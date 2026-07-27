@@ -18,27 +18,24 @@ firestore.rules   the enforcement boundary (§6)
 
 ```bash
 npm install && npm --prefix functions install
-export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
-export PATH="$JAVA_HOME/bin:$PATH"          # emulators need a JVM
-npm --prefix functions run build            # the emulator serves lib/, not src/
-npm run emulators
-FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-devfest-cfp \
-  node scripts/seed-config.mjs --opens 2026-07-01 --closes 2026-09-15
-npm run dev
+npm start
 ```
 
-Four things must be true or you get a blank page — the app fails closed rather
-than guessing:
+[`scripts/dev.mjs`](scripts/dev.mjs) does the four things that each fail
+silently if you skip them: finds a JVM, rebuilds `functions/lib` (the emulator
+serves the compiled output, not the TypeScript), starts **auth, firestore and
+functions**, and seeds `config/cfp` with a window around today. Then Vite on
+<http://localhost:5173>.
 
-- **A `.env` exists.** One with emulator placeholders is committed. Without it
-  `getAuth()` throws `auth/invalid-api-key` during module load and nothing
-  renders at all.
-- **`functions` is among the running emulators.** Without it every callable hits
-  a closed port, while the form still loads and drafts still autosave — so the
-  breakage looks like a bug in the import feature.
-- **`config/cfp` is seeded**, with dates bracketing today.
-- **`functions/lib` is rebuilt** after any change under `functions/src` or
-  `shared/`.
+Emulator data is kept in `.emulator-data/` between runs; `npm start -- --fresh`
+discards it.
+
+Miss any of those and the app fails closed rather than guessing: without
+`functions` every callable hits a closed port while drafts still autosave, so
+the breakage looks like a bug in the import feature; without `config/cfp` the
+form correctly reports "not open yet". A committed `.env` supplies emulator
+placeholders — without one, `getAuth()` throws `auth/invalid-api-key` during
+module load and nothing renders at all.
 
 `signInWithPopup` fails with *"No matching frame"* in headless browsers and
 embedded webviews, so under the emulators the sign-in panel grows a **"Sign in as
@@ -48,13 +45,25 @@ rendered against a real project.
 ## Verify
 
 ```bash
-npm run verify   # lint, build, unit tests, rules tests
+npm run verify   # lint, build, unit, rules, end-to-end
 ```
 
-The unit suite runs on node alone; `test:rules` needs the Firestore emulator and
-a JVM. If an emulator is already running on 8080, `emulators:exec` cannot start
-its own — point vitest at the running one instead, remembering that the rules
-tests call `clearFirestore()` and will wipe it:
+| Suite | Needs | Covers |
+|---|---|---|
+| `npm test` | node | schema, scoring, parser, import merge, message translation |
+| `npm run test:rules` | Firestore emulator, JVM | `firestore.rules` |
+| `npm run test:e2e` | the full stack | every applicant flow, in a browser |
+
+The end-to-end suite drives the same stack `npm start` brings up, reusing it if
+it is already running. It resets the emulators between tests through their REST
+surface ([`tests/e2e/backend.ts`](tests/e2e/backend.ts)), which lets a test put
+the backend somewhere the UI cannot reach — a closed window, a paused CFP, a
+missing config document. The Sessionize specs are the only ones that touch the
+network; `E2E_SKIP_NETWORK=1` drops them.
+
+If an emulator is already running on 8080, `emulators:exec` cannot start its own
+for the rules suite — point vitest at the running one instead, remembering that
+those tests call `clearFirestore()` and will wipe it:
 
 ```bash
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 npx vitest run --project rules
@@ -76,6 +85,10 @@ with unequal counts now pins it.
 
 [`tests/validation.test.ts`](tests/validation.test.ts) asserts that no zod
 message reaches an applicant untranslated, and that French never equals English.
+
+The end-to-end suite was mutation-checked too: restoring the raw Firebase
+message in the banner, ignoring `replaceExisting`, and dropping the
+`deleteField()` sentinel each fail exactly the test written for them.
 
 ## Decisions worth knowing
 

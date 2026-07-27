@@ -6,13 +6,13 @@ Conventions and hard-won facts for this repo. `SPEC.md` is the product spec;
 ## Commands
 
 ```bash
-npm run dev          # Vite on :5173, pointed at the emulators
-npm run emulators    # auth, firestore, functions, hosting — functions is not optional
-npm run verify       # lint, build, unit tests, rules tests — what CI runs
+npm start            # the whole local stack: emulators, seeded config, Vite
+npm run verify       # lint, build, unit, rules, e2e — what CI runs
 ```
 
-Suites are split by vitest project (`vitest.workspace.ts`): `unit` runs on node
-alone, `rules` needs the Firestore emulator and a JVM.
+Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules`
+(vitest `rules` project, needs the Firestore emulator and a JVM), and
+`npm run test:e2e` (Playwright against the `npm start` stack).
 
 ## Layout
 
@@ -35,6 +35,9 @@ tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 - A new schema rule needs a `params: { key }` on its issue and an `errors.rules`
   entry in both dictionaries. `tests/validation.test.ts` fails otherwise — zod's
   own English message must never reach an applicant.
+- **Never show a caught error's `.message`.** Map its `code` through
+  `src/lib/errors.ts`. Firestore denials arrive as raw rule text, and our own
+  callables throw English.
 
 ## Facts worth knowing
 

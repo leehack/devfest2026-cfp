@@ -81,6 +81,15 @@ export const en = {
     tooShort: (field: string, length: number, min: number) =>
       `The imported ${field} is only ${length} characters and we need at least ${min}. Please expand it before submitting.`,
     fieldNames: { bio: 'bio', title: 'title', abstract: 'abstract' } as Record<string, string>,
+    errors: {
+      badLink:
+        'That does not look like a Sessionize link. Paste your profile (sessionize.com/your-name) or one of your talks.',
+      noProfile: 'We could not find a Sessionize profile at that address.',
+      offHost: 'That link redirected somewhere other than Sessionize, so we stopped.',
+      unreadable:
+        'That page loaded but nothing could be read from it. Sessionize may have changed their layout — please fill the form in by hand and let the organisers know.',
+      unavailable: 'We could not reach Sessionize. Please try again in a moment.',
+    },
   },
 
   speaker: {
@@ -196,6 +205,13 @@ export const en = {
   errors: {
     generic: 'Something went wrong. Please try again.',
     signIn: 'Could not sign you in. Please try again.',
+    signedOut: 'Your session has expired. Please sign in again.',
+    notFound: 'We could not find that proposal.',
+    incomplete: 'Some answers are missing or invalid. Please check the form.',
+    unavailable: 'That service is unavailable right now. Please try again shortly.',
+    notOpen: 'The call for proposals is not open right now.',
+    readOnlyNow:
+      'This can no longer be edited — the call may have closed, or your proposal is already submitted. Reload to see where things stand.',
     crashed: 'Something broke on this page. Reload and your draft will still be here.',
     reload: 'Reload',
 

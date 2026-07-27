@@ -14,6 +14,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # The emulators need a JVM, for both the rules tests and the e2e stack.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
 
       - run: npm ci
       - run: npm ci --prefix functions
@@ -23,9 +28,23 @@ jobs:
       - run: npm test
 
       # Rules are the enforcement boundary; a green build with broken rules is
-      # worse than a red one. Needs the emulator, hence Java.
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+      # worse than a red one.
       - run: npm run test:rules
+
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+        env:
+          # The Sessionize specs fetch a third-party site. They run below, kept
+          # out of the blocking path so an outage there cannot block a merge.
+          E2E_SKIP_NETWORK: '1'
+
+      - name: e2e against sessionize.com
+        continue-on-error: true
+        run: npx playwright test tests/e2e/sessionize.spec.ts
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

@@ -17,6 +17,7 @@ import { SessionizeImport } from '../components/SessionizeImport';
 import { SocialsInput } from '../components/SocialsInput';
 import { formatDate, useI18n, type Dictionary } from '../i18n';
 import { validationMessage } from '../i18n/validation';
+import { friendlyError } from '../lib/errors';
 import {
   emptyForm,
   fromDocuments,
@@ -153,7 +154,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
       setStatus('submitted');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error: any) {
-      setBanner(error?.message ?? t.errors.generic);
+      setBanner(friendlyError(error, t));
     } finally {
       setSubmitting(false);
     }
@@ -166,7 +167,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
       await withdrawProposal({ proposalId });
       setStatus('withdrawn');
     } catch (error: any) {
-      setBanner(error?.message ?? t.errors.generic);
+      setBanner(friendlyError(error, t));
     } finally {
       setSubmitting(false);
     }

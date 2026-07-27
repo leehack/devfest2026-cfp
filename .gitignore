@@ -17,3 +17,8 @@ ui-debug.log
 
 .DS_Store
 *.tsbuildinfo
+
+# Emulator state kept between `npm start` runs
+.emulator-data/
+test-results/
+playwright-report/

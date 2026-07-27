@@ -7,6 +7,7 @@ import {
   type FormState,
   type OverLimit,
 } from '../lib/formState';
+import { importError } from '../lib/errors';
 import { importSessionizeProfile } from '../lib/proposals';
 
 interface SessionizeImportProps {
@@ -108,8 +109,8 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
       // appended, not substituted — the bio and links were filled in too.
       const preselected = data.profile.sessions?.find((s) => s.id === data.preselectSessionId);
       setReport(preselected ? [...lines, ...chooseSession(preselected)] : lines);
-    } catch (e: any) {
-      setError(e?.message ?? t.errors.generic);
+    } catch (e) {
+      setError(importError(e, t));
     } finally {
       setBusy(false);
     }

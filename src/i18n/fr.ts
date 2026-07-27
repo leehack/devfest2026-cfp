@@ -86,6 +86,15 @@ export const fr: Dictionary = {
     tooShort: (field: string, length: number, min: number) =>
       `Le champ « ${field} » importé ne compte que ${length} caractères et il en faut au moins ${min}. Veuillez l’étoffer avant de soumettre.`,
     fieldNames: { bio: 'biographie', title: 'titre', abstract: 'résumé' } as Record<string, string>,
+    errors: {
+      badLink:
+        'Ce lien ne semble pas provenir de Sessionize. Collez votre profil (sessionize.com/votre-nom) ou une de vos conférences.',
+      noProfile: 'Aucun profil Sessionize n’a été trouvé à cette adresse.',
+      offHost: 'Ce lien redirige ailleurs que vers Sessionize — nous avons arrêté.',
+      unreadable:
+        'La page s’est chargée mais rien n’a pu en être lu. Sessionize a peut-être changé sa mise en page — veuillez remplir le formulaire à la main et prévenir les organisateurs.',
+      unavailable: 'Impossible de joindre Sessionize. Veuillez réessayer dans un instant.',
+    },
   },
 
   speaker: {
@@ -202,6 +211,13 @@ export const fr: Dictionary = {
   errors: {
     generic: 'Une erreur est survenue. Veuillez réessayer.',
     signIn: 'Connexion impossible. Veuillez réessayer.',
+    signedOut: 'Votre session a expiré. Veuillez vous reconnecter.',
+    notFound: 'Cette proposition est introuvable.',
+    incomplete: 'Des réponses sont manquantes ou invalides. Veuillez vérifier le formulaire.',
+    unavailable: 'Ce service est indisponible pour le moment. Veuillez réessayer sous peu.',
+    notOpen: 'L’appel à conférences n’est pas ouvert en ce moment.',
+    readOnlyNow:
+      'Ce formulaire ne peut plus être modifié — l’appel est peut-être terminé, ou votre proposition a déjà été soumise. Rechargez la page pour voir l’état actuel.',
     crashed: 'Un problème est survenu sur cette page. Rechargez — votre brouillon est conservé.',
     reload: 'Recharger',
 

@@ -1,0 +1,55 @@
+import { expect, type Page } from '@playwright/test';
+
+/**
+ * Page helpers. Fields are found by accessible name, anchored at the start so
+ * "Title" does not also match "Job title" — no test ids in the markup.
+ */
+
+export const field = (page: Page, label: string) =>
+  page.getByRole('textbox', { name: new RegExp(`^${label}\\b`) });
+
+export const select = (page: Page, label: string) =>
+  page.getByRole('combobox', { name: new RegExp(`^${label}\\b`) });
+
+export const check = (page: Page, label: string) =>
+  page.getByRole('checkbox', { name: new RegExp(label) });
+
+export async function signIn(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: /test speaker/i }).click();
+  await expect(field(page, 'Title')).toBeVisible();
+}
+
+/** Everything `submissionSchema` requires, so a test can submit in one call. */
+export const COMPLETE = {
+  title: 'Local models on a plane',
+  abstract:
+    'What actually happens when you take a language model offline and run it on the device in your pocket. ' +
+    'We will look at quantisation, memory pressure and the three things that break first, with numbers from a ' +
+    'real app that shipped to both stores this year and the mistakes made getting there.',
+  bio:
+    'Engineer working on on-device machine learning, based in Montréal. Organises a monthly meetup and has been ' +
+    'shipping mobile applications for about a decade.',
+  basedIn: 'Montréal, QC',
+};
+
+export async function fillRequired(page: Page) {
+  await field(page, 'Title').fill(COMPLETE.title);
+  await field(page, 'Abstract').fill(COMPLETE.abstract);
+  await select(page, 'Category').selectOption('ai_ml');
+  await select(page, 'Format').selectOption('session_40');
+  await select(page, 'Audience level').selectOption('intermediate');
+  await select(page, 'Which language').selectOption('en');
+  await field(page, 'Name').fill('Test Speaker');
+  await field(page, 'Bio').fill(COMPLETE.bio);
+  await field(page, 'Based in').fill(COMPLETE.basedIn);
+  await check(page, 'travel and accommodation are not covered').check();
+  await check(page, 'Code of Conduct').check();
+  await check(page, 'recorded and published').check();
+  await page.getByRole('radio', { name: /no travel required/ }).check();
+}
+
+/** Autosave is debounced; this waits for the write rather than guessing. */
+export async function waitForSave(page: Page) {
+  await expect(page.locator('.actions__status')).toHaveText(/Draft saved/, { timeout: 10_000 });
+}
