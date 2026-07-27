@@ -9,7 +9,7 @@
  *   npm start -- --fresh       # discard the emulator data first
  */
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,6 +24,12 @@ const FUNCTIONS = '127.0.0.1:5001';
 const children = [];
 let shuttingDown = false;
 
+/**
+ * Deliberately not `detached`. It looks like the fix for the orphaned Firestore
+ * JVM, but it puts the children outside this process's group — which is also
+ * how Playwright tears the stack down after an e2e run. Detaching left the
+ * emulators and Vite alive after Playwright killed us, which is worse.
+ */
 function run(command, args, options = {}) {
   const child = spawn(command, args, { stdio: 'inherit', ...options });
   children.push(child);
@@ -83,6 +89,54 @@ async function waitForEmulators() {
   );
 }
 
+/**
+ * Clears a previous run's emulators off our ports.
+ *
+ * A crashed run, a force-quit terminal, or Playwright tearing the stack down
+ * after an e2e run can all leave the Firestore JVM listening on 8080 with no
+ * visible parent. Without this the next `npm start` fails on a port owned by
+ * nothing you can find.
+ *
+ * Only ever kills a process whose command line is recognisably one of ours;
+ * anything else is reported and left alone, because port 8080 is popular.
+ */
+function reclaimPorts() {
+  const ours = /cloud-firestore-emulator|firebase|emulator|[/\\]vite$|[/\\]vite\s/i;
+
+  for (const [name, host] of Object.entries({ firestore: FIRESTORE, auth: AUTH, functions: FUNCTIONS })) {
+    const port = host.split(':')[1];
+    let pids;
+    try {
+      pids = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .filter(Boolean);
+    } catch {
+      continue; // nothing listening, or no lsof — let the emulator report it
+    }
+
+    for (const pid of pids) {
+      let command = '';
+      try {
+        command = execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim();
+      } catch {
+        continue;
+      }
+      if (!ours.test(command)) {
+        console.error(`Port ${port} (${name}) is held by something that is not ours:\n  ${command}`);
+        process.exit(1);
+      }
+      console.log(`▸ clearing a stale ${name} emulator on ${port} (pid ${pid})`);
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  }
+}
+
 /** A window comfortably around today, so the form is open on a fresh checkout. */
 function devWindow() {
   const day = 24 * 60 * 60 * 1000;
@@ -90,15 +144,31 @@ function devWindow() {
   return { opens: iso(-30 * day), closes: iso(60 * day) };
 }
 
-function shutdown(code = 0) {
+/**
+ * Waits for the children to actually go.
+ *
+ * Exiting on a fixed timer instead left the firebase CLI mid-shutdown, and the
+ * Firestore JVM it had spawned survived holding port 8080 — so the next
+ * `npm start` failed on a port belonging to a process with no visible parent.
+ */
+async function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const child of children) child.kill('SIGINT');
-  setTimeout(() => process.exit(code), 2000);
+
+  const alive = children.filter((c) => c.exitCode === null);
+  for (const child of alive) child.kill('SIGINT');
+
+  // The emulators export their data on the way out, which is not instant.
+  for (let i = 0; i < 60 && alive.some((c) => c.exitCode === null); i++) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  for (const child of alive) if (child.exitCode === null) child.kill('SIGKILL');
+
+  process.exit(code);
 }
 
-process.on('SIGINT', () => shutdown(0));
-process.on('SIGTERM', () => shutdown(0));
+process.on('SIGINT', () => void shutdown(0));
+process.on('SIGTERM', () => void shutdown(0));
 
 const javaHome = resolveJava();
 if (!javaHome) {
@@ -106,6 +176,8 @@ if (!javaHome) {
   process.exit(1);
 }
 const env = { ...process.env, JAVA_HOME: javaHome, PATH: `${javaHome}/bin:${process.env.PATH}` };
+
+reclaimPorts();
 
 if (process.argv.includes('--fresh')) rmSync(DATA_DIR, { recursive: true, force: true });
 mkdirSync(DATA_DIR, { recursive: true });
@@ -130,7 +202,7 @@ run(
     DATA_DIR,
   ],
   { env },
-).on('exit', (code) => shutdown(code ?? 0));
+).on('exit', (code) => void shutdown(code ?? 0));
 
 await waitForEmulators();
 
@@ -141,4 +213,4 @@ await runToCompletion('node', ['scripts/seed-config.mjs', '--opens', opens, '--c
 });
 
 console.log('\n▸ dev server on http://localhost:5173\n');
-run('npx', ['vite'], { env }).on('exit', (code) => shutdown(code ?? 0));
+run('npx', ['vite'], { env }).on('exit', (code) => void shutdown(code ?? 0));
