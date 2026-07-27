@@ -14,7 +14,18 @@
   "hosting": {
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    "rewrites": [{ "source": "**", "destination": "/index.html" }],
+    "headers": [
+      {
+        "//": "Hosting defaults HTML to max-age=3600. A deploy replaces the hashed assets, so for the next hour a returning visitor can hold an index.html naming files that no longer exist — which renders as a blank page, not an error. Assets keep the default: their names change with their contents.",
+        "source": "/",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "**/*.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ]
   },
   "storage": {
     "rules": "storage.rules"
