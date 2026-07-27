@@ -52,6 +52,21 @@ export function senderDomain(value: string): string | null {
   return 'address' in parsed ? parsed.address.split('@')[1].toLowerCase() : null;
 }
 
+/**
+ * The sender's domain when it is not the one verified with Resend, else null.
+ *
+ * Resend verifies an exact domain, so `cfp@mail.example.org` does not inherit
+ * `example.org` — a near-miss like that queues, looks configured, and fails at
+ * send. Silent when either side is unknown: a domain added in Resend's own
+ * dashboard never reaches `config/email`, and warning on that would cry wolf.
+ */
+export function senderMismatch(from: string, verified: string): string | null {
+  const sender = senderDomain(from);
+  const target = verified.trim().toLowerCase();
+  if (!sender || !target) return null;
+  return sender === target ? null : sender;
+}
+
 export type SettingsProblem = { field: 'from' | 'replyTo'; problem: SenderProblem };
 
 /**

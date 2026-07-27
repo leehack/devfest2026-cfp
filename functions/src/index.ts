@@ -577,6 +577,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       // API key — never the key.
       keyHint: (emailConfig.keyHint as string) ?? '',
       domainId: (emailConfig.domainId as string) ?? '',
+      // The name, not just the id: the panel compares it against the sender to
+      // catch an address on a domain that was never verified.
+      domain: (emailConfig.domain as string) ?? '',
       templates: emailConfig.templates ?? {},
       // Enough to check the copy and the addresses before committing to a send.
       held: snap.docs

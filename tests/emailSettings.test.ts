@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseSender, senderDomain, validateSettings } from '@shared/emailSettings';
+import {
+  parseSender,
+  senderDomain,
+  senderMismatch,
+  validateSettings,
+} from '@shared/emailSettings';
 
 describe('parseSender', () => {
   it.each([
@@ -46,6 +51,33 @@ describe('senderDomain', () => {
 
   it('is null when there is nothing to read', () => {
     expect(senderDomain('nonsense')).toBeNull();
+  });
+});
+
+describe('senderMismatch', () => {
+  it('passes an address on the verified domain', () => {
+    expect(senderMismatch('DevFest <cfp@leehack.com>', 'leehack.com')).toBeNull();
+    expect(senderMismatch('CFP@LeeHack.com', 'leehack.com')).toBeNull();
+  });
+
+  // The trap: Resend verifies an exact domain, so a subdomain inherits nothing
+  // and the near-miss is exactly what someone types without thinking.
+  it('catches a subdomain of the verified domain', () => {
+    expect(senderMismatch('cfp@mail.leehack.com', 'leehack.com')).toBe('mail.leehack.com');
+    expect(senderMismatch('cfp@leehack.com', 'mail.leehack.com')).toBe('leehack.com');
+  });
+
+  it('catches an unrelated domain', () => {
+    expect(senderMismatch('cfp@gmail.com', 'leehack.com')).toBe('gmail.com');
+  });
+
+  // A domain added in Resend's own dashboard never reaches config/email, and a
+  // warning that fires whenever we simply do not know would train people to
+  // ignore it.
+  it('stays quiet when either side is unknown', () => {
+    expect(senderMismatch('cfp@leehack.com', '')).toBeNull();
+    expect(senderMismatch('', 'leehack.com')).toBeNull();
+    expect(senderMismatch('not an address', 'leehack.com')).toBeNull();
   });
 });
 

@@ -353,6 +353,8 @@ export const en = {
     emailReplyTo: 'Reply-to',
     emailFromHelp:
       'Must be on a domain verified with Resend, or every message fails. Put a display name in angle brackets: DevFest Montréal <cfp@example.org>.',
+    emailDomainMismatch:
+      'You are sending from {sender}, but the domain verified with Resend is {verified}. Resend verifies an exact domain, so this will queue and then fail at send.',
     emailSaveSender: 'Save address',
     emailNoSender:
       'No sending address is set, so nothing is going out. Messages still queue, and send once you set one.',

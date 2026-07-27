@@ -35,6 +35,7 @@ import {
 } from '@shared/enums';
 import {
   EMPTY_SETTINGS,
+  senderMismatch,
   validateSettings,
   type EmailSettings,
 } from '@shared/emailSettings';
@@ -304,6 +305,7 @@ function Email() {
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [keyHint, setKeyHint] = useState('');
   const [domainId, setDomainId] = useState('');
+  const [domain, setDomain] = useState('');
   const [templates, setTemplates] = useState<TemplateOverrides>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
@@ -326,6 +328,7 @@ function Email() {
         if (data.settings && !editing.current) setSettings(data.settings);
         setKeyHint(data.keyHint ?? '');
         setDomainId(data.domainId ?? '');
+        setDomain(data.domain ?? '');
         setTemplates(data.templates ?? {});
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
@@ -358,6 +361,10 @@ function Email() {
     Object.entries(tally)
       .filter(([key]) => key.startsWith(`${prefix}:`))
       .reduce((sum, [, n]) => sum + n, 0);
+
+  // Warned about as you type, not on save: this one only shows up at send time
+  // otherwise, by which point the message is a `failed` row.
+  const mismatch = senderMismatch(settings.from, domain);
 
   const waiting = count('held');
   // A `dry_run` row is a message that was never sent, so it belongs with the
@@ -419,6 +426,11 @@ function Email() {
         />
       </div>
       <p className="field__help">{t.admin.emailFromHelp}</p>
+      {mismatch && (
+        <p className="note note--inline" role="status">
+          {t.admin.emailDomainMismatch.replace('{sender}', mismatch).replace('{verified}', domain)}
+        </p>
+      )}
 
       <button type="button" className="btn" disabled={busy} onClick={saveSender}>
         {t.admin.emailSaveSender}

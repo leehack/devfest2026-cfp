@@ -44,6 +44,8 @@ export const emailQueue = httpsCallable<
     /** Last four characters of the API key — never the key. */
     keyHint?: string;
     domainId?: string;
+    /** The verified domain's name, to check the sender against. */
+    domain?: string;
     templates?: TemplateOverrides;
   }
 >(functions, 'emailQueue');

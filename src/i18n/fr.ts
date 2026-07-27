@@ -360,6 +360,8 @@ export const fr: Dictionary = {
     emailReplyTo: 'Répondre à',
     emailFromHelp:
       'L’adresse doit être sur un domaine vérifié auprès de Resend, sinon tous les envois échouent. Le nom affiché se met entre chevrons : DevFest Montréal <cfp@exemple.org>.',
+    emailDomainMismatch:
+      'Vous envoyez depuis {sender}, mais le domaine vérifié auprès de Resend est {verified}. Resend vérifie un domaine exact : le message sera mis en file puis échouera à l’envoi.',
     emailSaveSender: 'Enregistrer l’adresse',
     emailNoSender:
       'Aucune adresse d’expéditeur n’est configurée : rien n’est envoyé. Les messages sont tout de même mis en file et partiront dès qu’une adresse sera définie.',
