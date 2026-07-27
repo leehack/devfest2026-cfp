@@ -457,6 +457,7 @@ export const fr: Dictionary = {
       3: '3 — Oui',
       4: '4 — Oui, sans hésiter',
     } as Record<number, string>,
+    gde: 'GDE',
     conflict: 'J’ai un conflit d’intérêts',
     conflictHelp: 'Exclue des totaux, y compris de votre propre calibrage.',
     comment: 'Notes pour le comité',

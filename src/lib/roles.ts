@@ -197,12 +197,22 @@ export async function loadReviewQueue(uid: string): Promise<ReviewQueue> {
   return { proposals, own: all.length - proposals.length };
 }
 
+/**
+ * `loadSpeakers` has always fetched the whole document — this only declared a
+ * fraction of it, so the review card could not show a bio the schema itself
+ * says "feeds promotion as well as review". Review is not blind (§7); the
+ * committee judges whether someone can deliver the talk, and that needs more
+ * than a name.
+ */
 export interface SpeakerBrief {
   name?: string;
   company?: string;
   jobTitle?: string;
   basedIn?: string;
   isGde?: boolean;
+  bio?: string;
+  pastTalks?: string;
+  socials?: { platform: string; handle: string }[];
 }
 
 /** Review is not blind (§7), so the card needs who is speaking. Deduped by uid. */

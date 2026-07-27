@@ -191,14 +191,35 @@ export async function seedProposal(
 
 export async function seedSpeaker(
   uid: string,
-  { name, email, locale }: { name: string; email: string; locale?: 'en' | 'fr' },
+  {
+    name,
+    email,
+    locale,
+    bio,
+    company,
+    jobTitle,
+    isGde,
+    pastTalks,
+  }: {
+    name: string;
+    email: string;
+    locale?: 'en' | 'fr';
+    bio?: string;
+    company?: string;
+    jobTitle?: string;
+    isGde?: boolean;
+    pastTalks?: string;
+  },
 ) {
   await patch(`speakers/${uid}`, {
     name: { stringValue: name },
     email: { stringValue: email },
-    bio: { stringValue: 'x'.repeat(120) },
+    bio: { stringValue: bio ?? 'x'.repeat(120) },
     basedIn: { stringValue: 'Montréal, QC' },
-    isGde: { booleanValue: false },
+    isGde: { booleanValue: isGde ?? false },
+    ...(company ? { company: { stringValue: company } } : {}),
+    ...(jobTitle ? { jobTitle: { stringValue: jobTitle } } : {}),
+    ...(pastTalks ? { pastTalks: { stringValue: pastTalks } } : {}),
     ...(locale ? { locale: { stringValue: locale } } : {}),
   });
 }

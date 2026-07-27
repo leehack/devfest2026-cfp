@@ -1205,6 +1205,52 @@ p {
   align-items: center;
 }
 
+/* The speaker behind the talk. Set apart, so it reads as context rather than
+   as more of the abstract — a reviewer scores the proposal, not the CV. */
+.speaker {
+  margin: var(--s-4) 0;
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.speaker > :last-child {
+  margin-bottom: 0;
+}
+
+.speaker .card__subtitle {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+  margin-top: 0;
+}
+
+.speaker__line {
+  margin: 0 0 var(--s-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.speaker__label {
+  margin: var(--s-3) 0 var(--s-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tag {
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .reviews {
   margin: 0;
   padding: 0;

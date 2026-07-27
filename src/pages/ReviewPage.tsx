@@ -134,8 +134,12 @@ function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved
     }
   }
 
+  const people = (proposal.speakerIds ?? [])
+    .map((id) => speakers.get(id))
+    .filter((s): s is SpeakerBrief => Boolean(s));
+
   const meta = [
-    (proposal.speakerIds ?? []).map((id) => speakers.get(id)?.name).filter(Boolean).join(', '),
+    people.map((s) => s.name).filter(Boolean).join(', '),
     t.enums.category[proposal.category],
     t.enums.format[proposal.format],
     t.enums.level[proposal.level],
@@ -154,6 +158,10 @@ function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved
           <p className="card__text">{proposal.pitch}</p>
         </>
       )}
+
+      {people.map((s, i) => (
+        <Speaker key={proposal.speakerIds?.[i] ?? i} speaker={s} />
+      ))}
 
       <RadioGroup
         label={t.review.scoreLabel}
@@ -202,6 +210,55 @@ function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved
 
       {reviewsVisible && <Committee proposalId={proposal.id} />}
     </section>
+  );
+}
+
+/**
+ * Everything the speaker told us, because the committee is judging whether this
+ * person can deliver this talk and a name is not enough to do that on. The
+ * schema says the bio "feeds promotion as well as review" — review never saw it.
+ *
+ * The known cost is bias: an employer and a GDE badge import reputation that
+ * the abstract did not earn. Deliberate, and the alternative was worse — a
+ * reviewer guessing at delivery risk with nothing to go on at all.
+ */
+function Speaker({ speaker }: { speaker: SpeakerBrief }) {
+  const { t } = useI18n();
+  const line = [
+    [speaker.jobTitle, speaker.company].filter(Boolean).join(', '),
+    speaker.basedIn,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <div className="speaker">
+      <h3 className="card__subtitle">
+        {speaker.name || '—'}
+        {speaker.isGde && <span className="tag">{t.review.gde}</span>}
+      </h3>
+      {line && <p className="speaker__line">{line}</p>}
+      {speaker.bio && <p className="card__text">{speaker.bio}</p>}
+
+      {speaker.pastTalks && (
+        <>
+          <p className="speaker__label">{t.speaker.pastTalks}</p>
+          <p className="card__text">{speaker.pastTalks}</p>
+        </>
+      )}
+
+      {speaker.socials && speaker.socials.length > 0 && (
+        <p className="speaker__line">
+          {speaker.socials.map((s, i) => (
+            <span key={`${s.platform}-${s.handle}-${i}`}>
+              {i > 0 && ' · '}
+              {(t.enums.socialPlatform as Record<string, string>)[s.platform] ?? s.platform}:{' '}
+              {s.handle}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
   );
 }
 

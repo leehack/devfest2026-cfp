@@ -243,6 +243,30 @@ test.describe('reviewing', () => {
     );
   });
 
+  // Review is not blind (§7), and the committee is judging whether this person
+  // can deliver this talk. The bio in particular: the schema says it feeds
+  // review, and for a long time the card was the one place that never showed it.
+  test('the card carries the speaker behind the talk, not just their name', async ({ page }) => {
+    const speaker = await createAccount({ ...SPEAKER, sub: 'ctx-sub', email: 'ctx@example.org' });
+    await seedSpeaker(speaker.uid, {
+      name: 'Sam Rivera',
+      email: 'ctx@example.org',
+      bio: 'Fifteen years of shipping mobile, mostly the parts that go wrong.',
+      company: 'Acme',
+      jobTitle: 'Staff Engineer',
+      isGde: true,
+      pastTalks: 'DroidCon 2023 — recording linked',
+    });
+    await seedSubmittedProposal('p-ctx', { speakerUid: speaker.uid, title: 'Sam on inference' });
+    await page.reload();
+
+    const card = page.locator('.card', { has: page.getByRole('heading', { name: 'Sam on inference' }) });
+    await expect(card.getByText('Fifteen years of shipping mobile')).toBeVisible();
+    await expect(card.getByText('Staff Engineer, Acme')).toBeVisible();
+    await expect(card.getByText('DroidCon 2023')).toBeVisible();
+    await expect(card.getByText('GDE', { exact: true })).toBeVisible();
+  });
+
   test('a reviewer never sees their own proposal in the queue', async ({ page }) => {
     await seedSubmittedProposal('p-rey', { speakerUid: reviewerUid, title: 'Rey on reviewing' });
     await page.reload();

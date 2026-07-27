@@ -448,6 +448,7 @@ export const en = {
       3: '3 — Yes',
       4: '4 — Strong yes',
     } as Record<number, string>,
+    gde: 'GDE',
     conflict: 'I have a conflict of interest',
     conflictHelp: 'Excluded from the totals, including your own calibration.',
     comment: 'Notes for the committee',
