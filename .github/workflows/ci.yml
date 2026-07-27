@@ -32,15 +32,32 @@ jobs:
       - run: npm run test:rules
 
       - run: npx playwright install --with-deps chromium
+
+      # Started once, here, rather than by Playwright: the two runs below share
+      # it, and a second `npm start` cannot claim ports the first still holds.
+      - name: Start the emulated stack
+        run: |
+          npm start > /tmp/stack.log 2>&1 &
+          for i in $(seq 1 120); do
+            curl -sf http://localhost:5173 >/dev/null && exit 0
+            sleep 2
+          done
+          echo "stack never came up"; cat /tmp/stack.log; exit 1
+
       - run: npm run test:e2e
         env:
-          # The Sessionize specs fetch a third-party site. They run below, kept
-          # out of the blocking path so an outage there cannot block a merge.
           E2E_SKIP_NETWORK: '1'
 
+      # Fetches a third-party site, so it is kept out of the blocking path: a
+      # Sessionize outage must not stop a merge. A markup change still shows up
+      # here, which is the point of the test.
       - name: e2e against sessionize.com
         continue-on-error: true
         run: npx playwright test tests/e2e/sessionize.spec.ts
+
+      - name: Stack log
+        if: failure()
+        run: cat /tmp/stack.log
 
       - uses: actions/upload-artifact@v4
         if: failure()
