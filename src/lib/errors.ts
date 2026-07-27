@@ -37,6 +37,23 @@ export function friendlyError(error: unknown, t: Dictionary): string {
   }
 }
 
+/**
+ * Admin actions reuse codes that mean something else to an applicant:
+ * `failed-precondition` here is the last-admin guard, not a closed window.
+ */
+export function adminError(error: unknown, t: Dictionary): string {
+  switch (codeOf(error)) {
+    case 'failed-precondition':
+      return t.admin.lastAdmin;
+    case 'invalid-argument':
+      return t.admin.badInput;
+    case 'permission-denied':
+      return t.nav.forbidden;
+    default:
+      return friendlyError(error, t);
+  }
+}
+
 /** The import has its own failures, all of which the speaker can act on. */
 export function importError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {

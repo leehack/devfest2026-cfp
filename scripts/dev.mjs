@@ -10,10 +10,10 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync } from 'node:fs';
 import process from 'node:process';
+
+import { javaEnv } from './java.mjs';
 
 const PROJECT = 'demo-devfest-cfp';
 const DATA_DIR = '.emulator-data';
@@ -45,34 +45,13 @@ function runToCompletion(command, args, options = {}) {
 }
 
 /**
- * The emulators need a JVM and this machine has none on PATH, so look where
- * Homebrew puts them. Failing here with a clear message beats the emulator's
- * own "java: command not found" three screens later.
- */
-function resolveJava() {
-  if (process.env.JAVA_HOME) return process.env.JAVA_HOME;
-
-  const brew = '/opt/homebrew/opt';
-  const candidates = existsSync(brew)
-    ? readdirSync(brew)
-        .filter((name) => name.startsWith('openjdk'))
-        .sort()
-        .reverse()
-        .map((name) => join(brew, name, 'libexec/openjdk.jdk/Contents/Home'))
-        .filter(existsSync)
-    : [];
-
-  return candidates[0];
-}
-
-/**
  * Every emulator, not just the first. Firestore wins the race on a cold start,
  * and waiting only for it hands out a stack whose auth and functions ports are
  * still closed — which reads as an app bug, not a startup one.
  *
  * Any HTTP response means listening; the functions emulator 404s at the root.
  */
-async function waitForEmulators() {
+async function waitForPorts() {
   const wanted = { firestore: FIRESTORE, auth: AUTH, functions: FUNCTIONS };
   await Promise.all(
     Object.entries(wanted).map(async ([name, host]) => {
@@ -87,6 +66,39 @@ async function waitForEmulators() {
       throw new Error(`${name} emulator never came up on ${host}`);
     }),
   );
+}
+
+/**
+ * A listening functions port is not a working one: the emulator accepts
+ * connections about four seconds before it finishes discovering the code, and
+ * every callable 404s in between. Nothing downstream can tell that window from
+ * a genuinely missing function — Playwright's readiness check is the Vite port,
+ * so an e2e run that opens with a callable used to fail its first two tests.
+ *
+ * So probe a real callable and wait for it to answer as itself. Unauthenticated
+ * is the expected reply here, and it means the code is loaded.
+ */
+async function waitForCallables() {
+  const url = `http://${FUNCTIONS}/${PROJECT}/northamerica-northeast1/claimRole`;
+  for (let i = 0; i < 240; i++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"data":{}}',
+      });
+      if (!(await response.text()).includes('does not exist')) return;
+    } catch {
+      // Port not up yet; waitForPorts reports that failure.
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error('functions emulator never registered its callables');
+}
+
+async function waitForEmulators() {
+  await waitForPorts();
+  await waitForCallables();
 }
 
 /**
@@ -170,12 +182,7 @@ async function shutdown(code = 0) {
 process.on('SIGINT', () => void shutdown(0));
 process.on('SIGTERM', () => void shutdown(0));
 
-const javaHome = resolveJava();
-if (!javaHome) {
-  console.error('No JVM found. Install one (brew install openjdk@21) or set JAVA_HOME.');
-  process.exit(1);
-}
-const env = { ...process.env, JAVA_HOME: javaHome, PATH: `${javaHome}/bin:${process.env.PATH}` };
+const env = javaEnv();
 
 reclaimPorts();
 

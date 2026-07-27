@@ -22,3 +22,6 @@ ui-debug.log
 .emulator-data/
 test-results/
 playwright-report/
+
+# The Resend key for the emulator; production reads it from Secret Manager.
+functions/.secret.local

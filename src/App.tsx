@@ -11,8 +11,13 @@ import {
   type Locale,
 } from './i18n';
 import { SubmitPage } from './pages/SubmitPage';
+import { AdminPage } from './pages/AdminPage';
+import { ReviewPage } from './pages/ReviewPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
+import { useRole } from './lib/roles';
+import { navigate, useRoute, type Route } from './lib/router';
 import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
+import type { Role } from '@shared/enums';
 
 export function App() {
   const [locale, setLocale] = useState<Locale>(detectLocale);
@@ -20,6 +25,8 @@ export function App() {
   const [authReady, setAuthReady] = useState(false);
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
+  const route = useRoute();
+  const { role, ready: roleReady } = useRole(user);
 
   const t = dictionaries[locale];
 
@@ -33,12 +40,15 @@ export function App() {
     setAuthReady(true);
   }), []);
 
+  // Re-read on navigation so an admin who just moved the window does not walk
+  // back to a form still rendering the old one. Speakers never change route, so
+  // this costs them nothing.
   useEffect(() => {
     loadCfpWindow()
       .then(setCfp)
       .catch(() => setCfp(null))
       .finally(() => setCfpReady(true));
-  }, []);
+  }, [route]);
 
   const i18n = useMemo(() => ({ locale, t, setLocale }), [locale, t]);
 
@@ -66,11 +76,13 @@ export function App() {
           </div>
         </header>
 
+        {role && <Nav route={route} role={role} />}
+
         <main className="main">
           {!authReady || !cfpReady ? (
             <p className="muted">{t.app.loading}</p>
           ) : (
-            <Body user={user} cfp={cfp} />
+            <Routed route={route} user={user} cfp={cfp} role={role} roleReady={roleReady} />
           )}
         </main>
       </div>
@@ -78,7 +90,63 @@ export function App() {
   );
 }
 
-function Body({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) {
+function Nav({ route, role }: { route: Route; role: Role }) {
+  const { t } = useI18n();
+  const tabs: Route[] = role === 'admin' ? ['form', 'review', 'admin'] : ['form', 'review'];
+
+  return (
+    <nav className="nav" aria-label={t.app.title}>
+      {tabs.map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          className={`nav__tab${tab === route ? ' nav__tab--on' : ''}`}
+          aria-current={tab === route ? 'page' : undefined}
+          onClick={() => navigate(tab)}
+        >
+          {t.nav[tab]}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+interface RoutedProps {
+  route: Route;
+  user: User | null;
+  cfp: CfpWindow | null;
+  role: Role | null;
+  roleReady: boolean;
+}
+
+/**
+ * Only the form is gated on the submission window — reviewing happens after it
+ * closes, and an admin needs the window controls precisely when it is shut.
+ */
+function Routed({ route, user, cfp, role, roleReady }: RoutedProps) {
+  const { t } = useI18n();
+
+  if (route === 'form') return <FormRoute user={user} cfp={cfp} />;
+
+  if (!user) return <SignIn cfp={cfp} />;
+  if (!roleReady) return <p className="muted">{t.app.loading}</p>;
+
+  const allowed = route === 'admin' ? role === 'admin' : role !== null;
+  if (!allowed) {
+    return (
+      <div className="panel">
+        <p>{t.nav.forbidden}</p>
+        <button type="button" className="btn btn--primary" onClick={() => navigate('form')}>
+          {t.nav.backToForm}
+        </button>
+      </div>
+    );
+  }
+
+  return route === 'admin' ? <AdminPage user={user} /> : <ReviewPage user={user} />;
+}
+
+function FormRoute({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) {
   const { t, locale } = useI18n();
 
   // Fail closed: without a config document we cannot prove the window is open,
@@ -118,7 +186,7 @@ function Body({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) {
   return <SubmitPage user={user} cfp={cfp} />;
 }
 
-function SignIn({ cfp }: { cfp: CfpWindow }) {
+function SignIn({ cfp }: { cfp: CfpWindow | null }) {
   const { t, locale } = useI18n();
   const [failed, setFailed] = useState(false);
 
@@ -138,9 +206,11 @@ function SignIn({ cfp }: { cfp: CfpWindow }) {
   return (
     <div className="panel">
       <p>{t.app.signInHint}</p>
-      <p className="muted">
-        {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
-      </p>
+      {cfp && (
+        <p className="muted">
+          {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
+        </p>
+      )}
       <button type="button" className="btn btn--primary" onClick={signIn}>
         {t.app.signIn}
       </button>

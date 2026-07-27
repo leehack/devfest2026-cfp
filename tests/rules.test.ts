@@ -45,6 +45,13 @@ const draft = (owner: string) => ({
   attendance: { status: 'local', needsVisa: false },
 });
 
+/** Moves a seeded draft into the committee's hands. */
+async function submitted(id: string) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await updateDoc(doc(ctx.firestore(), 'proposals', id), { status: 'submitted' });
+  });
+}
+
 async function seedWindow(opensOffsetMs: number, closesOffsetMs: number) {
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'config/cfp'), {
@@ -188,11 +195,31 @@ describe('status and aggregate are function-writable only', () => {
     );
   });
 
-  it('allows adding a co-presenter', async () => {
-    await assertSucceeds(
+  /**
+   * Naming a co-presenter is a claim about someone else: it hands them write
+   * access, and disqualifies them from reviewing the talk. Until there is an
+   * invitation flow, the cast is fixed at creation.
+   */
+  it('denies naming a co-presenter who never agreed', async () => {
+    await assertFails(
       updateDoc(doc(asApplicant(), 'proposals/p-anna'), {
         speakerIds: [APPLICANT, OTHER_APPLICANT],
       }),
+    );
+  });
+
+  it('denies creating a proposal with someone else already on it', async () => {
+    await assertFails(
+      addDoc(collection(asApplicant(), 'proposals'), {
+        ...draft(APPLICANT),
+        speakerIds: [APPLICANT, OTHER_APPLICANT],
+      }),
+    );
+  });
+
+  it('denies putting a proposal in someone else’s name entirely', async () => {
+    await assertFails(
+      addDoc(collection(asApplicant(), 'proposals'), draft(OTHER_APPLICANT)),
     );
   });
 
@@ -232,6 +259,73 @@ describe('status and aggregate are function-writable only', () => {
   });
 });
 
+/**
+ * A speaker keeps editing after submitting, until the committee starts reading.
+ * After that only the travel answers move, because they carry no weight in the
+ * score and change for reasons that have nothing to do with the talk.
+ */
+describe('editing after submission', () => {
+  const setStatus = (status: string) =>
+    env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), 'proposals/p-anna'), { status });
+    });
+
+  const editContent = () => updateDoc(doc(asApplicant(), 'proposals/p-anna'), { title: 'Reworked' });
+  const editTravel = () =>
+    updateDoc(doc(asApplicant(), 'proposals/p-anna'), {
+      attendance: { status: 'pending', needsVisa: true, fundingSource: 'employer' },
+    });
+
+  it('allows content edits while it is still only submitted', async () => {
+    await setStatus('submitted');
+    await assertSucceeds(editContent());
+  });
+
+  it('denies content edits once it is under review', async () => {
+    await setStatus('under_review');
+    await assertFails(editContent());
+  });
+
+  it('still allows the travel answers under review', async () => {
+    await setStatus('under_review');
+    await assertSucceeds(editTravel());
+  });
+
+  it('allows the travel answers on an accepted talk, after the window closes', async () => {
+    // The case this exists for: accepted in September, visa refused in October.
+    await seedWindow(-14 * 86_400_000, -86_400_000);
+    await setStatus('accepted');
+    await assertSucceeds(editTravel());
+    await assertFails(editContent());
+  });
+
+  it('denies everything once withdrawn or rejected', async () => {
+    for (const status of ['withdrawn', 'rejected']) {
+      await setStatus(status);
+      await assertFails(editContent());
+      await assertFails(editTravel());
+    }
+  });
+
+  it('denies smuggling a content change in alongside the travel answers', async () => {
+    await setStatus('under_review');
+    await assertFails(
+      updateDoc(doc(asApplicant(), 'proposals/p-anna'), {
+        // Must differ from the seed, or `affectedKeys()` never names it and the
+        // test passes on the abstract alone — which proves nothing about the
+        // pairing this is here to reject.
+        attendance: { status: 'pending', needsVisa: true, fundingSource: 'employer' },
+        abstract: 'y'.repeat(400),
+      }),
+    );
+  });
+
+  it('still denies a status change of their own', async () => {
+    await setStatus('submitted');
+    await assertFails(updateDoc(doc(asApplicant(), 'proposals/p-anna'), { status: 'accepted' }));
+  });
+});
+
 describe('the deadline is enforced server-side', () => {
   it('allows a create while the window is open', async () => {
     await assertSucceeds(addDoc(collection(asApplicant(), 'proposals'), draft(APPLICANT)));
@@ -256,6 +350,10 @@ describe('the deadline is enforced server-side', () => {
 });
 
 describe('reviewers write only their own review', () => {
+  // Scoring a draft is denied outright, so every refusal below would otherwise
+  // pass for that reason rather than the one it is written to prove.
+  beforeEach(() => submitted('p-anna'));
+
   it('writes its own review', async () => {
     await assertSucceeds(
       setDoc(doc(asOtherReviewer(), 'proposals/p-anna/reviews', OTHER_REVIEWER), {
@@ -324,12 +422,17 @@ describe('a reviewer who is also a speaker', () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore();
       // REVIEWER speaks on this one; OTHER_REVIEWER has already scored it.
-      await setDoc(doc(db, 'proposals', 'p-chen'), draft(REVIEWER));
+      await setDoc(doc(db, 'proposals', 'p-chen'), {
+        ...draft(REVIEWER),
+        status: 'submitted',
+      });
       await setDoc(doc(db, 'proposals/p-chen/reviews', OTHER_REVIEWER), {
         score: 4,
         conflictOfInterest: false,
       });
     });
+    // Same reason as above: these must fail for self-review, not for draft.
+    await submitted('p-bruno');
   });
 
   it('cannot review its own proposal', async () => {
@@ -383,6 +486,132 @@ describe('a reviewer who is also a speaker', () => {
   });
 });
 
+/** What the admin and review screens read before they can render anything. */
+/**
+ * A draft was never handed to anybody. Someone may have typed something into a
+ * pitch and thought better of sending it; the committee has no claim on that.
+ */
+describe('unsubmitted drafts are private to their author', () => {
+  it('denies a reviewer reading a draft', async () => {
+    await assertFails(getDoc(doc(asReviewer(), 'proposals/p-anna')));
+  });
+
+  it('denies a reviewer listing the collection unfiltered', async () => {
+    await assertFails(getDocs(collection(asReviewer(), 'proposals')));
+  });
+
+  it('allows the filtered listing the committee screens actually use', async () => {
+    await assertSucceeds(
+      getDocs(query(collection(asReviewer(), 'proposals'), where('status', '!=', 'draft'))),
+    );
+  });
+
+  it('lets the author still read their own draft', async () => {
+    await assertSucceeds(getDoc(doc(asApplicant(), 'proposals/p-anna')));
+  });
+
+  it('opens it to reviewers the moment it is submitted', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), 'proposals/p-anna'), { status: 'submitted' });
+    });
+    await assertSucceeds(getDoc(doc(asReviewer(), 'proposals/p-anna')));
+  });
+
+  it('denies scoring a draft or a withdrawn proposal', async () => {
+    // Otherwise the review would count towards an aggregate for something
+    // nobody submitted.
+    for (const status of ['draft', 'withdrawn']) {
+      await env.withSecurityRulesDisabled(async (ctx) => {
+        await updateDoc(doc(ctx.firestore(), 'proposals/p-bruno'), { status });
+      });
+      await assertFails(
+        setDoc(doc(asReviewer(), 'proposals/p-bruno/reviews', REVIEWER), {
+          score: 3,
+          conflictOfInterest: false,
+        }),
+      );
+    }
+  });
+
+  it('allows scoring once it is submitted', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), 'proposals/p-bruno'), { status: 'submitted' });
+    });
+    await assertSucceeds(
+      setDoc(doc(asReviewer(), 'proposals/p-bruno/reviews', REVIEWER), {
+        score: 3,
+        conflictOfInterest: false,
+      }),
+    );
+  });
+});
+
+describe('the reviewers collection', () => {
+  const makeAdmin = () =>
+    env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'reviewers', REVIEWER), {
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+
+  it('lets anyone read their own row, so a speaker can find they have no role', async () => {
+    await assertSucceeds(getDoc(doc(asApplicant(), 'reviewers', APPLICANT)));
+  });
+
+  it('denies an applicant reading someone else’s row', async () => {
+    await assertFails(getDoc(doc(asApplicant(), 'reviewers', REVIEWER)));
+  });
+
+  it('denies an applicant listing the committee', async () => {
+    await assertFails(getDocs(collection(asApplicant(), 'reviewers')));
+  });
+
+  it('denies a plain reviewer listing the committee', async () => {
+    await assertFails(getDocs(collection(asReviewer(), 'reviewers')));
+  });
+
+  it('allows an admin to list the committee', async () => {
+    await makeAdmin();
+    await assertSucceeds(getDocs(collection(asReviewer(), 'reviewers')));
+  });
+});
+
+/** The review queue and the admin proposals table are both unscoped listings. */
+describe('reviewers read every proposal and speaker', () => {
+  it('lists every submitted proposal', async () => {
+    await submitted('p-anna');
+    await submitted('p-bruno');
+    const snap = await getDocs(
+      query(collection(asReviewer(), 'proposals'), where('status', '!=', 'draft')),
+    );
+    expect(snap.docs.map((d) => d.id).sort()).toEqual(['p-anna', 'p-bruno']);
+  });
+
+  it('reads a speaker profile for the review card', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'speakers', APPLICANT), {
+        name: 'Anna',
+        email: 'anna@example.org',
+        bio: 'x'.repeat(60),
+      });
+    });
+    await assertSucceeds(getDoc(doc(asReviewer(), 'speakers', APPLICANT)));
+  });
+
+  it('denies an applicant reading another speaker’s profile', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'speakers', OTHER_APPLICANT), {
+        name: 'Bruno',
+        email: 'bruno@example.org',
+        bio: 'x'.repeat(60),
+      });
+    });
+    await assertFails(getDoc(doc(asApplicant(), 'speakers', OTHER_APPLICANT)));
+  });
+});
+
 describe('role grants are readable only by admins', () => {
   beforeEach(async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
@@ -431,8 +660,105 @@ describe('role grants are readable only by admins', () => {
   });
 });
 
+describe('config', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'config/email'), {
+        from: 'DevFest <cfp@example.org>',
+        replyTo: 'organisers@example.org',
+      });
+    });
+  });
+
+  it('lets a signed-out visitor read the window', async () => {
+    // The landing page renders the deadline before asking anyone to sign in.
+    await assertSucceeds(getDoc(doc(env.unauthenticatedContext().firestore(), 'config/cfp')));
+  });
+
+  it('does not expose the rest of the collection', async () => {
+    // The read rule names `cfp` rather than the collection, so a document added
+    // later is shut by default instead of public by default.
+    await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), 'config/email')));
+    await assertFails(getDoc(doc(asApplicant(), 'config/email')));
+    await assertFails(getDocs(collection(asApplicant(), 'config')));
+  });
+
+  it('denies an admin reading it directly — that goes through the callable', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'reviewers', REVIEWER), {
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    await assertFails(getDoc(doc(asReviewer(), 'config/email')));
+  });
+
+  it('denies writing the window or the sender', async () => {
+    // Both are read by the rules themselves or by the sender; a client write
+    // here would reopen a closed CFP or redirect the mail.
+    await assertFails(updateDoc(doc(asApplicant(), 'config/cfp'), { paused: false }));
+    await assertFails(setDoc(doc(asApplicant(), 'config/email'), { from: 'me@evil.example' }));
+  });
+});
+
+/**
+ * The queue holds every applicant's address alongside a decision that has not
+ * been announced yet, and a row with `status: 'queued'` is an instruction to
+ * send mail from our verified domain. Both halves are worth a test.
+ */
 describe('emailLog is closed to clients', () => {
+  async function makeAdmin() {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'reviewers', REVIEWER), {
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+  }
+
+  const row = {
+    kind: 'accepted',
+    proposalId: 'p1',
+    to: 'someone@example.org',
+    locale: 'en',
+    status: 'queued',
+  };
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'emailLog', 'accepted__p1'), row);
+    });
+  });
+
   it('denies reads', async () => {
     await assertFails(getDocs(collection(asReviewer(), 'emailLog')));
+  });
+
+  it('denies an applicant reading their own decision early', async () => {
+    await assertFails(getDoc(doc(asApplicant(), 'emailLog', 'accepted__p1')));
+  });
+
+  it('denies an admin too — the queue is read through the callable', async () => {
+    await makeAdmin();
+    await assertFails(getDocs(collection(asReviewer(), 'emailLog')));
+  });
+
+  it('denies writing a row, which would be a send', async () => {
+    // A client that could write `queued` could mail anyone from our domain.
+    await assertFails(setDoc(doc(asApplicant(), 'emailLog', 'accepted__p2'), row));
+  });
+
+  it('denies releasing a held row', async () => {
+    await makeAdmin();
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'emailLog', 'accepted__p1'), { status: 'queued' }),
+    );
+  });
+
+  it('denies deleting the audit trail', async () => {
+    await makeAdmin();
+    await assertFails(deleteDoc(doc(asReviewer(), 'emailLog', 'accepted__p1')));
   });
 });

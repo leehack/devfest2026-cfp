@@ -66,10 +66,13 @@ service cloud.firestore {
 
     // ---------------------------------------------------------------- config
 
-    // The form needs the open/close dates to render its own state. Writes go
-    // through the console or a function — never a client.
+    // The form needs the open/close dates to render its own state, before
+    // anyone has signed in — so `cfp` is public, and only `cfp`. A rule granting
+    // the whole collection would hand out every config document added later;
+    // `config/email` holds the organisers' addresses and reaches the admin page
+    // through the emailQueue callable instead. Writes go through a function.
     match /config/{docId} {
-      allow read: if true;
+      allow read: if docId == 'cfp';
       allow write: if false;
     }
 
@@ -101,12 +104,27 @@ service cloud.firestore {
       // while an unconstrained listing of the collection is denied on the first
       // foreign document. Rules are not filters: the client must carry that
       // where-clause or the whole query fails.
-      allow get, list: if isSpeakerOn(resource.data) || isReviewer();
+      //
+      // A draft was never handed to anybody. Someone may have typed "I am
+      // burning out and want to talk about it" into a pitch and thought better
+      // of sending it — the committee has no claim on that, so reviewers see a
+      // proposal only once its author submitted it. Committee-side queries must
+      // therefore carry `where('status', '!=', 'draft')`.
+      allow get, list: if isSpeakerOn(resource.data)
+        || (isReviewer() && resource.data.status != 'draft');
 
+      // Exactly the author, not "the author plus anyone they name".
+      //
+      // The field stays an array because co-presenters are in the data model
+      // (§6), but naming someone is a claim about *them*: it hands them write
+      // access to this document, and — since a speaker may not review their own
+      // talk — silently disqualifies them from reviewing it. Neither should be
+      // possible without their consent, so when co-presenters are built they get
+      // an invitation callable and this rule relaxes to match. Until then the
+      // write surface stays shut.
       allow create: if signedIn()
         && cfpOpen()
-        && uid() in request.resource.data.speakerIds
-        && request.resource.data.speakerIds.size() <= 4
+        && request.resource.data.speakerIds == [uid()]
         // The only status a client may ever write, and only at creation.
         && request.resource.data.status == 'draft'
         && !request.resource.data.keys().hasAny([
@@ -114,19 +132,36 @@ service cloud.firestore {
              'confirmedAt', 'assignedLanguage'
            ]);
 
+      // Nothing the committee has started reading may still be changing under
+      // them. Before that point a submitted proposal is still the speaker's to
+      // improve — the deadline is what closes it, not the act of submitting.
+      function beforeReview() {
+        return resource.data.status == 'draft' || resource.data.status == 'submitted';
+      }
+
+      // Alive, but being judged or already decided.
+      function underConsideration() {
+        return resource.data.status in ['under_review', 'accepted', 'confirmed', 'waitlisted'];
+      }
+
+      // Travel plans change for reasons that have nothing to do with the talk,
+      // and they carry no weight in the score — so they stay editable after the
+      // content freezes, and after the window closes.
+      function onlyLogistics() {
+        return request.resource.data.diff(resource.data)
+          .affectedKeys().hasOnly(['attendance', 'updatedAt']);
+      }
+
       allow update: if signedIn()
-        && cfpOpen()
         // Must already be a speaker on this proposal — prevents writing
         // yourself onto someone else's document.
         && isSpeakerOn(resource.data)
-        // ...and must still be one afterwards.
-        && uid() in request.resource.data.speakerIds
-        && request.resource.data.speakerIds.size() <= 4
-        // Editing stops once the proposal leaves draft. The draft -> submitted
-        // transition is done by the submitProposal function, which runs with
-        // admin credentials and bypasses these rules.
-        && resource.data.status == 'draft'
-        && !touchesProtected();
+        // The cast is fixed once the document exists — see `create` above.
+        && request.resource.data.speakerIds == resource.data.speakerIds
+        // The draft -> submitted transition is done by the submitProposal
+        // function, which runs with admin credentials and bypasses these rules.
+        && !touchesProtected()
+        && ((cfpOpen() && beforeReview()) || (underConsideration() && onlyLogistics()));
 
       // Withdrawal is a status change, handled by a function. Hard deletes
       // would break the emailLog audit trail.
@@ -144,9 +179,21 @@ service cloud.firestore {
         // sides of this subcollection. §6 says an applicant must never read the
         // reviews of their own proposal, and that outranks any role — so this
         // gate is applied to reads and writes alike, admins included.
+        // get() is cached per request, so naming the parent once costs one read
+        // however many of these are evaluated.
+        function proposal() {
+          return get(/databases/$(database)/documents/proposals/$(proposalId)).data;
+        }
+
         function speaksOnThis() {
-          return signedIn()
-            && uid() in get(/databases/$(database)/documents/proposals/$(proposalId)).data.speakerIds;
+          return signedIn() && uid() in proposal().speakerIds;
+        }
+
+        // Nothing to score on a draft nobody submitted, or on one its author
+        // took back. Without this a review could be attached to either, and
+        // would then count towards the aggregate.
+        function scorable() {
+          return proposal().status != 'draft' && proposal().status != 'withdrawn';
         }
 
         function ownReview() {
@@ -161,6 +208,7 @@ service cloud.firestore {
         // Each reviewer writes only their own document, so nobody can
         // overwrite a colleague's score.
         allow create, update: if ownReview()
+          && scorable()
           && request.resource.data.score is int
           && request.resource.data.score >= 1
           && request.resource.data.score <= 4

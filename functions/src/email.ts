@@ -1,0 +1,202 @@
+/**
+ * The email pipeline (§8).
+ *
+ * Every send goes through `emailLog`, whose document id is derived from what
+ * the message is about — so queueing the same message twice is a no-op rather
+ * than a second email. Sending is a Firestore trigger rather than part of the
+ * request that caused it: a speaker's submission must not fail because Resend
+ * is having a bad afternoon, and the trigger retries on its own.
+ *
+ * Decisions are queued `held` and released as a batch. §8 is explicit that
+ * rejections go out at the same time as acceptances — an admin working down the
+ * list would otherwise send rejections one at a time over an afternoon, and the
+ * people at the top of the alphabet would learn their fate first.
+ */
+
+import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
+import { defineSecret } from 'firebase-functions/params';
+import { onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { logger } from 'firebase-functions';
+
+import {
+  DECISION_KINDS,
+  renderEmail,
+  type EmailData,
+  type EmailKind,
+  type EmailLocale,
+} from '../../shared/emailTemplates';
+import type { EmailSettings } from '../../shared/emailSettings';
+
+/**
+ * The key is the only value that belongs in Secret Manager. The addresses live
+ * in `config/email`, written from `#/admin` — a sender that can only change by
+ * redeploying is a sender that stays wrong for as long as the deploy takes.
+ */
+export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
+
+const publicUrl = () => process.env.CFP_PUBLIC_URL || 'https://devfest-mtl-2026-cfp.web.app';
+
+/** Env is the fallback, so a fresh project sends nothing until someone says so. */
+export async function loadSettings(db: Firestore): Promise<EmailSettings> {
+  const snap = await db.doc('config/email').get();
+  const stored = snap.data() ?? {};
+  return {
+    from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
+    replyTo: (stored.replyTo as string) || process.env.CFP_REPLY_TO || '',
+  };
+}
+
+export type EmailStatus = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'dry_run';
+
+export interface QueueRequest {
+  kind: EmailKind;
+  proposalId: string;
+  to: string;
+  locale: EmailLocale;
+  data: Omit<EmailData, 'proposalUrl'>;
+}
+
+/**
+ * One document per (kind, proposal). Two acceptances for the same talk collapse
+ * into one row, and therefore one email.
+ */
+export const logId = (kind: EmailKind, proposalId: string) => `${kind}__${proposalId}`;
+
+/**
+ * Queues inside the caller's transaction, so an email is never recorded for a
+ * status change that rolled back. Reads the row first — Firestore requires every
+ * read before any write, so callers must invoke this before their own writes.
+ */
+export async function queueEmail(
+  db: Firestore,
+  tx: Transaction,
+  request: QueueRequest,
+): Promise<void> {
+  const ref = db.doc(`emailLog/${logId(request.kind, request.proposalId)}`);
+  const existing = await tx.get(ref);
+  if (existing.exists) return;
+
+  if (!request.to) {
+    logger.warn('no address to send to', { kind: request.kind, proposalId: request.proposalId });
+    return;
+  }
+
+  tx.create(ref, {
+    ...request,
+    // Held decisions wait for an admin to release the whole batch.
+    status: (DECISION_KINDS.includes(request.kind) ? 'held' : 'queued') satisfies EmailStatus,
+    attempts: 0,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+}
+
+interface SendOutcome {
+  status: EmailStatus;
+  providerId?: string;
+  error?: string;
+}
+
+/**
+ * Hands one message to Resend.
+ *
+ * With no API key configured it renders and logs instead, and records `dry_run`
+ * rather than `sent` — a log that claims to have sent mail it did not is worse
+ * than no log. That is also what makes the pipeline testable end to end.
+ */
+export async function deliver(
+  row: FirebaseFirestore.DocumentData,
+  apiKey: string,
+  settings: EmailSettings,
+): Promise<SendOutcome> {
+  const email = renderEmail(row.kind as EmailKind, (row.locale ?? 'en') as EmailLocale, {
+    ...(row.data as Omit<EmailData, 'proposalUrl'>),
+    proposalUrl: publicUrl(),
+  });
+
+  const sender = settings.from;
+  if (!apiKey || !sender) {
+    logger.warn('email not configured — rendering only', {
+      kind: row.kind,
+      to: row.to,
+      subject: email.subject,
+    });
+    return { status: 'dry_run' };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({
+        from: sender,
+        to: [row.to],
+        subject: email.subject,
+        text: email.text,
+        html: email.html,
+        ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
+      }),
+    });
+  } catch (error) {
+    return { status: 'failed', error: `network: ${String(error)}` };
+  }
+
+  const body = (await response.json().catch(() => ({}))) as { id?: string; message?: string };
+  if (!response.ok) {
+    return { status: 'failed', error: `${response.status}: ${body.message ?? 'unknown'}` };
+  }
+  return { status: 'sent', providerId: body.id };
+}
+
+/**
+ * Sends anything sitting at `queued`.
+ *
+ * Firestore triggers are at-least-once, and the same event can arrive twice.
+ * The claim below is the guard: a transaction moves `queued` → `sending`, and
+ * whichever invocation loses that race sees a status it does not act on and
+ * stops. The `sending` write re-fires this trigger, which is why the first thing
+ * it does is check the status.
+ *
+ * `onDocumentWritten` rather than `onDocumentCreated` because decisions are
+ * created `held` and become sendable later, on release — an on-create trigger
+ * would never see that moment.
+ */
+export const sendQueuedEmail = onDocumentWritten(
+  {
+    document: 'emailLog/{logId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: false,
+    secrets: [RESEND_API_KEY],
+  },
+  async (event) => {
+    const ref = event.data?.after.ref;
+    if (!ref || !event.data?.after.exists) return;
+    if (event.data.after.get('status') !== 'queued') return;
+
+    const db = getFirestore();
+    const claimed = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.get('status') !== 'queued') return null;
+      tx.update(ref, { status: 'sending', attempts: FieldValue.increment(1) });
+      return snap.data()!;
+    });
+    if (!claimed) return;
+
+    // Read from the environment rather than `.value()`: the binding below is
+    // what puts it there in production, and locally there is simply no key.
+    const outcome = await deliver(claimed, process.env.RESEND_API_KEY ?? '', await loadSettings(db));
+
+    await ref.update({
+      status: outcome.status,
+      sentAt: FieldValue.serverTimestamp(),
+      providerId: outcome.providerId ?? FieldValue.delete(),
+      error: outcome.error ?? FieldValue.delete(),
+    });
+
+    const line = { logId: event.params.logId, kind: claimed.kind, status: outcome.status };
+    if (outcome.status === 'failed') logger.error('email failed', { ...line, error: outcome.error });
+    else logger.info('email processed', line);
+  },
+);

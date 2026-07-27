@@ -28,9 +28,18 @@ interface SessionizeImportProps {
  * over-limit. Sessionize can change their markup at any time, and an import
  * that silently fills nothing looks exactly like one that had nothing to fill.
  */
+/**
+ * A Sessionize link the speaker has already given us, under Links. Saves them
+ * fetching their own profile URL to paste it back in.
+ */
+export function knownSessionizeUrl(form: FormState): string {
+  const link = form.socials.find((s) => /(^|\/\/|\.)sessionize\.com\//i.test(s.handle.trim()));
+  return link?.handle.trim() ?? '';
+}
+
 export function SessionizeImport({ form, onApply, disabled }: SessionizeImportProps) {
   const { t } = useI18n();
-  const [url, setUrl] = useState('');
+  const [url, setUrl] = useState(() => knownSessionizeUrl(form));
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);

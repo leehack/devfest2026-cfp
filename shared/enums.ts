@@ -68,6 +68,30 @@ export const PROPOSAL_STATUSES = [
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
 /**
+ * Groupings of the lifecycle, in one place because they were drifting apart
+ * across the form, the callables and the admin screen.
+ *
+ * `firestore.rules` necessarily restates them — the rules language cannot
+ * import. Any change here has to be mirrored there, and `tests/rules.test.ts`
+ * is what catches it if it is not.
+ */
+export const STATUS_SETS = {
+  /** In front of the committee, or past it. Counts against the per-speaker cap. */
+  live: ['submitted', 'under_review', 'accepted', 'confirmed', 'waitlisted'],
+  /** Being judged or already judged: content frozen, travel answers still open. */
+  underConsideration: ['under_review', 'accepted', 'confirmed', 'waitlisted'],
+  /** Outcomes an admin may set. Excludes the applicant's own draft/submit/withdraw. */
+  decidable: ['under_review', 'accepted', 'waitlisted', 'rejected'],
+  /** Settled either way — the rest is what the committee still owes an answer on. */
+  decided: ['accepted', 'confirmed', 'waitlisted', 'rejected'],
+  /** A speaker may take it back from any of these. */
+  withdrawable: ['draft', 'submitted', 'under_review', 'accepted', 'waitlisted'],
+} as const satisfies Record<string, readonly ProposalStatus[]>;
+
+export const inStatusSet = (set: keyof typeof STATUS_SETS, status: string): boolean =>
+  (STATUS_SETS[set] as readonly string[]).includes(status);
+
+/**
  * Who someone is to the CFP. Speaker is not a role: anyone signed in may submit,
  * including reviewers and admins, so it needs no record.
  *
@@ -114,4 +138,10 @@ export const LIMITS = {
   handleMax: 200,
   maxSocials: 6,
   reviewCommentMax: 2000,
+  /**
+   * Submitted talks per speaker. Drafts above this are harmless — reviewers
+   * never see them — so the cap is enforced in `submitProposal`, which is the
+   * only place that can count them reliably.
+   */
+  maxTalksPerSpeaker: 3,
 } as const;

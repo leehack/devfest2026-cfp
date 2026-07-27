@@ -9,10 +9,20 @@ drift apart.
 
 ```
 shared/       enums, types, schema, pure parsers — compiled into both bundles
-src/          the form
-functions/    submit, withdraw, recomputeAggregates, sessionize import
+src/          pages/ the form, the admin screen, the review screen
+functions/    submit, withdraw, roles, window, aggregates, sessionize import
 firestore.rules   the enforcement boundary (§6)
 ```
+
+Three screens behind one hash router: `#/` the submission form, `#/review` for
+anyone holding a role, `#/admin` for admins. Everyone may submit a talk,
+reviewers and admins included — they simply never get their own in the queue.
+
+One speaker, up to three talks. The picker on the form switches between them;
+the speaker profile and the travel answers are shared, so a second submission
+does not mean retyping a bio. The cap is enforced in `submitProposal`, because
+rules cannot count documents — drafts above it are allowed and simply never
+reach a reviewer.
 
 ## Running it locally
 
@@ -52,7 +62,7 @@ npm run verify   # lint, build, unit, rules, end-to-end
 |---|---|---|
 | `npm test` | node | schema, scoring, parser, import merge, message translation |
 | `npm run test:rules` | Firestore emulator, JVM | `firestore.rules` |
-| `npm run test:e2e` | the full stack | every applicant flow, in a browser |
+| `npm run test:e2e` | the full stack | every applicant, reviewer and admin flow |
 
 The end-to-end suite drives the same stack `npm start` brings up, reusing it if
 it is already running. It resets the emulators between tests through their REST
@@ -87,8 +97,14 @@ with unequal counts now pins it.
 message reaches an applicant untranslated, and that French never equals English.
 
 The end-to-end suite was mutation-checked too: restoring the raw Firebase
-message in the banner, ignoring `replaceExisting`, and dropping the
-`deleteField()` sentinel each fail exactly the test written for them.
+message in the banner, ignoring `replaceExisting`, dropping the `deleteField()`
+sentinel, dropping the self-review filter from the queue, and forcing
+`reviewsVisible` on each fail exactly the test written for them.
+
+Signing in as somebody other than the default test speaker goes through
+`signInAs` — and the Auth emulator mints its own uid rather than reusing the
+token's `sub`, so anything that names a user creates the account first and reads
+back `localId`.
 
 ## Decisions worth knowing
 
@@ -113,7 +129,55 @@ block was visible. Otherwise a `fundingSource` stranded by a changed radio butto
 becomes a submit-time error with no visible field to point at.
 
 **No `onSnapshot` anywhere** (§2). Live listeners on list views are how the
-50k/day read quota disappears.
+50k/day read quota disappears. Every read is one-shot and refreshed by its caller
+after a write.
+
+**Roles are granted by email, before the person has ever signed in.** There is no
+uid to key on yet, so `roleGrants/{email}` holds the invitation and `claimRole`
+turns it into `reviewers/{uid}` on first sign-in. The first admin has to come
+from outside the app — `scripts/grant-role.mjs` calls the same `grant()` the
+callable does, so "what granting means" cannot drift between them.
+
+**A reviewer who is also a speaker must never read the reviews of their own
+proposal.** §6 outranks any role, so the block is on reads and writes alike,
+admins included, and holds through the moment `reviewsVisible` flips. Six rules
+tests pin it, including that flip.
+
+**Reviewers cannot see each other's scores until an admin opens the round** (§7,
+anchoring). Enforced in `firestore.rules`, not by hiding the section — and the
+review queue re-sorts by disagreement once it is open, because that is what the
+selection meeting is actually for.
+
+**Submitting is not what closes a proposal — the deadline is.** A speaker keeps
+editing after they submit, and keeps seeing what they sent: the form stays on
+screen with a status banner rather than being replaced by a dead end. Once the
+committee starts reading, the content freezes but the travel answers do not, and
+they stay editable after the window shuts — accepted in September, visa refused
+in October. `src/lib/lifecycle.ts` names the three states; `firestore.rules`
+enforces them, down to refusing an abstract smuggled in beside an attendance
+change.
+
+**A draft is private to its author.** Reviewers see a proposal only once it has
+been submitted — someone may have typed something into a pitch and thought better
+of sending it, and the committee has no claim on that. Committee-side queries
+carry `where('status', '!=', 'draft')`; without it the rules deny the listing
+outright rather than quietly filtering.
+
+**`speakerIds` is fixed at creation.** The field is an array because §6 wants
+co-presenters, but naming someone is a claim about *them* — it grants them write
+access and, since nobody may review their own talk, silently disqualifies them
+from reviewing it. Both need consent, so the write surface stays shut until there
+is an invitation flow.
+
+**The speaker profile belongs to the account, not to a talk.** One
+`speakers/{uid}` shared by every proposal, editable throughout — including while
+a talk is frozen, because a changed employer is not a changed talk.
+
+**Selection is a callable, for the same reason submission is.** `status` is what
+every other permission keys off, so an applicant who could write it could accept
+themselves. `setProposalStatus` takes only the four outcomes a committee decides
+and refuses `draft` (not theirs to touch) and `withdrawn` (the speaker's call,
+which outranks the committee's).
 
 ## The deployed project
 
@@ -133,17 +197,108 @@ peaking at a few hundred submissions in the final hour has no legitimate reason
 to autoscale past that — anything beyond is a loop or an attack, and should
 queue rather than bill.
 
-Still needs a console decision rather than a command:
+**Storage is not set up** and `firebase deploy` fails on it, so deploy
+`--only firestore,functions,hosting`. Headshots are post-acceptance (§3).
 
-- **Google sign-in must be enabled** under Authentication → Sign-in method.
-  Until then the site loads but nobody can sign in.
-- **`config/cfp` must be seeded**, or the live site reports "not open yet":
-  ```bash
-  gcloud auth application-default login
-  GCLOUD_PROJECT=devfest-mtl-2026-cfp node scripts/seed-config.mjs --opens 2026-08-01 --closes 2026-09-15
-  ```
-- **Storage is not set up** and `firebase deploy` fails on it, so deploy
-  `--only firestore,functions,hosting`. Headshots are post-acceptance (§3).
+Google sign-in is enabled, `config/cfp` is seeded (open 2026-07-27 →
+2026-09-15), and `leehack@gmail.com` holds the first admin role. The window is
+editable from `#/admin` now; `scripts/seed-config.mjs` is only for a fresh
+project.
+
+## Email
+
+Resend, called over its REST API from a Firestore trigger. Every message is a
+row in `emailLog` whose id is `{kind}__{proposalId}` — queueing the same message
+twice writes the same document, and the queue step refuses to touch a row that
+already exists, so a decision reversed and reinstated does not mail anyone
+twice. The trigger claims a row by moving it `queued → sending` in a
+transaction, which is what makes at-least-once trigger delivery safe.
+
+Decisions are queued **`held`**. They sit there until an admin releases the
+batch from `#/admin`, so acceptances and rejections go out together rather than
+trickling out alphabetically over an afternoon. Receipts do not wait.
+
+With no API key configured the trigger renders the message, logs it, and records
+`dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
+without sending anything, and the log never claims a send that did not happen.
+
+Setting it up, in the order the lead times demand:
+
+1. **Verify a domain** in Resend and add the DNS records it gives you (SPF, DKIM,
+   and a DMARC record). Propagation plus Resend's check is the long pole; do it
+   before anything else. Sending from an unverified domain, or from gmail.com,
+   lands the acceptance emails in spam.
+2. **Store the key**, which never passes through the repo or a shell history file
+   you keep:
+
+   ```bash
+   npx firebase functions:secrets:set RESEND_API_KEY
+   ```
+
+3. **Set the sending address on `#/admin`**, under Email. It is stored in
+   `config/email`, not deployed — an address that can only change by redeploying
+   is one that stays wrong for as long as the deploy takes. `CFP_EMAIL_FROM` and
+   `CFP_REPLY_TO` in `functions/.env*` still work as a fallback for a fresh
+   project, and are empty on purpose so nothing sends until someone says so.
+4. **Send yourself one decision before the real batch**: decide a throwaway
+   proposal, check the preview table, and release.
+
+Checking the DNS from a terminal is quicker than the dashboard — no Resend DKIM
+record means the domain is not verified, whatever the dashboard is showing:
+
+```bash
+dig +short TXT resend._domainkey.YOUR-DOMAIN
+```
+
+## Security
+
+The threat model is small and specific: applicants must not read each other's
+work or their own reviews, reviewers must not anchor on each other, and nobody
+must be able to grant themselves a role. `firestore.rules` is the boundary — the
+SDK queries straight from the browser, so anything the UI merely hides is still
+readable. 71 rules tests, each mutation-checked.
+
+- **Roles cannot be self-served.** `reviewers/{uid}` is `allow write: if false`;
+  only the callables touch it, and each checks `reviewers/{uid}.role == 'admin'`
+  server-side. The first admin comes from a script holding application-default
+  credentials. `claimRole` trusts only the verified auth token's email, and
+  requires `email_verified === true` rather than merely "not false".
+- **Every callable authorises before it acts** — `requireUid`, `requireAdmin`, or
+  ownership via `readOwnProposal`, which reports `not-found` for someone else's
+  proposal so a prober learns nothing either way.
+- **SSRF**: the Sessionize import rebuilds its URL from one validated path
+  segment, so no caller-supplied host is ever fetched, and re-checks the host
+  after redirects. Tested against `sessionize.com.evil.example`, `localhost` and
+  `169.254.169.254`.
+- **PII**: speaker emails are readable by the committee (§7 is not a blind
+  review) and by nobody else; `roleGrants` is admin-only because it is a list of
+  addresses; `emailLog` is closed to every client including admins, who reach it
+  through the `emailQueue` callable. A client that could write there could mail
+  anyone from our verified domain, so the deny covers writes as well as reads.
+- **`config` exposes one document, not a collection.** The read rule names `cfp`
+  — the window, which the landing page needs before anyone signs in. Anything
+  added to `config` later is therefore shut by default; `config/email` holds the
+  organisers' addresses and reaches the admin page through a callable.
+- **The bundle carries no secrets.** The Firebase web config is public by design;
+  the emulator sign-in hook is behind a build-time flag and is absent from the
+  production build (checked, not assumed). Production dependencies report zero
+  advisories — the `npm audit` findings are all dev tooling (vitest, eslint,
+  firebase-tools) that never ships.
+- **Cost is a security property here.** Every callable sets `maxInstances: 10`,
+  and no view uses `onSnapshot`.
+
+Still open, in rough order of how much they would matter on the day:
+
+- **`importSessionizeProfile` has no per-user rate limit.** `maxInstances` caps
+  the bill and the fan-out at Sessionize, but one authenticated user can still
+  call it in a loop. A counter on the speaker document would close it.
+- **No abuse ceiling on draft creation.** Submitted talks are capped at
+  `LIMITS.maxTalksPerSpeaker`; drafts are not, so an authenticated account can
+  create documents until someone notices. Bounded by requiring a Google account,
+  not by us.
+- **No audit log for admin actions.** Grants, revocations, window changes and
+  decisions are written by callables and logged to Cloud Logging, but nothing is
+  queryable in-app. Fine for a committee of five; not fine if this outlives them.
 
 ## Open items
 
@@ -155,9 +310,13 @@ Still needs a console decision rather than a command:
   can still call it in a loop.
 - Auth is Google sign-in only. Fine for a Google event, but it turns "no Google
   account" into "cannot submit".
-- Nothing sends email yet. "Submission received" hangs off `submitProposal` via
-  `emailLog`, so a retry cannot double-send. Domain authentication has the
-  longest lead time in the build — start it now.
+- **No domain is verified with Resend yet**, so the pipeline is in dry-run. Every
+  other part of it is built and tested; see [Email](#email) for the four steps.
+- **No confirmation reminder or waitlist-promotion job.** An acceptance sets no
+  `confirmDeadline` and nothing chases a speaker who does not confirm. §8 lists
+  both; both want a scheduled function, which is the next thing to build.
+- **Failed sends need a human.** The trigger records `failed` and the admin page
+  offers a retry button, but nothing retries on its own or alerts anyone.
 
 ## Seeding a review corpus
 

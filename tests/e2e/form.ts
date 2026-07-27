@@ -20,6 +20,19 @@ export async function signIn(page: Page) {
   await expect(field(page, 'Title')).toBeVisible();
 }
 
+export interface Identity {
+  sub: string;
+  email: string;
+  name: string;
+}
+
+/** Anyone but the default test speaker — see the hook in `src/lib/devAuth.ts`. */
+export async function signInAs(page: Page, who: Identity, hash = '#/') {
+  await page.goto(`/${hash}`);
+  await page.waitForFunction(() => typeof (window as any).signInAsTestSpeaker === 'function');
+  await page.evaluate((claims) => (window as any).signInAsTestSpeaker(claims), who);
+}
+
 /** Everything `submissionSchema` requires, so a test can submit in one call. */
 export const COMPLETE = {
   title: 'Local models on a plane',

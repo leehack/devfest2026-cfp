@@ -11,7 +11,7 @@
     "emulators": "firebase emulators:start --only auth,firestore,functions,hosting",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
     "test": "vitest run --project unit",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-devfest-cfp \"vitest run --project rules\"",
+    "test:rules": "node scripts/with-java.mjs npx firebase emulators:exec --only firestore --project demo-devfest-cfp \"vitest run --project rules\"",
     "lint": "eslint .",
     "verify": "npm run lint && npm run build && npm test && npm run test:rules && npm run test:e2e",
     "start": "node scripts/dev.mjs",

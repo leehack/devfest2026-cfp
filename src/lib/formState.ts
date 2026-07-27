@@ -49,6 +49,38 @@ export interface FormState {
   needsVisa: boolean;
 }
 
+/**
+ * Everything that belongs to one talk rather than to the speaker.
+ *
+ * The acks are here because they are per-submission by design — "I consent to
+ * my talk being recorded" is a statement about a talk, not a standing setting.
+ * Attendance is not: it describes the trip, which is the same whichever talk
+ * gets in.
+ */
+const TALK_KEYS = [
+  'title',
+  'abstract',
+  'pitch',
+  'category',
+  'format',
+  'level',
+  'deliveryLanguage',
+  'languagePreference',
+  'ackNoTravelSupport',
+  'ackCoc',
+  'ackRecording',
+] as const;
+
+/** A blank talk that keeps the speaker's profile — retyping a bio to submit a
+ * second talk is where people give up. */
+export function clearTalk(form: FormState): FormState {
+  const next = { ...form };
+  for (const key of TALK_KEYS) {
+    (next as Record<string, unknown>)[key] = emptyForm[key];
+  }
+  return next;
+}
+
 export const emptyForm: FormState = {
   title: '',
   abstract: '',

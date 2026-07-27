@@ -6,13 +6,21 @@
  */
 
 import { initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions';
 
+import { inStatusSet, LIMITS, STATUS_SETS } from '../../shared/enums';
 import { submissionSchema } from '../../shared/schema';
 import { aggregateReviews, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
+import { DECISION_KINDS, type EmailKind, type EmailLocale } from '../../shared/emailTemplates';
+import { validateSettings, type EmailSettings } from '../../shared/emailSettings';
+import { claim, grant, revoke, RoleError } from './roles';
+import { loadSettings, queueEmail, type EmailStatus } from './email';
+
+export { sendQueuedEmail } from './email';
 
 initializeApp();
 const db = getFirestore();
@@ -54,6 +62,22 @@ function requireUid(request: { auth?: { uid: string } }, action: string): string
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', `Sign in to ${action}.`);
   return uid;
+}
+
+async function requireAdmin(request: { auth?: { uid: string } }, action: string): Promise<string> {
+  const uid = requireUid(request, action);
+  const reviewer = await db.doc(`reviewers/${uid}`).get();
+  if (!reviewer.exists || reviewer.data()?.role !== 'admin') {
+    throw new HttpsError('permission-denied', `Only an admin can ${action}.`);
+  }
+  return uid;
+}
+
+/** RoleError carries the code the caller should see; anything else is ours. */
+function asHttpsError(error: unknown): HttpsError {
+  if (error instanceof RoleError) return new HttpsError(error.code, error.message);
+  logger.error('unexpected role failure', { error: String(error) });
+  return new HttpsError('internal', 'Could not complete that change.');
 }
 
 function requireProposalId(data: unknown): string {
@@ -115,6 +139,36 @@ function assemble(proposal: FirebaseFirestore.DocumentData, speaker: FirebaseFir
   };
 }
 
+/**
+ * Everything an email needs about a proposal, gathered inside the caller's
+ * transaction. Returns null when there is nobody to write to — an email is
+ * never a reason to fail the operation that triggered it.
+ */
+async function emailContext(
+  tx: FirebaseFirestore.Transaction,
+  proposal: FirebaseFirestore.DocumentData,
+) {
+  // `speakerIds` is always exactly `[author]` today (see firestore.rules). When
+  // co-presenters arrive this has to mail all of them — one row per speaker, so
+  // the log id needs their uid in it too.
+  const speakerId = (proposal.speakerIds ?? [])[0];
+  if (!speakerId) return null;
+
+  const snap = await tx.get(db.doc(`speakers/${speakerId}`));
+  const speaker = snap.data();
+  if (!speaker?.email) return null;
+
+  return {
+    to: speaker.email as string,
+    locale: (speaker.locale === 'fr' ? 'fr' : 'en') as EmailLocale,
+    data: {
+      speakerName: (speaker.name as string) || (speaker.email as string),
+      title: (proposal.title as string) ?? '',
+      needsVisa: proposal.attendance?.needsVisa === true,
+    },
+  };
+}
+
 export const submitProposal = onCall(CALLABLE, async (request) => {
   const uid = requireUid(request, 'submit a proposal');
   const proposalId = requireProposalId(request.data);
@@ -141,12 +195,35 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
       throw new HttpsError('failed-precondition', 'Complete your speaker profile first.');
     }
 
+    // Drafts are uncapped — reviewers never see them. What is capped is how many
+    // a speaker can put in front of the committee. Counted in memory rather than
+    // with a `status in` clause, which would need a composite index for a
+    // handful of documents.
+    const mine = await tx.get(
+      db.collection('proposals').where('speakerIds', 'array-contains', uid),
+    );
+    const live = mine.docs.filter((d) => inStatusSet('live', d.data().status)).length;
+    if (live >= LIMITS.maxTalksPerSpeaker) {
+      throw new HttpsError(
+        'resource-exhausted',
+        `You have already submitted ${LIMITS.maxTalksPerSpeaker} talks.`,
+      );
+    }
+
     // The authoritative pass; the browser's copy only renders inline errors.
     const parsed = submissionSchema.safeParse(assemble(proposal, speakerSnap.data()!));
     if (!parsed.success) {
       throw new HttpsError('invalid-argument', 'The proposal is incomplete.', {
         issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })),
       });
+    }
+
+    // Queued in the same transaction as the status change: no receipt for a
+    // submission that rolled back, and no submission without a receipt. Must
+    // precede the write below — Firestore allows no reads after a write.
+    const context = await emailContext(tx, proposal);
+    if (context) {
+      await queueEmail(db, tx, { kind: 'submission_received', proposalId, ...context });
     }
 
     tx.update(proposalRef, {
@@ -159,9 +236,6 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
   });
 
   logger.info('proposal submitted', { proposalId, uid, ...result });
-
-  // The "Submission received" email (build order item 5) hangs off this point,
-  // via emailLog so a retry cannot double-send.
   return { ok: true, proposalId, ...result };
 });
 
@@ -177,13 +251,17 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
 
   await db.runTransaction(async (tx) => {
     const proposal = await readOwnProposal(tx, proposalRef, uid);
-    const withdrawable = ['draft', 'submitted', 'under_review', 'accepted', 'waitlisted'];
-    if (!withdrawable.includes(proposal.status)) {
+    if (!inStatusSet('withdrawable', proposal.status)) {
       throw new HttpsError(
         'failed-precondition',
         `A proposal with status "${proposal.status}" cannot be withdrawn.`,
       );
     }
+    const context = await emailContext(tx, proposal);
+    if (context) {
+      await queueEmail(db, tx, { kind: 'withdrawn', proposalId, ...context });
+    }
+
     tx.update(proposalRef, {
       status: 'withdrawn',
       updatedAt: FieldValue.serverTimestamp(),
@@ -202,12 +280,7 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
  * collection and race each other.
  */
 export const recomputeAggregates = onCall(CALLABLE, async (request) => {
-  const uid = requireUid(request, 'close the review round');
-
-  const reviewer = await db.doc(`reviewers/${uid}`).get();
-  if (!reviewer.exists || reviewer.data()?.role !== 'admin') {
-    throw new HttpsError('permission-denied', 'Only an admin can close the round.');
-  }
+  const uid = await requireAdmin(request, 'close the review round');
 
   // Collection group: every review on every proposal, in one read pass.
   const reviewSnaps = await db.collectionGroup('reviews').get();
@@ -336,3 +409,238 @@ export const importSessionizeProfile = onCall(
     };
   },
 );
+
+// ----------------------------------------------------------------------- roles
+
+/**
+ * Called once after sign-in. Returns the caller's role, claiming a pending
+ * `roleGrants` entry if one is waiting for their address.
+ *
+ * The email comes from the verified auth token, never from the request body —
+ * otherwise anyone could claim any grant by naming it.
+ */
+export const claimRole = onCall(CALLABLE, async (request) => {
+  const uid = requireUid(request, 'continue');
+  const token = request.auth!.token;
+  // `!== true` rather than `=== false`: a token with the claim absent must not
+  // pass. Google always sets it, but a role is the wrong thing to hand out on
+  // the assumption that the only provider we enabled today is the only one
+  // there will ever be.
+  if (token.email && token.email_verified !== true) {
+    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  }
+
+  try {
+    const role = await claim(db, {
+      uid,
+      email: token.email as string | undefined,
+      name: token.name as string | undefined,
+    });
+    return { role };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Admin only. Applies at once if the person already has an account. */
+export const grantRole = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'assign roles');
+  const data = (request.data ?? {}) as { email?: unknown; role?: unknown };
+
+  try {
+    const result = await grant(db, getAuth(), { email: data.email, role: data.role, byUid });
+    logger.info('role granted', { ...result, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Admin only, and refuses to remove the last admin. */
+export const revokeRole = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'remove roles');
+  const data = (request.data ?? {}) as { email?: unknown };
+
+  try {
+    const result = await revoke(db, getAuth(), { email: data.email });
+    logger.info('role revoked', { ...result, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/**
+ * The selection decision. Admin only, and a function rather than a rule because
+ * `status` is what every other permission keys off — an applicant who could
+ * write it could accept themselves.
+ *
+ * Only the outcomes an admin actually decides. `draft`, `submitted` and
+ * `withdrawn` belong to the applicant's own flow and are not settable here.
+ */
+const DECIDABLE = STATUS_SETS.decidable;
+
+export const setProposalStatus = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'decide a proposal');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+
+  const proposalId = requireProposalId(data);
+  const status = String(data.status ?? '');
+  if (!(DECIDABLE as readonly string[]).includes(status)) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Status must be one of ${DECIDABLE.join(', ')} — got "${status}".`,
+    );
+  }
+
+  const ref = db.doc(`proposals/${proposalId}`);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
+
+    const current = String(snap.data()?.status ?? '');
+    // A withdrawn talk is the speaker's decision and outranks the committee's.
+    if (current === 'draft' || current === 'withdrawn') {
+      throw new HttpsError(
+        'failed-precondition',
+        `A proposal with status "${current}" cannot be decided.`,
+      );
+    }
+
+    // Decisions queue `held`, and an admin releases the whole batch at once
+    // (§8) — otherwise the first people alphabetically learn their fate hours
+    // before the rest, and rejections trickle out ahead of acceptances.
+    if (DECISION_KINDS.includes(status as EmailKind)) {
+      const context = await emailContext(tx, snap.data()!);
+      if (context) {
+        await queueEmail(db, tx, { kind: status as EmailKind, proposalId, ...context });
+      }
+    }
+
+    tx.update(ref, { status, updatedAt: FieldValue.serverTimestamp() });
+  });
+
+  logger.info('proposal decided', { proposalId, status, byUid });
+  return { ok: true, proposalId, status };
+});
+
+/**
+ * The batch control for decision mail: see what is waiting, send it, or retry
+ * what bounced.
+ *
+ * §8 asks for a dry run before the first real batch, so `preview` is the
+ * default and nothing leaves without an explicit `release`. Every action is a
+ * status flip on `emailLog`; the trigger does the sending.
+ */
+export const emailQueue = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'manage the email queue');
+  const action = String((request.data as { action?: unknown } | undefined)?.action ?? 'preview');
+  if (!['preview', 'release', 'retry'].includes(action)) {
+    throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
+  }
+
+  const snap = await db.collection('emailLog').get();
+
+  const tally: Record<string, number> = {};
+  for (const doc of snap.docs) {
+    const key = `${doc.get('status')}:${doc.get('kind')}`;
+    tally[key] = (tally[key] ?? 0) + 1;
+  }
+
+  if (action === 'preview') {
+    return {
+      ok: true,
+      tally,
+      settings: await loadSettings(db),
+      // Enough to check the copy and the addresses before committing to a send.
+      held: snap.docs
+        .filter((d) => d.get('status') === 'held')
+        .map((d) => ({ kind: d.get('kind'), to: d.get('to'), title: d.get('data')?.title })),
+    };
+  }
+
+  // `dry_run` counts as unsent, because it is: the row records a message that
+  // was rendered while no sender was configured. Retrying picks those up once
+  // the domain is, so a receipt written during setup still reaches its speaker.
+  const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
+  const due = snap.docs.filter((d) => from.includes(d.get('status')));
+
+  const CHUNK = 400;
+  for (let i = 0; i < due.length; i += CHUNK) {
+    const batch = db.batch();
+    for (const doc of due.slice(i, i + CHUNK)) {
+      batch.update(doc.ref, { status: 'queued' satisfies EmailStatus });
+    }
+    await batch.commit();
+  }
+
+  logger.info('email queue advanced', { byUid, action, count: due.length });
+  return { ok: true, tally, released: due.length };
+});
+
+/**
+ * Who the CFP writes as. Admin only, and stored rather than deployed so a
+ * domain that finishes verifying on a Tuesday can be switched on that Tuesday.
+ *
+ * Nothing here is checked against Resend — an address on an unverified domain
+ * saves fine and then fails at send time, which the queue records as `failed`
+ * and the retry button recovers once the DNS is right.
+ */
+export const setEmailSettings = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'change the sending address');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+
+  const settings: EmailSettings = {
+    from: String(data.from ?? '').trim(),
+    replyTo: String(data.replyTo ?? '').trim(),
+  };
+
+  const problem = validateSettings(settings);
+  if (problem) {
+    throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
+  }
+
+  await db.doc('config/email').set(settings, { merge: true });
+  logger.info('email settings changed', { byUid, ...settings });
+  return { ok: true, settings };
+});
+
+/**
+ * Admin only. The window is what the rules themselves read to decide whether
+ * the CFP is open, so it stays out of reach of any client write.
+ */
+export const setCfpWindow = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'change the submission window');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+
+  const patch: Record<string, unknown> = {};
+  for (const key of ['opensAt', 'closesAt'] as const) {
+    if (data[key] === undefined) continue;
+    const at = new Date(String(data[key]));
+    if (Number.isNaN(at.valueOf())) {
+      throw new HttpsError('invalid-argument', `${key} is not a date.`);
+    }
+    patch[key] = Timestamp.fromDate(at);
+  }
+  for (const key of ['paused', 'reviewsVisible'] as const) {
+    if (data[key] === undefined) continue;
+    if (typeof data[key] !== 'boolean') {
+      throw new HttpsError('invalid-argument', `${key} must be true or false.`);
+    }
+    patch[key] = data[key];
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new HttpsError('invalid-argument', 'Nothing to change.');
+  }
+
+  const current = (await db.doc('config/cfp').get()).data() ?? {};
+  const opensAt = (patch.opensAt ?? current.opensAt) as Timestamp | undefined;
+  const closesAt = (patch.closesAt ?? current.closesAt) as Timestamp | undefined;
+  if (opensAt && closesAt && closesAt.toMillis() <= opensAt.toMillis()) {
+    throw new HttpsError('invalid-argument', 'The window would close before it opens.');
+  }
+
+  await db.doc('config/cfp').set(patch, { merge: true });
+  logger.info('cfp window changed', { byUid, ...patch });
+  return { ok: true };
+});

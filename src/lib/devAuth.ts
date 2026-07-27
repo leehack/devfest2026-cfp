@@ -29,3 +29,9 @@ export async function signInAsTestSpeaker(profile?: {
 
   return signInWithCredential(auth, GoogleAuthProvider.credential(JSON.stringify(claims)));
 }
+
+// The sign-in button only ever mints the default speaker. The end-to-end tests
+// need admins and reviewers too, and Vite drops this branch from a real build.
+if (usingEmulators) {
+  (window as unknown as Record<string, unknown>).signInAsTestSpeaker = signInAsTestSpeaker;
+}

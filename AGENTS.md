@@ -11,17 +11,50 @@ npm run verify       # lint, build, unit, rules, e2e — what CI runs
 ```
 
 Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules`
-(vitest `rules` project, needs the Firestore emulator and a JVM), and
-`npm run test:e2e` (Playwright against the `npm start` stack).
+(vitest `rules` project, needs the Firestore emulator), and `npm run test:e2e`
+(Playwright against the `npm start` stack). Both emulator suites go through
+`scripts/with-java.mjs`, which finds a Homebrew JVM — macOS has none on PATH.
+
+```bash
+node scripts/grant-role.mjs --email you@example.org --role admin
+```
+
+Makes the first admin; every later role goes through `#/admin`. Add the emulator
+env vars from the script's own header to point it at the local stack.
 
 ## Layout
 
 ```
-shared/      enums, types, zod schema, pure parsers — compiled into BOTH bundles
-src/         the form (Vite/React)
-functions/   callables: submit, withdraw, recomputeAggregates, sessionize import
+shared/      enums, types, zod schema, email copy, pure parsers — BOTH bundles
+src/         the app: pages/ (submit, admin, review), lib/ (data access), i18n/
+functions/   callables: submit, withdraw, roles, window, aggregates, sessionize,
+             emailQueue — plus the sendQueuedEmail Firestore trigger
+scripts/     dev.mjs (npm start), grant-role.mjs (first admin), with-java.mjs
 tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 ```
+
+Three routes off one hash router (`src/lib/router.ts`): `#/` the form, `#/review`
+for any role-holder, `#/admin` for admins. Roles live in `reviewers/{uid}`;
+`roleGrants/{email}` holds an invitation until its holder first signs in.
+
+A speaker may hold several talks (`LIMITS.maxTalksPerSpeaker`), switched by the
+picker on the form. Only the talk half is cleared between them — the speaker
+profile and the travel answers carry over (`clearTalk` in `src/lib/formState.ts`).
+
+`src/lib/lifecycle.ts` decides what a speaker may still change: everything until
+the committee starts reading, then travel answers only, then nothing. The speaker
+profile is outside it — that document belongs to the account and never freezes.
+The rules are the enforcement; `editScope` only decides what to disable.
+
+Email is a queue, not a send: callables write `emailLog/{kind}__{proposalId}`
+inside their own transaction and the `sendQueuedEmail` trigger delivers. Copy
+lives in `shared/emailTemplates.ts` (pure, both languages); transport and status
+machine in `functions/src/email.ts`. Decisions queue `held` until an admin
+releases them together — see the README for why, and for the Resend setup.
+
+The sending address is data, not deploy config: `config/email`, written by
+`setEmailSettings` and shown on `#/admin`. `functions/.env*` is only a fallback.
+`config` is *not* world-readable as a collection — the rule names `cfp`.
 
 ## Style
 
@@ -51,6 +84,53 @@ tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
   `deleteField()` sentinel; see `mapEmpty` in `src/lib/formState.ts`.
 - **Start emulators with `functions` included.** Without it every callable 404s
   and the failure looks like a client bug.
+- **The Auth emulator mints its own uid; a token's `sub` is not it.** Anything
+  that has to name a user — `speakerIds`, a seeded review — must create the
+  account first and read back `localId` (`createAccount` in `tests/e2e/backend.ts`).
+- **No `onSnapshot`.** Every read is one-shot, refreshed by its caller after a
+  write. Ten reviewers on a live list view is how the read quota disappears.
+- **Status groupings live in `STATUS_SETS` (`shared/enums.ts`).** They had drifted
+  across the form, the callables and the admin screen. `firestore.rules` restates
+  them because the rules language cannot import — change one, change both.
+- **Reviewers never see a draft.** An unsubmitted proposal is nobody's but its
+  author's, so committee queries must carry `where('status', '!=', 'draft')` or
+  the rules deny the whole listing.
+- **`speakerIds` is fixed at creation** and must equal `[uid()]`. Naming someone
+  hands them write access and disqualifies them from reviewing the talk; that
+  needs their consent, so co-presenters wait for an invitation callable.
+- **A role-holder must never read reviews of their own proposal.** Blocked on
+  reads and writes alike, admins included — `firestore.rules` and six tests
+  around the `reviewsVisible` flip.
+- **`status` is function-writable only**, so every decision is a callable.
+  `setProposalStatus` is admin-only and refuses `draft` and `withdrawn` — the
+  first is not the committee's to touch, the second is the speaker's call.
+- **A rules test that writes the same value it seeded proves nothing.**
+  `affectedKeys()` never names an unchanged field, so a `hasOnly` guard passes
+  either way. Always write a value that differs.
+- **The emulator serves `functions/lib`, not `functions/src`.** A mutation test
+  against a callable or trigger has to `npm --prefix functions run build` first,
+  or it silently re-runs the unmutated code and "passes".
+- **A listening functions port is not a working one.** It accepts connections
+  ~4s before it registers the code, and callables 404 with "does not exist" in
+  between — indistinguishable from a real missing function. `dev.mjs` probes an
+  actual callable (`waitForCallables`); do not weaken that back to a port check.
+- **A deterministic `emailLog` id is not by itself the dedupe.** It keeps the row
+  count at one, but an overwrite resets a `sent` row to `held` and mails the
+  person again — the existence check in `queueEmail` is the actual guard, so
+  test the row's *status*, not how many rows there are.
+- **No `defineString`.** `firebase emulators:start` stops and prompts for any
+  param without a value, which hangs `npm start` with no visible error. Only the
+  Resend key is a param, and it is a `defineSecret`.
+- **A late load must not overwrite a field someone is typing in.** Every admin
+  panel seeds its inputs from an async call; without an `editing` ref the field
+  empties under the cursor. It only reproduces under load, so the test holds the
+  response open with `page.route` rather than hoping for the race.
+- **Charts are hand-rolled SVG/CSS in `src/components/charts.tsx`.** The deployed
+  CSP blocks CDN scripts, and a chart library would outweigh the page it draws.
+- **Test a guard through `callAs`, not the UI.** "The button is not rendered" is
+  not the claim worth proving; `tests/e2e/backend.ts` calls the callable directly
+  with a real ID token. Always pair refusals with one call that succeeds, or a
+  broken URL passes as a refusal.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.

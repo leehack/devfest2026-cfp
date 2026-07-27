@@ -1,6 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { readProposal, reset, setCfpWindow } from './backend';
-import { field, fillRequired, signIn, waitForSave } from './form';
+import { COMPLETE, field, fillRequired, signIn, waitForSave } from './form';
 
 test.beforeEach(async () => {
   await reset();
@@ -58,14 +58,21 @@ test.describe('validation', () => {
 });
 
 test.describe('submitting', () => {
-  test('a complete proposal submits and becomes read-only', async ({ page }) => {
+  async function submit(page: Page) {
     await signIn(page);
     await fillRequired(page);
     await waitForSave(page);
     await page.getByRole('button', { name: 'Submit proposal' }).click();
+    await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+  }
 
-    await expect(page.getByText('Your proposal has been submitted.')).toBeVisible();
-    await expect(field(page, 'Title')).toHaveCount(0);
+  test('a complete proposal submits and stays on screen', async ({ page }) => {
+    await submit(page);
+
+    // The talk is still readable — a speaker who cannot re-read what they sent
+    // has no way to check it went in.
+    await expect(field(page, 'Title')).toHaveValue(COMPLETE.title);
+    await expect(page.getByRole('button', { name: 'Submit proposal' })).toHaveCount(0);
 
     const proposal = await readProposal();
     expect(proposal?.status).toBe('submitted');
@@ -73,27 +80,19 @@ test.describe('submitting', () => {
   });
 
   test('the submitted state survives a reload', async ({ page }) => {
-    await signIn(page);
-    await fillRequired(page);
-    await waitForSave(page);
-    await page.getByRole('button', { name: 'Submit proposal' }).click();
-    await expect(page.getByText('Your proposal has been submitted.')).toBeVisible();
-
+    await submit(page);
     await page.reload();
-    await expect(page.getByText('Your proposal has been submitted.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+    await expect(field(page, 'Title')).toHaveValue(COMPLETE.title);
   });
 
   test('a submitted proposal can be withdrawn', async ({ page }) => {
-    await signIn(page);
-    await fillRequired(page);
-    await waitForSave(page);
-    await page.getByRole('button', { name: 'Submit proposal' }).click();
-    await expect(page.getByText('Your proposal has been submitted.')).toBeVisible();
+    await submit(page);
 
     page.once('dialog', (d) => d.accept());
     await page.getByRole('button', { name: 'Withdraw proposal' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Withdraw proposal' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Withdrawn' })).toBeVisible();
     expect((await readProposal())?.status).toBe('withdrawn');
   });
 

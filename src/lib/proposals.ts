@@ -16,8 +16,10 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
+import type { Locale } from '../i18n';
 import { mapEmpty, toDocuments, type FormState } from './formState';
-import type { ProposalStatus } from '@shared/enums';
+import type { EditScope } from './lifecycle';
+import { LIMITS, type ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
 
 export interface CfpWindow {
@@ -54,26 +56,36 @@ export interface LoadedProposal {
 }
 
 /**
+ * Every talk this speaker has, plus the one speaker profile they all share.
+ *
  * §2: no `onSnapshot` on anything list-shaped — ten reviewers on a live list
- * view is how the 50k/day read quota disappears. One-shot, capped at one doc.
+ * view is how the 50k/day read quota disappears. One-shot, and the query stays
+ * scoped by `array-contains` because the rules deny an unscoped listing.
  */
-export async function loadMyProposal(user: User): Promise<LoadedProposal | null> {
-  const q = query(
-    collection(db, 'proposals'),
-    where('speakerIds', 'array-contains', user.uid),
-    limit(1),
-  );
-  const snap = await getDocs(q);
-  if (snap.empty) return null;
+export async function loadMyProposals(
+  user: User,
+): Promise<{ talks: LoadedProposal[]; speaker: Record<string, any> | undefined }> {
+  const [snap, speakerSnap] = await Promise.all([
+    getDocs(
+      query(
+        collection(db, 'proposals'),
+        where('speakerIds', 'array-contains', user.uid),
+        limit(LIMITS.maxTalksPerSpeaker + 1),
+      ),
+    ),
+    getDoc(doc(db, 'speakers', user.uid)),
+  ]);
 
-  const docSnap = snap.docs[0];
-  const speakerSnap = await getDoc(doc(db, 'speakers', user.uid));
+  const speaker = speakerSnap.exists() ? speakerSnap.data() : undefined;
 
   return {
-    id: docSnap.id,
-    status: (docSnap.data().status ?? 'draft') as ProposalStatus,
-    proposal: docSnap.data(),
-    speaker: speakerSnap.exists() ? speakerSnap.data() : undefined,
+    talks: snap.docs.map((d) => ({
+      id: d.id,
+      status: (d.data().status ?? 'draft') as ProposalStatus,
+      proposal: d.data(),
+      speaker,
+    })),
+    speaker,
   };
 }
 
@@ -85,6 +97,8 @@ export async function saveDraft(
   user: User,
   form: FormState,
   proposalId: string | null,
+  scope: EditScope = 'all',
+  locale: Locale = 'en',
 ): Promise<string> {
   const { proposalDoc, speakerDoc } = toDocuments(form);
   const existing = proposalId !== null;
@@ -101,6 +115,9 @@ export async function saveDraft(
       // Email comes from the identity provider, never the form — the rules
       // require it to match the auth token on create and stay put on update.
       email: user.email ?? '',
+      // Which language to write to them in. Whatever they filled the form in is
+      // the best evidence we have, and it beats guessing from the address.
+      locale,
       updatedAt: serverTimestamp(),
       ...(existing ? {} : { createdAt: serverTimestamp() }),
     },
@@ -108,11 +125,21 @@ export async function saveDraft(
   );
 
   if (proposalId) {
-    await setDoc(
-      doc(db, 'proposals', proposalId),
-      { ...forWrite(proposalDoc), updatedAt: serverTimestamp() },
-      { merge: true },
-    );
+    // Under review the rules accept `attendance` and nothing else, so send
+    // nothing else — a full write would be rejected in its entirety, taking
+    // the speaker's profile edit down with it.
+    const patch =
+      scope === 'logistics'
+        ? { attendance: proposalDoc.attendance }
+        : forWrite(proposalDoc);
+
+    if (scope !== 'none') {
+      await setDoc(
+        doc(db, 'proposals', proposalId),
+        { ...patch, updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    }
     return proposalId;
   }
 

@@ -16,6 +16,14 @@ export const fr: Dictionary = {
     loading: 'Chargement…',
   },
 
+  nav: {
+    form: 'Votre proposition',
+    review: 'Évaluation',
+    admin: 'Administration',
+    forbidden: 'Cette page n’est pas accessible avec votre compte.',
+    backToForm: 'Aller à votre proposition',
+  },
+
   window: {
     notOpen: "L'appel à conférences n'est pas encore ouvert.",
     opensAt: 'Il ouvre le',
@@ -30,6 +38,8 @@ export const fr: Dictionary = {
     proposalHelp: "C'est ce que le comité de sélection lit.",
     language: 'Langue',
     speaker: 'À propos de vous',
+    speakerHelp:
+      'Rattaché à votre compte, pas à une conférence — le modifier ici le change partout, et il reste modifiable après une soumission.',
     acks: 'Avant de soumettre',
     attendance: 'Venir à Montréal',
   },
@@ -176,6 +186,21 @@ export const fr: Dictionary = {
       either: 'L’une ou l’autre — à vous de choisir',
       bilingual: 'Bilingue — j’alterne entre les deux pendant la conférence',
     },
+    status: {
+      draft: 'Brouillon',
+      submitted: 'Soumise',
+      under_review: 'En évaluation',
+      accepted: 'Acceptée',
+      confirmed: 'Confirmée',
+      declined: 'Déclinée',
+      waitlisted: 'Liste d’attente',
+      rejected: 'Refusée',
+      withdrawn: 'Retirée',
+    },
+    role: {
+      reviewer: 'Évaluateur',
+      admin: 'Administrateur',
+    },
     socialPlatform: {
       bluesky: 'Bluesky',
       linkedin: 'LinkedIn',
@@ -193,19 +218,171 @@ export const fr: Dictionary = {
     charsRemaining: (n: number) => `${n} caractères restants`,
     charsNeeded: (n: number) => `${n} caractères de plus requis`,
     save: 'Enregistrer le brouillon',
+    saveChanges: 'Enregistrer les modifications',
     saving: 'Enregistrement…',
     saved: 'Brouillon enregistré',
     saveFailed: 'Impossible d’enregistrer votre brouillon',
     submit: 'Soumettre la proposition',
     submitting: 'Soumission…',
     submitted: 'Votre proposition a été soumise.',
-    submittedHelp:
-      'Nous vous avons envoyé une copie par courriel. Vous pouvez encore la retirer, mais elle ne peut plus être modifiée.',
+    submittedHelp: 'Nous vous avons envoyé une copie par courriel.',
+
+    statusHelp: {
+      submitted: 'C’est envoyé. Le comité n’a pas encore commencé sa lecture.',
+      under_review: 'Le comité est en train de la lire.',
+      accepted: 'Vous êtes au programme. Nous vous écrirons pour les détails.',
+      confirmed: 'Confirmée. À bientôt à Montréal.',
+      waitlisted:
+        'Pas encore retenue, mais pas écartée — nous revenons à la liste d’attente dès qu’une place se libère.',
+      rejected:
+        'Pas cette année. Il y a eu plus de bonnes propositions que de places, et nous en sommes désolés.',
+      declined: 'Vous avez décliné la place.',
+      withdrawn: 'Vous avez retiré celle-ci.',
+    } as Record<string, string>,
+
+    editHelp: {
+      all: 'Vous pouvez encore tout modifier ici jusqu’à la date limite.',
+      logistics:
+        'La conférence est verrouillée pendant l’évaluation. Votre profil et vos réponses de voyage restent modifiables.',
+      none: 'Celle-ci est close. Votre profil vous appartient toujours.',
+    } as Record<string, string>,
     withdraw: 'Retirer la proposition',
     withdrawConfirm: 'Retirer cette proposition ? Cette action est irréversible.',
+    yourTalks: 'Vos conférences',
+    untitled: 'Conférence sans titre',
+    newTalk: 'Nouvelle conférence',
+    addTalk: '+ Une autre conférence',
+    talkCap: (n: number) => `C’est le maximum de ${n}.`,
     fixErrors: 'Veuillez vérifier les champs signalés.',
     errorCount: (n: number) =>
       n === 1 ? '1 champ requiert votre attention' : `${n} champs requièrent votre attention`,
+  },
+
+  admin: {
+    people: 'Comité',
+    peopleHelp: 'Invitez par courriel. Le rôle s’applique dès la première connexion.',
+    emailLabel: 'Adresse courriel',
+    roleLabel: 'Rôle',
+    invite: 'Inviter',
+    inviting: 'Invitation…',
+    granted: (email: string) => `${email} détient maintenant ce rôle.`,
+    invited: (email: string) => `${email} obtiendra ce rôle dès sa première connexion.`,
+    awaitingSignIn: 'Invité — ne s’est pas encore connecté',
+    revoke: 'Retirer',
+    revokeConfirm: (email: string) => `Retirer tous les rôles de ${email} ?`,
+    revoked: (email: string) => `${email} ne détient plus aucun rôle.`,
+    noPeople: 'Personne ne détient de rôle pour l’instant.',
+    isYou: 'vous',
+    lastAdmin: 'C’est le seul administrateur restant — accordez d’abord le rôle à quelqu’un d’autre.',
+    badInput: 'Vérifiez l’adresse courriel et les dates.',
+
+    window: 'Période de soumission',
+    opensAtLabel: 'Ouverture',
+    closesAtLabel: 'Fermeture',
+    pausedLabel: 'Suspendre les soumissions',
+    pausedHelp: 'Ferme le formulaire immédiatement, sans déplacer les dates.',
+    reviewsVisibleLabel: 'Permettre aux évaluateurs de voir les notes des autres',
+    reviewsVisibleHelp:
+      'Gardez ceci désactivé jusqu’à la fin de l’évaluation — une note visible influence la suivante.',
+    saveWindow: 'Enregistrer',
+    windowSaved: 'Enregistré.',
+
+    email: 'Courriels',
+    emailFrom: 'Expéditeur',
+    emailReplyTo: 'Répondre à',
+    emailFromHelp:
+      'L’adresse doit être sur un domaine vérifié auprès de Resend, sinon tous les envois échouent. Le nom affiché se met entre chevrons : DevFest Montréal <cfp@exemple.org>.',
+    emailSaveSender: 'Enregistrer l’adresse',
+    emailNoSender:
+      'Aucune adresse d’expéditeur n’est configurée : rien n’est envoyé. Les messages sont tout de même mis en file et partiront dès qu’une adresse sera définie.',
+    emailSender: {
+      empty: 'Une adresse d’expéditeur est requise.',
+      format: 'Cela ne ressemble pas à une adresse courriel.',
+      brackets:
+        'Mettez le nom affiché entre chevrons : DevFest Montréal <cfp@exemple.org>.',
+    },
+    emailQueue: 'File d’attente',
+    emailHelp:
+      'Les décisions sont retenues jusqu’à ce que vous les libériez, afin que tout le monde soit informé le même jour. Vérifiez la liste ci-dessous avant l’envoi — c’est irréversible.',
+    emailStatus: {
+      held: 'En attente de libération',
+      queued: 'En file',
+      sent: 'Envoyés',
+      dry_run: 'Non envoyés — expéditeur non configuré',
+      failed: 'Échecs',
+    },
+    emailKind: 'Message',
+    emailTo: 'Destinataire',
+    emailKinds: {
+      submission_received: 'Proposition reçue',
+      withdrawn: 'Retirée',
+      accepted: 'Acceptée',
+      waitlisted: 'Liste d’attente',
+      rejected: 'Non retenue',
+    } as Record<string, string>,
+    emailRefresh: 'Actualiser',
+    emailRelease: 'Envoyer {count} décisions',
+    emailNothing: 'Rien à envoyer',
+    emailConfirm: 'Envoyer {count} courriels de décision maintenant ? C’est irréversible.',
+    emailRetry: 'Renvoyer {count} non envoyés',
+    emailSent: '{count} messages mis en file.',
+
+    proposals: 'Propositions',
+    proposalsHelp:
+      'Meilleure note en tête. Recalculez après une série d’évaluations, puis décidez.',
+    overview: 'La ronde en un coup d’œil',
+    chartDecisions: 'Décisions',
+    chartScores: 'Note moyenne',
+    chartCategories: 'Catégories',
+    chartLanguages: 'Langues',
+    undecided: 'Indécises',
+    allScored: 'Toutes les propositions ont été évaluées.',
+    someUnscored: (n: number) =>
+      n === 1
+        ? '1 proposition n’a pas encore de note.'
+        : `${n} propositions n’ont pas encore de note.`,
+    results: 'Conférenciers retenus',
+    tally: (live: number, accepted: number, waitlisted: number, decided: number) =>
+      `${live} devant le comité · ${accepted} acceptées · ${waitlisted} en liste d’attente · ${live - decided} à décider`,
+    noneAccepted: 'Aucune acceptation pour l’instant.',
+    colSpeaker: 'Conférencier',
+    recompute: 'Recalculer les notes',
+    recomputing: 'Calcul en cours…',
+    recomputed: (proposals: number, reviews: number) =>
+      `${reviews} évaluations réparties sur ${proposals} propositions.`,
+    noProposals: 'Aucune proposition pour l’instant.',
+    colTitle: 'Titre',
+    colStatus: 'Statut',
+    colScore: 'Moyenne',
+    colReviews: 'Évaluations',
+    colSpread: 'Écart',
+  },
+
+  review: {
+    help: 'Notez chaque proposition que vous pouvez juger. Les vôtres n’apparaissent jamais.',
+    empty: 'Rien à évaluer pour l’instant — aucune conférence n’a été soumise.',
+    onlyYours: 'Rien à évaluer pour l’instant. Vous ne pouvez pas noter votre propre conférence, et c’est la seule soumise jusqu’ici.',
+    progress: (scored: number, total: number) => `${scored} sur ${total} évaluées`,
+    scoreLabel: 'Note',
+    scores: {
+      1: '1 — Non',
+      2: '2 — Peut-être',
+      3: '3 — Oui',
+      4: '4 — Oui, sans hésiter',
+    } as Record<number, string>,
+    conflict: 'J’ai un conflit d’intérêts',
+    conflictHelp: 'Exclue des totaux, y compris de votre propre calibrage.',
+    comment: 'Notes pour le comité',
+    save: 'Enregistrer',
+    saving: 'Enregistrement…',
+    saved: 'Enregistré',
+    notScored: 'Pas encore évaluée',
+    othersHidden:
+      'Les notes des autres évaluateurs restent masquées jusqu’à leur ouverture par un administrateur.',
+    others: 'Notes du comité',
+    sortedByDisagreement: 'Triées par désaccord — celles qui méritent discussion sont en tête.',
+    spread: 'Écart',
+    conflictDeclared: 'conflit déclaré',
   },
 
   errors: {
