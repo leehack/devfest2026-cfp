@@ -148,6 +148,41 @@ be a submit-time server error with no visible field to point at.
 are how the 50k/day read quota disappears. Everything here is one-shot `getDoc`
 / `getDocs`.
 
+## The deployed project
+
+Firebase project **`devfest-mtl-2026-cfp`**, Firestore in
+`northamerica-northeast1` (Montréal). Live at
+<https://devfest-mtl-2026-cfp.web.app>.
+
+Deployed so far: Firestore rules, Firestore indexes, Hosting.
+
+```bash
+npx vite build && npx firebase deploy --only firestore:rules,firestore:indexes,hosting
+```
+
+The real project config lives in `.env.production.local` (gitignored). It is
+`.env.production.local` rather than `.env.local` on purpose: Vite loads it only
+for `vite build`, so `npm run dev` keeps pointing at the emulators. The tracked
+`.env` holds `demo-` placeholders and nothing else.
+
+Three things are deliberately not done, because each needs an account decision
+rather than a command:
+
+1. **Google sign-in is not enabled.** Authentication → Sign-in method in the
+   console. Until then the site loads but nobody can sign in.
+2. **`config/cfp` has not been seeded**, so the live site correctly reports
+   "not open yet" — the rules and `submitProposal` both fail closed when that
+   document is missing. Seeding it needs application-default credentials:
+   ```bash
+   gcloud auth application-default login
+   GCLOUD_PROJECT=devfest-mtl-2026-cfp node scripts/seed-config.mjs --opens 2026-08-01 --closes 2026-09-15
+   ```
+3. **Cloud Functions are not deployed**, because functions require the Blaze
+   plan. Submitting, withdrawing and the Sessionize import all go through
+   callables, so on the deployed site those three do nothing until the project
+   is upgraded and `firebase deploy --only functions` has run. They work
+   locally against the emulators today.
+
 ## Open items before this ships
 
 - `firebase-tools` is pinned as a devDependency at 15.x. The globally installed
@@ -230,11 +265,23 @@ events a speaker appeared at (`c-s-event__name`), others list their talks
 only looked for events and reported a profile with seven talks as having
 nothing.
 
-**Switching talks replaces only what the import wrote.** Picking from a list of
-seven means picking wrong sometimes, so the merge tracks the text it applied and
-will replace that; anything the speaker typed themselves is still never touched.
-Without this the picker silently no-ops after the first choice, which is worse
-than not offering it.
+**It leads the form.** It fills the talk as well as the speaker, so offering it
+under "About you" — three sections down — arrived after the work it exists to
+save, and anyone who scrolled straight to the title never learned it was there.
+
+**Switching talks replaces what the import wrote, and asks about anything
+else.** Picking from a list of seven means picking wrong sometimes, so the merge
+tracks the text it applied and will replace that silently. Text of unknown
+provenance is different: it asks first, naming the fields it would overwrite.
+
+That second half matters because **provenance does not survive a reload**. Come
+back to a draft tomorrow and the title an import wrote yesterday is
+indistinguishable from one you typed, so a rule of "only replace what we wrote"
+turns every subsequent pick into a silent no-op — the report said *Using
+"Gemma 3"* while the form kept showing a different talk. Storing provenance on
+the draft would fix it too, at the cost of a field in the data model, in the
+rules' protected-field list, and in every document already written. Asking costs
+one dialog and is honest about whose text it is.
 
 - [`shared/sessionize.ts`](shared/sessionize.ts) is a pure parser. Keeping the
   brittle part free of network and DOM means a Sessionize markup change breaks
