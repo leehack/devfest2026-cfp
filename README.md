@@ -115,23 +115,36 @@ Real config lives in `.env.production.local` (gitignored) rather than
 `.env.local`, so `npm run dev` stays on the emulators; the tracked `.env` holds
 only `demo-` placeholders.
 
+Every callable sets `maxInstances: 10`. Blaze bills per invocation, and a CFP
+peaking at a few hundred submissions in the final hour has no legitimate reason
+to autoscale past that — anything beyond is a loop or an attack, and should
+queue rather than bill.
+
 Still needs a console decision rather than a command:
 
 - **Google sign-in must be enabled** under Authentication → Sign-in method.
+  Until then the site loads but nobody can sign in.
 - **`config/cfp` must be seeded**, or the live site reports "not open yet":
   ```bash
   gcloud auth application-default login
   GCLOUD_PROJECT=devfest-mtl-2026-cfp node scripts/seed-config.mjs --opens 2026-08-01 --closes 2026-09-15
   ```
+- **Storage is not set up** and `firebase deploy` fails on it, so deploy
+  `--only firestore,functions,hosting`. Headshots are post-acceptance (§3).
 
 ## Open items
 
+- **`functions/src` has no tests.** The guards it repeated are now extracted and
+  pure, but the transaction bodies are only covered indirectly, through the
+  rules suite and by hand. They need an emulator-backed suite of their own.
+- **`importSessionizeProfile` has no per-user rate limit.** `maxInstances` caps
+  the bill and the outbound fan-out at Sessionize, but one authenticated user
+  can still call it in a loop.
 - Auth is Google sign-in only. Fine for a Google event, but it turns "no Google
   account" into "cannot submit".
 - Nothing sends email yet. "Submission received" hangs off `submitProposal` via
   `emailLog`, so a retry cannot double-send. Domain authentication has the
   longest lead time in the build — start it now.
-- `storage.rules` denies everything; headshots are post-acceptance (§3).
 
 ## Seeding a review corpus
 

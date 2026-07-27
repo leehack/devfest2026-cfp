@@ -17,7 +17,13 @@ import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/session
 initializeApp();
 const db = getFirestore();
 
-const REGION = 'northamerica-northeast1'; // Montréal
+/**
+ * Blaze bills per invocation, so every callable caps its own fan-out. A CFP
+ * peaks at a few hundred submissions in the last hour before the deadline —
+ * anything past this ceiling is a loop or an attack, and should queue rather
+ * than autoscale into a bill.
+ */
+const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
 
 interface CfpWindow {
   paused: boolean;
@@ -109,7 +115,7 @@ function assemble(proposal: FirebaseFirestore.DocumentData, speaker: FirebaseFir
   };
 }
 
-export const submitProposal = onCall({ region: REGION }, async (request) => {
+export const submitProposal = onCall(CALLABLE, async (request) => {
   const uid = requireUid(request, 'submit a proposal');
   const proposalId = requireProposalId(request.data);
 
@@ -163,7 +169,7 @@ export const submitProposal = onCall({ region: REGION }, async (request) => {
  * Withdrawal is a status change rather than a delete: the rules block deletes
  * outright so the emailLog audit trail cannot be orphaned.
  */
-export const withdrawProposal = onCall({ region: REGION }, async (request) => {
+export const withdrawProposal = onCall(CALLABLE, async (request) => {
   const uid = requireUid(request, 'withdraw a proposal');
   const proposalId = requireProposalId(request.data);
 
@@ -195,7 +201,7 @@ export const withdrawProposal = onCall({ region: REGION }, async (request) => {
  * proposal they touched. Per-review triggers would fan out across the whole
  * collection and race each other.
  */
-export const recomputeAggregates = onCall({ region: REGION }, async (request) => {
+export const recomputeAggregates = onCall(CALLABLE, async (request) => {
   const uid = requireUid(request, 'close the review round');
 
   const reviewer = await db.doc(`reviewers/${uid}`).get();
@@ -248,7 +254,7 @@ export const recomputeAggregates = onCall({ region: REGION }, async (request) =>
  * tricks and link-local addresses.
  */
 export const importSessionizeProfile = onCall(
-  { region: REGION, timeoutSeconds: 30, memory: '256MiB' },
+  { ...CALLABLE, timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
     const uid = requireUid(request, 'import a profile');
 
