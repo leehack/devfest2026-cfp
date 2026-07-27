@@ -1,0 +1,435 @@
+/*
+ * Deliberately plain. The submission form should read as one screen of
+ * questions, not a designed landing page — §3 is about keeping abandonment
+ * down, and visual weight works against that.
+ */
+
+:root {
+  --bg: #ffffff;
+  --fg: #16181d;
+  --muted: #5f6673;
+  --line: #dcdfe5;
+  --accent: #1a73e8;
+  --accent-fg: #ffffff;
+  --error: #c5221f;
+  --error-bg: #fce8e6;
+  --note-bg: #f1f5fd;
+  --good-bg: #e6f4ea;
+  --radius: 8px;
+  --gap: 1.25rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e8eaed;
+    --muted: #9aa0a6;
+    --line: #33373d;
+    --accent: #8ab4f8;
+    --accent-fg: #14161a;
+    --error: #f28b82;
+    --error-bg: #2d1b1a;
+    --note-bg: #1b2230;
+    --good-bg: #1a2b1f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.page {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 5rem;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.header__event {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+}
+
+.header__title {
+  margin: 0.15rem 0 0;
+  font-size: 1.5rem;
+}
+
+.header__right {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.main {
+  padding-top: 1.75rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.deadline {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* -------------------------------------------------------------- sections */
+
+.section {
+  margin-bottom: 2.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.section h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.125rem;
+}
+
+.section__help {
+  margin: 0 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.grid {
+  display: grid;
+  gap: var(--gap);
+}
+
+@media (min-width: 40rem) {
+  .grid--2 {
+    grid-template-columns: 1fr 1fr;
+  }
+  .grid--3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ---------------------------------------------------------------- fields */
+
+.field {
+  margin-bottom: var(--gap);
+  border: 0;
+  padding: 0;
+}
+
+.field__label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+  padding: 0;
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.field__requirement {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.field__help {
+  margin: 0 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.field__input {
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.field__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.field__input:disabled {
+  opacity: 0.6;
+}
+
+.field__input--area {
+  resize: vertical;
+  min-height: 5rem;
+}
+
+.field__foot {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  min-height: 1.1rem;
+}
+
+.field__meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.field__error {
+  margin: 0.25rem 0 0;
+  color: var(--error);
+  font-size: 0.8125rem;
+}
+
+.field--error .field__input {
+  border-color: var(--error);
+}
+
+/* --------------------------------------------------------------- choices */
+
+.radios {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.radio {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.radio--on {
+  border-color: var(--accent);
+  background: var(--note-bg);
+}
+
+.radio__body {
+  display: block;
+}
+
+.radio__label {
+  display: block;
+}
+
+.radio__desc {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.checkbox {
+  margin-bottom: 0.75rem;
+}
+
+.checkbox__row {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.checkbox__row input {
+  margin-top: 0.3rem;
+}
+
+/* --------------------------------------------------------------- reveals */
+
+.reveal {
+  margin: 0 0 var(--gap);
+}
+
+/* Dependent inputs — the rule marks them as belonging to the control above. */
+.reveal--fields {
+  margin-left: 0.25rem;
+  padding-left: 1rem;
+  border-left: 2px solid var(--accent);
+}
+
+/* Static guidance — GDE travel support, visa invitation letters. */
+.reveal--note,
+.note {
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius);
+  background: var(--note-bg);
+  color: var(--fg);
+  font-size: 0.875rem;
+}
+
+.note--inline {
+  margin: 0 0 var(--gap);
+}
+
+/* ---------------------------------------------------------------- import */
+
+.import {
+  padding: 0.9rem 1rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+.import__row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.import__report {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--note-bg);
+  font-size: 0.8125rem;
+}
+
+.import__report p {
+  margin: 0 0 0.35rem;
+}
+
+.import__report p:last-child {
+  margin-bottom: 0;
+}
+
+.import__sessions ul {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.import__sessions li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.15rem 0.75rem;
+  align-items: center;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.import__sessions li.is-chosen {
+  border-color: var(--accent);
+  background: var(--note-bg);
+}
+
+.import__session-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.import__session-meta {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.import__sessions li button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- socials */
+
+.socials__row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.socials__platform {
+  flex: 0 0 9.5rem;
+}
+
+.socials__handle {
+  flex: 1 1 auto;
+}
+
+/* --------------------------------------------------------------- panels */
+
+.panel {
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.panel--good {
+  border-color: transparent;
+  background: var(--good-bg);
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+/* -------------------------------------------------------------- actions */
+
+.actions {
+  position: sticky;
+  bottom: 0;
+  padding: 1rem 0;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.actions__status {
+  min-height: 1.2rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.actions__buttons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.btn {
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+}

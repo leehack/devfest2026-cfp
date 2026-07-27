@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "moduleResolution": "node",
+    "outDir": "lib",
+    // Set to the repo root so `shared/` can be compiled in alongside `src/`.
+    // This is why `main` is lib/functions/src/index.js rather than lib/index.js.
+    "rootDir": "..",
+    "sourceMap": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "../shared/**/*.ts"],
+  "exclude": ["node_modules", "lib"]
+}

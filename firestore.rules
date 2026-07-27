@@ -1,0 +1,183 @@
+rules_version = '2';
+
+// DevFest Montréal 2026 CFP — Firestore security rules (spec §6).
+//
+// The rules below are the enforcement boundary, not the UI. The Firestore SDK
+// queries straight from the browser, so anything the UI merely hides is still
+// readable unless it is denied here.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------- helpers
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function config() {
+      return get(/databases/$(database)/documents/config/cfp).data;
+    }
+
+    // §6: "Deadline enforcement happens server-side, not by disabling the
+    // submit button." request.time is the server's clock, not the client's.
+    function cfpOpen() {
+      let c = config();
+      return c.paused == false
+        && request.time >= c.opensAt
+        && request.time < c.closesAt;
+    }
+
+    function isReviewer() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/reviewers/$(uid()));
+    }
+
+    function isLead() {
+      return isReviewer()
+        && get(/databases/$(database)/documents/reviewers/$(uid())).data.role == 'lead';
+    }
+
+    // Keys the client may never write, on create or update. `status` and
+    // `aggregate` are function-writable only; the rest are set during selection
+    // and scheduling.
+    function protectedKeys() {
+      return [
+        'status', 'aggregate', 'submittedAt', 'confirmDeadline',
+        'confirmedAt', 'assignedLanguage'
+      ];
+    }
+
+    function touchesProtected() {
+      return request.resource.data.diff(resource.data)
+        .affectedKeys().hasAny(protectedKeys());
+    }
+
+    function isSpeakerOn(doc) {
+      return signedIn() && uid() in doc.speakerIds;
+    }
+
+    // ---------------------------------------------------------------- config
+
+    // The form needs the open/close dates to render its own state. Writes go
+    // through the console or a function — never a client.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // --------------------------------------------------------------- speakers
+
+    match /speakers/{speakerId} {
+      function ownProfile() {
+        return signedIn() && speakerId == uid();
+      }
+
+      // Reviewers see speaker context on the review card — §7 is explicit that
+      // this is not a blind review.
+      allow get: if ownProfile() || isReviewer();
+      allow list: if isReviewer();
+
+      allow create: if ownProfile()
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if ownProfile()
+        && request.resource.data.email == resource.data.email;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------- proposals
+
+    match /proposals/{proposalId} {
+
+      // Rules are evaluated against every document a query returns, so an
+      // applicant's `where('speakerIds', 'array-contains', uid)` lookup passes
+      // while an unconstrained listing of the collection is denied on the first
+      // foreign document. Rules are not filters: the client must carry that
+      // where-clause or the whole query fails.
+      allow get, list: if isSpeakerOn(resource.data) || isReviewer();
+
+      allow create: if signedIn()
+        && cfpOpen()
+        && uid() in request.resource.data.speakerIds
+        && request.resource.data.speakerIds.size() <= 4
+        // The only status a client may ever write, and only at creation.
+        && request.resource.data.status == 'draft'
+        && !request.resource.data.keys().hasAny([
+             'aggregate', 'submittedAt', 'confirmDeadline',
+             'confirmedAt', 'assignedLanguage'
+           ]);
+
+      allow update: if signedIn()
+        && cfpOpen()
+        // Must already be a speaker on this proposal — prevents writing
+        // yourself onto someone else's document.
+        && isSpeakerOn(resource.data)
+        // ...and must still be one afterwards.
+        && uid() in request.resource.data.speakerIds
+        && request.resource.data.speakerIds.size() <= 4
+        // Editing stops once the proposal leaves draft. The draft -> submitted
+        // transition is done by the submitProposal function, which runs with
+        // admin credentials and bypasses these rules.
+        && resource.data.status == 'draft'
+        && !touchesProtected();
+
+      // Withdrawal is a status change, handled by a function. Hard deletes
+      // would break the emailLog audit trail.
+      allow delete: if false;
+
+      // ------------------------------------------------------------- reviews
+      //
+      // §6: "Applicants must never be able to read the reviews subcollection."
+      // Note there is no applicant clause anywhere in this block — the only
+      // readers are reviewers, and only of their own document until the round
+      // closes (§7, anchoring).
+      match /reviews/{reviewerUid} {
+
+        function ownReview() {
+          return isReviewer() && reviewerUid == uid();
+        }
+
+        allow get: if ownReview()
+          || (isReviewer() && config().reviewsVisible == true)
+          || isLead();
+        allow list: if (isReviewer() && config().reviewsVisible == true) || isLead();
+
+        // Each reviewer writes only their own document, so nobody can
+        // overwrite a colleague's score.
+        allow create, update: if ownReview()
+          && request.resource.data.score is int
+          && request.resource.data.score >= 1
+          && request.resource.data.score <= 4
+          && request.resource.data.conflictOfInterest is bool;
+
+        allow delete: if false;
+      }
+    }
+
+    // -------------------------------------------------------------- reviewers
+
+    match /reviewers/{reviewerId} {
+      allow get: if isReviewer();
+      allow list: if isReviewer();
+      // Membership is granted out of band, never self-served.
+      allow write: if false;
+    }
+
+    // --------------------------------------------------------------- emailLog
+
+    // Written by the email pipeline (admin SDK) only. Contains applicant
+    // addresses, so it is not client-readable at all.
+    match /emailLog/{logId} {
+      allow read, write: if false;
+    }
+
+    // Anything not matched above is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

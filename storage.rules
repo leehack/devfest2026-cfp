@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Cloud Storage is not used by the submission form: headshots are collected
+// after acceptance (§3), which keeps storage usage proportional to accepted
+// speakers rather than to all ~200 applicants.
+//
+// The bucket is locked shut until build order item 2 needs it. Leaving a
+// default-open bucket around is how CFP tooling leaks headshots.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

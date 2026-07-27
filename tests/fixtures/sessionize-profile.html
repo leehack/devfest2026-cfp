@@ -1,0 +1,116 @@
+<!--
+  Synthetic fixture mirroring the structure of a real Sessionize speaker page
+  as observed on 26 July 2026: same class names, same nesting depth, same Vue
+  v-if language switches, same icon-after-anchor pattern in the links group.
+
+  The speaker is invented on purpose. Committing a real person's bio, photo URL
+  and social handles into this repo as test data would be gratuitous, and the
+  parser only cares about shape.
+
+  When this test starts failing, Sessionize has changed their markup and the
+  import feature is silently degraded in production. That is the whole point of
+  keeping it.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta property="og:image" content="https://cdn.sessionize.com/image/0000-400o400o2-Placeholder.jpg" />
+  <meta property="og:url" content="https://sessionize.com/rene-tremblay/" />
+  <meta property="og:title" content="Ren&#233;e Tremblay&#39;s Speaker Profile" />
+  <meta property="og:description" content="Ren&#233;e builds developer tooling and has been speaking about it since 2019. She is happiest when a talk send..." />
+  <meta name="description" content="Ren&#233;e builds developer tooling and has been speaking about it since 2019. She is happiest when a talk send..." />
+</head>
+<body>
+<div class="c-s-speaker-container">
+  <div class="c-s-speaker-info c-s-speaker-info--full">
+    <div class="c-s-speaker-info__media">
+      <div class="c-s-speaker-info__avatar">
+        <img src="https://cdn.sessionize.com/image/0000-400o400o2-Placeholder.jpg" alt="Ren&#233;e Tremblay" />
+      </div>
+    </div>
+
+    <h1 class="c-s-speaker-info__name">Ren&#233;e Tremblay</h1>
+    <p class="c-s-speaker-info__tagline">Developer tooling &amp; build systems</p>
+    <div class="c-s-speaker-info__location">Montr&#233;al, Quebec, Canada</div>
+
+    <div class="c-s-speaker-info__group c-s-speaker-info__group--links">
+      <div class="c-s-speaker-info__group-title">Links</div>
+      <a href="https://github.com/renee-example" target="_blank" rel="noopener">
+        <svg class="o-icon"><use xlink:href="/landing/images/symbol-defs.svg#o-icon-github"></use></svg>
+        <span>GitHub</span>
+      </a>
+      <a href="https://www.linkedin.com/in/renee-example/" target="_blank" rel="noopener">
+        <svg class="o-icon"><use xlink:href="/landing/images/symbol-defs.svg#o-icon-linkedin"></use></svg>
+        <span>LinkedIn</span>
+      </a>
+      <a href="https://bsky.app/profile/renee.example" target="_blank" rel="noopener">
+        <svg class="o-icon"><use xlink:href="/landing/images/symbol-defs.svg#o-icon-bluesky"></use></svg>
+        <span>Bluesky</span>
+      </a>
+      <a href="https://renee.example.dev/" target="_blank" rel="noopener">
+        <svg class="o-icon"><use xlink:href="/landing/images/symbol-defs.svg#o-icon-building"></use></svg>
+        <span>Company</span>
+      </a>
+    </div>
+
+    <div class="c-s-speaker-info__group c-s-speaker-info__group--awards">
+      <a href="/most-active-speakers-2025/">
+        <svg class="o-icon"><use xlink:href="/landing/images/symbol-defs.svg#o-icon-star"></use></svg>
+      </a>
+    </div>
+
+    <div v-if="activeLanguage.speaker == 'en'" class="c-s-speaker-info__bio">
+      <p>Ren&#233;e builds developer tooling and has been speaking about it since 2019. She is happiest when a talk sends someone home with a smaller build.</p>
+      <p>Outside of work she maintains two open source <em>linters</em> nobody asked for &amp; runs a monthly meetup.</p>
+    </div>
+
+    <div v-if="activeLanguage.speaker == 'fr'" class="c-s-speaker-info__bio">
+      <p>Ren&#233;e con&#231;oit des outils pour d&#233;veloppeurs.</p>
+    </div>
+  </div>
+
+  <div class="c-s-events">
+    <div class="c-s-event">
+      <div class="c-s-event__name">DevFest Montr&#233;al 2025</div>
+      <div class="c-s-event__meta c-s-event__meta--date">November 2025</div>
+    </div>
+    <div class="c-s-event">
+      <div class="c-s-event__name">ConFoo 2025</div>
+      <div class="c-s-event__meta c-s-event__meta--date">February 2025</div>
+    </div>
+    <div class="c-s-event">
+      <div class="c-s-event__name">DevFest Montr&#233;al 2025</div>
+      <div class="c-s-event__meta c-s-event__meta--date">November 2025</div>
+    </div>
+  </div>
+
+  <!--
+    Talks. Profile layouts vary: some pages list the events a speaker appeared
+    at (above), others list their talks (here), and the parser must handle both
+    rather than treating an empty result as "this speaker has nothing".
+
+    Note Sessionize puts the full abstract inline with <br><br> for paragraph
+    breaks, which is why importing a talk needs no second request.
+  -->
+  <div class="c-s-sessions">
+    <div class="c-s-session">
+      <h3 class="c-s-session__title">
+        <a href="/s/rene-tremblay/making-builds-smaller/163127">Making builds smaller &amp; faster</a>
+      </h3>
+      <p class="c-s-session__summary">Every build gets slower until someone measures it.<br /><br />We will walk through three real regressions and the tooling that caught them.</p>
+    </div>
+    <div class="c-s-session">
+      <h3 class="c-s-session__title">
+        <a href="/s/rene-tremblay/linting-for-humans/155081">Linting for humans</a>
+      </h3>
+      <p class="c-s-session__summary"></p>
+    </div>
+    <div class="c-s-session">
+      <h3 class="c-s-session__title">
+        <a href="/s/rene-tremblay/a-talk-with-no-summary/155082">A talk with no summary element</a>
+      </h3>
+    </div>
+  </div>
+</div>
+</body>
+</html>
