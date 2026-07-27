@@ -18,6 +18,8 @@ import process from 'node:process';
 const PROJECT = 'demo-devfest-cfp';
 const DATA_DIR = '.emulator-data';
 const FIRESTORE = '127.0.0.1:8080';
+const AUTH = '127.0.0.1:9099';
+const FUNCTIONS = '127.0.0.1:5001';
 
 const children = [];
 let shuttingDown = false;
@@ -57,17 +59,28 @@ function resolveJava() {
   return candidates[0];
 }
 
-async function waitForFirestore() {
-  for (let i = 0; i < 120; i++) {
-    try {
-      const response = await fetch(`http://${FIRESTORE}/`);
-      if (response.ok || response.status === 200) return;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(`Firestore emulator never came up on ${FIRESTORE}`);
+/**
+ * Every emulator, not just the first. Firestore wins the race on a cold start,
+ * and waiting only for it hands out a stack whose auth and functions ports are
+ * still closed — which reads as an app bug, not a startup one.
+ *
+ * Any HTTP response means listening; the functions emulator 404s at the root.
+ */
+async function waitForEmulators() {
+  const wanted = { firestore: FIRESTORE, auth: AUTH, functions: FUNCTIONS };
+  await Promise.all(
+    Object.entries(wanted).map(async ([name, host]) => {
+      for (let i = 0; i < 240; i++) {
+        try {
+          await fetch(`http://${host}/`);
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+      throw new Error(`${name} emulator never came up on ${host}`);
+    }),
+  );
 }
 
 /** A window comfortably around today, so the form is open on a fresh checkout. */
@@ -119,7 +132,7 @@ run(
   { env },
 ).on('exit', (code) => shutdown(code ?? 0));
 
-await waitForFirestore();
+await waitForEmulators();
 
 const { opens, closes } = devWindow();
 console.log(`\n▸ seeding config/cfp (${opens} → ${closes})\n`);
