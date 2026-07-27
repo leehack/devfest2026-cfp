@@ -54,6 +54,31 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
+/**
+ * Resend's failures, which are about a third party and not about the caller.
+ *
+ * Worth its own map because the obvious code is a trap: a key Resend refuses is
+ * *not* `unauthenticated`. That code already means "you are not signed in", and
+ * sharing it told an admin their session had expired the moment they pasted a
+ * bad key — sending them to re-authenticate over and over while the key sat
+ * there wrong. `functions/src/domains.ts` throws `failed-precondition` instead.
+ */
+export function resendError(error: unknown, t: Dictionary): string {
+  switch (codeOf(error)) {
+    case 'failed-precondition':
+      return t.admin.emailErrors.badKey;
+    case 'not-found':
+      return t.admin.emailErrors.noDomain;
+    case 'invalid-argument':
+      return t.admin.emailErrors.rejected;
+    case 'unavailable':
+    case 'internal':
+      return t.admin.emailErrors.unreachable;
+    default:
+      return adminError(error, t);
+  }
+}
+
 /** The import has its own failures, all of which the speaker can act on. */
 export function importError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {

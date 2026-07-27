@@ -291,6 +291,13 @@ export const fr: Dictionary = {
     emailStepKey: 'Clé API Resend',
     emailKeyHelp:
       'Conservée dans Secret Manager, pas dans la base de données, et jamais réaffichée. Vérifiée auprès de Resend avant l’enregistrement : une faute de frappe échoue ici plutôt que le soir des décisions.',
+    emailKeySteps: [
+      'Créez un compte sur resend.com — l’offre gratuite suffit pour un appel à conférenciers.',
+      'Ouvrez API Keys, puis Create API Key.',
+      'Choisissez la permission Full access. Une clé limitée à l’envoi ne peut pas gérer les domaines, et l’étape suivante en a besoin.',
+      'Copiez la clé — elle commence par re_, et Resend ne l’affiche qu’une fois — puis collez-la ci-dessous.',
+    ],
+    emailKeyLink: 'Ouvrir les clés API Resend',
     emailKeyLabel: 'Clé API',
     emailKeySet: 'Une clé est configurée, terminant par {hint}.',
     emailKeySave: 'Enregistrer la clé',
@@ -300,6 +307,11 @@ export const fr: Dictionary = {
     emailStepDomain: 'Domaine d’envoi',
     emailDomainHelp:
       'Resend refuse les envois depuis un domaine non vérifié, et un fournisseur gratuit finit dans les indésirables. La vérification passe par le DNS : prévoyez le délai de propagation.',
+    emailDomainSteps: [
+      'Indiquez un domaine que vous contrôlez. Un sous-domaine comme cfp.exemple.org est préférable : son DNS reste distinct du courrier dont dépend tout le groupe.',
+      'Ajoutez les enregistrements affichés ici à ce domaine, chez l’hébergeur de son DNS.',
+      'Lancez la vérification. C’est habituellement une affaire de minutes, mais le DNS a le droit d’être bien plus lent.',
+    ],
     emailDomainLabel: 'Domaine',
     emailDomainAdd: 'Ajouter le domaine',
     emailDomainAdded: 'Ajouté. Ajoutez maintenant les enregistrements DNS ci-dessous.',
@@ -356,6 +368,13 @@ export const fr: Dictionary = {
       format: 'Cela ne ressemble pas à une adresse courriel.',
       brackets:
         'Mettez le nom affiché entre chevrons : DevFest Montréal <cfp@exemple.org>.',
+    },
+    emailErrors: {
+      badKey:
+        'Resend a refusé cette clé. Vérifiez qu’elle a été copiée en entier et que sa permission est Full access — une clé limitée à l’envoi ne peut pas gérer les domaines.',
+      noDomain: 'Resend ne connaît pas ce domaine. Il a peut-être été supprimé là-bas.',
+      rejected: 'Resend a refusé la demande. Vérifiez le nom de domaine.',
+      unreachable: 'Impossible de joindre Resend. Réessayez dans un instant.',
     },
     emailQueue: 'File d’attente',
     emailHelp:

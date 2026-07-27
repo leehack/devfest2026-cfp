@@ -285,6 +285,13 @@ export const en = {
     emailStepKey: 'Resend API key',
     emailKeyHelp:
       'Stored in Secret Manager, not in the database, and never shown again. Checked against Resend before it is saved, so a typo fails here rather than on the night the decisions go out.',
+    emailKeySteps: [
+      'Create an account at resend.com — the free tier covers a CFP.',
+      'Open API Keys, then Create API Key.',
+      'Set the permission to Full access. Sending access alone cannot manage domains, and the next step needs it.',
+      'Copy the key — it starts with re_, and Resend shows it only once — then paste it below.',
+    ],
+    emailKeyLink: 'Open Resend API keys',
     emailKeyLabel: 'API key',
     emailKeySet: 'A key is set, ending {hint}.',
     emailKeySave: 'Save key',
@@ -294,6 +301,11 @@ export const en = {
     emailStepDomain: 'Sending domain',
     emailDomainHelp:
       'Mail from an unverified domain is refused by Resend, and mail from a free provider lands in spam. Verification is DNS, so allow for propagation.',
+    emailDomainSteps: [
+      'Enter a domain you control. A subdomain such as cfp.example.org is worth preferring: its DNS is separate from the mail everyone else in the group depends on.',
+      'Add the records that appear here to that domain, at whoever hosts its DNS.',
+      'Check verification. It is usually minutes, but DNS is allowed to take far longer.',
+    ],
     emailDomainLabel: 'Domain',
     emailDomainAdd: 'Add domain',
     emailDomainAdded: 'Added. Now add the DNS records below.',
@@ -348,6 +360,13 @@ export const en = {
       empty: 'A sending address is required.',
       format: 'That does not look like an email address.',
       brackets: 'Put the display name in angle brackets: DevFest Montréal <cfp@example.org>.',
+    },
+    emailErrors: {
+      badKey:
+        'Resend would not accept that key. Check that it was copied whole, and that its permission is Full access — a sending-only key cannot manage domains.',
+      noDomain: 'Resend has no such domain. It may have been removed there.',
+      rejected: 'Resend refused that request. Check the domain name.',
+      unreachable: 'Could not reach Resend. Try again shortly.',
     },
     emailQueue: 'Queue',
     emailHelp:

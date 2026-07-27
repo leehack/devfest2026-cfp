@@ -31,9 +31,17 @@ export interface Domain {
   records: DnsRecord[];
 }
 
+/**
+ * Codes chosen so they cannot be confused with our own.
+ *
+ * A rejected Resend key is `failed-precondition`, never `unauthenticated`:
+ * `unauthenticated` already means "the caller is not signed in", and mapping
+ * both onto it told an admin their session had expired when the real problem
+ * was the key they had just pasted — advice that could never have worked.
+ */
 export class ResendError extends Error {
   constructor(
-    readonly code: 'unauthenticated' | 'invalid-argument' | 'unavailable' | 'not-found',
+    readonly code: 'failed-precondition' | 'invalid-argument' | 'unavailable' | 'not-found',
     message: string,
   ) {
     super(message);
@@ -45,7 +53,7 @@ async function call<T>(
   path: string,
   init: { method: string; body?: unknown } = { method: 'GET' },
 ): Promise<T> {
-  if (!apiKey) throw new ResendError('unauthenticated', 'No Resend API key is set.');
+  if (!apiKey) throw new ResendError('failed-precondition', 'No Resend API key is set.');
 
   let response: Response;
   try {
@@ -62,7 +70,9 @@ async function call<T>(
   const body = (await response.json().catch(() => ({}))) as Record<string, any>;
 
   if (response.status === 401 || response.status === 403) {
-    throw new ResendError('unauthenticated', 'Resend rejected the API key.');
+    // 403 is usually a *valid* key without full access: `/domains` needs it,
+    // `/emails` does not, so a sending-only key fails here and nowhere else.
+    throw new ResendError('failed-precondition', 'Resend rejected the API key.');
   }
   if (response.status === 404) throw new ResendError('not-found', 'No such domain at Resend.');
   if (!response.ok) {

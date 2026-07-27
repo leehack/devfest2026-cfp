@@ -831,6 +831,27 @@ body {
   color: var(--accent);
 }
 
+.steps {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.steps li + li {
+  margin-top: 0.375rem;
+}
+
+/* Done once a step is, so the instructions stop competing with the state. */
+.step--done .steps {
+  display: none;
+}
+
+.link {
+  color: var(--accent);
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.8125rem;

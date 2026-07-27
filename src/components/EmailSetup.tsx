@@ -9,8 +9,19 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { TextField } from './fields';
 import { useI18n } from '../i18n';
-import { adminError } from '../lib/errors';
+import { resendError } from '../lib/errors';
 import { emailDomain, setEmailSecret, type Domain } from '../lib/roles';
+
+/** Numbered, because the order is the only part of this that is not obvious. */
+function Steps({ items }: { items: readonly string[] }) {
+  return (
+    <ol className="steps">
+      {items.map((line) => (
+        <li key={line}>{line}</li>
+      ))}
+    </ol>
+  );
+}
 
 function Step({ done, title, children }: { done: boolean; title: string; children: React.ReactNode }) {
   return (
@@ -61,7 +72,7 @@ export function EmailSetup({
         setDomains(found);
       }
     } catch (e) {
-      setError(adminError(e, t));
+      setError(resendError(e, t));
     }
   }, [domainId, keyHint, t]);
 
@@ -76,7 +87,7 @@ export function EmailSetup({
     try {
       setNote(await fn());
     } catch (e) {
-      setError(adminError(e, t));
+      setError(resendError(e, t));
     } finally {
       setBusy(false);
     }
@@ -86,6 +97,12 @@ export function EmailSetup({
     <div className="setup">
       <Step done={Boolean(keyHint)} title={t.admin.emailStepKey}>
         <p className="field__help">{t.admin.emailKeyHelp}</p>
+        <Steps items={t.admin.emailKeySteps} />
+        <p>
+          <a className="link" href="https://resend.com/api-keys" target="_blank" rel="noreferrer">
+            {t.admin.emailKeyLink}
+          </a>
+        </p>
         {keyHint && <p className="muted">{t.admin.emailKeySet.replace('{hint}', keyHint)}</p>}
         <div className="grid grid--2">
           <TextField
@@ -118,6 +135,7 @@ export function EmailSetup({
 
       <Step done={verified} title={t.admin.emailStepDomain}>
         <p className="field__help">{t.admin.emailDomainHelp}</p>
+        <Steps items={t.admin.emailDomainSteps} />
 
         {!keyHint ? (
           <p className="muted">{t.admin.emailKeyFirst}</p>

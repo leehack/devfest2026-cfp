@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { Timestamp } from 'firebase/firestore';
 
 import { toDate, toDateTimeInput } from '../src/lib/dates';
-import { adminError, friendlyError } from '../src/lib/errors';
+import { adminError, friendlyError, resendError } from '../src/lib/errors';
 import { en } from '../src/i18n/en';
 import { fr } from '../src/i18n/fr';
 
@@ -70,5 +70,31 @@ describe('adminError', () => {
   it('never leaks the raw message', () => {
     const raw = 'PERMISSION_DENIED: evaluation error at L157:24';
     expect(adminError({ code: 'permission-denied', message: raw }, en)).not.toContain('L157');
+  });
+});
+
+describe('resendError', () => {
+  const failed = (code: string) => ({ code });
+
+  // The bug this exists for: a key Resend refused was reported as an expired
+  // session, so the admin signed in again — repeatedly — and the key stayed bad.
+  it('blames the key, never the session', () => {
+    for (const dict of [en, fr]) {
+      const shown = resendError(failed('functions/failed-precondition'), dict);
+      expect(shown).toBe(dict.admin.emailErrors.badKey);
+      expect(shown).not.toBe(dict.errors.signedOut);
+      expect(shown).not.toBe(dict.admin.lastAdmin);
+    }
+  });
+
+  it('still reports a real signed-out caller as signed out', () => {
+    expect(resendError(failed('unauthenticated'), en)).toBe(en.errors.signedOut);
+  });
+
+  it('maps the rest of what Resend can return', () => {
+    expect(resendError(failed('not-found'), en)).toBe(en.admin.emailErrors.noDomain);
+    expect(resendError(failed('invalid-argument'), en)).toBe(en.admin.emailErrors.rejected);
+    expect(resendError(failed('unavailable'), en)).toBe(en.admin.emailErrors.unreachable);
+    expect(resendError(failed('permission-denied'), en)).toBe(en.nav.forbidden);
   });
 });

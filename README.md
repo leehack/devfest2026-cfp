@@ -226,11 +226,13 @@ without sending anything, and the log never claims a send that did not happen.
 whether it is done, because the failure this replaces was silent — the pipeline
 queued perfectly and sent nothing, and no screen said why.
 
-1. **API key.** Paste a Resend key. It is checked against Resend before being
-   saved, so a typo fails here rather than on the night the decisions go out.
-   It goes to **Secret Manager, never to Firestore** — Firestore has no version
-   history, no access audit, and a copy of every document lands in every export.
-   The page shows the last four characters and nothing more.
+1. **API key.** Paste a Resend key. Give it **Full access** when you create it:
+   the next step manages domains, and Resend's sending-only keys cannot. The key
+   is checked against Resend before being saved, so a typo fails here rather than
+   on the night the decisions go out. It goes to **Secret Manager, never to
+   Firestore** — Firestore has no version history, no access audit, and a copy of
+   every document lands in every export. The page shows the last four characters
+   and nothing more.
 2. **Sending domain.** Add it, and the page lists the exact DNS records Resend
    wants and re-checks them on a button. Those records are generated per domain
    and exist only in Resend's dashboard, which is the one part of the setup

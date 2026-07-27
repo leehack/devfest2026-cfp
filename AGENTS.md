@@ -132,6 +132,11 @@ collection — the rule names `cfp`.
   key rotated from `#/admin` would not take effect. `readResendKey()` goes to
   Secret Manager at runtime and short-circuits on `FUNCTIONS_EMULATOR`, since
   there is no Secret Manager emulator.
+- **`unauthenticated` means the caller, never a third party.** Resend refusing an
+  API key was thrown as `unauthenticated`, so `#/admin` told the admin their
+  session had expired and to sign in again — advice that could not work, for a
+  session that was fine. `domains.ts` throws `failed-precondition` and
+  `resendError` maps it; a borrowed code becomes a lie in the other mapper.
 - **A late load must not overwrite a field someone is typing in.** Every admin
   panel seeds its inputs from an async call; without an `editing` ref the field
   empties under the cursor. It only reproduces under load, so the test holds the
