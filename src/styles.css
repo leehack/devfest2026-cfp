@@ -289,6 +289,12 @@ p {
 .grid {
   display: grid;
   gap: var(--s-4) var(--s-5);
+  /*
+   * The grid carries the separation from whatever follows it, because the rule
+   * below takes it off the fields. Without this the last row sits flush against
+   * the next control — the Invite and Save buttons were touching their grids.
+   */
+  margin-bottom: var(--s-4);
 }
 
 /*
