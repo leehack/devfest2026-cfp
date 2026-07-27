@@ -53,7 +53,7 @@ interface TextFieldProps extends CommonProps {
   value: string;
   onChange: (v: string) => void;
   maxLength?: number;
-  type?: 'text' | 'email' | 'date' | 'datetime-local' | 'url';
+  type?: 'text' | 'email' | 'date' | 'datetime-local' | 'url' | 'password';
   placeholder?: string;
   min?: string;
 }

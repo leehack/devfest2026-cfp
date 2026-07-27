@@ -14,7 +14,6 @@
  */
 
 import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
-import { defineSecret } from 'firebase-functions/params';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
@@ -24,16 +23,17 @@ import {
   type EmailData,
   type EmailKind,
   type EmailLocale,
+  type TemplateOverrides,
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
+import { readResendKey } from './secrets';
 
 /**
- * The key is the only value that belongs in Secret Manager. The addresses live
- * in `config/email`, written from `#/admin` — a sender that can only change by
- * redeploying is a sender that stays wrong for as long as the deploy takes.
+ * Neither the key nor the addresses are deploy config: the addresses live in
+ * `config/email` and the key in Secret Manager, both written from `#/admin`.
+ * Anything that can only change by redeploying stays wrong for as long as the
+ * deploy takes, which on the night decisions go out is too long.
  */
-export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
-
 const publicUrl = () => process.env.CFP_PUBLIC_URL || 'https://devfest-mtl-2026-cfp.web.app';
 
 /** Env is the fallback, so a fresh project sends nothing until someone says so. */
@@ -44,6 +44,12 @@ export async function loadSettings(db: Firestore): Promise<EmailSettings> {
     from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
     replyTo: (stored.replyTo as string) || process.env.CFP_REPLY_TO || '',
   };
+}
+
+/** Organiser-written copy, if any. Absent means the built-in wording is used. */
+export async function loadTemplates(db: Firestore): Promise<TemplateOverrides> {
+  const snap = await db.doc('config/email').get();
+  return ((snap.data()?.templates ?? {}) as TemplateOverrides) ?? {};
 }
 
 export type EmailStatus = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'dry_run';
@@ -107,11 +113,14 @@ export async function deliver(
   row: FirebaseFirestore.DocumentData,
   apiKey: string,
   settings: EmailSettings,
+  templates?: TemplateOverrides,
 ): Promise<SendOutcome> {
-  const email = renderEmail(row.kind as EmailKind, (row.locale ?? 'en') as EmailLocale, {
-    ...(row.data as Omit<EmailData, 'proposalUrl'>),
-    proposalUrl: publicUrl(),
-  });
+  const email = renderEmail(
+    row.kind as EmailKind,
+    (row.locale ?? 'en') as EmailLocale,
+    { ...(row.data as Omit<EmailData, 'proposalUrl'>), proposalUrl: publicUrl() },
+    templates,
+  );
 
   const sender = settings.from;
   if (!apiKey || !sender) {
@@ -168,7 +177,6 @@ export const sendQueuedEmail = onDocumentWritten(
     region: 'northamerica-northeast1',
     maxInstances: 10,
     retry: false,
-    secrets: [RESEND_API_KEY],
   },
   async (event) => {
     const ref = event.data?.after.ref;
@@ -184,9 +192,12 @@ export const sendQueuedEmail = onDocumentWritten(
     });
     if (!claimed) return;
 
-    // Read from the environment rather than `.value()`: the binding below is
-    // what puts it there in production, and locally there is simply no key.
-    const outcome = await deliver(claimed, process.env.RESEND_API_KEY ?? '', await loadSettings(db));
+    const [apiKey, settings, templates] = await Promise.all([
+      readResendKey(),
+      loadSettings(db),
+      loadTemplates(db),
+    ]);
+    const outcome = await deliver(claimed, apiKey, settings, templates);
 
     await ref.update({
       status: outcome.status,

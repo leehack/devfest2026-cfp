@@ -23,6 +23,8 @@ import {
   type SpeakerBrief,
 } from '../lib/roles';
 import { BarChart, ScoreHistogram, StackedBar } from '../components/charts';
+import { EmailSetup } from '../components/EmailSetup';
+import { EmailPreview } from '../components/EmailPreview';
 import {
   CATEGORIES,
   DELIVERY_LANGUAGES,
@@ -36,6 +38,7 @@ import {
   validateSettings,
   type EmailSettings,
 } from '@shared/emailSettings';
+import type { TemplateOverrides } from '@shared/emailTemplates';
 import type { RoleGrant } from '@shared/types';
 
 function Result({ ok, error }: { ok: string; error: string }) {
@@ -299,6 +302,9 @@ function Email() {
   const [tally, setTally] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<HeldEmail[]>([]);
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
+  const [keyHint, setKeyHint] = useState('');
+  const [domainId, setDomainId] = useState('');
+  const [templates, setTemplates] = useState<TemplateOverrides>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
@@ -318,6 +324,9 @@ function Email() {
         // an admin who starts typing before it lands would otherwise watch the
         // field empty itself under the cursor.
         if (data.settings && !editing.current) setSettings(data.settings);
+        setKeyHint(data.keyHint ?? '');
+        setDomainId(data.domainId ?? '');
+        setTemplates(data.templates ?? {});
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
         if (action === 'preview') {
@@ -383,6 +392,9 @@ function Email() {
     <section className="section">
       <h2>{t.admin.email}</h2>
 
+      <EmailSetup keyHint={keyHint} domainId={domainId} onKeySet={setKeyHint} />
+
+      <h3 className="card__subtitle">{t.admin.emailStepSender}</h3>
       {!settings.from && <p className="note note--inline">{t.admin.emailNoSender}</p>}
 
       <div className="grid grid--2">
@@ -412,6 +424,13 @@ function Email() {
         {t.admin.emailSaveSender}
       </button>
       <Result ok={senderNote} error={senderError} />
+
+      <h3 className="card__subtitle">{t.admin.emailPreview}</h3>
+      <EmailPreview
+        configured={Boolean(keyHint && settings.from)}
+        templates={templates}
+        onSaved={() => run('preview')}
+      />
 
       <h3 className="card__subtitle">{t.admin.emailQueue}</h3>
       <p className="field__help">{t.admin.emailHelp}</p>

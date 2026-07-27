@@ -11,6 +11,7 @@
     "serve": "npm run build && firebase emulators:start --only functions,firestore,auth"
   },
   "dependencies": {
+    "@google-cloud/secret-manager": "^6.3.0",
     "firebase-admin": "^13.0.1",
     "firebase-functions": "^6.1.1",
     "zod": "^3.23.8"

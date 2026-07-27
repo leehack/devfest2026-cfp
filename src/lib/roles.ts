@@ -6,6 +6,7 @@ import type { User } from 'firebase/auth';
 import { db, functions } from '../firebase';
 import type { ProposalStatus, Role } from '@shared/enums';
 import type { EmailSettings } from '@shared/emailSettings';
+import type { TemplateOverrides } from '@shared/emailTemplates';
 import type { Proposal, Reviewer, RoleGrant } from '@shared/types';
 
 export const claimRole = httpsCallable<void, { role: Role | null }>(functions, 'claimRole');
@@ -40,6 +41,10 @@ export const emailQueue = httpsCallable<
     held?: HeldEmail[];
     released?: number;
     settings?: EmailSettings;
+    /** Last four characters of the API key — never the key. */
+    keyHint?: string;
+    domainId?: string;
+    templates?: TemplateOverrides;
   }
 >(functions, 'emailQueue');
 
@@ -47,6 +52,43 @@ export const setEmailSettings = httpsCallable<EmailSettings, { ok: boolean }>(
   functions,
   'setEmailSettings',
 );
+
+/** The key goes up and never comes back — `keyHint` is the last four characters. */
+export const setEmailSecret = httpsCallable<{ apiKey: string }, { ok: boolean; keyHint: string }>(
+  functions,
+  'setEmailSecret',
+);
+
+export interface DnsRecord {
+  record: string;
+  name: string;
+  type: string;
+  value: string;
+  ttl?: string;
+  priority?: number;
+  status?: string;
+}
+export interface Domain {
+  id: string;
+  name: string;
+  status: string;
+  records: DnsRecord[];
+}
+
+export const emailDomain = httpsCallable<
+  { action: 'list' | 'add' | 'get' | 'verify'; domain?: string; domainId?: string },
+  { ok: boolean; domains?: Domain[]; domain?: Domain }
+>(functions, 'emailDomain');
+
+export const setEmailTemplate = httpsCallable<
+  { kind: string; locale: string; subject?: string; body?: string; reset?: boolean },
+  { ok: boolean }
+>(functions, 'setEmailTemplate');
+
+export const sendTestEmail = httpsCallable<
+  { kind: string; locale: string; needsVisa?: boolean },
+  { ok: boolean; status: string; to: string }
+>(functions, 'sendTestEmail');
 
 /**
  * The signed-in user's role, or null for the ordinary case of a speaker.

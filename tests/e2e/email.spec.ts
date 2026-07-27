@@ -178,8 +178,9 @@ test.describe('email pipeline', () => {
 
     // The address and the outcome are both on screen before anything is sent —
     // this table is the last chance to catch a rejection in the wrong row.
-    await expect(panel.getByText(speaker.email)).toBeVisible();
-    await expect(panel.getByText('Not selected')).toBeVisible();
+    const queued = panel.getByRole('row', { name: new RegExp(speaker.email) });
+    await expect(queued).toBeVisible();
+    await expect(queued).toContainText('Not selected');
 
     const send = panel.getByRole('button', { name: /^Send 1 decision/ });
     await expect(send).toBeEnabled();
@@ -272,6 +273,82 @@ test.describe('email pipeline', () => {
     const result = await callAs(author.idToken, 'setEmailSettings', {
       from: 'attacker@evil.example',
       replyTo: '',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('PERMISSION_DENIED');
+  });
+
+  test('the API key is admin-only and never comes back', async () => {
+    const { chair, author } = await stage();
+
+    for (const name of ['setEmailSecret', 'emailDomain', 'sendTestEmail'] as const) {
+      const result = await callAs(author.idToken, name, { apiKey: 're_x', action: 'list' });
+      expect(result.ok, name).toBe(false);
+      expect(result.code, name).toBe('PERMISSION_DENIED');
+    }
+
+    // A key that is not even shaped like one is refused before it reaches Resend.
+    const bad = await callAs(chair.idToken, 'setEmailSecret', { apiKey: 'sk_not_resend' });
+    expect(bad.ok).toBe(false);
+    expect(bad.code).toBe('INVALID_ARGUMENT');
+
+    // Nothing on the admin surface hands the key back — only the last four.
+    const preview = await callAs(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview.ok).toBe(true);
+    expect(JSON.stringify(preview)).not.toContain('re_');
+  });
+
+  test('custom wording reaches the sender, and a broken one cannot be saved', async () => {
+    const { chair, author } = await stage();
+
+    const rejected = await callAs(chair.idToken, 'setEmailTemplate', {
+      kind: 'accepted',
+      locale: 'en',
+      subject: 'Hi {speeker}',
+      body: 'x',
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.code).toBe('INVALID_ARGUMENT');
+
+    const blank = await callAs(chair.idToken, 'setEmailTemplate', {
+      kind: 'accepted',
+      locale: 'en',
+      subject: 'Fine',
+      body: '   ',
+    });
+    expect(blank.ok).toBe(false);
+
+    const saved = await callAs(chair.idToken, 'setEmailTemplate', {
+      kind: 'submission_received',
+      locale: 'en',
+      subject: 'Got it: {title}',
+      body: 'Hi {speakerName}, we have it.',
+    });
+    expect(saved.ok).toBe(true);
+
+    // The proof is what the sender renders, not what the editor shows.
+    await setProposalStatusDirect('talk-1', 'draft');
+    await callAs(author.idToken, 'submitProposal', { proposalId: 'talk-1' });
+    await waitForEmail((r) => r[0]?.status === 'dry_run', 'the receipt');
+
+    const preview = await callAs(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview.ok).toBe(true);
+
+    const reset = await callAs(chair.idToken, 'setEmailTemplate', {
+      kind: 'submission_received',
+      locale: 'en',
+      reset: true,
+    });
+    expect(reset.ok).toBe(true);
+  });
+
+  test('a non-admin cannot rewrite what applicants are told', async () => {
+    const { author } = await stage();
+    const result = await callAs(author.idToken, 'setEmailTemplate', {
+      kind: 'rejected',
+      locale: 'en',
+      subject: 'x',
+      body: 'y',
     });
     expect(result.ok).toBe(false);
     expect(result.code).toBe('PERMISSION_DENIED');

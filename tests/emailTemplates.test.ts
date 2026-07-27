@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   DECISION_KINDS,
   EMAIL_KINDS,
+  builtInTemplate,
   renderEmail,
+  validateTemplate,
   type EmailData,
 } from '@shared/emailTemplates';
 
@@ -85,5 +87,76 @@ describe('renderEmail', () => {
     // A receipt that waited for the batch would arrive weeks after the talk it
     // acknowledges.
     expect(DECISION_KINDS).not.toContain('submission_received');
+  });
+});
+
+describe('overrides', () => {
+  const override = {
+    accepted: {
+      en: { subject: 'You are in: {title}', body: 'Hi {speakerName},\n\nSee you at {event}.' },
+    },
+  };
+
+  it('replaces our wording when there is one', () => {
+    const email = renderEmail('accepted', 'en', data, override);
+    expect(email.subject).toBe('You are in: Notes on the Analytical Engine');
+    expect(email.text).toContain('See you at DevFest Montréal 2026.');
+    expect(email.text).not.toContain('is on the programme');
+  });
+
+  it('leaves the languages and messages it does not name alone', () => {
+    expect(renderEmail('accepted', 'fr', data, override).text).toContain('est au programme');
+    expect(renderEmail('rejected', 'en', data, override).text).toContain('not able to fit');
+  });
+
+  it('ignores a half-written override rather than sending a blank', () => {
+    // Firestore holding `{subject: ''}` must not produce an email with no
+    // subject — falling back is the only safe reading.
+    for (const half of [{ subject: '', body: 'x' }, { subject: 'x', body: '' }]) {
+      const email = renderEmail('accepted', 'en', data, { accepted: { en: half } });
+      expect(email.subject).toBe(renderEmail('accepted', 'en', data).subject);
+    }
+  });
+
+  it('drops a visa-only paragraph when no visa is needed', () => {
+    const withVisa = {
+      accepted: { en: { subject: 's', body: 'One.\n\n{visa}\n\nTwo.' } },
+    };
+    expect(renderEmail('accepted', 'en', data, withVisa).text).toBe('One.\n\nTwo.\n\n\n\n— DevFest Montréal 2026');
+    expect(renderEmail('accepted', 'en', { ...data, needsVisa: true }, withVisa).text).toContain('visa or eTA');
+  });
+
+  it('still escapes speaker-supplied values in a custom template', () => {
+    // Custom copy is written by an organiser but interpolates values written by
+    // an applicant, so escaping cannot be skipped just because the template is
+    // trusted.
+    const withTitle = { accepted: { en: { subject: 's', body: 'Talk: {title}' } } };
+    const html = renderEmail('accepted', 'en', { ...data, title: '<img onerror=x>' }, withTitle).html;
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img');
+  });
+});
+
+describe('validateTemplate', () => {
+  it('accepts the built-in copy — ours must pass our own check', () => {
+    for (const kind of EMAIL_KINDS) {
+      for (const locale of ['en', 'fr'] as const) {
+        expect(validateTemplate(builtInTemplate(kind, locale)), `${kind}/${locale}`).toBeNull();
+      }
+    }
+  });
+
+  it.each([
+    [{ subject: '  ', body: 'x' }, 'emptySubject'],
+    [{ subject: 'x', body: '   ' }, 'emptyBody'],
+  ])('rejects %j', (template, problem) => {
+    expect(validateTemplate(template)?.problem).toBe(problem);
+  });
+
+  it('rejects a placeholder that does not exist, and names it', () => {
+    // Left unsubstituted it would reach an applicant as literal braces.
+    const result = validateTemplate({ subject: 'Hi {speaker}', body: 'x' });
+    expect(result?.problem).toBe('unknownPlaceholder');
+    expect(result?.detail).toBe('speaker');
   });
 });

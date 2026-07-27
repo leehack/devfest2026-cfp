@@ -15,10 +15,27 @@ import { inStatusSet, LIMITS, STATUS_SETS } from '../../shared/enums';
 import { submissionSchema } from '../../shared/schema';
 import { aggregateReviews, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
-import { DECISION_KINDS, type EmailKind, type EmailLocale } from '../../shared/emailTemplates';
+import {
+  DECISION_KINDS,
+  EMAIL_KINDS,
+  EMAIL_LOCALES,
+  validateTemplate,
+  type EmailKind,
+  type EmailLocale,
+  type Template,
+} from '../../shared/emailTemplates';
 import { validateSettings, type EmailSettings } from '../../shared/emailSettings';
 import { claim, grant, revoke, RoleError } from './roles';
-import { loadSettings, queueEmail, type EmailStatus } from './email';
+import { deliver, loadSettings, loadTemplates, queueEmail, type EmailStatus } from './email';
+import { keyHint, readResendKey, writeResendKey } from './secrets';
+import {
+  addDomain,
+  cleanDomain,
+  getDomain,
+  listDomains,
+  ResendError,
+  verifyDomain,
+} from './domains';
 
 export { sendQueuedEmail } from './email';
 
@@ -539,7 +556,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
   }
 
-  const snap = await db.collection('emailLog').get();
+  const [snap, configSnap] = await Promise.all([
+    db.collection('emailLog').get(),
+    db.doc('config/email').get(),
+  ]);
+  const emailConfig = configSnap.data() ?? {};
 
   const tally: Record<string, number> = {};
   for (const doc of snap.docs) {
@@ -552,6 +573,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       ok: true,
       tally,
       settings: await loadSettings(db),
+      // Setup state for the panel. `keyHint` is the last four characters of the
+      // API key — never the key.
+      keyHint: (emailConfig.keyHint as string) ?? '',
+      domainId: (emailConfig.domainId as string) ?? '',
+      templates: emailConfig.templates ?? {},
       // Enough to check the copy and the addresses before committing to a send.
       held: snap.docs
         .filter((d) => d.get('status') === 'held')
@@ -603,6 +629,178 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   await db.doc('config/email').set(settings, { merge: true });
   logger.info('email settings changed', { byUid, ...settings });
   return { ok: true, settings };
+});
+
+/**
+ * Replaces the wording of one message, or restores ours. Admin only.
+ *
+ * Validated server-side as well as in the browser: a blank body or a mistyped
+ * placeholder reaches an applicant as a broken email, and the applicant is the
+ * one person who cannot tell it was a mistake.
+ */
+export const setEmailTemplate = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'change the email wording');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+
+  const kind = String(data.kind ?? '') as EmailKind;
+  if (!EMAIL_KINDS.includes(kind)) {
+    throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
+  }
+  const locale = String(data.locale ?? '') as EmailLocale;
+  if (!EMAIL_LOCALES.includes(locale)) {
+    throw new HttpsError('invalid-argument', `Unknown language "${locale}".`);
+  }
+
+  const path = `templates.${kind}.${locale}`;
+
+  if (data.reset === true) {
+    await db.doc('config/email').update({ [path]: FieldValue.delete() }).catch(() => {
+      // Nothing stored for it yet, which is the state `reset` was asking for.
+    });
+    logger.info('email template reset', { byUid, kind, locale });
+    return { ok: true, reset: true };
+  }
+
+  const template: Template = {
+    subject: String(data.subject ?? ''),
+    body: String(data.body ?? ''),
+  };
+
+  const problem = validateTemplate(template);
+  if (problem) {
+    throw new HttpsError('invalid-argument', `${problem.problem}: ${problem.detail ?? ''}`);
+  }
+
+  await db.doc('config/email').set({ templates: { [kind]: { [locale]: template } } }, { merge: true });
+  logger.info('email template changed', { byUid, kind, locale });
+  return { ok: true };
+});
+
+/**
+ * Sends one rendered message to the caller's own address. Admin only.
+ *
+ * Deliberately not through `emailLog`: that collection is the record of what
+ * applicants were told, and a test message is not that. It also means a test
+ * cannot consume the deterministic id a real message will need later.
+ */
+export const sendTestEmail = onCall(CALLABLE, async (request) => {
+  const uid = await requireAdmin(request, 'send a test');
+  const to = request.auth?.token.email as string | undefined;
+  if (!to) throw new HttpsError('failed-precondition', 'Your account has no email address.');
+
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const kind = String(data.kind ?? 'submission_received') as EmailKind;
+  if (!EMAIL_KINDS.includes(kind)) {
+    throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
+  }
+  const locale = (data.locale === 'fr' ? 'fr' : 'en') as EmailLocale;
+
+  const [apiKey, settings, templates] = await Promise.all([
+    readResendKey(),
+    loadSettings(db),
+    loadTemplates(db),
+  ]);
+  const outcome = await deliver(
+    {
+      kind,
+      locale,
+      to,
+      data: {
+        speakerName: (request.auth?.token.name as string) || to,
+        title: 'A test of the sending setup',
+        needsVisa: data.needsVisa === true,
+      },
+    },
+    apiKey,
+    settings,
+    templates,
+  );
+
+  logger.info('test email', { uid, kind, status: outcome.status });
+  if (outcome.status === 'failed') {
+    throw new HttpsError('unavailable', outcome.error ?? 'Resend refused it.');
+  }
+  return { ok: true, status: outcome.status, to };
+});
+
+/**
+ * Sets the Resend API key. Admin only.
+ *
+ * The key goes to Secret Manager and is never written to Firestore, never
+ * logged, and never returned — `#/admin` shows only the last four characters,
+ * which is enough to tell one key from another and nothing else. Verified
+ * against Resend before it is stored, so a typo fails here rather than silently
+ * failing on the night the decisions go out.
+ */
+export const setEmailSecret = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'set the API key');
+  const apiKey = String((request.data as { apiKey?: unknown } | undefined)?.apiKey ?? '').trim();
+
+  if (!apiKey) throw new HttpsError('invalid-argument', 'An API key is required.');
+  if (!apiKey.startsWith('re_')) {
+    throw new HttpsError('invalid-argument', 'A Resend API key starts with "re_".');
+  }
+
+  try {
+    await listDomains(apiKey);
+  } catch (error) {
+    throw asResendError(error);
+  }
+
+  await writeResendKey(apiKey);
+  await db.doc('config/email').set(
+    { keyHint: keyHint(apiKey), keySetAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+
+  logger.info('resend key set', { byUid, hint: keyHint(apiKey) });
+  return { ok: true, keyHint: keyHint(apiKey) };
+});
+
+/** Resend's own failures, mapped so nothing leaks its raw text to a client. */
+function asResendError(error: unknown): HttpsError {
+  if (error instanceof ResendError) return new HttpsError(error.code, error.message);
+  logger.error('unexpected resend failure', { error: String(error) });
+  return new HttpsError('internal', 'Could not reach Resend.');
+}
+
+/**
+ * The sending domain: add it, read back the DNS records Resend wants, and ask
+ * it to re-check. Admin only, because it spends the API key.
+ */
+export const emailDomain = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'manage the sending domain');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const action = String(data.action ?? 'list');
+
+  const apiKey = await readResendKey();
+
+  try {
+    if (action === 'list') return { ok: true, domains: await listDomains(apiKey) };
+
+    if (action === 'add') {
+      const name = cleanDomain(String(data.domain ?? ''));
+      if (!name) throw new HttpsError('invalid-argument', 'That is not a domain name.');
+      const domain = await addDomain(apiKey, name);
+      await db.doc('config/email').set({ domainId: domain.id, domain: name }, { merge: true });
+      return { ok: true, domain };
+    }
+
+    const id = String(data.domainId ?? '');
+    if (!id) throw new HttpsError('invalid-argument', 'domainId is required.');
+
+    if (action === 'get') return { ok: true, domain: await getDomain(apiKey, id) };
+    if (action === 'verify') {
+      const domain = await verifyDomain(apiKey, id);
+      logger.info('domain verification requested', { byUid, id, status: domain.status });
+      return { ok: true, domain };
+    }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    throw asResendError(error);
+  }
+
+  throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
 });
 
 /**

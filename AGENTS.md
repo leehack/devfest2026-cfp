@@ -52,9 +52,17 @@ lives in `shared/emailTemplates.ts` (pure, both languages); transport and status
 machine in `functions/src/email.ts`. Decisions queue `held` until an admin
 releases them together — see the README for why, and for the Resend setup.
 
-The sending address is data, not deploy config: `config/email`, written by
-`setEmailSettings` and shown on `#/admin`. `functions/.env*` is only a fallback.
-`config` is *not* world-readable as a collection — the rule names `cfp`.
+Email setup is entirely `#/admin`, no redeploy: key, domain, sender, wording.
+Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
+the built-in and an organiser's override are the same shape and one editor
+prefills from either. Overrides live in `config/email.templates`; a half-written
+one (blank subject or body) falls back rather than sending a blank.
+Addresses are data (`config/email`, `setEmailSettings`); the **key is Secret
+Manager only** (`functions/src/secrets.ts`) and never enters Firestore or a
+response — the client sees `keyHint`, the last four characters. Resend's domain
+API is proxied by `emailDomain` so the DNS records can be shown and re-checked.
+`functions/.env*` is only a fallback. `config` is *not* world-readable as a
+collection — the rule names `cfp`.
 
 ## Style
 
@@ -118,9 +126,12 @@ The sending address is data, not deploy config: `config/email`, written by
   count at one, but an overwrite resets a `sent` row to `held` and mails the
   person again — the existence check in `queueEmail` is the actual guard, so
   test the row's *status*, not how many rows there are.
-- **No `defineString`.** `firebase emulators:start` stops and prompts for any
-  param without a value, which hangs `npm start` with no visible error. Only the
-  Resend key is a param, and it is a `defineSecret`.
+- **No `defineString`, and no `secrets:` binding either.** `emulators:start`
+  stops and prompts for any param without a value, hanging `npm start` with no
+  visible error; and a `secrets:` binding resolves once at instance start, so a
+  key rotated from `#/admin` would not take effect. `readResendKey()` goes to
+  Secret Manager at runtime and short-circuits on `FUNCTIONS_EMULATOR`, since
+  there is no Secret Manager emulator.
 - **A late load must not overwrite a field someone is typing in.** Every admin
   panel seeds its inputs from an async call; without an `editing` ref the field
   empties under the cursor. It only reproduces under load, so the test holds the

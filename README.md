@@ -222,33 +222,49 @@ With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
 without sending anything, and the log never claims a send that did not happen.
 
-Setting it up, in the order the lead times demand:
+**Set it all up from `#/admin`**, under Email. Four steps, each of which says
+whether it is done, because the failure this replaces was silent — the pipeline
+queued perfectly and sent nothing, and no screen said why.
 
-1. **Verify a domain** in Resend and add the DNS records it gives you (SPF, DKIM,
-   and a DMARC record). Propagation plus Resend's check is the long pole; do it
-   before anything else. Sending from an unverified domain, or from gmail.com,
-   lands the acceptance emails in spam.
-2. **Store the key**, which never passes through the repo or a shell history file
-   you keep:
+1. **API key.** Paste a Resend key. It is checked against Resend before being
+   saved, so a typo fails here rather than on the night the decisions go out.
+   It goes to **Secret Manager, never to Firestore** — Firestore has no version
+   history, no access audit, and a copy of every document lands in every export.
+   The page shows the last four characters and nothing more.
+2. **Sending domain.** Add it, and the page lists the exact DNS records Resend
+   wants and re-checks them on a button. Those records are generated per domain
+   and exist only in Resend's dashboard, which is the one part of the setup
+   nobody can be told in advance. This is the long pole — DNS propagation plus
+   Resend's own check.
+3. **Sender.** The from address and reply-to, stored in `config/email`.
+   `CFP_EMAIL_FROM` and `CFP_REPLY_TO` in `functions/.env*` remain a fallback for
+   a fresh project, empty on purpose so nothing sends until someone says so.
+4. **Preview and wording**, then send one to yourself. The preview renders
+   through the same pure `renderEmail` the sender uses, so it is the message
+   rather than an impression of it — and it renders from the editor's text, so
+   an unsaved edit is visible before it can reach anyone. Test sends deliberately
+   skip `emailLog`: that collection is the record of what applicants were told,
+   and a test is not that.
 
-   ```bash
-   npx firebase functions:secrets:set RESEND_API_KEY
-   ```
+Every message can be rewritten per language from that last step, stored in
+`config/email.templates`. Placeholders are `{speakerName}`, `{title}`,
+`{proposalUrl}`, `{event}` and `{visa}` — the last is conditional, so a paragraph
+containing only `{visa}` disappears for speakers who do not need one. A blank
+subject or body, or a mistyped placeholder that would print braces to an
+applicant, is refused in the browser *and* in the callable. "Restore ours" drops
+the override and the built-in copy applies again.
 
-3. **Set the sending address on `#/admin`**, under Email. It is stored in
-   `config/email`, not deployed — an address that can only change by redeploying
-   is one that stays wrong for as long as the deploy takes. `CFP_EMAIL_FROM` and
-   `CFP_REPLY_TO` in `functions/.env*` still work as a fallback for a fresh
-   project, and are empty on purpose so nothing sends until someone says so.
-4. **Send yourself one decision before the real batch**: decide a throwaway
-   proposal, check the preview table, and release.
-
-Checking the DNS from a terminal is quicker than the dashboard — no Resend DKIM
-record means the domain is not verified, whatever the dashboard is showing:
+Nothing here needs a redeploy. Checking DNS from a terminal is still quicker than
+any dashboard — no Resend DKIM record means the domain is not verified, whatever
+the dashboard says:
 
 ```bash
 dig +short TXT resend._domainkey.YOUR-DOMAIN
 ```
+
+Rotating the key takes effect as instances recycle: the sender reads it from
+Secret Manager at runtime and caches it for ten minutes, rather than taking it
+from a `secrets:` binding that only resolves at deploy time.
 
 ## Security
 
