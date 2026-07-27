@@ -324,6 +324,17 @@ describe('editing after submission', () => {
     await setStatus('submitted');
     await assertFails(updateDoc(doc(asApplicant(), 'proposals/p-anna'), { status: 'accepted' }));
   });
+
+  // `confirmed` and `declined` are the speaker's own answer, which makes them
+  // the two they are likeliest to try writing directly. They still go through
+  // `respondToDecision`, because the precondition is "only from accepted" and
+  // nothing here would stop a speaker confirming a rejection.
+  it('denies answering an acceptance by writing the status', async () => {
+    await setStatus('accepted');
+    for (const status of ['confirmed', 'declined']) {
+      await assertFails(updateDoc(doc(asApplicant(), 'proposals/p-anna'), { status }));
+    }
+  });
 });
 
 describe('the deadline is enforced server-side', () => {

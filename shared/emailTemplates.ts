@@ -85,8 +85,9 @@ const EN: Record<EmailKind, Template> = {
     body: p(
       'Hi {speakerName},',
       '“{title}” is on the programme. We would like you to give it at {event}.',
-      'Please confirm you can still make it, here:',
+      'Please confirm you can still make it: open your proposal and pick one of the two answers there. Signing in with the account you submitted with is all it takes.',
       '{proposalUrl}',
+      'If you cannot come, saying so early is genuinely useful rather than awkward: it lets us offer the slot to someone on the waitlist while there is still time.',
       '{visa}',
       'A reminder of something you agreed to when you submitted: travel and accommodation are not covered by the event.',
     ),

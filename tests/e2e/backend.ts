@@ -269,6 +269,16 @@ export async function readProposal(): Promise<Record<string, any> | null> {
   return (await readProposals())[0] ?? null;
 }
 
+/** By id, since `readProposals` unwraps the fields and drops the document name. */
+export async function readProposalById(id: string): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/proposals/${id}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (!response.ok) return null;
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
 /** Firestore REST wraps every value in a type tag; this is the inverse. */
 function unwrap(fields: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};

@@ -176,7 +176,7 @@ test.describe('roles', () => {
     await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
     await expect(page.getByRole('textbox', { name: /^Bio/ })).toBeEnabled();
     await expect(page.getByRole('radio', { name: /no travel required/ })).toBeEnabled();
-    await expect(page.getByText(/talk is locked while it is being judged/)).toBeVisible();
+    await expect(page.getByText(/talk itself is locked now/)).toBeVisible();
   });
 
   test('a locked talk still saves a profile and travel edit', async ({ page }) => {

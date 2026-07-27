@@ -31,6 +31,7 @@ import {
   loadMyProposals,
   saveDraft,
   submitProposal,
+  respondToDecision,
   withdrawProposal,
   type CfpWindow,
   type LoadedProposal,
@@ -103,10 +104,12 @@ interface StatusBannerProps {
   busy: boolean;
   /** Absent once withdrawing is no longer something they can do. */
   onWithdraw?: () => void;
+  /** Present only while an acceptance is unanswered. */
+  onRespond?: (response: 'confirm' | 'decline') => void;
 }
 
 /** Where the talk stands, and what is still theirs to change about it. */
-function StatusBanner({ status, scope, busy, onWithdraw }: StatusBannerProps) {
+function StatusBanner({ status, scope, busy, onWithdraw, onRespond }: StatusBannerProps) {
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
 
@@ -114,6 +117,34 @@ function StatusBanner({ status, scope, busy, onWithdraw }: StatusBannerProps) {
     <div className={`panel${good ? ' panel--good' : ''}`}>
       <h2>{t.enums.status[status]}</h2>
       <p>{t.form.statusHelp[status] ?? t.form.submittedHelp}</p>
+
+      {/*
+        The whole point of the acceptance email's link. Both answers are here
+        because an accepted speaker who cannot come needs a way to say so that
+        is not "ignore it until someone chases me" — an unanswered slot is the
+        expensive one for the programme.
+      */}
+      {onRespond && (
+        <div className="card__actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busy}
+            onClick={() => onRespond('confirm')}
+          >
+            {t.form.confirmAccept}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={busy}
+            onClick={() => onRespond('decline')}
+          >
+            {t.form.confirmDecline}
+          </button>
+        </div>
+      )}
+
       <p className="muted">{t.form.editHelp[scope]}</p>
       {onWithdraw && (
         <button type="button" className="btn btn--ghost" disabled={busy} onClick={onWithdraw}>
@@ -333,6 +364,23 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     }
   }
 
+  async function onRespond(response: 'confirm' | 'decline') {
+    if (!proposalId) return;
+    // Only the decline is confirmed: saying yes is reversible by declining
+    // afterwards, but a decline given by accident gives the slot away.
+    if (response === 'decline' && !window.confirm(t.form.confirmDeclineConfirm)) return;
+    setSubmitting(true);
+    try {
+      const { data } = await respondToDecision({ proposalId, response });
+      setStatus(data.status);
+      markTalk(proposalId, data.status);
+    } catch (error: any) {
+      setBanner(friendlyError(error, t));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   // -------------------------------------------------------------- option sets
 
   const options = useMemo(
@@ -398,6 +446,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
           scope={scope}
           busy={submitting}
           onWithdraw={withdrawable ? onWithdraw : undefined}
+          onRespond={status === 'accepted' ? onRespond : undefined}
         />
       )}
 

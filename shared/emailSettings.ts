@@ -13,9 +13,15 @@ export interface EmailSettings {
   /** `cfp@example.org` or `DevFest Montréal <cfp@example.org>`. */
   from: string;
   replyTo: string;
+  /**
+   * Where `{proposalUrl}` points. Empty falls back to the project's own
+   * `web.app` domain, which is right until the CFP gets a custom hostname —
+   * and that is a DNS change, not a reason to redeploy the functions.
+   */
+  publicUrl: string;
 }
 
-export const EMPTY_SETTINGS: EmailSettings = { from: '', replyTo: '' };
+export const EMPTY_SETTINGS: EmailSettings = { from: '', replyTo: '', publicUrl: '' };
 
 /**
  * Deliberately loose. This exists to catch a typo and a pasted display name
@@ -67,7 +73,27 @@ export function senderMismatch(from: string, verified: string): string | null {
   return sender === target ? null : sender;
 }
 
-export type SettingsProblem = { field: 'from' | 'replyTo'; problem: SenderProblem };
+export type SettingsProblem =
+  | { field: 'from' | 'replyTo'; problem: SenderProblem }
+  | { field: 'publicUrl'; problem: 'url' };
+
+/**
+ * A link a speaker is asked to act on, so it is checked rather than trusted:
+ * `http`/`https` only — `javascript:` and `data:` are the reason to allow-list
+ * the scheme rather than deny-list it — and a host with a dot in it, which
+ * rejects the `localhost` that once shipped in a real acceptance email.
+ */
+export function validPublicUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true; // Empty is legal; the server derives a default.
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname.includes('.');
+}
 
 /**
  * `from` is required to send at all; `replyTo` is optional but must be a plain
@@ -81,5 +107,6 @@ export function validateSettings(settings: EmailSettings): SettingsProblem | nul
     const replyTo = parseSender(settings.replyTo);
     if ('problem' in replyTo) return { field: 'replyTo', problem: replyTo.problem };
   }
+  if (!validPublicUrl(settings.publicUrl)) return { field: 'publicUrl', problem: 'url' };
   return null;
 }

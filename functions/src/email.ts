@@ -34,7 +34,20 @@ import { readResendKey } from './secrets';
  * Anything that can only change by redeploying stays wrong for as long as the
  * deploy takes, which on the night decisions go out is too long.
  */
-const publicUrl = () => process.env.CFP_PUBLIC_URL || 'https://devfest-mtl-2026-cfp.web.app';
+/**
+ * Where `{proposalUrl}` points, most specific first: an organiser's custom
+ * domain, then a local override, then the project's own Hosting domain.
+ *
+ * Derived rather than written down, so a staging project or a fork is right
+ * with no configuration. It is deliberately *not* taken from the request —
+ * `sendQueuedEmail` is a Firestore trigger and has no request at all, and the
+ * callables that queue only see a client-supplied `Host`, which would let
+ * whoever submits a proposal choose the link in mail we send to a speaker.
+ */
+const derivedUrl = () => `https://${process.env.GCLOUD_PROJECT ?? 'localhost'}.web.app`;
+
+const publicUrl = (settings: EmailSettings) =>
+  settings.publicUrl || process.env.CFP_PUBLIC_URL || derivedUrl();
 
 /** Env is the fallback, so a fresh project sends nothing until someone says so. */
 export async function loadSettings(db: Firestore): Promise<EmailSettings> {
@@ -43,6 +56,11 @@ export async function loadSettings(db: Firestore): Promise<EmailSettings> {
   return {
     from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
     replyTo: (stored.replyTo as string) || process.env.CFP_REPLY_TO || '',
+    // Stored only, unlike the addresses above: this is what the admin field
+    // edits, and folding the env fallback in here put `http://localhost:5173`
+    // into that field locally — a value `validPublicUrl` then refused to save.
+    // The fallback still applies, at render time, in `publicUrl()`.
+    publicUrl: (stored.publicUrl as string) || '',
   };
 }
 
@@ -118,7 +136,7 @@ export async function deliver(
   const email = renderEmail(
     row.kind as EmailKind,
     (row.locale ?? 'en') as EmailLocale,
-    { ...(row.data as Omit<EmailData, 'proposalUrl'>), proposalUrl: publicUrl() },
+    { ...(row.data as Omit<EmailData, 'proposalUrl'>), proposalUrl: publicUrl(settings) },
     templates,
   );
 

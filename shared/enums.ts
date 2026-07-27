@@ -80,12 +80,18 @@ export const STATUS_SETS = {
   live: ['submitted', 'under_review', 'accepted', 'confirmed', 'waitlisted'],
   /** Being judged or already judged: content frozen, travel answers still open. */
   underConsideration: ['under_review', 'accepted', 'confirmed', 'waitlisted'],
-  /** Outcomes an admin may set. Excludes the applicant's own draft/submit/withdraw. */
-  decidable: ['under_review', 'accepted', 'waitlisted', 'rejected'],
+  /**
+   * Outcomes an admin may set. Excludes the applicant's own draft/submit/withdraw.
+   * `confirmed` and `declined` are the speaker's answer, but an organiser needs
+   * to be able to record one that arrived by email instead of through the link.
+   */
+  decidable: ['under_review', 'accepted', 'confirmed', 'declined', 'waitlisted', 'rejected'],
   /** Settled either way — the rest is what the committee still owes an answer on. */
-  decided: ['accepted', 'confirmed', 'waitlisted', 'rejected'],
+  decided: ['accepted', 'confirmed', 'declined', 'waitlisted', 'rejected'],
   /** A speaker may take it back from any of these. */
-  withdrawable: ['draft', 'submitted', 'under_review', 'accepted', 'waitlisted'],
+  withdrawable: ['draft', 'submitted', 'under_review', 'accepted', 'confirmed', 'waitlisted'],
+  /** The speaker's own answer to an acceptance, and the only statuses they set. */
+  speakerResponse: ['confirmed', 'declined'],
 } as const satisfies Record<string, readonly ProposalStatus[]>;
 
 export const inStatusSet = (set: keyof typeof STATUS_SETS, status: string): boolean =>

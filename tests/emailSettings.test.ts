@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  EMPTY_SETTINGS,
   parseSender,
   senderDomain,
   senderMismatch,
+  validPublicUrl,
   validateSettings,
+  type EmailSettings,
 } from '@shared/emailSettings';
 
 describe('parseSender', () => {
@@ -82,25 +85,70 @@ describe('senderMismatch', () => {
 });
 
 describe('validateSettings', () => {
+  const settings = (over: Partial<EmailSettings>): EmailSettings => ({
+    ...EMPTY_SETTINGS,
+    from: 'cfp@example.org',
+    ...over,
+  });
+
   it('accepts a sender with no reply-to', () => {
-    expect(validateSettings({ from: 'cfp@example.org', replyTo: '' })).toBeNull();
+    expect(validateSettings(settings({}))).toBeNull();
   });
 
   it('requires a sender', () => {
-    expect(validateSettings({ from: '', replyTo: 'x@example.org' })).toEqual({
+    expect(validateSettings(settings({ from: '', replyTo: 'x@example.org' }))).toEqual({
       field: 'from',
       problem: 'empty',
     });
   });
 
   it('checks the reply-to when there is one', () => {
-    expect(validateSettings({ from: 'cfp@example.org', replyTo: 'nope' })).toEqual({
+    expect(validateSettings(settings({ replyTo: 'nope' }))).toEqual({
       field: 'replyTo',
       problem: 'format',
     });
   });
 
   it('reports the sender first when both are wrong', () => {
-    expect(validateSettings({ from: 'nope', replyTo: 'also-nope' })?.field).toBe('from');
+    expect(validateSettings(settings({ from: 'nope', replyTo: 'also-nope' }))?.field).toBe('from');
   });
+
+  it('checks the public URL', () => {
+    expect(validateSettings(settings({ publicUrl: 'cfp.example.org' }))).toEqual({
+      field: 'publicUrl',
+      problem: 'url',
+    });
+    expect(validateSettings(settings({ publicUrl: 'https://cfp.example.org' }))).toBeNull();
+  });
+});
+
+describe('validPublicUrl', () => {
+  it.each([
+    'https://cfp.example.org',
+    'http://cfp.example.org',
+    'https://devfest-mtl-2026-cfp.web.app',
+    'https://cfp.example.org/submit',
+    '',
+    '   ',
+  ])('accepts %s', (value) => {
+    expect(validPublicUrl(value)).toBe(true);
+  });
+
+  // localhost is the one that actually went out, in a real acceptance email,
+  // as the address a speaker was asked to confirm at.
+  it.each(['http://localhost:5173', 'localhost', 'cfp.example.org', 'not a url'])(
+    'rejects %s',
+    (value) => {
+      expect(validPublicUrl(value)).toBe(false);
+    },
+  );
+
+  // A link a speaker is asked to click, so the scheme is allow-listed rather
+  // than deny-listed — there is always one more scheme than a blocklist knows.
+  it.each(['javascript:alert(1)', 'data:text/html,<script>x</script>', 'file:///etc/passwd'])(
+    'rejects the scheme in %s',
+    (value) => {
+      expect(validPublicUrl(value)).toBe(false);
+    },
+  );
 });

@@ -226,7 +226,8 @@ export const en = {
     statusHelp: {
       submitted: 'It is in. The committee has not started reading yet.',
       under_review: 'The committee is reading it now.',
-      accepted: 'You are on the programme. We will be in touch about the details.',
+      accepted:
+        'You are on the programme — please tell us whether you can still make it, so we know the slot is filled.',
       confirmed: 'Confirmed. See you in Montréal.',
       waitlisted: 'Not in yet, but not out — we come back to the waitlist as places free up.',
       rejected: 'Not this year. There were more good proposals than slots, and we are sorry.',
@@ -237,12 +238,18 @@ export const en = {
     /** What is still theirs to change, keyed by `EditScope`. */
     editHelp: {
       all: 'You can still edit anything here until the deadline.',
+      // One string covers under_review through confirmed, so it cannot say
+      // "while it is being judged" — by the time a talk is confirmed, it is not.
       logistics:
-        'The talk is locked while it is being judged. Your profile and your travel answers are still editable.',
+        'The talk itself is locked now. Your profile and your travel answers are still editable.',
       none: 'This one is closed. Your profile is still yours to edit.',
     } as Record<string, string>,
     withdraw: 'Withdraw proposal',
     withdrawConfirm: 'Withdraw this proposal? This cannot be undone.',
+    confirmAccept: 'Yes, I can present',
+    confirmDecline: 'I have to decline',
+    confirmDeclineConfirm:
+      'Decline this slot? We will offer it to someone else, so it may not be available if you change your mind.',
     yourTalks: 'Your talks',
     untitled: 'Untitled talk',
     newTalk: 'New talk',
@@ -358,10 +365,15 @@ export const en = {
     emailSaveSender: 'Save address',
     emailNoSender:
       'No sending address is set, so nothing is going out. Messages still queue, and send once you set one.',
+    emailPublicUrl: 'Link in emails',
+    emailPublicUrlHelp:
+      'Where speakers are sent to confirm or read a decision. Leave it empty to use this project’s own address; set it once the CFP has a domain of its own.',
+    emailPublicUrlPlaceholder: 'https://cfp.example.org',
     emailSender: {
       empty: 'A sending address is required.',
       format: 'That does not look like an email address.',
       brackets: 'Put the display name in angle brackets: DevFest Montréal <cfp@example.org>.',
+      url: 'That is not a full web address. It needs to start with https:// and name a domain.',
     },
     emailErrors: {
       badKey:

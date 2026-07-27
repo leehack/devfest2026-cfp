@@ -230,7 +230,8 @@ export const fr: Dictionary = {
     statusHelp: {
       submitted: 'C’est envoyé. Le comité n’a pas encore commencé sa lecture.',
       under_review: 'Le comité est en train de la lire.',
-      accepted: 'Vous êtes au programme. Nous vous écrirons pour les détails.',
+      accepted:
+        'Vous êtes au programme — dites-nous si vous pouvez toujours être présent, afin que nous sachions que la place est prise.',
       confirmed: 'Confirmée. À bientôt à Montréal.',
       waitlisted:
         'Pas encore retenue, mais pas écartée — nous revenons à la liste d’attente dès qu’une place se libère.',
@@ -243,11 +244,15 @@ export const fr: Dictionary = {
     editHelp: {
       all: 'Vous pouvez encore tout modifier ici jusqu’à la date limite.',
       logistics:
-        'La conférence est verrouillée pendant l’évaluation. Votre profil et vos réponses de voyage restent modifiables.',
+        'La conférence elle-même est maintenant verrouillée. Votre profil et vos réponses de voyage restent modifiables.',
       none: 'Celle-ci est close. Votre profil vous appartient toujours.',
     } as Record<string, string>,
     withdraw: 'Retirer la proposition',
     withdrawConfirm: 'Retirer cette proposition ? Cette action est irréversible.',
+    confirmAccept: 'Oui, je serai là',
+    confirmDecline: 'Je dois décliner',
+    confirmDeclineConfirm:
+      'Décliner cette place ? Nous l’offrirons à quelqu’un d’autre : elle pourrait ne plus être disponible si vous changez d’avis.',
     yourTalks: 'Vos conférences',
     untitled: 'Conférence sans titre',
     newTalk: 'Nouvelle conférence',
@@ -365,11 +370,16 @@ export const fr: Dictionary = {
     emailSaveSender: 'Enregistrer l’adresse',
     emailNoSender:
       'Aucune adresse d’expéditeur n’est configurée : rien n’est envoyé. Les messages sont tout de même mis en file et partiront dès qu’une adresse sera définie.',
+    emailPublicUrl: 'Lien dans les courriels',
+    emailPublicUrlHelp:
+      'L’adresse vers laquelle les conférenciers sont dirigés pour confirmer ou lire une décision. Laissez vide pour utiliser l’adresse du projet ; renseignez-la dès que l’appel a son propre domaine.',
+    emailPublicUrlPlaceholder: 'https://cfp.exemple.org',
     emailSender: {
       empty: 'Une adresse d’expéditeur est requise.',
       format: 'Cela ne ressemble pas à une adresse courriel.',
       brackets:
         'Mettez le nom affiché entre chevrons : DevFest Montréal <cfp@exemple.org>.',
+      url: 'Ce n’est pas une adresse web complète. Elle doit commencer par https:// et nommer un domaine.',
     },
     emailErrors: {
       badKey:

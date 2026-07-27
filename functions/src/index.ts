@@ -290,6 +290,53 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
 });
 
 /**
+ * The speaker's answer to an acceptance.
+ *
+ * A callable rather than a rule because `status` is function-written only, and
+ * because the answer has a precondition a rule cannot express cheaply: it is
+ * only meaningful from `accepted`. Confirming twice is idempotent; changing a
+ * confirmation to a decline is allowed, since plans change and the alternative
+ * is an organiser doing it by hand from an email.
+ *
+ * No token in the link: the CFP is behind Google sign-in and the proposal is
+ * already the speaker's, so the session is the authentication. A one-time token
+ * would be a second, weaker credential to leak, expire and support.
+ */
+export const respondToDecision = onCall(CALLABLE, async (request) => {
+  const uid = requireUid(request, 'answer a decision');
+  const proposalId = requireProposalId(request.data);
+  const response = String((request.data as { response?: unknown } | undefined)?.response ?? '');
+
+  if (response !== 'confirm' && response !== 'decline') {
+    throw new HttpsError('invalid-argument', 'Answer must be "confirm" or "decline".');
+  }
+  const status = response === 'confirm' ? 'confirmed' : 'declined';
+
+  await db.runTransaction(async (tx) => {
+    const proposalRef = db.doc(`proposals/${proposalId}`);
+    const proposal = await readOwnProposal(tx, proposalRef, uid);
+
+    // `confirmed` is in the set so that re-clicking a mailed link is a no-op
+    // rather than an error the speaker has to interpret.
+    if (!inStatusSet('speakerResponse', proposal.status) && proposal.status !== 'accepted') {
+      throw new HttpsError(
+        'failed-precondition',
+        `A proposal with status "${proposal.status}" has no decision to answer.`,
+      );
+    }
+
+    tx.update(proposalRef, {
+      status,
+      confirmedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  logger.info('decision answered', { proposalId, uid, status });
+  return { ok: true, status };
+});
+
+/**
  * Recomputes `aggregate` on every reviewed proposal. Run once when the round
  * closes (§8) — a batch job, not a trigger: a z-score is relative to everything
  * that reviewer scored, so one new review moves the normalised score of every
@@ -622,6 +669,10 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   const settings: EmailSettings = {
     from: String(data.from ?? '').trim(),
     replyTo: String(data.replyTo ?? '').trim(),
+    // Trailing slash trimmed here rather than at render: it is one place, and
+    // "https://x.org/" + a path is the kind of double slash nobody notices
+    // until it is in mail that has already gone out.
+    publicUrl: String(data.publicUrl ?? '').trim().replace(/\/+$/, ''),
   };
 
   const problem = validateSettings(settings);

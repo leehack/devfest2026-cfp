@@ -425,6 +425,17 @@ function Email() {
           disabled={busy}
         />
       </div>
+      <TextField
+        label={t.admin.emailPublicUrl}
+        help={t.admin.emailPublicUrlHelp}
+        placeholder={t.admin.emailPublicUrlPlaceholder}
+        value={settings.publicUrl}
+        onChange={(publicUrl) => {
+          editing.current = true;
+          setSettings((s) => ({ ...s, publicUrl }));
+        }}
+        disabled={busy}
+      />
       <p className="field__help">{t.admin.emailFromHelp}</p>
       {mismatch && (
         <p className="note note--inline" role="status">

@@ -169,6 +169,11 @@ export const withdrawProposal = httpsCallable<{ proposalId: string }, CallableRe
   'withdrawProposal',
 );
 
+export const respondToDecision = httpsCallable<
+  { proposalId: string; response: 'confirm' | 'decline' },
+  CallableResult & { status: 'confirmed' | 'declined' }
+>(functions, 'respondToDecision');
+
 export const importSessionizeProfile = httpsCallable<
   { url: string },
   {

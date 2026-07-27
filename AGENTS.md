@@ -46,6 +46,12 @@ the committee starts reading, then travel answers only, then nothing. The speake
 profile is outside it — that document belongs to the account and never freezes.
 The rules are the enforcement; `editScope` only decides what to disable.
 
+An accepted speaker answers with `respondToDecision` — `confirmed` or `declined`,
+from `accepted` only. No token in the link: the CFP is behind Google sign-in and
+the proposal is already theirs, so the session is the authentication. Idempotent,
+and reversible, because plans change and the alternative is an organiser editing
+a status by hand from an email.
+
 Email is a queue, not a send: callables write `emailLog/{kind}__{proposalId}`
 inside their own transaction and the `sendQueuedEmail` trigger delivers. Copy
 lives in `shared/emailTemplates.ts` (pure, both languages); transport and status
@@ -132,6 +138,16 @@ collection — the rule names `cfp`.
   key rotated from `#/admin` would not take effect. `readResendKey()` goes to
   Secret Manager at runtime and short-circuits on `FUNCTIONS_EMULATOR`, since
   there is no Secret Manager emulator.
+- **`functions/.env` is tracked and deployed; `.env.local` is neither.** A
+  `CFP_PUBLIC_URL` of `http://localhost:5173` sat in the deployed file and went
+  out in a real acceptance email as the link the speaker was told to confirm at.
+  Local-only values go in `.env.local`, which the emulator reads and deploy
+  ignores. The link's default is now derived from `GCLOUD_PROJECT`, and an
+  organiser overrides it in `#/admin` for a custom domain.
+- **The email link is never taken from the request.** `sendQueuedEmail` is a
+  trigger and has no request; the callables that queue see only a client-supplied
+  `Host`, so reading it would let whoever submits a proposal choose the URL in
+  mail we send to a speaker. Derive it or store it — never reflect it.
 - **`unauthenticated` means the caller, never a third party.** Resend refusing an
   API key was thrown as `unauthenticated`, so `#/admin` told the admin their
   session had expired and to sign in again — advice that could not work, for a
