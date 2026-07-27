@@ -32,14 +32,17 @@ service cloud.firestore {
         && request.time < c.closesAt;
     }
 
+    // Holding a role means having a `reviewers` document; admins hold one too,
+    // distinguished by `role`. Anyone signed in may submit a talk, so speakers
+    // need no record at all.
     function isReviewer() {
       return signedIn()
         && exists(/databases/$(database)/documents/reviewers/$(uid()));
     }
 
-    function isLead() {
+    function isAdmin() {
       return isReviewer()
-        && get(/databases/$(database)/documents/reviewers/$(uid())).data.role == 'lead';
+        && get(/databases/$(database)/documents/reviewers/$(uid())).data.role == 'admin';
     }
 
     // Keys the client may never write, on create or update. `status` and
@@ -137,14 +140,23 @@ service cloud.firestore {
       // closes (§7, anchoring).
       match /reviews/{reviewerUid} {
 
-        function ownReview() {
-          return isReviewer() && reviewerUid == uid();
+        // Reviewers and admins may also submit talks, which puts them on both
+        // sides of this subcollection. §6 says an applicant must never read the
+        // reviews of their own proposal, and that outranks any role — so this
+        // gate is applied to reads and writes alike, admins included.
+        function speaksOnThis() {
+          return signedIn()
+            && uid() in get(/databases/$(database)/documents/proposals/$(proposalId)).data.speakerIds;
         }
 
-        allow get: if ownReview()
-          || (isReviewer() && config().reviewsVisible == true)
-          || isLead();
-        allow list: if (isReviewer() && config().reviewsVisible == true) || isLead();
+        function ownReview() {
+          return isReviewer() && reviewerUid == uid() && !speaksOnThis();
+        }
+
+        allow get: if !speaksOnThis()
+          && (ownReview() || (isReviewer() && config().reviewsVisible == true) || isAdmin());
+        allow list: if !speaksOnThis()
+          && ((isReviewer() && config().reviewsVisible == true) || isAdmin());
 
         // Each reviewer writes only their own document, so nobody can
         // overwrite a colleague's score.
@@ -152,7 +164,10 @@ service cloud.firestore {
           && request.resource.data.score is int
           && request.resource.data.score >= 1
           && request.resource.data.score <= 4
-          && request.resource.data.conflictOfInterest is bool;
+          && request.resource.data.conflictOfInterest is bool
+          && (!('comment' in request.resource.data)
+              || (request.resource.data.comment is string
+                  && request.resource.data.comment.size() <= 2000));
 
         allow delete: if false;
       }
@@ -160,10 +175,24 @@ service cloud.firestore {
 
     // -------------------------------------------------------------- reviewers
 
+    // A reviewer needs to read their own document to know they hold a role, so
+    // `get` is open to any signed-in user for their own id only. Seeing the
+    // whole committee is an admin matter.
     match /reviewers/{reviewerId} {
-      allow get: if isReviewer();
-      allow list: if isReviewer();
-      // Membership is granted out of band, never self-served.
+      allow get: if signedIn() && (reviewerId == uid() || isReviewer());
+      allow list: if isAdmin();
+      // Written only by the role callables. Letting a client write here would
+      // make the collection self-serving, and it is the root of every other
+      // permission in this file.
+      allow write: if false;
+    }
+
+    // --------------------------------------------------------------- grants
+
+    // Pending invitations, keyed by email because a role is assigned before the
+    // person has ever signed in. Holds addresses, so admins only.
+    match /roleGrants/{email} {
+      allow get, list: if isAdmin();
       allow write: if false;
     }
 

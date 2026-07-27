@@ -78,12 +78,12 @@ const pick = (list) => list[Math.floor(rand() * list.length)];
  * for it.
  */
 const REVIEWERS = [
-  { uid: 'rev-generous', name: 'Generous', role: 'organizer', score: (q) => clamp(1.9 + q * 2.6) },
-  { uid: 'rev-harsh', name: 'Harsh', role: 'organizer', score: (q) => clamp(0.6 + q * 2.6) },
-  { uid: 'rev-middling', name: 'Middling', role: 'organizer', score: (q) => clamp(1.3 + q * 2.4) },
-  { uid: 'rev-polarised', name: 'Polarised', role: 'organizer', score: (q) => clamp(0.5 + q * 4.0) },
-  { uid: 'rev-flat', name: 'Flat', role: 'organizer', score: (q) => clamp(2.6 + q * 0.7) },
-  { uid: 'rev-lead', name: 'Lead', role: 'lead', score: (q) => clamp(1.2 + q * 2.7) },
+  { uid: 'rev-generous', name: 'Generous', role: 'reviewer', score: (q) => clamp(1.9 + q * 2.6) },
+  { uid: 'rev-harsh', name: 'Harsh', role: 'reviewer', score: (q) => clamp(0.6 + q * 2.6) },
+  { uid: 'rev-middling', name: 'Middling', role: 'reviewer', score: (q) => clamp(1.3 + q * 2.4) },
+  { uid: 'rev-polarised', name: 'Polarised', role: 'reviewer', score: (q) => clamp(0.5 + q * 4.0) },
+  { uid: 'rev-flat', name: 'Flat', role: 'reviewer', score: (q) => clamp(2.6 + q * 0.7) },
+  { uid: 'rev-admin', name: 'Admin', role: 'admin', score: (q) => clamp(1.2 + q * 2.7) },
 ];
 
 function clamp(value) {

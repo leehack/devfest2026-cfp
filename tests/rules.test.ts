@@ -75,12 +75,12 @@ beforeEach(async () => {
     await setDoc(doc(db, 'reviewers', REVIEWER), {
       name: 'Chen',
       email: 'chen@example.org',
-      role: 'organizer',
+      role: 'reviewer',
     });
     await setDoc(doc(db, 'reviewers', OTHER_REVIEWER), {
       name: 'Dara',
       email: 'dara@example.org',
-      role: 'organizer',
+      role: 'reviewer',
     });
     await setDoc(doc(db, 'proposals', 'p-anna'), {
       ...draft(APPLICANT),
@@ -300,7 +300,132 @@ describe('reviewers write only their own review', () => {
       setDoc(doc(asApplicant(), 'reviewers', APPLICANT), {
         name: 'Anna',
         email: 'anna@example.org',
-        role: 'lead',
+        role: 'admin',
+      }),
+    );
+  });
+
+  it('cannot promote itself to admin', async () => {
+    // The reviewers collection is the root of every other permission here, so
+    // even an existing reviewer must not be able to edit their own row.
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'reviewers', REVIEWER), { role: 'admin' }),
+    );
+  });
+});
+
+/**
+ * Reviewers and admins may submit talks too, which puts them on both sides of
+ * the reviews subcollection. §6's "applicants never read their own reviews"
+ * outranks any role.
+ */
+describe('a reviewer who is also a speaker', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      // REVIEWER speaks on this one; OTHER_REVIEWER has already scored it.
+      await setDoc(doc(db, 'proposals', 'p-chen'), draft(REVIEWER));
+      await setDoc(doc(db, 'proposals/p-chen/reviews', OTHER_REVIEWER), {
+        score: 4,
+        conflictOfInterest: false,
+      });
+    });
+  });
+
+  it('cannot review its own proposal', async () => {
+    await assertFails(
+      setDoc(doc(asReviewer(), 'proposals/p-chen/reviews', REVIEWER), {
+        score: 4,
+        conflictOfInterest: false,
+      }),
+    );
+  });
+
+  it('cannot read a review on its own proposal', async () => {
+    await assertFails(getDoc(doc(asReviewer(), 'proposals/p-chen/reviews', OTHER_REVIEWER)));
+  });
+
+  it('cannot list the reviews on its own proposal', async () => {
+    await assertFails(getDocs(collection(asReviewer(), 'proposals/p-chen/reviews')));
+  });
+
+  it('still cannot read them once the round closes', async () => {
+    // The moment reviewsVisible flips is exactly when this would leak.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), 'config/cfp'), { reviewsVisible: true });
+    });
+    await assertFails(getDoc(doc(asReviewer(), 'proposals/p-chen/reviews', OTHER_REVIEWER)));
+    await assertFails(getDocs(collection(asReviewer(), 'proposals/p-chen/reviews')));
+  });
+
+  it('not even as an admin', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'reviewers', REVIEWER), {
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    await assertFails(getDoc(doc(asReviewer(), 'proposals/p-chen/reviews', OTHER_REVIEWER)));
+  });
+
+  it('reviews everyone else’s proposals as normal', async () => {
+    await assertSucceeds(
+      setDoc(doc(asReviewer(), 'proposals/p-bruno/reviews', REVIEWER), {
+        score: 3,
+        conflictOfInterest: false,
+      }),
+    );
+  });
+
+  it('can still submit a talk like anyone else', async () => {
+    await assertSucceeds(addDoc(collection(asReviewer(), 'proposals'), draft(REVIEWER)));
+  });
+});
+
+describe('role grants are readable only by admins', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'roleGrants', 'new@example.org'), {
+        email: 'new@example.org',
+        role: 'reviewer',
+        createdBy: 'someone',
+      });
+    });
+  });
+
+  it('denies an applicant', async () => {
+    await assertFails(getDocs(collection(asApplicant(), 'roleGrants')));
+  });
+
+  it('denies a plain reviewer — these are email addresses', async () => {
+    await assertFails(getDocs(collection(asReviewer(), 'roleGrants')));
+  });
+
+  it('allows an admin', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'reviewers', REVIEWER), {
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    await assertSucceeds(getDocs(collection(asReviewer(), 'roleGrants')));
+  });
+
+  it('denies even an admin writing one directly', async () => {
+    // Grants are minted by the callables, which validate the email and role.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'reviewers', REVIEWER), {
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    await assertFails(
+      setDoc(doc(asReviewer(), 'roleGrants', 'x@example.org'), {
+        email: 'x@example.org',
+        role: 'admin',
       }),
     );
   });

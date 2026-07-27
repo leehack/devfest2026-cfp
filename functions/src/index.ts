@@ -205,8 +205,8 @@ export const recomputeAggregates = onCall(CALLABLE, async (request) => {
   const uid = requireUid(request, 'close the review round');
 
   const reviewer = await db.doc(`reviewers/${uid}`).get();
-  if (!reviewer.exists || reviewer.data()?.role !== 'lead') {
-    throw new HttpsError('permission-denied', 'Only a lead organiser can close the round.');
+  if (!reviewer.exists || reviewer.data()?.role !== 'admin') {
+    throw new HttpsError('permission-denied', 'Only an admin can close the round.');
   }
 
   // Collection group: every review on every proposal, in one read pass.

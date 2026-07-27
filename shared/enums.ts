@@ -67,6 +67,23 @@ export const PROPOSAL_STATUSES = [
 ] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
+/**
+ * Who someone is to the CFP. Speaker is not a role: anyone signed in may submit,
+ * including reviewers and admins, so it needs no record.
+ *
+ *   reviewer   scores proposals — but never one they are speaking on
+ *   admin      everything a reviewer can do, plus granting roles, moving the
+ *              window and closing the round
+ *
+ * Replaces the spec's `lead` (§7), which named the same thing less clearly.
+ */
+export const ROLES = ['reviewer', 'admin'] as const;
+export type Role = (typeof ROLES)[number];
+
+/** §7 — 1 Pass · 2 Maybe · 3 Yes · 4 Strong yes. */
+export const SCORES = [1, 2, 3, 4] as const;
+export type Score = (typeof SCORES)[number];
+
 /** Free-form, but a known list keeps the common ones tidy on the review card. */
 export const SOCIAL_PLATFORMS = [
   'bluesky',
@@ -96,4 +113,5 @@ export const LIMITS = {
   pastTalksMax: 1000,
   handleMax: 200,
   maxSocials: 6,
+  reviewCommentMax: 2000,
 } as const;

@@ -14,6 +14,8 @@ import type {
   Level,
   ProposalStatus,
   ResolvedLanguage,
+  Role,
+  Score,
   SocialPlatform,
 } from './enums';
 
@@ -102,6 +104,50 @@ export interface Proposal {
 
   /** Written by the aggregation Cloud Function only. */
   aggregate?: ProposalAggregate;
+}
+
+/**
+ * `reviewers/{uid}` — who holds a role. Written only by the role callables, so
+ * the collection cannot be self-served; see firestore.rules.
+ */
+export interface Reviewer {
+  role: Role;
+  /** Copied from the auth token at claim time, for display on the admin page. */
+  email: string;
+  name?: string;
+  createdAt: unknown;
+  /** uid of the admin whose grant this claimed. */
+  grantedBy: string;
+}
+
+/**
+ * `roleGrants/{email}` — an invitation, keyed by lowercased email.
+ *
+ * Roles are granted before the person has ever signed in, so there is no uid to
+ * key on yet. `claimRole` turns the grant into a `reviewers/{uid}` document on
+ * their first sign-in and records who took it.
+ */
+export interface RoleGrant {
+  email: string;
+  role: Role;
+  createdAt: unknown;
+  createdBy: string;
+  claimedBy?: string;
+  claimedAt?: unknown;
+}
+
+/**
+ * `proposals/{id}/reviews/{reviewerUid}` — one per reviewer per proposal.
+ *
+ * Keyed by reviewer so nobody can overwrite a colleague's score, and so a
+ * reviewer's own document is addressable without a query.
+ */
+export interface Review {
+  score: Score;
+  /** Excluded from every calculation, including the reviewer's own calibration. */
+  conflictOfInterest: boolean;
+  comment?: string;
+  updatedAt: unknown;
 }
 
 /**
