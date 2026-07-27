@@ -4,7 +4,7 @@
     {
       "name": "cfp-form",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["start"],
       "port": 5173
     }
   ]

@@ -54,7 +54,9 @@ export function App() {
 
   return (
     <I18nContext.Provider value={i18n}>
-      <div className="page">
+      {/* The form is prose you write, so it keeps a readable measure. Admin and
+          review are tables you scan, and 46rem on a wide screen wasted it. */}
+      <div className={route === 'form' ? 'page' : 'page page--wide'}>
         <header className="header">
           <div>
             <p className="header__event">{t.app.event}</p>

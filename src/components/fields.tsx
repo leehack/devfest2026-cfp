@@ -39,10 +39,14 @@ function Shell({ label, help, error, required, htmlFor, children, meta }: ShellP
       </label>
       {help && <p className="field__help">{help}</p>}
       {children}
-      <div className="field__foot">
-        {error ? <FieldError message={error} /> : <span />}
-        {meta && <span className="field__meta">{meta}</span>}
-      </div>
+      {/* Rendered only when occupied — an always-present row reserved ~18px of
+          nothing under every field, which is most of why the form scrolled. */}
+      {(error || meta) && (
+        <div className="field__foot">
+          <FieldError message={error} />
+          {meta && <span className="field__meta">{meta}</span>}
+        </div>
+      )}
     </div>
   );
 }
