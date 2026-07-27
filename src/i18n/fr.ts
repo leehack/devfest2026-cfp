@@ -58,7 +58,7 @@ export const fr: Dictionary = {
 
   import: {
     label: 'Vous avez un profil Sessionize ?',
-    help: 'Collez votre profil ou une conférence précise. Nous remplirons ce que nous pouvons — rien de ce que vous avez déjà saisi ne sera écrasé.',
+    help: 'Collez votre profil, ou le lien d’une de vos conférences. Nous remplirons votre biographie, vos liens et la conférence que vous choisirez — rien de ce que vous avez déjà écrit ne sera remplacé sans vous le demander.',
     placeholder: 'sessionize.com/votre-nom',
     sessionsFound: (n: number) =>
       n === 1
@@ -67,6 +67,9 @@ export const fr: Dictionary = {
     useThis: 'Utiliser celle-ci',
     noAbstract: 'aucun résumé sur Sessionize',
     sessionApplied: (title: string) => `Utilisation de « ${title} ».`,
+    replaceConfirm: (fields: string) =>
+      `Cela remplacera ce que vous avez déjà écrit : ${fields}. Continuer ?`,
+    sessionDeclined: 'Votre texte a été conservé — rien n’a été modifié.',
     sessionMissing:
       'Cette conférence n’est plus listée sur votre profil — veuillez en choisir une dans la liste.',
     action: 'Importer',

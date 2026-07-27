@@ -55,7 +55,7 @@ export const en = {
 
   import: {
     label: 'Have a Sessionize profile?',
-    help: 'Paste your profile or a specific talk. We will fill in what we can — nothing you have already typed will be overwritten.',
+    help: 'Paste your profile, or a link to one of your talks. We will fill in your bio, your links, and whichever talk you pick — nothing you have already written will be replaced without asking.',
     placeholder: 'sessionize.com/your-name',
     sessionsFound: (n: number) =>
       n === 1
@@ -64,6 +64,9 @@ export const en = {
     useThis: 'Use this one',
     noAbstract: 'no abstract on Sessionize',
     sessionApplied: (title: string) => `Using “${title}”.`,
+    replaceConfirm: (fields: string) =>
+      `This will replace what you have already written: ${fields}. Continue?`,
+    sessionDeclined: 'Left your own text in place — nothing was changed.',
     sessionMissing:
       'That talk is not listed on your profile any more, so pick one from the list instead.',
     action: 'Import',

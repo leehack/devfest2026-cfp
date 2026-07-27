@@ -16,8 +16,11 @@ interface SessionizeImportProps {
 }
 
 /**
- * Prefills the speaker section — and optionally the talk — from a public
- * Sessionize profile.
+ * Prefills the talk and the speaker from a public Sessionize profile.
+ *
+ * It leads the form because it fills fields in every section below it: offering
+ * it after the talk has been typed out by hand wastes the work it exists to
+ * save, and a speaker who scrolls past it never learns it was there.
  *
  * A profile page carries every talk with its full abstract, so a pasted talk
  * link is resolved back to the profile rather than fetched directly: one
@@ -62,7 +65,21 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
 
   /** Applies a talk and returns the lines describing it, rather than setting them. */
   function chooseSession(session: SessionizeSession): string[] {
-    const { patch, filled, skipped, overLimit } = applySessionizeSession(form, session, applied);
+    let result = applySessionizeSession(form, session, { replacing: applied });
+
+    // Picking a talk names one specific talk, so a silent refusal is a dead
+    // end: the speaker cannot get what they clicked for without emptying two
+    // fields by hand. Ask instead — but only about text we did not write, and
+    // only about fields this talk actually has something to put in.
+    if (result.skipped.length > 0) {
+      const names = result.skipped.map((f) => t.import.fieldNames[f] ?? f).join(', ');
+      if (!window.confirm(t.import.replaceConfirm(names))) {
+        return [t.import.sessionDeclined];
+      }
+      result = applySessionizeSession(form, session, { replaceExisting: true });
+    }
+
+    const { patch, filled, skipped, overLimit } = result;
     if (Object.keys(patch).length > 0) onApply(patch);
     setChosen(session.id);
     // Only remember what we actually wrote — if the speaker's own title was
@@ -107,9 +124,9 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
   }
 
   return (
-    <div className="field import">
-      <span className="field__label">{t.import.label}</span>
-      <p className="field__help">{t.import.help}</p>
+    <section className="section import">
+      <h2>{t.import.label}</h2>
+      <p className="section__help">{t.import.help}</p>
 
       <div className="import__row">
         <input
@@ -176,6 +193,6 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
           {error}
         </p>
       )}
-    </div>
+    </section>
   );
 }

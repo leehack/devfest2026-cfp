@@ -218,6 +218,21 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
         {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
       </p>
 
+      {/*
+        First, because it fills fields in every section below it — the talk as
+        well as the speaker. Buried under "About you" it arrives after the work
+        it would have saved.
+      */}
+      <SessionizeImport
+        form={form}
+        disabled={readOnly}
+        onApply={(patch) => {
+          dirty.current = true;
+          setSaveState('idle');
+          setForm((prev) => ({ ...prev, ...patch }));
+        }}
+      />
+
       {/* ------------------------------------------------------- the talk */}
       <section className="section">
         <h2>{t.sections.proposal}</h2>
@@ -332,16 +347,6 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
       {/* --------------------------------------------------------- speaker */}
       <section className="section">
         <h2>{t.sections.speaker}</h2>
-
-        <SessionizeImport
-          form={form}
-          disabled={readOnly}
-          onApply={(patch) => {
-            dirty.current = true;
-            setSaveState('idle');
-            setForm((prev) => ({ ...prev, ...patch }));
-          }}
-        />
 
         <TextField
           label={t.speaker.name}

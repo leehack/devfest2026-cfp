@@ -285,10 +285,19 @@ body {
 
 /* ---------------------------------------------------------------- import */
 
+/*
+  Leads the form, so it is dashed rather than solid: an optional shortcut you
+  may walk past, not the first question you have to answer.
+*/
 .import {
-  padding: 0.9rem 1rem;
+  margin-bottom: 2.5rem;
+  padding: 1rem 1.1rem 1.1rem;
   border: 1px dashed var(--line);
   border-radius: var(--radius);
+}
+
+.import .section__help {
+  margin-bottom: 0.75rem;
 }
 
 .import__row {

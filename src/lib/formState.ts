@@ -191,13 +191,26 @@ function checkLimits(
 export function applySessionizeSession(
   form: FormState,
   session: SessionizeSession,
-  /**
-   * The talk currently applied, if any. A speaker who picks the wrong one from
-   * a list of seven must be able to switch, so replacing text *this import
-   * wrote* is allowed — but text they typed themselves is still never touched.
-   */
-  replacing?: { title: string; abstract: string },
+  options: {
+    /**
+     * The talk currently applied, if any. A speaker who picks the wrong one
+     * from a list of seven must be able to switch, so replacing text *this
+     * import wrote* is allowed — but text they typed themselves is not touched
+     * unless they say so.
+     */
+    replacing?: { title: string; abstract: string };
+    /**
+     * The speaker was shown what would be overwritten and agreed.
+     *
+     * Needed because provenance does not survive a reload: come back to a draft
+     * tomorrow and the title an import wrote yesterday is indistinguishable
+     * from one you typed. Without this, picking a talk on a filled-in draft is
+     * a dead end — the click reports success and changes nothing.
+     */
+    replaceExisting?: boolean;
+  } = {},
 ): { patch: Partial<FormState>; filled: string[]; skipped: string[]; overLimit: OverLimit[] } {
+  const { replacing, replaceExisting } = options;
   const patch: Partial<FormState> = {};
   const filled: string[] = [];
   const skipped: string[] = [];
@@ -206,6 +219,7 @@ export function applySessionizeSession(
   const claimable = (field: 'title' | 'abstract') => {
     const current = form[field].trim();
     if (!current) return true;
+    if (replaceExisting) return true;
     return replacing !== undefined && current === replacing[field].trim();
   };
 

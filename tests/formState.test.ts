@@ -181,8 +181,7 @@ describe('applying a chosen talk', () => {
       // the buttons silently no-op, the picker lies about what it did.
       const afterFirst = form({ title: first.title, abstract: first.abstract });
       const { patch, filled } = applySessionizeSession(afterFirst, second, {
-        title: first.title,
-        abstract: first.abstract,
+        replacing: { title: first.title, abstract: first.abstract },
       });
 
       expect(patch.title).toBe('Second talk');
@@ -193,8 +192,7 @@ describe('applying a chosen talk', () => {
     it('still refuses to replace text the speaker edited', () => {
       const edited = form({ title: 'My own title', abstract: first.abstract });
       const { patch, filled, skipped } = applySessionizeSession(edited, second, {
-        title: first.title,
-        abstract: first.abstract,
+        replacing: { title: first.title, abstract: first.abstract },
       });
 
       // The hand-written title survives; only the untouched abstract switches.
@@ -210,6 +208,52 @@ describe('applying a chosen talk', () => {
       expect(patch.title).toBeUndefined();
       expect(patch.abstract).toBeUndefined();
       expect(skipped).toEqual(['title', 'abstract']);
+    });
+  });
+
+  describe('replacing on request', () => {
+    // Provenance does not survive a reload. Reopen a draft the next day and the
+    // title an import wrote is indistinguishable from one you typed — so on its
+    // own, `replacing` makes picking a talk a dead end for anyone returning to
+    // a filled-in draft. The UI asks; this is what it asks for.
+
+    it('overwrites the speaker’s own text once they agree', () => {
+      const typed = form({ title: 'My own title', abstract: 'My own abstract.' });
+      const { patch, filled, skipped } = applySessionizeSession(typed, session(), {
+        replaceExisting: true,
+      });
+
+      expect(patch.title).toBe('Flight Mode AI: Building Local LLM Apps');
+      expect(patch.abstract).toHaveLength(400);
+      expect(filled).toEqual(['title', 'abstract']);
+      expect(skipped).toEqual([]);
+    });
+
+    it('reports exactly what a refusal would cost, so the question can name it', () => {
+      // The confirm text is built from `skipped`. A talk with no abstract must
+      // not make us ask about an abstract we were never going to write.
+      const typed = form({ title: 'My own title', abstract: 'My own abstract.' });
+      const { skipped } = applySessionizeSession(typed, session({ abstract: '' }));
+      expect(skipped).toEqual(['title']);
+    });
+
+    it('still leaves a field alone when the talk has nothing to put in it', () => {
+      const typed = form({ title: 'My own title', abstract: 'My own abstract.' });
+      const { patch } = applySessionizeSession(typed, session({ abstract: '' }), {
+        replaceExisting: true,
+      });
+      expect(patch.title).toBe('Flight Mode AI: Building Local LLM Apps');
+      expect(patch.abstract).toBeUndefined();
+    });
+
+    it('flags limits on text it replaced, not only on text it filled', () => {
+      const typed = form({ title: 'My own title', abstract: 'My own abstract.' });
+      const { overLimit } = applySessionizeSession(typed, session({ abstract: 'y'.repeat(1301) }), {
+        replaceExisting: true,
+      });
+      expect(overLimit).toEqual([
+        { field: 'abstract', length: 1301, min: LIMITS.abstractMin, max: LIMITS.abstractMax },
+      ]);
     });
   });
 });
