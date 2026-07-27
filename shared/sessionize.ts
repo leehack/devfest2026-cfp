@@ -1,21 +1,14 @@
 /**
  * Sessionize public speaker-profile parser.
  *
- * Sessionize's API is event-scoped — an organiser generates an endpoint for
- * their own event — so there is no "fetch speaker X's profile" call. The only
- * way to prefill from a speaker's profile is to read their public page. Their
- * robots.txt disallows only /app/ and /submission/helper/, so public profiles
- * are fair game, and the speaker supplies their own URL.
+ * Their API is event-scoped, so there is no "fetch speaker X" call — the only
+ * route is the public profile page, which robots.txt permits and the speaker
+ * supplies themselves.
  *
- * This is inherently brittle: it reads markup Sessionize can change without
- * notice. Two deliberate choices follow from that.
- *
- *   1. The parser is pure. No network, no DOM, no Firestore — so it can be
- *      pinned by tests, and a markup change breaks a test rather than silently
- *      returning empty fields in production.
- *   2. Nothing fails silently. Every field we expected but could not find is
- *      reported in `warnings`, which the form shows to the speaker. A prefill
- *      that quietly does nothing is worse than no prefill at all.
+ * It reads markup Sessionize can change without notice, hence two rules: the
+ * parser is pure, so a change breaks a test rather than production; and nothing
+ * fails silently — anything expected but missing lands in `warnings`, which the
+ * form shows. A prefill that quietly does nothing is worse than none.
  */
 
 import type { SocialPlatform } from './enums';

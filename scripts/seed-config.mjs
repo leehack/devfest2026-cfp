@@ -1,8 +1,6 @@
 /**
- * Seeds the config/cfp document that gates every write.
- *
- * The rules and submitProposal both read this document, and both fail closed
- * when it is missing — so nothing works until this has run once.
+ * Seeds config/cfp. The rules and submitProposal both read it and both fail
+ * closed without it, so nothing works until this has run once.
  *
  * Emulator:
  *   FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-cfp \

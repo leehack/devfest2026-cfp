@@ -193,15 +193,30 @@ export const en = {
     errorCount: (n: number) => (n === 1 ? '1 field needs attention' : `${n} fields need attention`),
   },
 
-  /**
-   * KNOWN GAP: only `generic` is wired up. Field-level validation messages come
-   * straight out of the zod schema, which means a French-speaking applicant
-   * sees English errors. The schema already tags its custom issues with
-   * `params.key`, which is the hook for translating them — nothing consumes it
-   * yet. Worth closing before the CFP opens at a Montréal event.
-   */
   errors: {
     generic: 'Something went wrong. Please try again.',
+    signIn: 'Could not sign you in. Please try again.',
+    crashed: 'Something broke on this page. Reload and your draft will still be here.',
+    reload: 'Reload',
+
+    required: 'This one is required.',
+    invalid: 'Please check this.',
+    tooShort: (n: number) => `At least ${n} characters.`,
+    tooLong: (n: number) => `At most ${n} characters.`,
+    chooseOne: 'Choose one.',
+    mustAgree: 'You need to agree to this before submitting.',
+    email: 'Enter a valid email address.',
+
+    /** Keyed by the `params.key` on each custom issue in `shared/schema.ts`. */
+    rules: {
+      fundingSourceRequired: 'Tell us where the funding is coming from.',
+      fundingSourceNotApplicable: 'Funding source does not apply to local speakers.',
+      decisionByRequired: 'When do you expect to know?',
+      decisionByNotApplicable: 'Decision date only applies when funding is pending.',
+      languagePreferenceNotApplicable:
+        'Language preference only applies when you can present in either language.',
+      dateFormat: 'Use the date picker.',
+    } as Record<string, string>,
   },
 };
 

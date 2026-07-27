@@ -1,9 +1,6 @@
 /**
- * Sessionize parser tests — run by `npm test`, no network required.
- *
- * The import feature reads markup Sessionize can change at any time. These
- * tests exist so that change breaks the build instead of silently producing a
- * prefill that fills nothing.
+ * The parser reads markup Sessionize can change at any time. These tests exist
+ * so that change breaks the build instead of quietly producing an empty prefill.
  */
 
 import { readFileSync } from 'node:fs';

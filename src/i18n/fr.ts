@@ -201,5 +201,28 @@ export const fr: Dictionary = {
 
   errors: {
     generic: 'Une erreur est survenue. Veuillez réessayer.',
+    signIn: 'Connexion impossible. Veuillez réessayer.',
+    crashed: 'Un problème est survenu sur cette page. Rechargez — votre brouillon est conservé.',
+    reload: 'Recharger',
+
+    required: 'Ce champ est obligatoire.',
+    invalid: 'Veuillez vérifier ce champ.',
+    tooShort: (n: number) => `Au moins ${n} caractères.`,
+    tooLong: (n: number) => `Au plus ${n} caractères.`,
+    chooseOne: 'Choisissez une option.',
+    mustAgree: 'Vous devez accepter ceci avant de soumettre.',
+    email: 'Saisissez une adresse courriel valide.',
+
+    rules: {
+      fundingSourceRequired: 'Dites-nous d’où provient le financement.',
+      fundingSourceNotApplicable:
+        'Le financement ne s’applique pas aux conférenciers de la région.',
+      decisionByRequired: 'Quand pensez-vous le savoir ?',
+      decisionByNotApplicable:
+        'La date de décision ne s’applique que si le financement est en attente.',
+      languagePreferenceNotApplicable:
+        'La préférence linguistique ne s’applique que si vous pouvez présenter dans les deux langues.',
+      dateFormat: 'Utilisez le sélecteur de date.',
+    },
   },
 };

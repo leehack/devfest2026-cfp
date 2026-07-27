@@ -1,10 +1,9 @@
 /**
- * Tests for the import merge — the step between "we parsed a profile" and
- * "the form changed". Run by `npm test`, no network or emulator.
+ * The import merge — between "we parsed a profile" and "the form changed".
  *
- * The rule this file exists to defend: importing must never destroy something
- * the speaker typed, and must never fill a field with a value that will fail
- * validation later without saying so.
+ * Defends two rules: importing never destroys what the speaker typed without
+ * asking, and never fills a field with a value that will fail validation later
+ * without saying so.
  */
 
 import { describe, expect, it } from 'vitest';

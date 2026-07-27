@@ -1,23 +1,20 @@
 /**
- * Generates a realistic review corpus so the evaluation side can be exercised.
+ * Generates a review corpus so the evaluation side can be exercised.
  *
  *   FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-devfest-cfp \
  *     node scripts/seed-corpus.mjs --proposals 40
  *
- * Every proposal is given a hidden "true quality", and each reviewer expresses
- * that quality through a persona — generous, harsh, polarised, flat. This is
- * the whole point: with uniformly calibrated reviewers, z-score normalisation
- * is a no-op and the corpus would prove nothing. Because each proposal is seen
- * by a random subset of reviewers, a proposal that happens to draw three
- * generous reviewers gets an inflated raw average, which is exactly the
- * distortion §7 says normalisation exists to correct.
+ * Each proposal gets a hidden "true quality" that reviewers express through a
+ * persona — generous, harsh, polarised, flat. Uniformly calibrated reviewers
+ * would make normalisation a no-op and prove nothing; because each proposal
+ * draws a random subset, one that happens to get three generous reviewers gets
+ * an inflated raw average, which is the distortion §7 exists to correct.
  *
- * The script finishes by ranking the corpus both ways and reporting which
- * ordering better recovers the hidden quality. That number is the evidence for
- * (or against) §7's claim on data shaped like yours.
+ * Ends by ranking both ways and reporting which better recovers the hidden
+ * quality — evidence for or against §7 on data shaped like yours.
  *
- * Deterministic: same --seed gives the same corpus, so a ranking change means
- * the code changed.
+ * Deterministic: same --seed, same corpus, so a ranking change means the code
+ * changed.
  */
 
 import { createRequire } from 'node:module';

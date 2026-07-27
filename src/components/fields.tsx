@@ -1,11 +1,29 @@
 import { useId, type ReactNode } from 'react';
 import { useI18n } from '../i18n';
 
-interface ShellProps {
+interface CommonProps {
   label: string;
   help?: ReactNode;
   error?: string;
   required?: boolean;
+  disabled?: boolean;
+}
+
+function Requirement({ required }: { required?: boolean }) {
+  const { t } = useI18n();
+  return <span className="field__requirement">{required ? t.form.required : t.form.optional}</span>;
+}
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p className="field__error" role="alert">
+      {message}
+    </p>
+  );
+}
+
+interface ShellProps extends CommonProps {
   htmlFor?: string;
   children: ReactNode;
   /** Rendered under the input, e.g. a character counter. */
@@ -13,25 +31,16 @@ interface ShellProps {
 }
 
 function Shell({ label, help, error, required, htmlFor, children, meta }: ShellProps) {
-  const { t } = useI18n();
   return (
     <div className={`field${error ? ' field--error' : ''}`}>
       <label className="field__label" htmlFor={htmlFor}>
         {label}
-        <span className="field__requirement">
-          {required ? t.form.required : t.form.optional}
-        </span>
+        <Requirement required={required} />
       </label>
       {help && <p className="field__help">{help}</p>}
       {children}
       <div className="field__foot">
-        {error ? (
-          <p className="field__error" role="alert">
-            {error}
-          </p>
-        ) : (
-          <span />
-        )}
+        {error ? <FieldError message={error} /> : <span />}
         {meta && <span className="field__meta">{meta}</span>}
       </div>
     </div>
@@ -40,17 +49,12 @@ function Shell({ label, help, error, required, htmlFor, children, meta }: ShellP
 
 // ---------------------------------------------------------------- text inputs
 
-interface TextFieldProps {
-  label: string;
+interface TextFieldProps extends CommonProps {
   value: string;
   onChange: (v: string) => void;
-  help?: ReactNode;
-  error?: string;
-  required?: boolean;
   maxLength?: number;
   type?: 'text' | 'email' | 'date' | 'url';
   placeholder?: string;
-  disabled?: boolean;
   min?: string;
 }
 
@@ -149,15 +153,10 @@ interface Option<T extends string> {
   description?: string;
 }
 
-interface SelectFieldProps<T extends string> {
-  label: string;
+interface ChoiceProps<T extends string> extends CommonProps {
   value: T | '';
   options: readonly Option<T>[];
   onChange: (v: T) => void;
-  help?: ReactNode;
-  error?: string;
-  required?: boolean;
-  disabled?: boolean;
 }
 
 export function SelectField<T extends string>({
@@ -169,7 +168,7 @@ export function SelectField<T extends string>({
   error,
   required,
   disabled,
-}: SelectFieldProps<T>) {
+}: ChoiceProps<T>) {
   const id = useId();
   return (
     <Shell label={label} help={help} error={error} required={required} htmlFor={id}>
@@ -192,17 +191,6 @@ export function SelectField<T extends string>({
   );
 }
 
-interface RadioGroupProps<T extends string> {
-  label: string;
-  value: T | '';
-  options: readonly Option<T>[];
-  onChange: (v: T) => void;
-  help?: ReactNode;
-  error?: string;
-  required?: boolean;
-  disabled?: boolean;
-}
-
 export function RadioGroup<T extends string>({
   label,
   value,
@@ -212,16 +200,13 @@ export function RadioGroup<T extends string>({
   error,
   required,
   disabled,
-}: RadioGroupProps<T>) {
+}: ChoiceProps<T>) {
   const name = useId();
-  const { t } = useI18n();
   return (
     <fieldset className={`field fieldset${error ? ' field--error' : ''}`}>
       <legend className="field__label">
         {label}
-        <span className="field__requirement">
-          {required ? t.form.required : t.form.optional}
-        </span>
+        <Requirement required={required} />
       </legend>
       {help && <p className="field__help">{help}</p>}
       <div className="radios">
@@ -242,21 +227,15 @@ export function RadioGroup<T extends string>({
           </label>
         ))}
       </div>
-      {error && (
-        <p className="field__error" role="alert">
-          {error}
-        </p>
-      )}
+      <FieldError message={error} />
     </fieldset>
   );
 }
 
-interface CheckboxProps {
+interface CheckboxProps extends Omit<CommonProps, 'label' | 'help' | 'required'> {
   label: ReactNode;
   checked: boolean;
   onChange: (v: boolean) => void;
-  error?: string;
-  disabled?: boolean;
 }
 
 export function Checkbox({ label, checked, onChange, error, disabled }: CheckboxProps) {
@@ -272,11 +251,7 @@ export function Checkbox({ label, checked, onChange, error, disabled }: Checkbox
         />
         <span>{label}</span>
       </label>
-      {error && (
-        <p className="field__error" role="alert">
-          {error}
-        </p>
-      )}
+      <FieldError message={error} />
     </div>
   );
 }

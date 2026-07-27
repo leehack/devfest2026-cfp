@@ -9,13 +9,11 @@ interface RevealProps {
    */
   variant?: 'fields' | 'note';
   /**
-   * Fires on the true -> false edge so the parent can clear the values that
-   * were only valid while this block was visible.
-   *
-   * This is the whole reason conditionals go through one component. The schema
-   * rejects a `fundingSource` on a `local` applicant and a `languagePreference`
-   * on a non-`either` talk, so a value left behind by a changed radio button is
-   * a submit-time server error with no visible field to point at.
+   * Fires on the true → false edge, so the parent can clear values that were
+   * only valid while this block was visible. The reason conditionals go through
+   * one component: the schema rejects a `fundingSource` on a `local` applicant,
+   * so a value stranded by a changed radio is a server error with no visible
+   * field to point at.
    */
   onHide?: () => void;
   children: ReactNode;

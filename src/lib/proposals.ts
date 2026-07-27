@@ -54,11 +54,8 @@ export interface LoadedProposal {
 }
 
 /**
- * Finds this applicant's proposal, if any.
- *
- * §2: no `onSnapshot` on anything list-shaped. This is a one-shot `getDocs`
- * capped at one document — ten reviewers on a live-listening list view is how
- * the 50k/day read quota disappears.
+ * §2: no `onSnapshot` on anything list-shaped — ten reviewers on a live list
+ * view is how the 50k/day read quota disappears. One-shot, capped at one doc.
  */
 export async function loadMyProposal(user: User): Promise<LoadedProposal | null> {
   const q = query(
@@ -92,9 +89,8 @@ export async function saveDraft(
   const { proposalDoc, speakerDoc } = toDocuments(form);
   const existing = proposalId !== null;
 
-  // On create, an empty optional is simply absent. On update it must be an
-  // explicit deleteField(), because a `{merge: true}` write ignores keys that
-  // are not present — a cleared field would otherwise never actually clear.
+  // On create an empty optional is simply absent; on update it needs an explicit
+  // deleteField(), since `{merge: true}` ignores keys that are not present.
   const forWrite = (o: Record<string, any>) =>
     existing ? mapEmpty(o, deleteField()) : mapEmpty(o, undefined);
 

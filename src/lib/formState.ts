@@ -11,10 +11,9 @@ import type { SubmissionInput } from '@shared/schema';
 import type { SessionizeProfile, SessionizeSession } from '@shared/sessionize';
 
 /**
- * The form keeps one flat object. Firestore keeps the talk and the person in
- * two documents (§6), and the validation schema wants a third shape — the
- * mapping between the three lives here rather than being scattered across
- * components.
+ * The form is one flat object; Firestore stores the talk and the person
+ * separately (§6); the schema wants a third shape. All three mappings live here
+ * rather than scattered across components.
  */
 export interface FormState {
   // Proposal
@@ -78,13 +77,11 @@ export const emptyForm: FormState = {
 };
 
 /**
- * Splits the form into the two documents the data model defines.
+ * Splits the form into its two documents.
  *
- * Empty optionals are emitted as `''` rather than dropped. Dropping them here
- * would make a cleared field invisible to a `{merge: true}` write, so deleting
- * your pitch would appear to work and then silently come back. The caller
- * decides what `''` means: omit it on create, `deleteField()` on update, or
- * `undefined` when validating.
+ * Empty optionals stay as `''` rather than being dropped: a `{merge: true}`
+ * write ignores absent keys, so a cleared pitch would appear to save and then
+ * come back. The caller decides what `''` means — see `mapEmpty`.
  */
 export function toDocuments(form: FormState) {
   const funded = form.attendanceStatus === 'secured' || form.attendanceStatus === 'pending';
@@ -159,13 +156,10 @@ export interface OverLimit {
 }
 
 /**
- * Records a filled value that the schema will reject.
- *
- * Imported text has no relation to our limits — Sessionize abstracts routinely
- * run past 1,200 characters and bios past 800. Fill it anyway, because trimming
- * prose is far easier than retyping it, but say so. Otherwise the first the
- * speaker hears of it is a validation error at submit time, on text they never
- * wrote and cannot see the rule for.
+ * Records a filled value the schema will reject. Sessionize has no reason to
+ * respect our limits, so fill it anyway — trimming prose beats retyping it —
+ * but say so, rather than letting it surface as a submit-time error on text the
+ * speaker never wrote.
  */
 function checkLimits(
   patch: Partial<FormState>,
@@ -182,30 +176,21 @@ function checkLimits(
 }
 
 /**
- * Applies one chosen Sessionize talk to the form.
- *
- * Split from the profile merge because picking a talk is a separate, explicit
- * act: a speaker with seven talks on Sessionize is submitting exactly one of
- * them here, and we cannot guess which.
+ * Applies one chosen talk. Separate from the profile merge because a speaker
+ * with seven talks on Sessionize is proposing exactly one of them here, and we
+ * cannot guess which.
  */
 export function applySessionizeSession(
   form: FormState,
   session: SessionizeSession,
   options: {
-    /**
-     * The talk currently applied, if any. A speaker who picks the wrong one
-     * from a list of seven must be able to switch, so replacing text *this
-     * import wrote* is allowed — but text they typed themselves is not touched
-     * unless they say so.
-     */
+    /** The talk currently applied. Text this import wrote may be replaced silently. */
     replacing?: { title: string; abstract: string };
     /**
-     * The speaker was shown what would be overwritten and agreed.
-     *
-     * Needed because provenance does not survive a reload: come back to a draft
-     * tomorrow and the title an import wrote yesterday is indistinguishable
-     * from one you typed. Without this, picking a talk on a filled-in draft is
-     * a dead end — the click reports success and changes nothing.
+     * The speaker was shown what would be overwritten and agreed. Needed
+     * because `replacing` does not survive a reload — a title an import wrote
+     * yesterday is indistinguishable from one you typed, which made every pick
+     * on a saved draft a no-op that reported success.
      */
     replaceExisting?: boolean;
   } = {},
@@ -244,16 +229,13 @@ export function applySessionizeSession(
 }
 
 /**
- * Merges an imported Sessionize profile into the form.
+ * Merges a profile into the form: blank fields only, and reports what it
+ * touched. Someone who clicks Import out of curiosity half way through the form
+ * must not lose what they wrote.
  *
- * Fills only blank fields and reports exactly what it touched. Overwriting
- * something the speaker already typed — because they clicked Import out of
- * curiosity after filling half the form — would be a far worse bug than not
- * importing at all.
- *
- * Deliberately does *not* map Sessionize's `tagline` onto `jobTitle`. A tagline
- * is a free-text headline ("Advocating for open source"), and quietly filing
- * that as a job title puts it on the public programme.
+ * Deliberately does *not* map `tagline` onto `jobTitle` — a tagline is a
+ * headline ("Advocating for open source"), and filing that as a job title puts
+ * it on the public programme.
  */
 export function applySessionizeProfile(
   form: FormState,
@@ -301,10 +283,8 @@ export function applySessionizeProfile(
     if (form.pastTalks.trim()) {
       skipped.push('past talks');
     } else {
-      // Sessionize lists events, not talk titles or recordings — so say
-      // "spoke at" rather than dressing them up as something they are not.
-      // Drop events until it fits: this string is generated, so trimming it
-      // costs the speaker nothing, unlike trimming their own bio.
+      // Sessionize lists events, not talks or recordings, so say "spoke at".
+      // Drop events until it fits — generated text, so trimming costs nothing.
       let events = profile.events.slice(0, 12);
       let text = `Spoke at: ${events.join(', ')}`;
       while (events.length > 1 && text.length > LIMITS.pastTalksMax) {
@@ -358,10 +338,8 @@ export function fromDocuments(
 }
 
 /**
- * The shape `submissionSchema` validates — used for inline errors before submit.
- *
- * Empties become absent keys so the browser validates exactly what the function
- * will see: the server reads these documents back from Firestore, where a
+ * The shape `submissionSchema` validates. Empties become absent keys so the
+ * browser checks exactly what the server will read back from Firestore, where a
  * cleared field does not exist at all.
  */
 export function toSubmission(form: FormState): SubmissionInput {

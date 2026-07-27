@@ -113,34 +113,49 @@ function Body({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) {
     );
   }
 
-  if (!user) {
-    return (
-      <div className="panel">
-        <p>{t.app.signInHint}</p>
-        <p className="muted">
-          {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
-        </p>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() => signInWithPopup(auth, googleProvider)}
-        >
-          {t.app.signIn}
-        </button>
-        {usingEmulators && (
-          <p className="muted" style={{ marginBottom: 0 }}>
-            <button
-              type="button"
-              className="btn btn--ghost"
-              onClick={() => signInAsTestSpeaker()}
-            >
-              Sign in as a test speaker (emulator only)
-            </button>
-          </p>
-        )}
-      </div>
-    );
-  }
+  if (!user) return <SignIn cfp={cfp} />;
 
   return <SubmitPage user={user} cfp={cfp} />;
+}
+
+function SignIn({ cfp }: { cfp: CfpWindow }) {
+  const { t, locale } = useI18n();
+  const [failed, setFailed] = useState(false);
+
+  // Popups get blocked, closed, and cancelled. Swallowing the rejection left the
+  // button looking dead.
+  async function signIn() {
+    setFailed(false);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      if (error?.code === 'auth/popup-closed-by-user') return;
+      console.error('sign-in failed', error);
+      setFailed(true);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <p>{t.app.signInHint}</p>
+      <p className="muted">
+        {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
+      </p>
+      <button type="button" className="btn btn--primary" onClick={signIn}>
+        {t.app.signIn}
+      </button>
+      {failed && (
+        <p className="field__error" role="alert">
+          {t.errors.signIn}
+        </p>
+      )}
+      {usingEmulators && (
+        <p className="muted" style={{ marginBottom: 0 }}>
+          <button type="button" className="btn btn--ghost" onClick={() => signInAsTestSpeaker()}>
+            Sign in as a test speaker (emulator only)
+          </button>
+        </p>
+      )}
+    </div>
+  );
 }

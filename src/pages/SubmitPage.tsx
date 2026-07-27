@@ -15,7 +15,8 @@ import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../
 import { Reveal } from '../components/Reveal';
 import { SessionizeImport } from '../components/SessionizeImport';
 import { SocialsInput } from '../components/SocialsInput';
-import { formatDate, useI18n } from '../i18n';
+import { formatDate, useI18n, type Dictionary } from '../i18n';
+import { validationMessage } from '../i18n/validation';
 import {
   emptyForm,
   fromDocuments,
@@ -34,13 +35,13 @@ import type { ProposalStatus } from '@shared/enums';
 type Errors = Record<string, string>;
 
 /** Flattens zod issue paths into the dotted keys the fields look themselves up by. */
-function validate(form: FormState): Errors {
+function validate(form: FormState, t: Dictionary): Errors {
   const result = submissionSchema.safeParse(toSubmission(form));
   if (result.success) return {};
   const errors: Errors = {};
   for (const issue of result.error.issues) {
     const key = issue.path.join('.');
-    if (!errors[key]) errors[key] = issue.message;
+    if (!errors[key]) errors[key] = validationMessage(issue, t);
   }
   return errors;
 }
@@ -122,16 +123,17 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  // Re-validate live once the applicant has seen errors, so fixes clear as they type.
+  // Re-validate live once the applicant has seen errors, so fixes clear as they
+  // type — and so switching language re-renders the messages in it.
   useEffect(() => {
-    if (showErrors) setErrors(validate(form));
-  }, [form, showErrors]);
+    if (showErrors) setErrors(validate(form, t));
+  }, [form, showErrors, t]);
 
   // ------------------------------------------------------------------- submit
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const found = validate(form);
+    const found = validate(form, t);
     setErrors(found);
     setShowErrors(true);
     if (Object.keys(found).length > 0) {

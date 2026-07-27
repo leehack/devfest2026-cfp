@@ -16,20 +16,16 @@ interface SessionizeImportProps {
 }
 
 /**
- * Prefills the talk and the speaker from a public Sessionize profile.
+ * Prefills the talk and the speaker from a public Sessionize profile. Leads the
+ * form because it fills fields in every section below it.
  *
- * It leads the form because it fills fields in every section below it: offering
- * it after the talk has been typed out by hand wastes the work it exists to
- * save, and a speaker who scrolls past it never learns it was there.
+ * A pasted talk link is resolved back to the profile rather than fetched: the
+ * profile page carries every talk with its full abstract *and* the bio, so it
+ * is one request that returns strictly more.
  *
- * A profile page carries every talk with its full abstract, so a pasted talk
- * link is resolved back to the profile rather than fetched directly: one
- * request, and it returns the bio too, which a session page does not have.
- *
- * Everything it does is reported in words: what was filled, what was left
- * alone, what could not be read, and what will not pass validation. Sessionize
- * can change their markup at any time, and an import that silently fills
- * nothing looks identical to one that had nothing to fill.
+ * Everything it does is reported in words — filled, skipped, unreadable,
+ * over-limit. Sessionize can change their markup at any time, and an import
+ * that silently fills nothing looks exactly like one that had nothing to fill.
  */
 export function SessionizeImport({ form, onApply, disabled }: SessionizeImportProps) {
   const { t } = useI18n();
@@ -67,10 +63,9 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
   function chooseSession(session: SessionizeSession): string[] {
     let result = applySessionizeSession(form, session, { replacing: applied });
 
-    // Picking a talk names one specific talk, so a silent refusal is a dead
-    // end: the speaker cannot get what they clicked for without emptying two
-    // fields by hand. Ask instead — but only about text we did not write, and
-    // only about fields this talk actually has something to put in.
+    // A silent refusal here is a dead end — the speaker cannot get what they
+    // clicked for without emptying two fields by hand. `skipped` already covers
+    // only text we did not write, in fields this talk can actually fill.
     if (result.skipped.length > 0) {
       const names = result.skipped.map((f) => t.import.fieldNames[f] ?? f).join(', ');
       if (!window.confirm(t.import.replaceConfirm(names))) {
@@ -82,8 +77,7 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
     const { patch, filled, skipped, overLimit } = result;
     if (Object.keys(patch).length > 0) onApply(patch);
     setChosen(session.id);
-    // Only remember what we actually wrote — if the speaker's own title was
-    // left alone, we must not later claim the right to overwrite it.
+    // Only what we actually wrote: a title left alone is not ours to replace.
     setApplied({
       title: patch.title ?? '',
       abstract: patch.abstract ?? '',
@@ -110,10 +104,8 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
       const lines = applyProfile(data.profile, Boolean(data.requestedSessionMissing));
       setSessions(data.profile.sessions ?? []);
 
-      // A pasted talk link says which one they meant, so do not make them pick
-      // it again out of a list of seven. Its report is appended rather than
-      // substituted — the speaker still needs to know their bio and links were
-      // filled in as well.
+      // A pasted talk link already says which one they meant. Its report is
+      // appended, not substituted — the bio and links were filled in too.
       const preselected = data.profile.sessions?.find((s) => s.id === data.preselectSessionId);
       setReport(preselected ? [...lines, ...chooseSession(preselected)] : lines);
     } catch (e: any) {

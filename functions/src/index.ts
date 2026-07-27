@@ -1,12 +1,8 @@
 /**
- * Cloud Functions for the DevFest Montréal 2026 CFP.
- *
- * Build order item 1 needs exactly one function. §6 makes `status` and
- * `aggregate` function-writable only, which means the draft -> submitted
- * transition cannot happen in the browser. That constraint is a feature: it
- * gives us one server-side chokepoint that re-runs validation and re-checks the
- * deadline against the server clock, so neither can be bypassed by posting
- * directly to Firestore.
+ * §6 makes `status` and `aggregate` function-writable only, so the
+ * draft → submitted transition cannot happen in the browser. That gives one
+ * server-side chokepoint which re-runs validation and re-checks the deadline
+ * against the server clock — neither can be bypassed by posting to Firestore.
  */
 
 import { initializeApp } from 'firebase-admin/app';
@@ -29,16 +25,13 @@ interface CfpWindow {
   closesAt: Timestamp;
 }
 
-async function loadCfpWindow(): Promise<CfpWindow> {
+/** Fails closed: a missing config document must not read as "wide open". */
+async function assertCfpOpen(): Promise<void> {
   const snap = await db.doc('config/cfp').get();
   if (!snap.exists) {
-    // Fail closed. A missing config document must not read as "wide open".
     throw new HttpsError('failed-precondition', 'CFP is not configured.');
   }
-  return snap.data() as CfpWindow;
-}
-
-function assertWindowOpen(cfp: CfpWindow): void {
+  const cfp = snap.data() as CfpWindow;
   const now = Date.now();
   if (cfp.paused) {
     throw new HttpsError('failed-precondition', 'The CFP is currently paused.');
@@ -49,6 +42,39 @@ function assertWindowOpen(cfp: CfpWindow): void {
   if (now >= cfp.closesAt.toMillis()) {
     throw new HttpsError('deadline-exceeded', 'The CFP has closed.');
   }
+}
+
+function requireUid(request: { auth?: { uid: string } }, action: string): string {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', `Sign in to ${action}.`);
+  return uid;
+}
+
+function requireProposalId(data: unknown): string {
+  const id = (data as { proposalId?: unknown } | undefined)?.proposalId;
+  if (typeof id !== 'string' || !id) {
+    throw new HttpsError('invalid-argument', 'proposalId is required.');
+  }
+  return id;
+}
+
+/**
+ * Loads a proposal the caller owns. Non-ownership reports `not-found`, the same
+ * as a missing document — an authenticated prober learns nothing about other
+ * people's proposals either way.
+ */
+async function readOwnProposal(
+  tx: FirebaseFirestore.Transaction,
+  ref: FirebaseFirestore.DocumentReference,
+  uid: string,
+): Promise<FirebaseFirestore.DocumentData> {
+  const snap = await tx.get(ref);
+  if (!snap.exists) throw new HttpsError('not-found', 'Proposal not found.');
+  const proposal = snap.data()!;
+  if (!(proposal.speakerIds ?? []).includes(uid)) {
+    throw new HttpsError('not-found', 'Proposal not found.');
+  }
+  return proposal;
 }
 
 /**
@@ -84,34 +110,15 @@ function assemble(proposal: FirebaseFirestore.DocumentData, speaker: FirebaseFir
 }
 
 export const submitProposal = onCall({ region: REGION }, async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) {
-    throw new HttpsError('unauthenticated', 'Sign in to submit a proposal.');
-  }
+  const uid = requireUid(request, 'submit a proposal');
+  const proposalId = requireProposalId(request.data);
 
-  const proposalId = (request.data ?? {}).proposalId;
-  if (typeof proposalId !== 'string' || !proposalId) {
-    throw new HttpsError('invalid-argument', 'proposalId is required.');
-  }
-
-  const cfp = await loadCfpWindow();
-  assertWindowOpen(cfp);
+  await assertCfpOpen();
 
   const proposalRef = db.doc(`proposals/${proposalId}`);
 
   const result = await db.runTransaction(async (tx) => {
-    const proposalSnap = await tx.get(proposalRef);
-    if (!proposalSnap.exists) {
-      throw new HttpsError('not-found', 'Proposal not found.');
-    }
-    const proposal = proposalSnap.data()!;
-
-    const speakerIds: string[] = proposal.speakerIds ?? [];
-    if (!speakerIds.includes(uid)) {
-      // Same message as not-found on purpose — do not confirm the existence of
-      // other people's proposals to an authenticated prober.
-      throw new HttpsError('not-found', 'Proposal not found.');
-    }
+    const proposal = await readOwnProposal(tx, proposalRef, uid);
 
     if (proposal.status === 'submitted') {
       return { alreadySubmitted: true };
@@ -128,8 +135,7 @@ export const submitProposal = onCall({ region: REGION }, async (request) => {
       throw new HttpsError('failed-precondition', 'Complete your speaker profile first.');
     }
 
-    // The authoritative validation pass. The browser ran the same schema, but
-    // that copy is only there to render inline errors.
+    // The authoritative pass; the browser's copy only renders inline errors.
     const parsed = submissionSchema.safeParse(assemble(proposal, speakerSnap.data()!));
     if (!parsed.success) {
       throw new HttpsError('invalid-argument', 'The proposal is incomplete.', {
@@ -158,27 +164,13 @@ export const submitProposal = onCall({ region: REGION }, async (request) => {
  * outright so the emailLog audit trail cannot be orphaned.
  */
 export const withdrawProposal = onCall({ region: REGION }, async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) {
-    throw new HttpsError('unauthenticated', 'Sign in to withdraw a proposal.');
-  }
-
-  const proposalId = (request.data ?? {}).proposalId;
-  if (typeof proposalId !== 'string' || !proposalId) {
-    throw new HttpsError('invalid-argument', 'proposalId is required.');
-  }
+  const uid = requireUid(request, 'withdraw a proposal');
+  const proposalId = requireProposalId(request.data);
 
   const proposalRef = db.doc(`proposals/${proposalId}`);
 
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(proposalRef);
-    if (!snap.exists) {
-      throw new HttpsError('not-found', 'Proposal not found.');
-    }
-    const proposal = snap.data()!;
-    if (!(proposal.speakerIds ?? []).includes(uid)) {
-      throw new HttpsError('not-found', 'Proposal not found.');
-    }
+    const proposal = await readOwnProposal(tx, proposalRef, uid);
     const withdrawable = ['draft', 'submitted', 'under_review', 'accepted', 'waitlisted'];
     if (!withdrawable.includes(proposal.status)) {
       throw new HttpsError(
@@ -197,21 +189,14 @@ export const withdrawProposal = onCall({ region: REGION }, async (request) => {
 });
 
 /**
- * Recomputes `aggregate` on every reviewed proposal.
- *
- * Deliberately a batch job rather than a Firestore trigger on review writes. A
- * z-score is relative to everything that reviewer scored, so a single new
- * review changes that reviewer's mean and therefore the normalised score of
- * every other proposal they touched. Per-review triggers would fan out across
- * the whole collection on each keystroke and race each other doing it.
- *
- * §8 runs this once when the review round closes.
+ * Recomputes `aggregate` on every reviewed proposal. Run once when the round
+ * closes (§8) — a batch job, not a trigger: a z-score is relative to everything
+ * that reviewer scored, so one new review moves the normalised score of every
+ * proposal they touched. Per-review triggers would fan out across the whole
+ * collection and race each other.
  */
 export const recomputeAggregates = onCall({ region: REGION }, async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) {
-    throw new HttpsError('unauthenticated', 'Sign in first.');
-  }
+  const uid = requireUid(request, 'close the review round');
 
   const reviewer = await db.doc(`reviewers/${uid}`).get();
   if (!reviewer.exists || reviewer.data()?.role !== 'lead') {
@@ -231,8 +216,7 @@ export const recomputeAggregates = onCall({ region: REGION }, async (request) =>
 
   const aggregates = aggregateReviews(reviews);
 
-  // Firestore caps a batch at 500 writes; ~200 proposals fits, but chunking
-  // keeps this correct if the CFP grows.
+  // Firestore caps a batch at 500 writes.
   const entries = [...aggregates.entries()];
   const CHUNK = 400;
   for (let i = 0; i < entries.length; i += CHUNK) {
@@ -256,27 +240,19 @@ export const recomputeAggregates = onCall({ region: REGION }, async (request) =>
 });
 
 /**
- * Fetches a speaker's public Sessionize profile and returns it parsed.
+ * Fetches and parses a public Sessionize profile. Writes nothing.
  *
- * Writes nothing. The result goes back to the browser, which prefills only the
- * fields the speaker has left blank and tells them what it filled — importing
- * must never silently overwrite something they already typed.
- *
- * Why a function rather than a browser fetch: sessionize.com sends no CORS
- * headers, so the request has to be server-side. That makes it an SSRF surface,
- * which is why the URL is rebuilt from a validated handle rather than taken
- * from the caller — `normalizeSessionizeHandle` accepts a single path segment
- * on sessionize.com and nothing else, and is unit-tested against host-suffix
+ * Server-side because sessionize.com sends no CORS headers — which makes it an
+ * SSRF surface, so the URL is rebuilt from a validated handle rather than taken
+ * from the caller. `parseSessionizeUrl` is unit-tested against host-suffix
  * tricks and link-local addresses.
  */
 export const importSessionizeProfile = onCall(
   { region: REGION, timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError('unauthenticated', 'Sign in first.');
-    }
+    const uid = requireUid(request, 'import a profile');
 
-    const parsed = parseSessionizeUrl((request.data ?? {}).url ?? '');
+    const parsed = parseSessionizeUrl((request.data as { url?: string } | undefined)?.url ?? '');
     if (!parsed) {
       throw new HttpsError(
         'invalid-argument',
@@ -286,10 +262,8 @@ export const importSessionizeProfile = onCall(
 
     const { handle, sessionId } = parsed;
 
-    // Always fetch the profile page, even for a pasted talk link. A profile
-    // carries the bio *and* every talk with its full abstract, whereas a
-    // session page has the talk but no bio — so this is one request instead of
-    // two, and returns strictly more.
+    // The profile page even for a talk link: it carries the bio *and* every
+    // talk with its full abstract, so it is one request that returns more.
     const target = `https://sessionize.com/${handle}/`;
 
     let response: Response;
@@ -324,9 +298,8 @@ export const importSessionizeProfile = onCall(
     const html = await response.text();
     const profile = parseSessionizeProfile(html, handle);
 
-    // A profile with nothing usable almost always means the markup moved, not
-    // that the speaker has an empty profile. Say so plainly rather than
-    // returning a blank object the form would silently ignore.
+    // Nothing usable almost always means the markup moved, not an empty
+    // profile. Say so, rather than returning a blank the form would ignore.
     if (!profile.bio && !profile.name) {
       logger.error('sessionize parse produced nothing', { handle, warnings: profile.warnings });
       throw new HttpsError(
@@ -335,15 +308,14 @@ export const importSessionizeProfile = onCall(
       );
     }
 
-    // A pasted talk link that is not on the profile means Sessionize moved it
-    // or the speaker unlisted it. Say so rather than silently importing a
-    // different talk.
+    // A pasted talk that is no longer listed: say so rather than silently
+    // importing a different one.
     const preselect =
       sessionId && profile.sessions.some((s) => s.id === sessionId) ? sessionId : undefined;
 
     logger.info('sessionize profile imported', {
       handle,
-      uid: request.auth.uid,
+      uid,
       sessions: profile.sessions.length,
       requestedSession: sessionId ?? null,
       matchedSession: preselect ?? null,

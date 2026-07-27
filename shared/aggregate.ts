@@ -1,15 +1,9 @@
 /**
- * Scoring aggregation — §7.
+ * Scoring aggregation (§7). Pure functions over plain objects — no Firestore, so
+ * the maths is testable without an emulator.
  *
- * Deliberately free of any Firestore dependency. The caller loads reviews and
- * writes the results; everything here is a pure function over plain objects, so
- * the maths can be tested without an emulator, a UI, or network access.
- *
- * The whole point of this file is that its bugs are invisible. A miscomputed
- * ranking still looks like a perfectly plausible ranking, and nobody eyeballs a
- * z-score and notices it is wrong — so the tests assert *properties* (raw and
- * normalised orderings disagree in a specific way) rather than checking that
- * numbers come out.
+ * Bugs here are invisible: a miscomputed ranking still looks like a ranking.
+ * Hence property tests rather than expected-value tests.
  */
 
 export interface ReviewRecord {
@@ -37,11 +31,7 @@ function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-/**
- * Population standard deviation — used for reviewer calibration, where we
- * genuinely hold every score that reviewer gave. There is no wider population
- * to estimate.
- */
+/** Reviewer calibration: we hold every score they gave, so there is no wider population to estimate. */
 function populationStdDev(values: number[]): number {
   if (values.length === 0) return 0;
   const m = mean(values);
@@ -49,15 +39,11 @@ function populationStdDev(values: number[]): number {
 }
 
 /**
- * Sample standard deviation — used for the disagreement metric, where the
- * reviews are a sample of the opinions the proposal could have drawn.
- *
- * The distinction matters when review counts differ between proposals, which
- * they will if reviewers are partitioned rather than all seeing everything (an
- * open question in the spec). Population and sample sd differ by a factor of
- * sqrt(n/(n-1)) that *varies with n*, so mixing them would make proposals with
- * different review counts incomparable — precisely the sort you are doing when
- * you sort the committee screen by disagreement.
+ * Disagreement: these reviews are a sample of the opinions the proposal could
+ * have drawn. Not interchangeable with the population form above — they differ
+ * by √(n/(n−1)), which varies with n, so mixing them makes proposals with
+ * unequal review counts incomparable. That is exactly the comparison the
+ * committee screen makes when it sorts by disagreement.
  */
 function sampleStdDev(values: number[]): number {
   if (values.length < 2) return 0;
@@ -67,10 +53,9 @@ function sampleStdDev(values: number[]): number {
 }
 
 /**
- * Per-reviewer mean and spread across everything they scored.
- *
- * Reviewers differ in how generously they score, and §7 is explicit that at
- * 5–10 reviewers correcting for it genuinely reorders the ranking.
+ * Per-reviewer mean and spread across everything they scored. Reviewers differ
+ * in how generously they score; at 5–10 of them, correcting for it reorders the
+ * ranking (§7).
  */
 export function reviewerCalibration(
   reviews: ReviewRecord[],
@@ -95,11 +80,8 @@ export function reviewerCalibration(
 }
 
 /**
- * Computes an aggregate for every proposal appearing in `reviews`.
- *
- * Proposals with no countable reviews are omitted entirely rather than returned
- * as zeroes — a zero would sort as though the committee had judged it poorly,
- * when in fact nobody has looked at it. The caller decides how to surface that.
+ * Proposals with no countable reviews are omitted, not zeroed: a zero sorts as
+ * though the committee judged it poorly, when nobody has looked at it.
  */
 export function aggregateReviews(reviews: ReviewRecord[]): Map<string, Aggregate> {
   const counted = reviews.filter((r) => !r.conflictOfInterest);
@@ -118,9 +100,8 @@ export function aggregateReviews(reviews: ReviewRecord[]): Map<string, Aggregate
 
     const zScores = rs.map((r) => {
       const cal = calibration.get(r.reviewerUid);
-      // A reviewer who gave everything the same score carries no discriminating
-      // signal, and dividing by their zero spread would be a NaN. Treat them as
-      // exactly average — they neither lift nor sink the proposal.
+      // A reviewer who scored everything the same carries no signal, and their
+      // zero spread would divide to NaN. Treat them as exactly average.
       if (!cal || cal.stdDev === 0) return 0;
       return (r.score - cal.mean) / cal.stdDev;
     });
@@ -135,15 +116,14 @@ export function aggregateReviews(reviews: ReviewRecord[]): Map<string, Aggregate
   return out;
 }
 
-/** Four decimals is far beyond committee-relevant precision; it just keeps float noise out of Firestore. */
+/** Keeps float noise out of Firestore; four decimals is far beyond what the committee reads. */
 function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
 /**
- * Committee meeting order (§7): most disagreement first, because a proposal
- * everyone scored 3 needs less discussion than one that drew a 1 and a 4.
- * Ties fall back to normalised score so the ordering is stable.
+ * Committee meeting order (§7): most disagreement first — a proposal everyone
+ * scored 3 needs less discussion than one that drew a 1 and a 4.
  */
 export function byDisagreement(
   entries: Array<[string, Aggregate]>,

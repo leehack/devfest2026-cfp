@@ -1,10 +1,4 @@
-/**
- * Firestore rules tests — the four non-negotiables in §6.
- *
- * Run with:  npm run test:rules
- * (which wraps this in `firebase emulators:exec`, so the emulator is started
- * and torn down for you. Requires a Java runtime.)
- */
+/** Firestore rules — the four non-negotiables in §6. `npm run test:rules`. */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {

@@ -1,10 +1,7 @@
 /**
- * One validation schema, used in two places:
- *   - the browser, for inline form errors
- *   - submitProposal (Cloud Function), which revalidates on the server
- *
- * The client copy is a convenience. The server copy is the one that counts:
- * a hand-rolled POST can skip the form entirely.
+ * One schema, run in the browser for inline errors and again in
+ * `submitProposal`. The server pass is the one that counts — a hand-rolled POST
+ * skips the form entirely.
  */
 
 import { z } from 'zod';
@@ -27,9 +24,8 @@ export const socialSchema = z.object({
 
 export const speakerSchema = z.object({
   name: trimmed(LIMITS.nameMax).min(1),
-  // One bio, required. It feeds promotion as well as review, so a speaker with
-  // no bio cannot be announced — hence mandatory rather than optional, and
-  // hence a floor long enough to be usable in a programme entry.
+  // Required, with a floor: it feeds promotion as well as review, and a speaker
+  // with no usable bio cannot be announced.
   bio: trimmed(LIMITS.bioMax).min(LIMITS.bioMin),
   // Not required: independents and between-jobs applicants exist (§3).
   company: trimmed(LIMITS.companyMax).optional(),
@@ -52,10 +48,7 @@ export const attendanceSchema = z
   .object({
     status: z.enum(ATTENDANCE_STATUSES),
     fundingSource: trimmed(LIMITS.fundingSourceMax).optional(),
-    decisionBy: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use the date picker.')
-      .optional(),
+    decisionBy: z.string().optional(),
     needsVisa: z.boolean(),
   })
   .superRefine((val, ctx) => {
@@ -92,6 +85,16 @@ export const attendanceSchema = z
         path: ['decisionBy'],
         params: { key: 'decisionByNotApplicable' },
         message: 'Decision date only applies when funding is pending.',
+      });
+    }
+    // A custom issue rather than `.regex()`, so it carries a key the i18n layer
+    // can translate like every other message.
+    if (val.decisionBy && !/^\d{4}-\d{2}-\d{2}$/.test(val.decisionBy)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['decisionBy'],
+        params: { key: 'dateFormat' },
+        message: 'Use the date picker.',
       });
     }
   });
@@ -133,9 +136,6 @@ export const submissionSchema = z.object({
 export type SubmissionInput = z.input<typeof submissionSchema>;
 export type SubmissionOutput = z.output<typeof submissionSchema>;
 
-/**
- * Drafts are saved continuously and must tolerate half-filled forms, so every
- * field is optional here. The strict schema above runs at submit time only.
- */
+/** Drafts autosave half-filled, so everything is optional until submit time. */
 export const draftSchema = submissionSchema.deepPartial();
 export type DraftInput = z.input<typeof draftSchema>;

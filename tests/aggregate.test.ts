@@ -1,12 +1,9 @@
 /**
  * Property tests for the scoring maths (§7).
  *
- * Run with:  npm test          (no emulator, no Java, no network)
- *
- * These deliberately do not assert "the function returns a number". A fixture
- * where every reviewer is calibrated identically would make normalisation a
+ * A fixture where every reviewer is calibrated alike makes normalisation a
  * no-op, and such a suite would pass while proving the feature does nothing.
- * Every test below encodes a claim the spec actually makes.
+ * Every test here encodes a claim the spec actually makes.
  */
 
 import { describe, expect, it } from 'vitest';

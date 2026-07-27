@@ -4,16 +4,12 @@ import { auth } from '../firebase';
 export const usingEmulators = import.meta.env.VITE_USE_EMULATORS === 'true';
 
 /**
- * Emulator-only sign-in.
+ * Emulator-only sign-in. `signInWithPopup` needs a real popup to post back to,
+ * so it is unusable in headless browsers, embedded webviews and CI; the Auth
+ * emulator accepts an unsigned ID token, so mint one and skip the IdP.
  *
- * `signInWithPopup` needs a real popup window to post its result back to, which
- * makes it unusable in headless browsers, embedded webviews and CI. The Auth
- * emulator accepts an *unsigned* ID token, so we can mint one directly and skip
- * the IdP round trip entirely.
- *
- * Guarded by `usingEmulators` and never rendered against a real project — a
- * genuine Firebase backend rejects an unsigned token outright, but the button
- * should not be reachable in the first place.
+ * Guarded by `usingEmulators`. A real backend would reject the token anyway,
+ * but the button should not be reachable in the first place.
  */
 export async function signInAsTestSpeaker(profile?: {
   sub?: string;
