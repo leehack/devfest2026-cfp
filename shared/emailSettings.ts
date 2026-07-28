@@ -1,7 +1,7 @@
 /**
  * Who the CFP writes as (§8).
  *
- * Kept out of the deploy so the address can be fixed from `#/admin` the moment
+ * Kept out of the deploy so the address can be fixed from `/admin` the moment
  * a domain finishes verifying, rather than waiting on a redeploy — and so a
  * wrong address is a thirty-second correction rather than an incident.
  *

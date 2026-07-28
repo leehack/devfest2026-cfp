@@ -8,7 +8,7 @@
  *
  * What that costs is a redeploy to change the key — so this reads it at runtime
  * instead of through a `secrets: []` binding, which resolves once when the
- * instance starts. An admin can then rotate the key from `#/admin` and the next
+ * instance starts. An admin can then rotate the key from `/admin` and the next
  * instance picks it up, with no deploy and nothing pasted into a terminal.
  */
 

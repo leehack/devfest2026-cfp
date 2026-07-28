@@ -26,8 +26,8 @@ both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
 account, not to any one talk), `signInLinks` (a platform-wide throttle) and
 `config/platform` sit outside.
 
-Screens behind one hash router: `#/` lists the public calls, `#/new` starts one,
-and then `#/c/{cfpId}` is the submission form, `/review` is for anyone holding a
+Screens behind one path router: `/` lists the public calls, `/new` starts one,
+and then `/c/{cfpId}` is the submission form, `/review` is for anyone holding a
 role on it and `/admin/{tab}` is for its admins. Everyone may submit a talk,
 reviewers and admins included — they simply never get their own in the queue.
 
@@ -236,7 +236,7 @@ are bearer credentials. Move it with `scripts/set-platform.mjs`.
 
 Google sign-in is enabled, `config/cfp` is seeded (open 2026-07-27 →
 2026-09-15), and `leehack@gmail.com` holds the first admin role. The window is
-editable from `#/admin` now; `scripts/seed-config.mjs` is only for a fresh
+editable from `/admin` now; `scripts/seed-config.mjs` is only for a fresh
 project.
 
 ## Email
@@ -249,14 +249,14 @@ twice. The trigger claims a row by moving it `queued → sending` in a
 transaction, which is what makes at-least-once trigger delivery safe.
 
 Decisions are queued **`held`**. They sit there until an admin releases the
-batch from `#/admin`, so acceptances and rejections go out together rather than
+batch from `/admin`, so acceptances and rejections go out together rather than
 trickling out alphabetically over an afternoon. Receipts do not wait.
 
 With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
 without sending anything, and the log never claims a send that did not happen.
 
-**Set it all up from `#/admin`**, under Email. Four steps, each of which says
+**Set it all up from `/admin`**, under Email. Four steps, each of which says
 whether it is done, because the failure this replaces was silent — the pipeline
 queued perfectly and sent nothing, and no screen said why.
 

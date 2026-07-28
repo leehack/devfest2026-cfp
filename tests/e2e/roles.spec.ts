@@ -285,7 +285,7 @@ test.describe('roles', () => {
     await page.getByRole('button', { name: 'Save window' }).click();
     await expect(page.getByText('Saved.')).toBeVisible();
 
-    await page.goto(`/${at()}`);
+    await page.goto(at());
     await expect(page.getByText(/paused/)).toBeVisible();
   });
 });

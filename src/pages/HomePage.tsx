@@ -12,6 +12,7 @@ import type { User } from 'firebase/auth';
 
 import { useI18n, formatDay } from '../i18n';
 import { href, navigate } from '../lib/router';
+import { Link } from '../components/Link';
 import {
   loadMyCfps,
   loadMyMemberships,
@@ -125,9 +126,9 @@ function CfpCard({ cfp }: { cfp: CfpSummary }) {
 
   return (
     <li className="cfp-list__item">
-      <a className="cfp-list__link" href={href({ route: 'form', cfpId: cfp.id })}>
+      <Link className="cfp-list__link" to={href({ route: 'form', cfpId: cfp.id })}>
         {cfp.name}
-      </a>
+      </Link>
       <span className="cfp-list__meta">
         {when}
         {cfp.visibility === 'private' && <span className="tag">{t.platform.private}</span>}

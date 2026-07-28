@@ -11,7 +11,7 @@
  *
  * The built-in copy is stored as placeholder templates rather than as functions
  * so that it is the same shape as an organiser's override — the editor on
- * `#/admin` prefills with exactly the text that would otherwise be sent, and
+ * `/admin` prefills with exactly the text that would otherwise be sent, and
  * one substitution path serves both.
  */
 

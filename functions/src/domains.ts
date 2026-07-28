@@ -1,6 +1,6 @@
 /**
  * Resend's domain API, just enough of it to set a sending domain up without
- * leaving `#/admin`.
+ * leaving `/admin`.
  *
  * The DNS records Resend wants are generated per domain and only exist in its
  * dashboard, which is the one part of the setup nobody can be told in advance —

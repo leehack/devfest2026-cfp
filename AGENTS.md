@@ -42,8 +42,8 @@ are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
 the account), `signInLinks` (a platform-wide throttle) and `config/platform` sit
 outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
 
-Routes off one hash router (`src/lib/router.ts`): `#/` the public listing, `#/new`
-to start one, then `#/c/{cfpId}` the form, `/review` for any role-holder and
+Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
+to start one, then `/c/{cfpId}` the form, `/review` for any role-holder and
 `/admin/{tab}` for admins. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
 `owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
 until its holder first visits. Only an owner archives, deletes or is written by
@@ -74,7 +74,7 @@ lives in `shared/emailTemplates.ts` (pure, both languages); transport and status
 machine in `functions/src/email.ts`. Decisions queue `held` until an admin
 releases them together — see the README for why, and for the Resend setup.
 
-Email setup is entirely `#/admin`, no redeploy: key, domain, sender, wording.
+Email setup is entirely `/admin`, no redeploy: key, domain, sender, wording.
 Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
 the built-in and an organiser's override are the same shape and one editor
 prefills from either. Overrides live in `config/email.templates`; a half-written
@@ -156,7 +156,7 @@ collection — the rule names `confirmForm`.
 - **No `defineString`, and no `secrets:` binding either.** `emulators:start`
   stops and prompts for any param without a value, hanging `npm start` with no
   visible error; and a `secrets:` binding resolves once at instance start, so a
-  key rotated from `#/admin` would not take effect. `readResendKey()` goes to
+  key rotated from `/admin` would not take effect. `readResendKey()` goes to
   Secret Manager at runtime and short-circuits on `FUNCTIONS_EMULATOR`, since
   there is no Secret Manager emulator.
 - **`functions/.env` is tracked and deployed; `.env.local` is neither.** A
@@ -164,13 +164,21 @@ collection — the rule names `confirmForm`.
   out in a real acceptance email as the link the speaker was told to confirm at.
   Local-only values go in `.env.local`, which the emulator reads and deploy
   ignores. The link's default is now derived from `GCLOUD_PROJECT`, and an
-  organiser overrides it in `#/admin` for a custom domain.
+  organiser overrides it in `/admin` for a custom domain.
+- **`#/c/{id}` links are still out there.** The router moved from the hash to the
+  path so a call for proposals could have a public page a crawler and a link
+  preview can read. Every acceptance and sign-in link mailed before that carries
+  the old form, and mail cannot be reissued — `adoptLegacyHash` in
+  `src/lib/router.ts` rewrites it before the first render, keeping the query
+  string because a sign-in link's one-time code lives there. Anything that emits
+  a URL has to move with the router: `cfpUrl` in `functions/src/email.ts` is the
+  one that reaches speakers.
 - **The email link is never taken from the request.** `sendQueuedEmail` is a
   trigger and has no request; the callables that queue see only a client-supplied
   `Host`, so reading it would let whoever submits a proposal choose the URL in
   mail we send to a speaker. Derive it or store it — never reflect it.
 - **`unauthenticated` means the caller, never a third party.** Resend refusing an
-  API key was thrown as `unauthenticated`, so `#/admin` told the admin their
+  API key was thrown as `unauthenticated`, so `/admin` told the admin their
   session had expired and to sign in again — advice that could not work, for a
   session that was fine. `domains.ts` throws `failed-precondition` and
   `resendError` maps it; a borrowed code becomes a lie in the other mapper.

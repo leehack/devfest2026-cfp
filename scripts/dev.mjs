@@ -241,5 +241,5 @@ await runToCompletion(
   },
 );
 
-console.log(`\n▸ dev server on http://localhost:5173/#/c/${DEV_CFP}\n`);
+console.log(`\n▸ dev server on http://localhost:5173/c/${DEV_CFP}\n`);
 run('npx', ['vite'], { env }).on('exit', (code) => void shutdown(code ?? 0));

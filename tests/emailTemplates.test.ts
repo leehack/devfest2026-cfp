@@ -13,7 +13,7 @@ import {
 const data: EmailData = {
   speakerName: 'Ada Lovelace',
   title: 'Notes on the Analytical Engine',
-  proposalUrl: 'https://cfp.example/#/c/devfest-mtl-2026',
+  proposalUrl: 'https://cfp.example/c/devfest-mtl-2026',
   // The CFP's own name, not a constant: every message on the platform is signed
   // with whichever event it is about.
   event: 'DevFest Montréal 2026',
@@ -154,7 +154,7 @@ describe('renderTemplate', () => {
       data,
     );
     expect(email.subject).toBe('About “Notes on the Analytical Engine”');
-    expect(email.text).toContain('Hi Ada Lovelace, see https://cfp.example/#/c/devfest-mtl-2026.');
+    expect(email.text).toContain('Hi Ada Lovelace, see https://cfp.example/c/devfest-mtl-2026.');
   });
 
   it('escapes what an organiser typed', () => {

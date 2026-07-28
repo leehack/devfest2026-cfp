@@ -13,7 +13,7 @@ describe('a refused key', () => {
 
   // 401 is a wrong key, 403 a valid one without full access. Neither is
   // `unauthenticated`: that code means the *caller* is not signed in, and
-  // sharing it made `#/admin` tell an admin their session had expired the
+  // sharing it made `/admin` tell an admin their session had expired the
   // moment they pasted a bad key.
   it.each([401, 403])('is failed-precondition, not unauthenticated (%i)', async (status) => {
     answers(status);

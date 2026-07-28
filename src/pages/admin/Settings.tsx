@@ -88,7 +88,7 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
         />
 
         <p className="field__help">
-          {t.admin.identityAddress.replace('{url}', `${location.origin}/#/c/${cfpId}`)}
+          {t.admin.identityAddress.replace('{url}', `${location.origin}/c/${cfpId}`)}
         </p>
 
         <button

@@ -71,7 +71,7 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
     forgetPendingEmail();
     // The code is spent and the URL is now a confusing thing to bookmark or
     // share, so it does not stay in the address bar.
-    history.replaceState(null, '', window.location.pathname + window.location.hash);
+    history.replaceState(null, '', window.location.pathname);
     return 'signedIn';
   } catch (error: any) {
     // A mismatched address is not a broken link — asking again is the fix.

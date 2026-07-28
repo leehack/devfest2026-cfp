@@ -102,7 +102,7 @@ export function NewCfpPage({ user }: { user: User }) {
         label={t.platform.addressLabel}
         help={
           cfpId
-            ? t.platform.addressPreview.replace('{url}', `${location.origin}/#/c/${cfpId}`)
+            ? t.platform.addressPreview.replace('{url}', `${location.origin}/c/${cfpId}`)
             : t.platform.addressHelp
         }
         value={cfpId}

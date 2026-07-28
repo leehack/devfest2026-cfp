@@ -6,7 +6,7 @@
  * codebase. A field that only exists after a redeploy is a field the organiser
  * cannot add on the Tuesday they realise they need it, which in practice means
  * chasing forty people by hand instead. So the form is data: written from
- * `#/admin` into `config/confirmForm`, rendered by the speaker's page.
+ * `/admin` into `config/confirmForm`, rendered by the speaker's page.
  *
  * Pure, and shared. The browser renders from this and `respondToDecision`
  * validates against it, so a rule cannot be enforced in one and forgotten in the

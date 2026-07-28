@@ -1570,7 +1570,7 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
  * Sets the Resend API key. Admin only.
  *
  * The key goes to Secret Manager and is never written to Firestore, never
- * logged, and never returned — `#/admin` shows only the last four characters,
+ * logged, and never returned — `/admin` shows only the last four characters,
  * which is enough to tell one key from another and nothing else. Verified
  * against Resend before it is stored, so a typo fails here rather than silently
  * failing on the night the decisions go out.

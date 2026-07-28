@@ -17,8 +17,16 @@
     "rewrites": [{ "source": "**", "destination": "/index.html" }],
     "headers": [
       {
-        "//": "Hosting defaults HTML to max-age=3600. A deploy replaces the hashed assets, so for the next hour a returning visitor can hold an index.html naming files that no longer exist — which renders as a blank page, not an error. Assets keep the default: their names change with their contents.",
+        "//": "Hosting defaults HTML to max-age=3600. A deploy replaces the hashed assets, so for the next hour a returning visitor can hold an index.html naming files that no longer exist — which renders as a blank page, not an error. Assets keep the default: their names change with their contents. Every address the shell is served at needs its own entry, because headers match the request path and a rewritten one no longer ends in .html — that is why the list grew when routing moved off the hash.",
         "source": "/",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/new",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/c/**",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       },
       {

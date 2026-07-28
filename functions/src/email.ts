@@ -77,7 +77,7 @@ export async function loadPlatform(db: Firestore): Promise<Platform> {
 }
 
 /** Where one CFP lives, which is what a speaker's mail should point at. */
-export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/#/c/${cfpId}`;
+export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/c/${cfpId}`;
 
 const configDoc = (db: Firestore, cfpId: string) => db.doc(`cfps/${cfpId}/config/email`);
 

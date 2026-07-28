@@ -72,7 +72,7 @@ export function EmailPreview({
     {
       speakerName: 'Ada Lovelace',
       title: 'Notes on the Analytical Engine',
-      proposalUrl: `${window.location.origin}/#/c/${cfpId}`,
+      proposalUrl: `${window.location.origin}/c/${cfpId}`,
       // The real name, because {event} appears in every subject line and a
       // stand-in reads as "Your Your event talk has been accepted".
       event: cfpName,

@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+
+import { href, placeOf } from '../src/lib/router';
+
+/**
+ * `placeOf` and `href` are the pair the whole router rests on, and they have to
+ * round-trip: anything `href` writes, `placeOf` has to read back the same way,
+ * or a link points somewhere its own code does not recognise. Boot-time hash
+ * adoption is left to the e2e suite, where there is a real browser to have a
+ * history in.
+ */
+describe('reading a path', () => {
+  it('takes the root and its variations as home', () => {
+    for (const path of ['/', '', '//', '/nonsense', '/c', '/c/']) {
+      expect(placeOf(path), path).toMatchObject({ route: 'home', cfpId: null });
+    }
+  });
+
+  it('reads a CFP and its section', () => {
+    expect(placeOf('/c/devfest-mtl-2026')).toMatchObject({
+      route: 'form',
+      cfpId: 'devfest-mtl-2026',
+    });
+    expect(placeOf('/c/devfest-mtl-2026/review')).toMatchObject({ route: 'review' });
+    expect(placeOf('/c/devfest-mtl-2026/admin')).toMatchObject({
+      route: 'admin',
+      tab: 'proposals',
+    });
+    expect(placeOf('/c/devfest-mtl-2026/admin/email')).toMatchObject({
+      route: 'admin',
+      tab: 'email',
+    });
+  });
+
+  it('ignores a trailing slash', () => {
+    expect(placeOf('/c/devfest-mtl-2026/')).toEqual(placeOf('/c/devfest-mtl-2026'));
+  });
+
+  it('falls back to the first tab rather than an empty admin screen', () => {
+    expect(placeOf('/c/devfest-mtl-2026/admin/nope')).toMatchObject({ tab: 'proposals' });
+  });
+
+  /*
+   * An id that would not be allowed to exist cannot be looked up, and a page
+   * that says "no such call" for `/c/../../etc` is worse than the front door.
+   */
+  it('refuses an id the platform would never have issued', () => {
+    for (const bad of ['/c/Not Valid', '/c/x', '/c/-leading', '/c/UPPER']) {
+      expect(placeOf(bad), bad).toMatchObject({ route: 'home' });
+    }
+  });
+
+  it('reads /new as itself and not as a CFP', () => {
+    expect(placeOf('/new')).toMatchObject({ route: 'new', cfpId: null });
+  });
+});
+
+describe('writing a path', () => {
+  it('round-trips every route', () => {
+    const places = [
+      { route: 'home' as const, cfpId: null },
+      { route: 'new' as const, cfpId: null },
+      { route: 'form' as const, cfpId: 'devfest-mtl-2026' },
+      { route: 'review' as const, cfpId: 'devfest-mtl-2026' },
+      { route: 'admin' as const, cfpId: 'devfest-mtl-2026', tab: 'settings' as const },
+    ];
+    for (const place of places) {
+      expect(placeOf(href(place)), href(place)).toMatchObject(place);
+    }
+  });
+
+  it('writes paths, not fragments', () => {
+    expect(href({ route: 'form', cfpId: 'devfest-mtl-2026' })).toBe('/c/devfest-mtl-2026');
+    expect(href({ route: 'home' })).toBe('/');
+  });
+});

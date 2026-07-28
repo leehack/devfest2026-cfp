@@ -1,7 +1,7 @@
 /**
  * A call for proposals, as a tenant.
  *
- * The id *is* the slug. A CFP lives at `#/c/devfest-mtl-2026`, and making that
+ * The id *is* the slug. A CFP lives at `/c/devfest-mtl-2026`, and making that
  * the document id means Firestore's own "a document id is unique" is the
  * uniqueness check — there is no second index to keep honest, and no window in
  * which two people both believe they own the name.

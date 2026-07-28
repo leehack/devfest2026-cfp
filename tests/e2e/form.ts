@@ -17,14 +17,14 @@ export const check = (page: Page, label: string) =>
   page.getByRole('checkbox', { name: new RegExp(label) });
 
 /**
- * A hash inside the CFP these specs work on. Every page but the home listing
- * and the create form lives under `#/c/{cfpId}`, so writing that out in each
+ * A path inside the CFP these specs work on. Every page but the home listing
+ * and the create form lives under `/c/{cfpId}`, so writing that out in each
  * spec would be the same string forty times.
  */
-export const at = (sub = '') => `#/c/${CFP_ID}${sub}`;
+export const at = (sub = '') => `/c/${CFP_ID}${sub}`;
 
 export async function signIn(page: Page) {
-  await page.goto(`/${at()}`);
+  await page.goto(at());
   await page.getByRole('button', { name: /test speaker/i }).click();
   await expect(field(page, 'Title')).toBeVisible();
 }
@@ -36,8 +36,8 @@ export interface Identity {
 }
 
 /** Anyone but the default test speaker — see the hook in `src/lib/devAuth.ts`. */
-export async function signInAs(page: Page, who: Identity, hash = at()) {
-  await page.goto(`/${hash}`);
+export async function signInAs(page: Page, who: Identity, path = at()) {
+  await page.goto(path);
   await page.waitForFunction(() => typeof (window as any).signInAsTestSpeaker === 'function');
   await page.evaluate((claims) => (window as any).signInAsTestSpeaker(claims), who);
 }

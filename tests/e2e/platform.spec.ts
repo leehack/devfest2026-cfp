@@ -46,7 +46,7 @@ test.describe('the front door', () => {
   test('lists the public calls and not the private ones', async ({ page }) => {
     await seedCfp(OTHER, { name: 'Someone Else’s Conf', visibility: 'private' });
 
-    await page.goto('/#/');
+    await page.goto('/');
     await expect(page.getByRole('link', { name: 'DevFest Montréal 2026' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Someone Else’s Conf' })).toHaveCount(0);
   });
@@ -54,7 +54,7 @@ test.describe('the front door', () => {
   test('a private call is unlisted, not secret — its link still opens', async ({ page }) => {
     await seedCfp(OTHER, { name: 'Someone Else’s Conf', visibility: 'private' });
 
-    await page.goto(`/#/c/${OTHER}`);
+    await page.goto(`/c/${OTHER}`);
     await expect(page.getByRole('heading', { name: 'Someone Else’s Conf' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
   });
@@ -62,12 +62,12 @@ test.describe('the front door', () => {
   test('an archived call drops off the list', async ({ page }) => {
     await seedCfp(OTHER, { name: 'Last Year’s Conf', archived: true });
 
-    await page.goto('/#/');
+    await page.goto('/');
     await expect(page.getByRole('link', { name: 'Last Year’s Conf' })).toHaveCount(0);
   });
 
   test('signing in and starting one makes you its owner', async ({ page }) => {
-    await signInAs(page, OWNER, '#/new');
+    await signInAs(page, OWNER, '/new');
 
     await page.getByRole('textbox', { name: /^Name/ }).fill('Test Conf 2027');
     // The address follows the name until it is typed into directly.
@@ -94,13 +94,13 @@ test.describe('the front door', () => {
     const reviewer = await createAccount(OUTSIDER);
     await seedMember(reviewer.uid, 'reviewer', OTHER);
 
-    await signInAs(page, OUTSIDER, '#/');
+    await signInAs(page, OUTSIDER, '/');
     await expect(page.getByRole('heading', { name: 'Where you help out' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Someone Else’s Conf' })).toBeVisible();
   });
 
   test('an address already taken is refused, and says so', async ({ page }) => {
-    await signInAs(page, OWNER, '#/new');
+    await signInAs(page, OWNER, '/new');
 
     await page.getByRole('textbox', { name: /^Name/ }).fill('DevFest Montréal 2026');
     await page.getByRole('textbox', { name: /^Address/ }).fill(CFP_ID);

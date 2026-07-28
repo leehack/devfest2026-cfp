@@ -11,6 +11,7 @@ import {
   type Locale,
 } from './i18n';
 import { GoogleButton } from './components/GoogleButton';
+import { Link } from './components/Link';
 import { SubmitPage } from './pages/SubmitPage';
 import { AdminPage } from './pages/AdminPage';
 import { ReviewPage } from './pages/ReviewPage';
@@ -89,9 +90,9 @@ export function App() {
                 page needs no eyebrow: it would only repeat its own title. */}
             {route !== 'home' && (
               <p className="header__event">
-                <a className="header__home" href={href({ route: 'home' })}>
+                <Link className="header__home" to={href({ route: 'home' })}>
                   {t.platform.back}
-                </a>
+                </Link>
               </p>
             )}
             <h1 className="header__title">{cfp?.name ?? t.app.title}</h1>
