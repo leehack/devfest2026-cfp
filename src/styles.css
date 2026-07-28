@@ -231,6 +231,42 @@ p {
   font-weight: 700;
 }
 
+/* The way back out of a CFP, in the slot its name would otherwise occupy. */
+.header__home {
+  color: inherit;
+}
+
+/* ------------------------------------------------------------- the listing */
+
+.cfp-list {
+  margin: 0 0 var(--s-5);
+  padding: 0;
+  list-style: none;
+}
+
+.cfp-list__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  align-items: baseline;
+  justify-content: space-between;
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.cfp-list__link {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.cfp-list__meta {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 .header__right {
   display: flex;
   flex-wrap: wrap;
@@ -783,6 +819,18 @@ p {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* Reserved for what cannot be undone. Deleting a CFP is the only one. */
+.btn--danger {
+  border-color: var(--error);
+  background: var(--error);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn--danger:hover:not(:disabled) {
+  filter: brightness(0.92);
 }
 
 /* Fingers need more than a mouse does; pointer, not width, is the question. */

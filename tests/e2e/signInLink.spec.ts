@@ -17,6 +17,7 @@ import {
   reset,
   setPublicUrlDirect,
 } from './backend';
+import { at } from './form';
 
 const ADDRESS = 'nogoogle@example.test';
 
@@ -32,7 +33,7 @@ const HERE = 'http://localhost:5173';
 const request = (email: string) => callPublic('requestSignInLink', { email, locale: 'en' });
 
 async function ask(page: Page, email: string) {
-  await page.goto('/#/');
+  await page.goto(`/${at()}`);
   await page.getByRole('textbox', { name: /^Email/ }).fill(email);
   await page.getByRole('button', { name: 'Email me a link' }).click();
   // The link does not exist until the callable has answered.

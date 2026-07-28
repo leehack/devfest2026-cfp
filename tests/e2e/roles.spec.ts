@@ -14,7 +14,7 @@ import {
   setProposalStatusDirect,
   setReviewsVisible,
 } from './backend';
-import { signInAs, type Identity } from './form';
+import { at, signInAs, type Identity } from './form';
 import { LIMITS } from '@shared/enums';
 
 const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'Ada' };
@@ -41,7 +41,7 @@ const SECTIONS = {
  */
 async function asAdmin(page: Page, section: keyof typeof SECTIONS = 'committee') {
   await inviteRole(ADMIN.email, 'admin');
-  await signInAs(page, ADMIN, `#/admin/${section}`);
+  await signInAs(page, ADMIN, at(`/admin/${section}`));
   await expect(tab(page, SECTIONS[section])).toHaveAttribute('aria-current', 'page');
 }
 
@@ -51,7 +51,7 @@ test.describe('roles', () => {
   });
 
   test('a speaker sees no committee tabs and cannot open the admin page', async ({ page }) => {
-    await signInAs(page, SPEAKER, '#/admin');
+    await signInAs(page, SPEAKER, at('/admin'));
     await expect(page.getByText('That page is not available to your account.')).toBeVisible();
     await expect(tab(page, 'Admin')).toHaveCount(0);
     await expect(tab(page, 'Review')).toHaveCount(0);
@@ -76,7 +76,7 @@ test.describe('roles', () => {
     ).toBeVisible();
     await expect(page.getByText('Invited — has not signed in yet')).toBeVisible();
 
-    await signInAs(page, REVIEWER, '#/review');
+    await signInAs(page, REVIEWER, at('/review'));
     await expect(tab(page, 'Review')).toBeVisible();
     // A reviewer is not an admin.
     await expect(tab(page, 'Admin')).toHaveCount(0);
@@ -97,7 +97,7 @@ test.describe('roles', () => {
     await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
     await inviteRole(REVIEWER.email, 'reviewer');
     // Claims the grant, so the reviewer really does hold a role by now.
-    await signInAs(page, REVIEWER, '#/review');
+    await signInAs(page, REVIEWER, at('/review'));
     await expect(page.getByRole('heading', { name: 'Sam on shipping' })).toBeVisible();
 
     const decide = { proposalId: 'p-sam', status: 'accepted' };
@@ -223,7 +223,7 @@ test.describe('roles', () => {
     await page.getByRole('button', { name: 'Save window' }).click();
     await expect(page.getByText('Saved.')).toBeVisible();
 
-    await page.goto('/#/');
+    await page.goto(`/${at()}`);
     await expect(page.getByText(/paused/)).toBeVisible();
   });
 });
@@ -237,7 +237,7 @@ test.describe('reviewing', () => {
     const speaker = await createAccount(SPEAKER);
     await inviteRole(REVIEWER.email, 'reviewer');
     await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
-    await signInAs(page, REVIEWER, '#/review');
+    await signInAs(page, REVIEWER, at('/review'));
   });
 
   test('scores a proposal and keeps the score across a reload', async ({ page }) => {
@@ -274,16 +274,20 @@ test.describe('reviewing', () => {
   // review, and for a long time the card was the one place that never showed it.
   test('the card carries the speaker behind the talk, not just their name', async ({ page }) => {
     const speaker = await createAccount({ ...SPEAKER, sub: 'ctx-sub', email: 'ctx@example.org' });
-    await seedSpeaker(speaker.uid, {
-      name: 'Sam Rivera',
-      email: 'ctx@example.org',
-      bio: 'Fifteen years of shipping mobile, mostly the parts that go wrong.',
-      company: 'Acme',
-      jobTitle: 'Staff Engineer',
-      isGde: true,
-      pastTalks: 'DroidCon 2023 — recording linked',
+    // On the proposal, not on `speakers/{uid}`: the profile is global and a role
+    // is per CFP, so what the committee reads is the copy frozen at submission.
+    await seedSubmittedProposal('p-ctx', {
+      speakerUid: speaker.uid,
+      title: 'Sam on inference',
+      speaker: {
+        name: 'Sam Rivera',
+        bio: 'Fifteen years of shipping mobile, mostly the parts that go wrong.',
+        company: 'Acme',
+        jobTitle: 'Staff Engineer',
+        isGde: true,
+        pastTalks: 'DroidCon 2023 — recording linked',
+      },
     });
-    await seedSubmittedProposal('p-ctx', { speakerUid: speaker.uid, title: 'Sam on inference' });
     await page.reload();
 
     const card = page.locator('.card', { has: page.getByRole('heading', { name: 'Sam on inference' }) });

@@ -1,14 +1,17 @@
 /**
- * Granting, revoking and claiming roles.
+ * Granting, revoking and claiming roles, within one CFP.
  *
- * Lives here rather than in `shared/` because it needs the Admin SDK, and is
- * separate from `index.ts` so the bootstrap script can call exactly the same
- * code as the callable — "what granting means" must not drift between the two.
+ * Lives here rather than in `shared/` because it needs the Admin SDK, and
+ * separate from `index.ts` so that "what granting means" is written once.
+ *
+ * Every function below takes a `cfpId` and touches nothing outside it. There is
+ * no platform-wide role: the person who creates a CFP is written as its owner
+ * in the same transaction, which is what replaced the bootstrap script.
  */
 
 import type { Auth } from 'firebase-admin/auth';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
-import { ROLES, type Role } from '../../shared/enums';
+import { CFP_ROLES, type CfpRole } from '../../shared/cfp';
 
 export class RoleError extends Error {
   constructor(
@@ -28,13 +31,23 @@ export function normalizeEmail(raw: unknown): string {
   return email;
 }
 
-export function normalizeRole(raw: unknown): Role {
+/**
+ * `owner` is deliberately not grantable. It is written once, to whoever created
+ * the CFP, and moves only through `transferCfp` — otherwise an admin could
+ * promote themselves and then archive the thing out from under its owner.
+ */
+export function normalizeRole(raw: unknown): CfpRole {
   const role = String(raw ?? '');
-  if (!(ROLES as readonly string[]).includes(role)) {
+  if (role === 'owner' || !(CFP_ROLES as readonly string[]).includes(role)) {
     throw new RoleError('invalid-argument', `Unknown role: ${role}`);
   }
-  return role as Role;
+  return role as CfpRole;
 }
+
+const memberDoc = (db: Firestore, cfpId: string, uid: string) =>
+  db.doc(`cfps/${cfpId}/members/${uid}`);
+const grantDoc = (db: Firestore, cfpId: string, email: string) =>
+  db.doc(`cfps/${cfpId}/roleGrants/${email}`);
 
 /**
  * The account that owns this address, if it has proved that it does.
@@ -54,27 +67,36 @@ async function uidForEmail(auth: Auth, email: string): Promise<string | undefine
   }
 }
 
-async function adminUids(db: Firestore): Promise<string[]> {
-  const snap = await db.collection('reviewers').where('role', '==', 'admin').get();
+async function adminUids(db: Firestore, cfpId: string): Promise<string[]> {
+  const snap = await db
+    .collection(`cfps/${cfpId}/members`)
+    .where('role', 'in', ['admin', 'owner'])
+    .get();
   return snap.docs.map((d) => d.id);
 }
 
 /**
  * Records a grant, and applies it immediately if the person already has an
  * account. Otherwise it waits in `roleGrants` for `claim` to pick up on their
- * first sign-in.
+ * first visit to this CFP.
  */
 export async function grant(
   db: Firestore,
   auth: Auth,
-  { email: rawEmail, role: rawRole, byUid }: { email: unknown; role: unknown; byUid: string },
-): Promise<{ email: string; role: Role; applied: boolean }> {
+  {
+    cfpId,
+    email: rawEmail,
+    role: rawRole,
+    byUid,
+  }: { cfpId: string; email: unknown; role: unknown; byUid: string },
+): Promise<{ email: string; role: CfpRole; applied: boolean }> {
   const email = normalizeEmail(rawEmail);
   const role = normalizeRole(rawRole);
   const uid = await uidForEmail(auth, email);
 
-  await db.doc(`roleGrants/${email}`).set(
+  await grantDoc(db, cfpId, email).set(
     {
+      cfpId,
       email,
       role,
       createdAt: FieldValue.serverTimestamp(),
@@ -85,8 +107,15 @@ export async function grant(
   );
 
   if (uid) {
-    await db.doc(`reviewers/${uid}`).set(
-      { role, email, createdAt: FieldValue.serverTimestamp(), grantedBy: byUid },
+    await memberDoc(db, cfpId, uid).set(
+      {
+        cfpId,
+        uid,
+        role,
+        email,
+        createdAt: FieldValue.serverTimestamp(),
+        grantedBy: byUid,
+      },
       { merge: true },
     );
   }
@@ -95,61 +124,67 @@ export async function grant(
 }
 
 /**
- * Removes a role. Refuses to remove the last admin: an empty admin list can
- * only be repaired by running the bootstrap script again with credentials
- * nobody has to hand in the middle of a review round.
+ * Removes a role. Refuses to remove the last admin: a CFP with nobody who can
+ * administer it can only be repaired by its owner, and the owner may be the
+ * person being removed.
  */
 export async function revoke(
   db: Firestore,
   auth: Auth,
-  { email: rawEmail }: { email: unknown },
+  { cfpId, email: rawEmail }: { cfpId: string; email: unknown },
 ): Promise<{ email: string }> {
   const email = normalizeEmail(rawEmail);
   const uid = await uidForEmail(auth, email);
 
   if (uid) {
-    const existing = await db.doc(`reviewers/${uid}`).get();
-    if (existing.exists && existing.data()?.role === 'admin') {
-      const admins = await adminUids(db);
+    const existing = await memberDoc(db, cfpId, uid).get();
+    const role = existing.data()?.role;
+    if (role === 'owner') {
+      throw new RoleError('failed-precondition', 'An owner cannot be removed.');
+    }
+    if (existing.exists && role === 'admin') {
+      const admins = await adminUids(db, cfpId);
       if (admins.length <= 1) {
         throw new RoleError('failed-precondition', 'That is the only admin left.');
       }
     }
-    await db.doc(`reviewers/${uid}`).delete();
+    await memberDoc(db, cfpId, uid).delete();
   }
 
-  await db.doc(`roleGrants/${email}`).delete();
+  await grantDoc(db, cfpId, email).delete();
   return { email };
 }
 
 /**
- * Turns a pending grant into a role, on sign-in. Returns null for the ordinary
- * case of a speaker with no grant waiting.
+ * Turns a pending grant into a role, on first visit to a CFP. Returns null for
+ * the ordinary case of a speaker with no grant waiting.
  *
  * Trusts the email on the verified auth token, never one supplied by the caller.
  */
 export async function claim(
   db: Firestore,
-  { uid, email: rawEmail, name }: { uid: string; email?: string; name?: string },
-): Promise<Role | null> {
-  const existing = await db.doc(`reviewers/${uid}`).get();
-  if (existing.exists) return (existing.data()?.role ?? null) as Role | null;
+  { cfpId, uid, email: rawEmail, name }: { cfpId: string; uid: string; email?: string; name?: string },
+): Promise<CfpRole | null> {
+  const existing = await memberDoc(db, cfpId, uid).get();
+  if (existing.exists) return (existing.data()?.role ?? null) as CfpRole | null;
 
   if (!rawEmail) return null;
   const email = rawEmail.trim().toLowerCase();
 
-  const grantSnap = await db.doc(`roleGrants/${email}`).get();
+  const grantSnap = await grantDoc(db, cfpId, email).get();
   if (!grantSnap.exists) return null;
 
   const granted = grantSnap.data()!;
   const role = normalizeRole(granted.role);
 
-  await db.doc(`reviewers/${uid}`).set({
+  await memberDoc(db, cfpId, uid).set({
+    cfpId,
+    uid,
     role,
     email,
     ...(name ? { name } : {}),
     createdAt: FieldValue.serverTimestamp(),
-    grantedBy: granted.createdBy ?? 'bootstrap',
+    grantedBy: granted.createdBy ?? 'unknown',
   });
   await grantSnap.ref.set(
     { claimedBy: uid, claimedAt: FieldValue.serverTimestamp() },

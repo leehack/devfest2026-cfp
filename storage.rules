@@ -3,14 +3,15 @@ rules_version = '2';
 // Headshots, and nothing else.
 //
 // Collected after acceptance (§3), so the bucket holds objects for the handful
-// of speakers on the programme rather than for all ~200 applicants — which is
-// both the storage bill and the thing that would leak if this file were wrong.
+// of speakers on each programme rather than for every applicant — which is both
+// the storage bill and the thing that would leak if this file were wrong.
 service firebase.storage {
   match /b/{bucket}/o {
 
     // Verified, matching the Firestore rules. A photo of someone's face is
     // exactly the thing not to hand to an account that has not proved it owns
     // the address it claims.
+    //
     // `get` rather than a plain lookup: a token without the claim at all is an
     // account that has not verified, and reading the property straight off the
     // map raises instead of answering false.
@@ -18,13 +19,18 @@ service firebase.storage {
       return request.auth != null && request.auth.token.get('email_verified', false) == true;
     }
 
-    match /headshots/{uid}/{field} {
+    // The CFP is in the path even though the rule never reads it. One speaker
+    // may be on two programmes whose confirmation forms ask for different
+    // photographs, and deleting a CFP has to be able to take its objects with
+    // it — a single prefix is what makes that one operation rather than a scan.
+    match /cfps/{cfpId}/headshots/{uid}/{field} {
 
       // The owner, and only the owner — in both directions.
       //
       // Storage rules cannot read Firestore, so "and the committee" cannot be
       // expressed here: any rule wide enough to let a reviewer in would be wide
-      // enough to let anyone in. Organisers go through the admin-only
+      // enough to let anyone in, and under tenancy "anyone" now means every
+      // organiser on the platform. Organisers go through the admin-only
       // `headshotImage` callable instead, which keeps the bucket shut and puts
       // a function in the path where the role check can happen.
       allow read: if signedIn() && request.auth.uid == uid;

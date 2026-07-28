@@ -37,7 +37,13 @@ const fromLines = (text: string) =>
     .filter(Boolean)
     .map((value) => ({ value, label: { en: value } }));
 
-export function ConfirmFormEditor({ fields: saved }: { fields: ConfirmField[] }) {
+export function ConfirmFormEditor({
+  cfpId,
+  fields: saved,
+}: {
+  cfpId: string;
+  fields: ConfirmField[];
+}) {
   const { t } = useI18n();
   const [fields, setFields] = useState<ConfirmField[]>(saved);
   const [busy, setBusy] = useState(false);
@@ -96,7 +102,7 @@ export function ConfirmFormEditor({ fields: saved }: { fields: ConfirmField[] })
 
     setBusy(true);
     try {
-      const { data } = await setConfirmForm({ fields: keyed });
+      const { data } = await setConfirmForm({ cfpId, fields: keyed });
       // The server's normalised copy, not ours — it trims and drops, and the
       // editor should show what was actually stored.
       setFields(data.fields);

@@ -5,11 +5,9 @@ import { adminError } from '../../lib/errors';
 import {
   headshotImage,
   loadAllProposals,
-  loadSpeakers,
   recomputeAggregates,
   setProposalStatus,
   type ProposalRow,
-  type SpeakerBrief,
 } from '../../lib/roles';
 import { BarChart, ScoreHistogram, StackedBar } from '../../components/charts';
 import { CATEGORIES, DELIVERY_LANGUAGES, STATUS_SETS, inStatusSet } from '@shared/enums';
@@ -25,7 +23,15 @@ import { Result } from './Result';
  * and a page of forty accepted speakers would otherwise pull forty of them —
  * most of which nobody looks at — every time it loads.
  */
-function Headshot({ speakerUid, fieldKey }: { speakerUid: string; fieldKey: string }) {
+function Headshot({
+  cfpId,
+  speakerUid,
+  fieldKey,
+}: {
+  cfpId: string;
+  speakerUid: string;
+  fieldKey: string;
+}) {
   const { t } = useI18n();
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
@@ -35,7 +41,7 @@ function Headshot({ speakerUid, fieldKey }: { speakerUid: string; fieldKey: stri
     setBusy(true);
     setError('');
     try {
-      const { data } = await headshotImage({ speakerUid, key: fieldKey });
+      const { data } = await headshotImage({ cfpId, speakerUid, key: fieldKey });
       setUrl(data.dataUrl);
     } catch (e) {
       setError(adminError(e, t));
@@ -61,10 +67,12 @@ function Headshot({ speakerUid, fieldKey }: { speakerUid: string; fieldKey: stri
 
 /** What one speaker answered, labelled by the questions as they stand now. */
 function Answered({
+  cfpId,
   fields,
   answers,
   speakerUid,
 }: {
+  cfpId: string;
   fields: ConfirmField[];
   answers?: Answers;
   speakerUid?: string;
@@ -85,7 +93,7 @@ function Answered({
           <dd>
             {field.type === 'image' ? (
               speakerUid ? (
-                <Headshot speakerUid={speakerUid} fieldKey={field.key} />
+                <Headshot cfpId={cfpId} speakerUid={speakerUid} fieldKey={field.key} />
               ) : null
             ) : typeof answers[field.key] === 'boolean' ? (
               answers[field.key] ? (
@@ -177,10 +185,9 @@ function Dashboard({ rows }: { rows: ProposalRow[] }) {
   );
 }
 
-export function Proposals() {
+export function Proposals({ cfpId }: { cfpId: string }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
-  const [speakers, setSpeakers] = useState<Map<string, SpeakerBrief>>(new Map());
   const [questions, setQuestions] = useState<ConfirmField[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
@@ -188,14 +195,13 @@ export function Proposals() {
 
   const refresh = useCallback(async () => {
     try {
-      const [all, form] = await Promise.all([loadAllProposals(), loadConfirmForm()]);
+      const [all, form] = await Promise.all([loadAllProposals(cfpId), loadConfirmForm(cfpId)]);
       setRows(all);
       setQuestions(form.fields);
-      setSpeakers(await loadSpeakers(all.flatMap((p) => p.speakerIds ?? [])));
     } catch (e) {
       setError(adminError(e, t));
     }
-  }, [t]);
+  }, [cfpId, t]);
 
   useEffect(() => {
     void refresh();
@@ -206,7 +212,7 @@ export function Proposals() {
     setNote('');
     setError('');
     try {
-      const { data } = await recomputeAggregates();
+      const { data } = await recomputeAggregates({ cfpId });
       setNote(t.admin.recomputed(data.proposalCount, data.reviewCount));
       await refresh();
     } catch (e) {
@@ -220,16 +226,23 @@ export function Proposals() {
     setNote('');
     setError('');
     try {
-      await setProposalStatus({ proposalId, status });
+      await setProposalStatus({ cfpId, proposalId, status });
       await refresh();
     } catch (e) {
       setError(adminError(e, t));
     }
   }
 
+  /*
+   * From the snapshot on the proposal, not from `speakers/{uid}`.
+   *
+   * The profile is global and belongs to the account; a role is per CFP. Reading
+   * profiles here would hand every committee on the platform the whole speaker
+   * directory, so submission freezes what the committee is entitled to see.
+   */
   const names = (row: ProposalRow) =>
-    (row.speakerIds ?? [])
-      .map((id) => speakers.get(id)?.name)
+    (row.speakerSnapshot ?? [])
+      .map((s) => s.name)
       .filter(Boolean)
       .join(', ');
 
@@ -339,6 +352,7 @@ export function Proposals() {
                 {/* The whole reason for asking. Without it an organiser reads
                     shirt sizes out of the Firestore console. */}
                 <Answered
+                  cfpId={cfpId}
                   fields={questions}
                   answers={row.confirmAnswers}
                   speakerUid={(row.speakerIds ?? [])[0]}

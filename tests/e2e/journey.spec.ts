@@ -9,7 +9,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { inviteRole, readProposals, reset } from './backend';
-import { COMPLETE, check, field, fillRequired, select, signInAs, type Identity } from './form';
+import { COMPLETE, at, check, field, fillRequired, select, signInAs, type Identity } from './form';
 
 const SPEAKER: Identity = { sub: 'journey-speaker', email: 'sam@example.org', name: 'Sam' };
 const REVIEWER: Identity = { sub: 'journey-reviewer', email: 'rey@example.org', name: 'Rey' };
@@ -63,7 +63,7 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
 
   // --------------------------------------------------------------- reviewer
   await inviteRole(REVIEWER.email, 'reviewer');
-  await signInAs(page, REVIEWER, '#/review');
+  await signInAs(page, REVIEWER, at('/review'));
 
   // One at a time now: the second proposal is a keystroke away, not a scroll.
   await expect(page.getByText('0 of 2 scored')).toBeVisible();
@@ -85,7 +85,7 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
 
   // ------------------------------------------------------------------ admin
   await inviteRole(ADMIN.email, 'admin');
-  await signInAs(page, ADMIN, '#/admin');
+  await signInAs(page, ADMIN, at('/admin'));
 
   await page.getByRole('button', { name: 'Recompute scores' }).click();
   await expect(page.getByText('2 reviews across 2 proposals.')).toBeVisible();

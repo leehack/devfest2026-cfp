@@ -18,12 +18,13 @@ export interface ReviewDraft {
  * is the only access the rules give a reviewer before then.
  */
 export async function loadMyReviews(
+  cfpId: string,
   uid: string,
   proposalIds: string[],
 ): Promise<Map<string, Review>> {
   const found = await Promise.all(
     proposalIds.map(async (id) => {
-      const snap = await getDoc(doc(db, 'proposals', id, 'reviews', uid));
+      const snap = await getDoc(doc(db, 'cfps', cfpId, 'proposals', id, 'reviews', uid));
       return snap.exists() ? ([id, snap.data() as Review] as const) : null;
     }),
   );
@@ -32,12 +33,16 @@ export async function loadMyReviews(
 
 /** Full overwrite, not a merge: clearing the comment has to actually clear it. */
 export async function saveReview(
+  cfpId: string,
   proposalId: string,
   uid: string,
   draft: ReviewDraft,
 ): Promise<void> {
   const comment = draft.comment.trim();
-  await setDoc(doc(db, 'proposals', proposalId, 'reviews', uid), {
+  await setDoc(doc(db, 'cfps', cfpId, 'proposals', proposalId, 'reviews', uid), {
+    // Denormalised from the path, and pinned to it by the rules: the aggregate
+    // recompute is a collection-group query, which cannot filter by ancestor.
+    cfpId,
     score: draft.score,
     conflictOfInterest: draft.conflictOfInterest,
     ...(comment ? { comment } : {}),
@@ -50,7 +55,7 @@ export interface ReviewRow extends Review {
 }
 
 /** Every review on one proposal — admins, or reviewers once the round closes. */
-export async function loadReviewsFor(proposalId: string): Promise<ReviewRow[]> {
-  const snap = await getDocs(collection(db, 'proposals', proposalId, 'reviews'));
+export async function loadReviewsFor(cfpId: string, proposalId: string): Promise<ReviewRow[]> {
+  const snap = await getDocs(collection(db, 'cfps', cfpId, 'proposals', proposalId, 'reviews'));
   return snap.docs.map((d) => ({ reviewerUid: d.id, ...(d.data() as Review) }));
 }

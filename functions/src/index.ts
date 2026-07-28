@@ -29,7 +29,7 @@ import {
   type EmailLocale,
   type Template,
 } from '../../shared/emailTemplates';
-import { validateSettings, type EmailSettings } from '../../shared/emailSettings';
+import { senderMismatch, validateSettings, type EmailSettings } from '../../shared/emailSettings';
 import {
   EMPTY_FORM,
   IMAGE_TYPES,
@@ -40,12 +40,15 @@ import {
   type Answers,
   type ConfirmForm,
 } from '../../shared/confirmForm';
+import { CFP_LIMITS, validateCfp, validateCfpId, type CfpRole } from '../../shared/cfp';
+import type { SpeakerSnapshot } from '../../shared/types';
 import { claim, grant, revoke, RoleError } from './roles';
 import {
+  cfpUrl,
   deliver,
+  loadPlatform,
   loadSettings,
   loadTemplates,
-  publicUrl,
   queueEmail,
   sendViaResend,
   type EmailStatus,
@@ -78,18 +81,40 @@ const ROW_CAP = 500;
 
 interface CfpWindow {
   paused: boolean;
+  archived: boolean;
   opensAt: Timestamp;
   closesAt: Timestamp;
 }
 
-/** Fails closed: a missing config document must not read as "wide open". */
-async function assertCfpOpen(): Promise<void> {
-  const snap = await db.doc('config/cfp').get();
+/**
+ * Which CFP this call is about.
+ *
+ * Every callable below takes one. It is never inferred from the caller's
+ * memberships — somebody on two CFPs would get whichever the server guessed —
+ * and the role check that follows is always made against this id, so naming a
+ * CFP you have no role on buys nothing.
+ */
+function requireCfpId(data: unknown): string {
+  const id = (data as { cfpId?: unknown } | undefined)?.cfpId;
+  if (typeof id !== 'string' || validateCfpId(id) !== null) {
+    throw new HttpsError('invalid-argument', 'cfpId is required.');
+  }
+  return id;
+}
+
+/** Fails closed: a missing CFP must not read as "wide open". */
+async function assertCfpOpen(cfpId: string): Promise<void> {
+  const snap = await db.doc(`cfps/${cfpId}`).get();
   if (!snap.exists) {
-    throw new HttpsError('failed-precondition', 'CFP is not configured.');
+    throw new HttpsError('not-found', 'No such call for proposals.');
   }
   const cfp = snap.data() as CfpWindow;
   const now = Date.now();
+  // Archiving is how a round is stopped without editing its window, so it is
+  // checked before the dates rather than after them.
+  if (cfp.archived) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+  }
   if (cfp.paused) {
     throw new HttpsError('failed-precondition', 'The CFP is currently paused.');
   }
@@ -107,11 +132,35 @@ function requireUid(request: { auth?: { uid: string } }, action: string): string
   return uid;
 }
 
-async function requireAdmin(request: { auth?: { uid: string } }, action: string): Promise<string> {
+/** The caller's role on one CFP, or undefined if they hold none. */
+async function roleOn(cfpId: string, uid: string): Promise<CfpRole | undefined> {
+  const snap = await db.doc(`cfps/${cfpId}/members/${uid}`).get();
+  return snap.exists ? (snap.data()?.role as CfpRole) : undefined;
+}
+
+/** `owner` outranks `admin` wherever admin is enough. */
+async function requireAdmin(
+  request: { auth?: { uid: string } },
+  cfpId: string,
+  action: string,
+): Promise<string> {
   const uid = requireUid(request, action);
-  const reviewer = await db.doc(`reviewers/${uid}`).get();
-  if (!reviewer.exists || reviewer.data()?.role !== 'admin') {
+  const role = await roleOn(cfpId, uid);
+  if (role !== 'admin' && role !== 'owner') {
     throw new HttpsError('permission-denied', `Only an admin can ${action}.`);
+  }
+  return uid;
+}
+
+/** Archiving, deleting and changing who owns a CFP are the owner's alone. */
+async function requireOwner(
+  request: { auth?: { uid: string } },
+  cfpId: string,
+  action: string,
+): Promise<string> {
+  const uid = requireUid(request, action);
+  if ((await roleOn(cfpId, uid)) !== 'owner') {
+    throw new HttpsError('permission-denied', `Only an owner can ${action}.`);
   }
   return uid;
 }
@@ -121,6 +170,15 @@ function asHttpsError(error: unknown): HttpsError {
   if (error instanceof RoleError) return new HttpsError(error.code, error.message);
   logger.error('unexpected role failure', { error: String(error) });
   return new HttpsError('internal', 'Could not complete that change.');
+}
+
+/** An ISO date from the request body, or a legible refusal. */
+function toTimestamp(value: unknown, field: string): Timestamp {
+  const at = new Date(String(value ?? ''));
+  if (Number.isNaN(at.valueOf())) {
+    throw new HttpsError('invalid-argument', `${field} is not a date.`);
+  }
+  return Timestamp.fromDate(at);
 }
 
 function requireProposalId(data: unknown): string {
@@ -183,6 +241,27 @@ function assemble(proposal: FirebaseFirestore.DocumentData, speaker: FirebaseFir
 }
 
 /**
+ * The speaker as the committee will read them.
+ *
+ * `email` is deliberately absent. A reviewer judging a talk has no need of the
+ * address, and this copy is readable by every reviewer on the CFP — the profile
+ * it is taken from is not.
+ */
+function snapshotOf(uid: string, speaker: FirebaseFirestore.DocumentData): SpeakerSnapshot {
+  return {
+    uid,
+    name: (speaker.name as string) ?? '',
+    bio: (speaker.bio as string) ?? '',
+    ...(speaker.company ? { company: speaker.company as string } : {}),
+    ...(speaker.jobTitle ? { jobTitle: speaker.jobTitle as string } : {}),
+    basedIn: (speaker.basedIn as string) ?? '',
+    socials: (speaker.socials as SpeakerSnapshot['socials']) ?? [],
+    isGde: speaker.isGde === true,
+    ...(speaker.pastTalks ? { pastTalks: speaker.pastTalks as string } : {}),
+  };
+}
+
+/**
  * Everything an email needs about a proposal, gathered inside the caller's
  * transaction. Returns null when there is nobody to write to — an email is
  * never a reason to fail the operation that triggered it.
@@ -213,12 +292,13 @@ async function emailContext(
 }
 
 export const submitProposal = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'submit a proposal');
   const proposalId = requireProposalId(request.data);
 
-  await assertCfpOpen();
+  await assertCfpOpen(cfpId);
 
-  const proposalRef = db.doc(`proposals/${proposalId}`);
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
 
   const result = await db.runTransaction(async (tx) => {
     const proposal = await readOwnProposal(tx, proposalRef, uid);
@@ -243,7 +323,7 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
     // with a `status in` clause, which would need a composite index for a
     // handful of documents.
     const mine = await tx.get(
-      db.collection('proposals').where('speakerIds', 'array-contains', uid),
+      db.collection(`cfps/${cfpId}/proposals`).where('speakerIds', 'array-contains', uid),
     );
     const live = mine.docs.filter((d) => inStatusSet('live', d.data().status)).length;
     if (live >= LIMITS.maxTalksPerSpeaker) {
@@ -266,11 +346,15 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
     // precede the write below — Firestore allows no reads after a write.
     const context = await emailContext(tx, proposal);
     if (context) {
-      await queueEmail(db, tx, { kind: 'submission_received', proposalId, ...context });
+      await queueEmail(db, tx, cfpId, { kind: 'submission_received', proposalId, ...context });
     }
 
     tx.update(proposalRef, {
       status: 'submitted',
+      // What the committee will read, frozen now. The profile belongs to the
+      // account and is global; this is the only copy of it this CFP gets, so a
+      // bio rewritten years later cannot rewrite what was judged.
+      speakerSnapshot: [snapshotOf(uid, speakerSnap.data()!)],
       submittedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -287,10 +371,11 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
  * outright so the emailLog audit trail cannot be orphaned.
  */
 export const withdrawProposal = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'withdraw a proposal');
   const proposalId = requireProposalId(request.data);
 
-  const proposalRef = db.doc(`proposals/${proposalId}`);
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
 
   await db.runTransaction(async (tx) => {
     const proposal = await readOwnProposal(tx, proposalRef, uid);
@@ -302,7 +387,7 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
     }
     const context = await emailContext(tx, proposal);
     if (context) {
-      await queueEmail(db, tx, { kind: 'withdrawn', proposalId, ...context });
+      await queueEmail(db, tx, cfpId, { kind: 'withdrawn', proposalId, ...context });
     }
 
     tx.update(proposalRef, {
@@ -335,7 +420,11 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
  * caller's own uid, so there is nothing here a speaker could point at somebody
  * else's object — the answer is a fact we look up, not a claim we accept.
  */
-async function findUploads(form: ConfirmForm, uid: string): Promise<Record<string, string>> {
+async function findUploads(
+  cfpId: string,
+  form: ConfirmForm,
+  uid: string,
+): Promise<Record<string, string>> {
   const images = (form.fields ?? []).filter((field) => field.type === 'image');
   if (images.length === 0) return {};
 
@@ -343,7 +432,7 @@ async function findUploads(form: ConfirmForm, uid: string): Promise<Record<strin
   const found: Record<string, string> = {};
   await Promise.all(
     images.map(async (field) => {
-      const path = headshotPath(uid, field.key);
+      const path = headshotPath(cfpId, uid, field.key);
       const [exists] = await bucket.file(path).exists();
       if (exists) found[field.key] = path;
     }),
@@ -352,13 +441,14 @@ async function findUploads(form: ConfirmForm, uid: string): Promise<Record<strin
 }
 
 /** The organiser's questions, or none. Missing means nothing extra is asked. */
-async function loadConfirmForm(): Promise<ConfirmForm> {
-  const snap = await db.doc('config/confirmForm').get();
+async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
+  const snap = await db.doc(`cfps/${cfpId}/config/confirmForm`).get();
   const fields = snap.data()?.fields;
   return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
 }
 
 export const respondToDecision = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'answer a decision');
   const proposalId = requireProposalId(request.data);
   const data = (request.data ?? {}) as { response?: unknown; answers?: unknown };
@@ -380,8 +470,8 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
    */
   let answers: Answers = {};
   if (status === 'confirmed') {
-    const form = await loadConfirmForm();
-    const uploads = await findUploads(form, uid);
+    const form = await loadConfirmForm(cfpId);
+    const uploads = await findUploads(cfpId, form, uid);
     const checked = validateAnswers(form, (data.answers ?? {}) as Answers, uploads);
     if (Object.keys(checked.faults).length > 0) {
       throw new HttpsError('invalid-argument', 'Some answers need fixing.', checked.faults);
@@ -390,7 +480,7 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
   }
 
   await db.runTransaction(async (tx) => {
-    const proposalRef = db.doc(`proposals/${proposalId}`);
+    const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
     const proposal = await readOwnProposal(tx, proposalRef, uid);
 
     // `confirmed` is in the set so that re-clicking a mailed link is a no-op
@@ -433,7 +523,8 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
  * Answers are capped at `FORM_LIMITS.image`, which bounds the response.
  */
 export const headshotImage = onCall(CALLABLE, async (request) => {
-  await requireAdmin(request, 'view a headshot');
+  const cfpId = requireCfpId(request.data);
+  await requireAdmin(request, cfpId, 'view a headshot');
   const data = (request.data ?? {}) as { speakerUid?: unknown; key?: unknown };
   const speakerUid = String(data.speakerUid ?? '');
   const key = String(data.key ?? '');
@@ -441,7 +532,7 @@ export const headshotImage = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'speakerUid and key are required.');
   }
 
-  const file = getStorage().bucket().file(headshotPath(speakerUid, key));
+  const file = getStorage().bucket().file(headshotPath(cfpId, speakerUid, key));
   const [exists] = await file.exists();
   if (!exists) throw new HttpsError('not-found', 'No headshot for that speaker.');
 
@@ -468,7 +559,8 @@ export const headshotImage = onCall(CALLABLE, async (request) => {
  * result keeps the merge where the admin can see it.
  */
 export const setConfirmForm = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'change the confirmation form');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'change the confirmation form');
   const fields = (request.data as { fields?: unknown } | undefined)?.fields;
   if (!Array.isArray(fields)) {
     throw new HttpsError('invalid-argument', 'fields must be a list.');
@@ -484,7 +576,7 @@ export const setConfirmForm = onCall(CALLABLE, async (request) => {
     );
   }
 
-  await db.doc('config/confirmForm').set(form);
+  await db.doc(`cfps/${cfpId}/config/confirmForm`).set(form);
   logger.info('confirm form saved', { byUid, fields: form.fields.length });
   return { ok: true, fields: form.fields };
 });
@@ -497,13 +589,22 @@ export const setConfirmForm = onCall(CALLABLE, async (request) => {
  * collection and race each other.
  */
 export const recomputeAggregates = onCall(CALLABLE, async (request) => {
-  const uid = await requireAdmin(request, 'close the review round');
+  const cfpId = requireCfpId(request.data);
+  const uid = await requireAdmin(request, cfpId, 'close the review round');
 
-  // Collection group: every review on every proposal, in one read pass.
-  const reviewSnaps = await db.collectionGroup('reviews').get();
+  /*
+   * Every review on every proposal in *this* CFP, in one read pass.
+   *
+   * Filtered on the denormalised `cfpId` rather than on the path, because a
+   * collection-group query cannot be constrained by ancestor — without the
+   * filter this would sweep up every review on the platform and write one
+   * organiser's scores onto another's proposals. The rules pin
+   * `request.resource.data.cfpId` to the path on write, so the field cannot lie.
+   */
+  const reviewSnaps = await db.collectionGroup('reviews').where('cfpId', '==', cfpId).get();
 
   const reviews: ReviewRecord[] = reviewSnaps.docs.map((d) => ({
-    // reviews live at proposals/{proposalId}/reviews/{reviewerUid}
+    // reviews live at cfps/{cfpId}/proposals/{proposalId}/reviews/{reviewerUid}
     proposalId: d.ref.parent.parent!.id,
     reviewerUid: d.id,
     score: d.data().score,
@@ -518,7 +619,7 @@ export const recomputeAggregates = onCall(CALLABLE, async (request) => {
   for (let i = 0; i < entries.length; i += CHUNK) {
     const batch = db.batch();
     for (const [proposalId, aggregate] of entries.slice(i, i + CHUNK)) {
-      batch.update(db.doc(`proposals/${proposalId}`), {
+      batch.update(db.doc(`cfps/${cfpId}/proposals/${proposalId}`), {
         aggregate,
         updatedAt: FieldValue.serverTimestamp(),
       });
@@ -627,6 +728,166 @@ export const importSessionizeProfile = onCall(
   },
 );
 
+
+// ------------------------------------------------------------------- the CFP
+
+/**
+ * A new call for proposals, owned by whoever asked for it.
+ *
+ * The id is the slug, so `create` is also the uniqueness check: two people
+ * racing for the same name means one `create` fails, and there is no window in
+ * which both believe they hold it. That is why this is a transaction with an
+ * existence check rather than a `set`.
+ *
+ * The creator is written as owner in the same transaction. That is what
+ * replaced the bootstrap script — there is no moment when a CFP exists with
+ * nobody able to administer it.
+ */
+export const createCfp = onCall(CALLABLE, async (request) => {
+  const uid = requireUid(request, 'create a call for proposals');
+  const token = request.auth!.token;
+  if (token.email_verified !== true) {
+    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  }
+
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const input = {
+    id: String(data.cfpId ?? ''),
+    name: String(data.name ?? '').trim(),
+    visibility: String(data.visibility ?? 'private'),
+  };
+  const fault = validateCfp(input);
+  if (fault) throw new HttpsError('invalid-argument', fault);
+
+  const opensAt = toTimestamp(data.opensAt, 'opensAt');
+  const closesAt = toTimestamp(data.closesAt, 'closesAt');
+  if (closesAt.toMillis() <= opensAt.toMillis()) {
+    throw new HttpsError('invalid-argument', 'The window closes before it opens.');
+  }
+
+  // A platform anyone can create on needs a ceiling somewhere, and the cheapest
+  // honest one is per account.
+  const mine = await db
+    .collection('cfps')
+    .where('ownerUids', 'array-contains', uid)
+    .count()
+    .get();
+  if (mine.data().count >= CFP_LIMITS.perOwner) {
+    throw new HttpsError('resource-exhausted', 'You have reached the limit on calls for proposals.');
+  }
+
+  const ref = db.doc(`cfps/${input.id}`);
+  await db.runTransaction(async (tx) => {
+    if ((await tx.get(ref)).exists) {
+      throw new HttpsError('already-exists', 'That address is taken.');
+    }
+    tx.set(ref, {
+      name: input.name,
+      visibility: input.visibility,
+      ownerUids: [uid],
+      archived: false,
+      opensAt,
+      closesAt,
+      paused: false,
+      reviewsVisible: false,
+      createdBy: uid,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(db.doc(`cfps/${input.id}/members/${uid}`), {
+      cfpId: input.id,
+      uid,
+      role: 'owner',
+      email: (token.email as string) ?? '',
+      ...(token.name ? { name: token.name as string } : {}),
+      createdAt: FieldValue.serverTimestamp(),
+      grantedBy: uid,
+    });
+  });
+
+  logger.info('cfp created', { cfpId: input.id, uid });
+  return { ok: true, cfpId: input.id };
+});
+
+/** The name and who can find it. Admin, because neither is destructive. */
+export const updateCfp = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'change this call for proposals');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+
+  const name = String(data.name ?? '').trim();
+  const visibility = String(data.visibility ?? '');
+  const fault = validateCfp({ id: cfpId, name, visibility });
+  if (fault) throw new HttpsError('invalid-argument', fault);
+
+  await db.doc(`cfps/${cfpId}`).update({
+    name,
+    visibility,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  logger.info('cfp updated', { cfpId, byUid });
+  return { ok: true };
+});
+
+/**
+ * Archiving, and taking it back.
+ *
+ * Read-only rather than gone: the committee's decisions and the email log are
+ * the record of a round that actually happened, and an organiser who wanted
+ * them destroyed asked for `deleteCfp`. Reversible for the same reason —
+ * archiving by mistake must not cost anybody their data.
+ */
+export const archiveCfp = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireOwner(request, cfpId, 'archive this call for proposals');
+  const archived = (request.data as { archived?: unknown }).archived !== false;
+
+  await db.doc(`cfps/${cfpId}`).update({
+    archived,
+    // Cleared rather than left behind, so "when was this archived" cannot
+    // answer for an archiving that was undone.
+    archivedAt: archived ? FieldValue.serverTimestamp() : FieldValue.delete(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  logger.info('cfp archived', { cfpId, byUid, archived });
+  return { ok: true, archived };
+});
+
+/**
+ * Deleting a CFP, and everything anybody submitted to it.
+ *
+ * Two steps on purpose. It must be archived first — so the round is visibly
+ * over before it can be destroyed — and the caller has to send back the id,
+ * which is what a confirm dialog cannot do on its own. This is other people's
+ * writing; nobody should be one stray click from it.
+ *
+ * `recursiveDelete` walks the subcollections, and the bucket prefix goes with
+ * them. Both are best-effort against a partial failure: a second call finishes
+ * the job, because a half-deleted CFP is worse than either outcome.
+ */
+export const deleteCfp = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireOwner(request, cfpId, 'delete this call for proposals');
+
+  const snap = await db.doc(`cfps/${cfpId}`).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+  if (snap.data()?.archived !== true) {
+    throw new HttpsError('failed-precondition', 'Archive it before deleting it.');
+  }
+  if (String((request.data as { confirm?: unknown }).confirm ?? '') !== cfpId) {
+    throw new HttpsError('invalid-argument', 'Type the address to confirm.');
+  }
+
+  await getStorage()
+    .bucket()
+    .deleteFiles({ prefix: `cfps/${cfpId}/` })
+    .catch((error) => logger.error('could not clear the bucket', { cfpId, error: String(error) }));
+
+  await db.recursiveDelete(db.doc(`cfps/${cfpId}`));
+  logger.warn('cfp deleted', { cfpId, byUid });
+  return { ok: true };
+});
+
 // ----------------------------------------------------------------------- roles
 
 /**
@@ -637,6 +898,7 @@ export const importSessionizeProfile = onCall(
  * otherwise anyone could claim any grant by naming it.
  */
 export const claimRole = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'continue');
   const token = request.auth!.token;
   // `!== true` rather than `=== false`: a token with the claim absent must not
@@ -649,6 +911,7 @@ export const claimRole = onCall(CALLABLE, async (request) => {
 
   try {
     const role = await claim(db, {
+      cfpId,
       uid,
       email: token.email as string | undefined,
       name: token.name as string | undefined,
@@ -661,11 +924,12 @@ export const claimRole = onCall(CALLABLE, async (request) => {
 
 /** Admin only. Applies at once if the person already has an account. */
 export const grantRole = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'assign roles');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'assign roles');
   const data = (request.data ?? {}) as { email?: unknown; role?: unknown };
 
   try {
-    const result = await grant(db, getAuth(), { email: data.email, role: data.role, byUid });
+    const result = await grant(db, getAuth(), { cfpId, email: data.email, role: data.role, byUid });
     logger.info('role granted', { ...result, byUid });
     return result;
   } catch (error) {
@@ -675,11 +939,12 @@ export const grantRole = onCall(CALLABLE, async (request) => {
 
 /** Admin only, and refuses to remove the last admin. */
 export const revokeRole = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'remove roles');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'remove roles');
   const data = (request.data ?? {}) as { email?: unknown };
 
   try {
-    const result = await revoke(db, getAuth(), { email: data.email });
+    const result = await revoke(db, getAuth(), { cfpId, email: data.email });
     logger.info('role revoked', { ...result, byUid });
     return result;
   } catch (error) {
@@ -698,7 +963,8 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
 const DECIDABLE = STATUS_SETS.decidable;
 
 export const setProposalStatus = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'decide a proposal');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'decide a proposal');
   const data = (request.data ?? {}) as Record<string, unknown>;
 
   const proposalId = requireProposalId(data);
@@ -710,7 +976,7 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
     );
   }
 
-  const ref = db.doc(`proposals/${proposalId}`);
+  const ref = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
@@ -730,7 +996,7 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
     if (DECISION_KINDS.includes(status as EmailKind)) {
       const context = await emailContext(tx, snap.data()!);
       if (context) {
-        await queueEmail(db, tx, { kind: status as EmailKind, proposalId, ...context });
+        await queueEmail(db, tx, cfpId, { kind: status as EmailKind, proposalId, ...context });
       }
     }
 
@@ -750,7 +1016,8 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
  * status flip on `emailLog`; the trigger does the sending.
  */
 export const emailQueue = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'manage the email queue');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'manage the email queue');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const action = String(data.action ?? 'preview');
   if (!['preview', 'release', 'retry', 'resend'].includes(action)) {
@@ -770,7 +1037,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     const logId = String(data.logId ?? '');
     if (!logId) throw new HttpsError('invalid-argument', 'logId is required.');
 
-    const ref = db.doc(`emailLog/${logId}`);
+    const ref = db.doc(`cfps/${cfpId}/emailLog/${logId}`);
     const status = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
       if (!snap.exists) throw new HttpsError('not-found', 'No such message.');
@@ -790,8 +1057,8 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   }
 
   const [snap, configSnap] = await Promise.all([
-    db.collection('emailLog').get(),
-    db.doc('config/email').get(),
+    db.collection(`cfps/${cfpId}/emailLog`).get(),
+    db.doc(`cfps/${cfpId}/config/email`).get(),
   ]);
   const emailConfig = configSnap.data() ?? {};
 
@@ -828,7 +1095,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     return {
       ok: true,
       tally,
-      settings: await loadSettings(db),
+      settings: await loadSettings(db, cfpId),
       // Setup state for the panel. `keyHint` is the last four characters of the
       // API key — never the key.
       keyHint: (emailConfig.keyHint as string) ?? '',
@@ -927,11 +1194,19 @@ async function takeLinkAllowance(email: string): Promise<void> {
  * The link never touches `emailLog`. Anyone holding it is signed in as its
  * owner, so it is rendered and handed to Resend in this one request and not
  * written anywhere — no queue row, no retry, nothing to read back later.
+ *
+ * `cfpId` is optional and only decides who the message comes from and where it
+ * lands: signing in at a CFP writes as that CFP, signing in at the home page
+ * writes as the platform. The link itself is the same either way — an account
+ * is an account, not a membership.
  */
 export const requestSignInLink = onCall(CALLABLE, async (request) => {
-  const data = (request.data ?? {}) as { email?: unknown; locale?: unknown };
+  const data = (request.data ?? {}) as { email?: unknown; locale?: unknown; cfpId?: unknown };
   const email = String(data.email ?? '').trim().toLowerCase();
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
+  const cfpId = typeof data.cfpId === 'string' && validateCfpId(data.cfpId) === null
+    ? data.cfpId
+    : null;
 
   if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
     throw new HttpsError('invalid-argument', 'That does not look like an email address.');
@@ -939,14 +1214,29 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
 
   await takeLinkAllowance(email);
 
-  const [apiKey, settings] = await Promise.all([readResendKey(), loadSettings(db)]);
+  const [apiKey, platform] = await Promise.all([readResendKey(), loadPlatform(db)]);
+  // Named CFP or not, the sender is looked up server-side. Nothing about who
+  // this mail comes from is taken from the caller.
+  const [settings, cfpSnap] = await Promise.all([
+    cfpId ? loadSettings(db, cfpId) : Promise.resolve(platform.settings),
+    cfpId ? db.doc(`cfps/${cfpId}`).get() : Promise.resolve(null),
+  ]);
+  const event = (cfpSnap?.get('name') as string) || platform.name;
+
   const link = await getAuth().generateSignInWithEmailLink(email, {
     // Must be one of Auth's authorized domains, or Firebase refuses to mint it.
-    url: `${publicUrl(settings)}/`,
+    // The origin is platform config, never a per-CFP field: an organiser who
+    // could edit it could aim other people's sign-in mail at a host they own.
+    url: cfpId ? cfpUrl(platform.publicUrl, cfpId) : `${platform.publicUrl}/`,
     handleCodeInApp: true,
   });
 
-  const outcome = await sendViaResend(email, renderSignInEmail(link, locale), apiKey, settings);
+  const outcome = await sendViaResend(
+    email,
+    renderSignInEmail(link, locale, event),
+    apiKey,
+    settings,
+  );
   // The address is not logged: this line would otherwise be a record of who
   // tried to sign in, sitting in Cloud Logging with a much wider audience than
   // Firestore has.
@@ -972,7 +1262,8 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
  * compose form is what stops a double-send, and this log is the receipt.
  */
 export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'write to a speaker');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'write to a speaker');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const proposalId = requireProposalId(data);
   const subject = String(data.subject ?? '').trim();
@@ -998,7 +1289,7 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
   }
 
   const logId = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(db.doc(`proposals/${proposalId}`));
+    const snap = await tx.get(db.doc(`cfps/${cfpId}/proposals/${proposalId}`));
     if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
 
     // A draft is nobody's but its author's, and writing to someone about a talk
@@ -1010,7 +1301,7 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
     const context = await emailContext(tx, snap.data()!);
     if (!context) throw new HttpsError('failed-precondition', 'No address on file for that speaker.');
 
-    const ref = db.collection('emailLog').doc();
+    const ref = db.collection(`cfps/${cfpId}/emailLog`).doc();
     tx.create(ref, {
       kind: MESSAGE_KIND,
       proposalId,
@@ -1035,21 +1326,22 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
  * Who the CFP writes as. Admin only, and stored rather than deployed so a
  * domain that finishes verifying on a Tuesday can be switched on that Tuesday.
  *
- * Nothing here is checked against Resend — an address on an unverified domain
- * saves fine and then fails at send time, which the queue records as `failed`
- * and the retry button recovers once the DNS is right.
+ * The sender has to be on the domain *this* CFP registered. One Resend account
+ * serves the whole platform, so without that check any organiser could put
+ * another CFP's verified domain in their own `from` and send mail that arrives
+ * signed by somebody else's event.
  */
 export const setEmailSettings = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'change the sending address');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'change the sending address');
   const data = (request.data ?? {}) as Record<string, unknown>;
 
   const settings: EmailSettings = {
     from: String(data.from ?? '').trim(),
     replyTo: String(data.replyTo ?? '').trim(),
-    // Trailing slash trimmed here rather than at render: it is one place, and
-    // "https://x.org/" + a path is the kind of double slash nobody notices
-    // until it is in mail that has already gone out.
-    publicUrl: String(data.publicUrl ?? '').trim().replace(/\/+$/, ''),
+    // Platform config now — see `loadPlatform`. Kept on the type because the
+    // renderer wants both halves in one object.
+    publicUrl: '',
   };
 
   const problem = validateSettings(settings);
@@ -1057,7 +1349,17 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
   }
 
-  await db.doc('config/email').set(settings, { merge: true });
+  const configRef = db.doc(`cfps/${cfpId}/config/email`);
+  const registered = ((await configRef.get()).get('domain') as string | undefined) ?? '';
+  if (!registered) {
+    throw new HttpsError('failed-precondition', 'Add your sending domain first.');
+  }
+  const mismatch = senderMismatch(settings.from, registered);
+  if (mismatch) {
+    throw new HttpsError('invalid-argument', `${mismatch} is not your verified domain.`);
+  }
+
+  await configRef.set({ from: settings.from, replyTo: settings.replyTo }, { merge: true });
   logger.info('email settings changed', { byUid, ...settings });
   return { ok: true, settings };
 });
@@ -1070,7 +1372,8 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
  * one person who cannot tell it was a mistake.
  */
 export const setEmailTemplate = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'change the email wording');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'change the email wording');
   const data = (request.data ?? {}) as Record<string, unknown>;
 
   const kind = String(data.kind ?? '') as EmailKind;
@@ -1085,7 +1388,7 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
   const path = `templates.${kind}.${locale}`;
 
   if (data.reset === true) {
-    await db.doc('config/email').update({ [path]: FieldValue.delete() }).catch(() => {
+    await db.doc(`cfps/${cfpId}/config/email`).update({ [path]: FieldValue.delete() }).catch(() => {
       // Nothing stored for it yet, which is the state `reset` was asking for.
     });
     logger.info('email template reset', { byUid, kind, locale });
@@ -1102,7 +1405,7 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', `${problem.problem}: ${problem.detail ?? ''}`);
   }
 
-  await db.doc('config/email').set({ templates: { [kind]: { [locale]: template } } }, { merge: true });
+  await db.doc(`cfps/${cfpId}/config/email`).set({ templates: { [kind]: { [locale]: template } } }, { merge: true });
   logger.info('email template changed', { byUid, kind, locale });
   return { ok: true };
 });
@@ -1115,7 +1418,8 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
  * cannot consume the deterministic id a real message will need later.
  */
 export const sendTestEmail = onCall(CALLABLE, async (request) => {
-  const uid = await requireAdmin(request, 'send a test');
+  const cfpId = requireCfpId(request.data);
+  const uid = await requireAdmin(request, cfpId, 'send a test');
   const to = request.auth?.token.email as string | undefined;
   if (!to) throw new HttpsError('failed-precondition', 'Your account has no email address.');
 
@@ -1126,10 +1430,12 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
   }
   const locale = (data.locale === 'fr' ? 'fr' : 'en') as EmailLocale;
 
-  const [apiKey, settings, templates] = await Promise.all([
+  const [apiKey, settings, templates, platform, cfpSnap] = await Promise.all([
     readResendKey(),
-    loadSettings(db),
-    loadTemplates(db),
+    loadSettings(db, cfpId),
+    loadTemplates(db, cfpId),
+    loadPlatform(db),
+    db.doc(`cfps/${cfpId}`).get(),
   ]);
   const outcome = await deliver(
     {
@@ -1144,6 +1450,7 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
     },
     apiKey,
     settings,
+    { id: cfpId, name: (cfpSnap.get('name') as string) || cfpId, publicUrl: platform.publicUrl },
     templates,
   );
 
@@ -1164,7 +1471,8 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
  * failing on the night the decisions go out.
  */
 export const setEmailSecret = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'set the API key');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'set the API key');
   const apiKey = String((request.data as { apiKey?: unknown } | undefined)?.apiKey ?? '').trim();
 
   if (!apiKey) throw new HttpsError('invalid-argument', 'An API key is required.');
@@ -1179,7 +1487,7 @@ export const setEmailSecret = onCall(CALLABLE, async (request) => {
   }
 
   await writeResendKey(apiKey);
-  await db.doc('config/email').set(
+  await db.doc(`cfps/${cfpId}/config/email`).set(
     { keyHint: keyHint(apiKey), keySetAt: FieldValue.serverTimestamp() },
     { merge: true },
   );
@@ -1198,32 +1506,48 @@ function asResendError(error: unknown): HttpsError {
 /**
  * The sending domain: add it, read back the DNS records Resend wants, and ask
  * it to re-check. Admin only, because it spends the API key.
+ *
+ * One Resend account serves the whole platform, so every action here is pinned
+ * to the domain id stored on *this* CFP. `list` used to return the account's
+ * whole roster, which under tenancy is a list of every other organiser's
+ * domains, and `get`/`verify` took an id straight from the caller — which would
+ * have let one CFP read another's DNS records and trigger its verifications.
  */
 export const emailDomain = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'manage the sending domain');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'manage the sending domain');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const action = String(data.action ?? 'list');
 
   const apiKey = await readResendKey();
+  const configRef = db.doc(`cfps/${cfpId}/config/email`);
+  const ours = ((await configRef.get()).get('domainId') as string | undefined) ?? '';
 
   try {
-    if (action === 'list') return { ok: true, domains: await listDomains(apiKey) };
+    if (action === 'list') {
+      return { ok: true, domains: ours ? [await getDomain(apiKey, ours)] : [] };
+    }
 
     if (action === 'add') {
       const name = cleanDomain(String(data.domain ?? ''));
       if (!name) throw new HttpsError('invalid-argument', 'That is not a domain name.');
-      const domain = await addDomain(apiKey, name);
-      await db.doc('config/email').set({ domainId: domain.id, domain: name }, { merge: true });
-      return { ok: true, domain };
+
+      // Already in the account — verified through Resend's own dashboard, or
+      // added here before the write below landed. Adopting the existing one is
+      // the only way forward: Resend refuses a duplicate, and refusing back
+      // would leave a CFP permanently unable to claim a domain it owns.
+      const existing = (await listDomains(apiKey)).find((d) => d.name === name);
+      const domain = existing ?? (await addDomain(apiKey, name));
+      await configRef.set({ domainId: domain.id, domain: name }, { merge: true });
+      return { ok: true, domain: existing ? await getDomain(apiKey, domain.id) : domain };
     }
 
-    const id = String(data.domainId ?? '');
-    if (!id) throw new HttpsError('invalid-argument', 'domainId is required.');
+    if (!ours) throw new HttpsError('failed-precondition', 'No domain has been added yet.');
 
-    if (action === 'get') return { ok: true, domain: await getDomain(apiKey, id) };
+    if (action === 'get') return { ok: true, domain: await getDomain(apiKey, ours) };
     if (action === 'verify') {
-      const domain = await verifyDomain(apiKey, id);
-      logger.info('domain verification requested', { byUid, id, status: domain.status });
+      const domain = await verifyDomain(apiKey, ours);
+      logger.info('domain verification requested', { byUid, cfpId, status: domain.status });
       return { ok: true, domain };
     }
   } catch (error) {
@@ -1239,17 +1563,14 @@ export const emailDomain = onCall(CALLABLE, async (request) => {
  * the CFP is open, so it stays out of reach of any client write.
  */
 export const setCfpWindow = onCall(CALLABLE, async (request) => {
-  const byUid = await requireAdmin(request, 'change the submission window');
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'change the submission window');
   const data = (request.data ?? {}) as Record<string, unknown>;
 
   const patch: Record<string, unknown> = {};
   for (const key of ['opensAt', 'closesAt'] as const) {
     if (data[key] === undefined) continue;
-    const at = new Date(String(data[key]));
-    if (Number.isNaN(at.valueOf())) {
-      throw new HttpsError('invalid-argument', `${key} is not a date.`);
-    }
-    patch[key] = Timestamp.fromDate(at);
+    patch[key] = toTimestamp(data[key], key);
   }
   for (const key of ['paused', 'reviewsVisible'] as const) {
     if (data[key] === undefined) continue;
@@ -1262,14 +1583,14 @@ export const setCfpWindow = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'Nothing to change.');
   }
 
-  const current = (await db.doc('config/cfp').get()).data() ?? {};
+  const current = (await db.doc(`cfps/${cfpId}`).get()).data() ?? {};
   const opensAt = (patch.opensAt ?? current.opensAt) as Timestamp | undefined;
   const closesAt = (patch.closesAt ?? current.closesAt) as Timestamp | undefined;
   if (opensAt && closesAt && closesAt.toMillis() <= opensAt.toMillis()) {
     throw new HttpsError('invalid-argument', 'The window would close before it opens.');
   }
 
-  await db.doc('config/cfp').set(patch, { merge: true });
+  await db.doc(`cfps/${cfpId}`).set(patch, { merge: true });
   logger.info('cfp window changed', { byUid, ...patch });
   return { ok: true };
 });

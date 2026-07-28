@@ -11,18 +11,18 @@ import type { ConfirmField } from '@shared/confirmForm';
  * Proposals: it is set up once at the start of a round and then left alone,
  * while the table above it is worked through every day.
  */
-export function Confirmation() {
+export function Confirmation({ cfpId }: { cfpId: string }) {
   const { t } = useI18n();
   const [fields, setFields] = useState<ConfirmField[] | null>(null);
   const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
     try {
-      setFields((await loadConfirmForm()).fields);
+      setFields((await loadConfirmForm(cfpId)).fields);
     } catch (e) {
       setError(adminError(e, t));
     }
-  }, [t]);
+  }, [cfpId, t]);
 
   useEffect(() => {
     void refresh();
@@ -39,7 +39,7 @@ export function Confirmation() {
       {/* Mounted only once the stored form has arrived, so the editor seeds
           itself from it. Not re-keyed afterwards: it owns the list from then
           on, and remounting would throw away what is being typed. */}
-      {fields === null ? <p className="muted">{t.app.loading}</p> : <ConfirmFormEditor fields={fields} />}
+      {fields === null ? <p className="muted">{t.app.loading}</p> : <ConfirmFormEditor cfpId={cfpId} fields={fields} />}
     </section>
   );
 }

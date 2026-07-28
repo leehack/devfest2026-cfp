@@ -17,7 +17,7 @@ import {
   seedSpeaker,
   seedSubmittedProposal,
 } from './backend';
-import { signInAs, type Identity } from './form';
+import { at, signInAs, type Identity } from './form';
 
 const REVIEWER: Identity = { sub: 'deck-reviewer', email: 'rey@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'deck-speaker', email: 'sam@example.org', name: 'Sam' };
@@ -33,7 +33,7 @@ async function stage(page: Page) {
   for (const [i, title] of TITLES.entries()) {
     await seedSubmittedProposal(`deck-${i}`, { speakerUid: speaker.uid, title });
   }
-  await signInAs(page, REVIEWER, '#/review');
+  await signInAs(page, REVIEWER, at('/review'));
   await expect(page.getByText('1 of 3')).toBeVisible();
 }
 
@@ -177,7 +177,7 @@ test.describe('the review deck', () => {
       },
     });
 
-    await signInAs(page, REVIEWER, '#/review');
+    await signInAs(page, REVIEWER, at('/review'));
     await expect(heading(page, 'Coming a long way')).toBeVisible();
 
     await expect(page.getByText('Expected but not confirmed')).toBeVisible();

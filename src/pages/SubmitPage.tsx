@@ -112,6 +112,7 @@ function TalkPicker({
 }
 
 interface QuestionsProps {
+  cfpId: string;
   uid: string;
   fields: ConfirmField[];
   answers: Answers;
@@ -121,14 +122,14 @@ interface QuestionsProps {
 }
 
 /**
- * The organiser's own questions, rendered from `config/confirmForm`.
+ * The organiser's own questions, rendered from `cfps/{cfpId}/config/confirmForm`.
  *
  * Nothing here is hard-coded — a t-shirt size and a dietary note are one
  * event's questions, not the platform's, and an organiser who cannot add
  * "do you need a power outlet" without a deploy ends up chasing forty people
  * by email instead.
  */
-function Questions({ uid, fields, answers, faults, busy, onAnswer }: QuestionsProps) {
+function Questions({ cfpId, uid, fields, answers, faults, busy, onAnswer }: QuestionsProps) {
   const { t, locale } = useI18n();
   const message = (key: string) => {
     const fault = faults[key];
@@ -146,6 +147,7 @@ function Questions({ uid, fields, answers, faults, busy, onAnswer }: QuestionsPr
           return (
             <HeadshotField
               key={field.key}
+              cfpId={cfpId}
               uid={uid}
               fieldKey={field.key}
               label={label}
@@ -157,7 +159,7 @@ function Questions({ uid, fields, answers, faults, busy, onAnswer }: QuestionsPr
               // file exists. Set locally on upload too, purely so the control
               // updates — the callable re-derives it from the bucket regardless.
               uploaded={typeof value === 'string' && value !== ''}
-              onUploaded={() => onAnswer(field.key, headshotPath(uid, field.key))}
+              onUploaded={() => onAnswer(field.key, headshotPath(cfpId, uid, field.key))}
             />
           );
         }
@@ -344,9 +346,10 @@ function validate(form: FormState, t: Dictionary): Errors {
 interface SubmitPageProps {
   user: User;
   cfp: CfpWindow;
+  cfpId: string;
 }
 
-export function SubmitPage({ user, cfp }: SubmitPageProps) {
+export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const { t, locale } = useI18n();
 
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -382,8 +385,8 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
         const [{ talks: found, speaker: profile }, questions] = await Promise.all([
-          loadMyProposals(user),
-          loadConfirmForm(),
+          loadMyProposals(cfpId, user),
+          loadConfirmForm(cfpId),
         ]);
         if (cancelled) return;
         setTalks(found);
@@ -413,7 +416,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [cfpId, user]);
 
   // ----------------------------------------------------------------- autosave
 
@@ -421,7 +424,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     if (scope === 'none') return;
     setSaveState('saving');
     try {
-      const id = await saveDraft(user, form, proposalId, scope, locale);
+      const id = await saveDraft(cfpId, user, form, proposalId, scope, locale);
       if (!proposalId) {
         setProposalId(id);
         setTalks((prev) => [...prev, { id, status: 'draft', proposal: {}, speaker: undefined }]);
@@ -437,7 +440,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     } catch {
       setSaveState('failed');
     }
-  }, [form, locale, proposalId, scope, user]);
+  }, [cfpId, form, locale, proposalId, scope, user]);
 
   useEffect(() => {
     if (loading || scope === 'none' || !dirty.current) return;
@@ -526,9 +529,9 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     setSubmitting(true);
     setBanner(null);
     try {
-      const id = await saveDraft(user, form, proposalId, 'all', locale);
+      const id = await saveDraft(cfpId, user, form, proposalId, 'all', locale);
       setProposalId(id);
-      await submitProposal({ proposalId: id });
+      await submitProposal({ cfpId, proposalId: id });
       setStatus('submitted');
       markTalk(id, 'submitted', form.title);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -543,7 +546,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     if (!proposalId || !window.confirm(t.form.withdrawConfirm)) return;
     setSubmitting(true);
     try {
-      await withdrawProposal({ proposalId });
+      await withdrawProposal({ cfpId, proposalId });
       setStatus('withdrawn');
       markTalk(proposalId, 'withdrawn');
     } catch (error: any) {
@@ -562,6 +565,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     setAnswerFaults({});
     try {
       const { data } = await respondToDecision({
+        cfpId,
         proposalId,
         response,
         ...(response === 'confirm' ? { answers } : {}),
@@ -655,6 +659,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
           onWithdraw={withdrawable ? onWithdraw : undefined}
           onRespond={status === 'accepted' ? onRespond : undefined}
           questions={{
+            cfpId,
             uid: user.uid,
             fields: confirmForm.fields,
             answers,

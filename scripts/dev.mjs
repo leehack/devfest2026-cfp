@@ -2,8 +2,8 @@
  * One command for the whole local stack: emulators, seeded config, dev server.
  *
  * Four separate steps in the right order, each of which fails silently if you
- * skip it — no `functions` emulator makes every callable look broken, and no
- * `config/cfp` renders "the CFP is not open yet" on a perfectly good build.
+ * skip it — no `functions` emulator makes every callable look broken, and with
+ * no CFP seeded the home page is an empty list on a perfectly good build.
  *
  *   npm start                  # everything, data kept between runs
  *   npm start -- --fresh       # discard the emulator data first
@@ -21,6 +21,8 @@ const FIRESTORE = '127.0.0.1:8080';
 const AUTH = '127.0.0.1:9099';
 const FUNCTIONS = '127.0.0.1:5001';
 const STORAGE = '127.0.0.1:9199';
+/** The one seeded locally. The same id the e2e specs use. */
+const DEV_CFP = 'devfest-mtl-2026';
 
 const children = [];
 let shuttingDown = false;
@@ -215,10 +217,29 @@ run(
 await waitForEmulators();
 
 const { opens, closes } = devWindow();
-console.log(`\n▸ seeding config/cfp (${opens} → ${closes})\n`);
-await runToCompletion('node', ['scripts/seed-config.mjs', '--opens', opens, '--closes', closes], {
-  env: { ...env, FIRESTORE_EMULATOR_HOST: FIRESTORE, GCLOUD_PROJECT: PROJECT },
-});
+console.log(`\n▸ seeding cfps/${DEV_CFP} (${opens} → ${closes})\n`);
+await runToCompletion(
+  'node',
+  [
+    'scripts/seed-cfp.mjs',
+    '--id',
+    DEV_CFP,
+    '--name',
+    'DevFest Montréal 2026',
+    '--opens',
+    opens,
+    '--closes',
+    closes,
+  ],
+  {
+    env: {
+      ...env,
+      FIRESTORE_EMULATOR_HOST: FIRESTORE,
+      FIREBASE_AUTH_EMULATOR_HOST: AUTH,
+      GCLOUD_PROJECT: PROJECT,
+    },
+  },
+);
 
-console.log('\n▸ dev server on http://localhost:5173\n');
+console.log(`\n▸ dev server on http://localhost:5173/#/c/${DEV_CFP}\n`);
 run('npx', ['vite'], { env }).on('exit', (code) => void shutdown(code ?? 0));

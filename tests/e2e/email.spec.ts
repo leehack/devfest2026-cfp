@@ -22,10 +22,11 @@ import {
   seedProposal,
   seedSpeaker,
   setEmailStatusDirect,
+  setSendingDomainDirect,
   setProposalStatusDirect,
   waitForEmail,
 } from './backend';
-import { signInAs } from './form';
+import { at, signInAs } from './form';
 
 const admin = { sub: 'email-admin', email: 'chair@devfest.test', name: 'Chair' };
 const speaker = { sub: 'email-speaker', email: 'ada@example.test', name: 'Ada Lovelace' };
@@ -45,6 +46,9 @@ async function stage(options: { locale?: 'en' | 'fr' } = {}) {
     speakerUid: author.uid,
     title: 'Notes on the Analytical Engine',
     status: 'submitted',
+    // What the committee sees. `speakers/{uid}` is global and not theirs to
+    // read; the snapshot on the proposal is.
+    speaker: { name: speaker.name },
   });
 
   return { chair, author };
@@ -172,7 +176,7 @@ test.describe('email pipeline', () => {
     const { chair } = await stage();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'rejected' });
 
-    await signInAs(page, admin, '#/admin/email');
+    await signInAs(page, admin, at('/admin/email'));
 
     const panel = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Email' }),
@@ -222,6 +226,7 @@ test.describe('email pipeline', () => {
 
   test('the sending address is set from the admin page, not a deploy', async ({ page }) => {
     const { chair } = await stage();
+    await setSendingDomainDirect('example.org');
 
     // Hold the panel's first load open so the typing below is guaranteed to
     // happen while it is still in flight. Without the delay this race only
@@ -235,7 +240,7 @@ test.describe('email pipeline', () => {
       await route.continue();
     });
 
-    await signInAs(page, admin, '#/admin/email');
+    await signInAs(page, admin, at('/admin/email'));
     const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
 
     // Unset is called out, because it is the reason nothing is going out.
@@ -251,6 +256,13 @@ test.describe('email pipeline', () => {
     await panel.getByLabel('Send as').fill('DevFest Montréal cfp@example.org');
     await panel.getByRole('button', { name: 'Save address' }).click();
     await expect(panel.getByRole('alert')).toContainText(/angle brackets/);
+
+    // An address on a domain this CFP never registered is refused by the
+    // server. The Resend account is shared, so otherwise one organiser could
+    // send mail signed by another organiser's event.
+    await panel.getByLabel('Send as').fill('cfp@someone-elses.example');
+    await panel.getByRole('button', { name: 'Save address' }).click();
+    await expect(panel.getByRole('alert')).toContainText(/someone-elses.example/);
 
     await panel.getByLabel('Send as').fill('DevFest Montréal <cfp@example.org>');
     await panel.getByLabel('Reply-to').fill('organisers@example.org');
@@ -524,7 +536,7 @@ test.describe('a message to one speaker', () => {
 
   test('the admin panel composes one and shows it in the log', async ({ page }) => {
     await stage();
-    await signInAs(page, admin, '#/admin/email');
+    await signInAs(page, admin, at('/admin/email'));
 
     const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
     const send = panel.getByRole('button', { name: 'Send message' });
@@ -536,7 +548,7 @@ test.describe('a message to one speaker', () => {
     const talk = panel.getByLabel('Talk');
     // The picker names the speaker as well as the talk — an organiser choosing
     // who to write to is thinking about the person, not the title.
-    await expect(talk).toContainText('Notes on the Analytical Engine — Ada Lovelace');
+    await expect(talk).toContainText(`Notes on the Analytical Engine — ${speaker.name}`);
     await talk.selectOption('talk-1');
     await panel.getByRole('textbox', { name: /^Subject/ }).fill('About your room');
     await panel.getByRole('textbox', { name: /^Message/ }).fill('Hi {speakerName}, quick question.');

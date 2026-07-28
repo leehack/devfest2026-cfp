@@ -6,13 +6,11 @@ import { adminError } from '../../lib/errors';
 import {
   emailQueue,
   loadAllProposals,
-  loadSpeakers,
   sendSpeakerMessage,
   setEmailSettings,
   type EmailRow,
   type HeldEmail,
   type ProposalRow,
-  type SpeakerBrief,
 } from '../../lib/roles';
 import { EmailSetup } from '../../components/EmailSetup';
 import { EmailPreview } from '../../components/EmailPreview';
@@ -31,7 +29,7 @@ import { Result } from './Result';
  * each decision is made and sits there until someone releases the lot — so the
  * dangerous button is the one that says how many people it is about to write to.
  */
-export function Email() {
+export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
   const { t, locale } = useI18n();
   const [tally, setTally] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<HeldEmail[]>([]);
@@ -56,7 +54,7 @@ export function Email() {
       setError('');
       if (action !== 'preview') setNote('');
       try {
-        const { data } = await emailQueue({ action, ...(logId ? { logId } : {}) });
+        const { data } = await emailQueue({ cfpId, action, ...(logId ? { logId } : {}) });
         setTally(data.tally ?? {});
         // Never over the top of someone mid-sentence: this load is async, and
         // an admin who starts typing before it lands would otherwise watch the
@@ -78,7 +76,7 @@ export function Email() {
           );
         } else {
           setNote(t.admin.emailSent.replace('{count}', String(data.released ?? 0)));
-          const { data: after } = await emailQueue({ action: 'preview' });
+          const { data: after } = await emailQueue({ cfpId, action: 'preview' });
           setTally(after.tally ?? {});
           setHeld(after.held ?? []);
         }
@@ -88,7 +86,7 @@ export function Email() {
         setBusy(false);
       }
     },
-    [t],
+    [cfpId, t],
   );
 
   useEffect(() => {
@@ -120,7 +118,7 @@ export function Email() {
     setNote('');
     setError('');
     try {
-      await emailQueue({ action: 'resend', logId: row.logId });
+      await emailQueue({ cfpId, action: 'resend', logId: row.logId });
       setNote(t.admin.emailResent.replace('{to}', row.to));
       await run('preview');
     } catch (e) {
@@ -140,9 +138,22 @@ export function Email() {
       return;
     }
 
+    // The server refuses both of these, and says so in English. Catching them
+    // here is what turns "invalid argument" into a sentence naming the domain.
+    if (!domain) {
+      setSenderError(t.admin.emailDomainFirst);
+      return;
+    }
+    if (mismatch) {
+      setSenderError(
+        t.admin.emailDomainMismatch.replace('{sender}', mismatch).replace('{verified}', domain),
+      );
+      return;
+    }
+
     setBusy(true);
     try {
-      await setEmailSettings(settings);
+      await setEmailSettings({ cfpId, ...settings });
       // Stored now, so the server's copy is the one to trust again.
       editing.current = false;
       setSenderNote(t.admin.windowSaved);
@@ -158,7 +169,7 @@ export function Email() {
     <section className="section">
       <h2>{t.admin.email}</h2>
 
-      <EmailSetup keyHint={keyHint} domainId={domainId} onKeySet={setKeyHint} />
+      <EmailSetup cfpId={cfpId} keyHint={keyHint} domainId={domainId} onKeySet={setKeyHint} />
 
       <h3 className="card__subtitle">{t.admin.emailStepSender}</h3>
       {!settings.from && <p className="note note--inline">{t.admin.emailNoSender}</p>}
@@ -184,17 +195,6 @@ export function Email() {
           disabled={busy}
         />
       </div>
-      <TextField
-        label={t.admin.emailPublicUrl}
-        help={t.admin.emailPublicUrlHelp}
-        placeholder={t.admin.emailPublicUrlPlaceholder}
-        value={settings.publicUrl}
-        onChange={(publicUrl) => {
-          editing.current = true;
-          setSettings((s) => ({ ...s, publicUrl }));
-        }}
-        disabled={busy}
-      />
       <p className="field__help">{t.admin.emailFromHelp}</p>
       {mismatch && (
         <p className="note note--inline" role="status">
@@ -209,6 +209,8 @@ export function Email() {
 
       <h3 className="card__subtitle">{t.admin.emailPreview}</h3>
       <EmailPreview
+        cfpId={cfpId}
+        cfpName={cfpName}
         configured={Boolean(keyHint && settings.from)}
         templates={templates}
         onSaved={() => run('preview')}
@@ -273,7 +275,7 @@ export function Email() {
       <Result ok={note} error={error} />
 
       <h3 className="card__subtitle">{t.admin.messageTitle}</h3>
-      <WriteToSpeaker replyTo={settings.replyTo} onSent={() => run('preview')} />
+      <WriteToSpeaker cfpId={cfpId} replyTo={settings.replyTo} onSent={() => run('preview')} />
 
       {/*
         The record of what was actually sent to whom. Counts alone could not
@@ -369,10 +371,17 @@ export function Email() {
  * twice sends twice — an empty form is the difference between a second thought
  * and a second copy.
  */
-function WriteToSpeaker({ replyTo, onSent }: { replyTo: string; onSent: () => void }) {
+function WriteToSpeaker({
+  cfpId,
+  replyTo,
+  onSent,
+}: {
+  cfpId: string;
+  replyTo: string;
+  onSent: () => void;
+}) {
   const { t } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
-  const [speakers, setSpeakers] = useState<Map<string, SpeakerBrief>>(new Map());
   const [proposalId, setProposalId] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -385,18 +394,19 @@ function WriteToSpeaker({ replyTo, onSent }: { replyTo: string; onSent: () => vo
       try {
         // Drafts are excluded: writing to someone about a talk they have not
         // submitted tells them it was read.
-        const sendable = (await loadAllProposals()).filter((row) => row.status !== 'draft');
+        const sendable = (await loadAllProposals(cfpId)).filter((row) => row.status !== 'draft');
         setRows(sendable);
-        setSpeakers(await loadSpeakers(sendable.flatMap((row) => row.speakerIds ?? [])));
       } catch (e) {
         setError(adminError(e, t));
       }
     })();
-  }, [t]);
+  }, [cfpId, t]);
 
+  // From the snapshot frozen onto the proposal — the global speaker profile is
+  // not the committee's to read. See `ReviewPage`.
   const nameOf = (row?: ProposalRow) =>
-    (row?.speakerIds ?? [])
-      .map((id) => speakers.get(id)?.name)
+    (row?.speakerSnapshot ?? [])
+      .map((s) => s.name)
       .filter(Boolean)
       .join(', ');
 
@@ -411,7 +421,7 @@ function WriteToSpeaker({ replyTo, onSent }: { replyTo: string; onSent: () => vo
     setNote('');
     setError('');
     try {
-      await sendSpeakerMessage({ proposalId, subject, body });
+      await sendSpeakerMessage({ cfpId, proposalId, subject, body });
       setSubject('');
       setBody('');
       setNote(t.admin.messageSent.replace('{name}', to));

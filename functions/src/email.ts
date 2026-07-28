@@ -33,43 +33,70 @@ import { readResendKey } from './secrets';
 
 /**
  * Neither the key nor the addresses are deploy config: the addresses live in
- * `config/email` and the key in Secret Manager, both written from `#/admin`.
- * Anything that can only change by redeploying stays wrong for as long as the
- * deploy takes, which on the night decisions go out is too long.
+ * `cfps/{cfpId}/config/email` and the key in Secret Manager, both written from
+ * the admin screen. Anything that can only change by redeploying stays wrong for
+ * as long as the deploy takes, which on the night decisions go out is too long.
  */
 /**
- * Where `{proposalUrl}` points, most specific first: an organiser's custom
- * domain, then a local override, then the project's own Hosting domain.
+ * Where the site is, most specific first: a stored platform address, then a
+ * local override, then the project's own Hosting domain.
  *
- * Derived rather than written down, so a staging project or a fork is right
- * with no configuration. It is deliberately *not* taken from the request —
- * `sendQueuedEmail` is a Firestore trigger and has no request at all, and the
- * callables that queue only see a client-supplied `Host`, which would let
- * whoever submits a proposal choose the link in mail we send to a speaker.
+ * Platform-level rather than per-CFP, and unwritable through any callable. It
+ * is the origin of every link we mail, including sign-in links, which are bearer
+ * credentials — an organiser who could edit it could aim other people's
+ * sign-in mail at a host of their choosing. Derived rather than written down so
+ * a staging project or a fork is right with no configuration, and deliberately
+ * *not* taken from the request: `sendQueuedEmail` is a Firestore trigger and has
+ * no request at all, and the callables that queue only see a client-supplied
+ * `Host`.
  */
 const derivedUrl = () => `https://${process.env.GCLOUD_PROJECT ?? 'localhost'}.web.app`;
 
-export const publicUrl = (settings: EmailSettings) =>
-  settings.publicUrl || process.env.CFP_PUBLIC_URL || derivedUrl();
+/**
+ * The platform itself: where it lives, what it calls itself, and who it writes
+ * as when the message is not about any one CFP — a sign-in link requested from
+ * the home page, before the person has picked one.
+ */
+export interface Platform {
+  publicUrl: string;
+  name: string;
+  settings: EmailSettings;
+}
+
+export async function loadPlatform(db: Firestore): Promise<Platform> {
+  const stored = (await db.doc('config/platform').get()).data() ?? {};
+  return {
+    publicUrl: (stored.publicUrl as string) || process.env.CFP_PUBLIC_URL || derivedUrl(),
+    name: (stored.name as string) || 'Call for proposals',
+    settings: {
+      from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
+      replyTo: (stored.replyTo as string) || '',
+      publicUrl: '',
+    },
+  };
+}
+
+/** Where one CFP lives, which is what a speaker's mail should point at. */
+export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/#/c/${cfpId}`;
+
+const configDoc = (db: Firestore, cfpId: string) => db.doc(`cfps/${cfpId}/config/email`);
 
 /** Env is the fallback, so a fresh project sends nothing until someone says so. */
-export async function loadSettings(db: Firestore): Promise<EmailSettings> {
-  const snap = await db.doc('config/email').get();
+export async function loadSettings(db: Firestore, cfpId: string): Promise<EmailSettings> {
+  const snap = await configDoc(db, cfpId).get();
   const stored = snap.data() ?? {};
   return {
     from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
     replyTo: (stored.replyTo as string) || process.env.CFP_REPLY_TO || '',
-    // Stored only, unlike the addresses above: this is what the admin field
-    // edits, and folding the env fallback in here put `http://localhost:5173`
-    // into that field locally — a value `validPublicUrl` then refused to save.
-    // The fallback still applies, at render time, in `publicUrl()`.
-    publicUrl: (stored.publicUrl as string) || '',
+    // Not stored here at all — see `loadPublicUrl`. Kept on the type because the
+    // renderer needs both halves and one object is easier to pass than two.
+    publicUrl: '',
   };
 }
 
 /** Organiser-written copy, if any. Absent means the built-in wording is used. */
-export async function loadTemplates(db: Firestore): Promise<TemplateOverrides> {
-  const snap = await db.doc('config/email').get();
+export async function loadTemplates(db: Firestore, cfpId: string): Promise<TemplateOverrides> {
+  const snap = await configDoc(db, cfpId).get();
   return ((snap.data()?.templates ?? {}) as TemplateOverrides) ?? {};
 }
 
@@ -80,7 +107,8 @@ export interface QueueRequest {
   proposalId: string;
   to: string;
   locale: EmailLocale;
-  data: Omit<EmailData, 'proposalUrl'>;
+  /** The link and the event name are filled in at send time — see `deliver`. */
+  data: Omit<EmailData, 'proposalUrl' | 'event'>;
 }
 
 /**
@@ -97,9 +125,10 @@ export const logId = (kind: EmailKind, proposalId: string) => `${kind}__${propos
 export async function queueEmail(
   db: Firestore,
   tx: Transaction,
+  cfpId: string,
   request: QueueRequest,
 ): Promise<void> {
-  const ref = db.doc(`emailLog/${logId(request.kind, request.proposalId)}`);
+  const ref = db.doc(`cfps/${cfpId}/emailLog/${logId(request.kind, request.proposalId)}`);
   const existing = await tx.get(ref);
   if (existing.exists) return;
 
@@ -180,12 +209,16 @@ export async function deliver(
   row: FirebaseFirestore.DocumentData,
   apiKey: string,
   settings: EmailSettings,
+  cfp: { id: string; name: string; publicUrl: string },
   templates?: TemplateOverrides,
 ): Promise<SendOutcome> {
   const locale = (row.locale ?? 'en') as EmailLocale;
+  // The link and the event name are resolved now rather than when the row was
+  // written, so renaming a CFP or moving the site fixes mail still in the queue.
   const data = {
-    ...(row.data as Omit<EmailData, 'proposalUrl'>),
-    proposalUrl: publicUrl(settings),
+    ...(row.data as Omit<EmailData, 'proposalUrl' | 'event'>),
+    proposalUrl: cfpUrl(cfp.publicUrl, cfp.id),
+    event: cfp.name,
   };
 
   // A message carries its own copy on the row. It was written once, for one
@@ -214,7 +247,7 @@ export async function deliver(
  */
 export const sendQueuedEmail = onDocumentWritten(
   {
-    document: 'emailLog/{logId}',
+    document: 'cfps/{cfpId}/emailLog/{logId}',
     region: 'northamerica-northeast1',
     maxInstances: 10,
     retry: false,
@@ -224,6 +257,7 @@ export const sendQueuedEmail = onDocumentWritten(
     if (!ref || !event.data?.after.exists) return;
     if (event.data.after.get('status') !== 'queued') return;
 
+    const { cfpId } = event.params;
     const db = getFirestore();
     const claimed = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -233,12 +267,19 @@ export const sendQueuedEmail = onDocumentWritten(
     });
     if (!claimed) return;
 
-    const [apiKey, settings, templates] = await Promise.all([
+    const [apiKey, settings, templates, platform, cfpSnap] = await Promise.all([
       readResendKey(),
-      loadSettings(db),
-      loadTemplates(db),
+      loadSettings(db, cfpId),
+      loadTemplates(db, cfpId),
+      loadPlatform(db),
+      db.doc(`cfps/${cfpId}`).get(),
     ]);
-    const outcome = await deliver(claimed, apiKey, settings, templates);
+    const cfp = {
+      id: cfpId,
+      name: (cfpSnap.get('name') as string) || cfpId,
+      publicUrl: platform.publicUrl,
+    };
+    const outcome = await deliver(claimed, apiKey, settings, cfp, templates);
 
     await ref.update({
       status: outcome.status,
@@ -247,7 +288,7 @@ export const sendQueuedEmail = onDocumentWritten(
       error: outcome.error ?? FieldValue.delete(),
     });
 
-    const line = { logId: event.params.logId, kind: claimed.kind, status: outcome.status };
+    const line = { cfpId, logId: event.params.logId, kind: claimed.kind, status: outcome.status };
     if (outcome.status === 'failed') logger.error('email failed', { ...line, error: outcome.error });
     else logger.info('email processed', line);
   },

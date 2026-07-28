@@ -97,19 +97,6 @@ export const STATUS_SETS = {
 export const inStatusSet = (set: keyof typeof STATUS_SETS, status: string): boolean =>
   (STATUS_SETS[set] as readonly string[]).includes(status);
 
-/**
- * Who someone is to the CFP. Speaker is not a role: anyone signed in may submit,
- * including reviewers and admins, so it needs no record.
- *
- *   reviewer   scores proposals — but never one they are speaking on
- *   admin      everything a reviewer can do, plus granting roles, moving the
- *              window and closing the round
- *
- * Replaces the spec's `lead` (§7), which named the same thing less clearly.
- */
-export const ROLES = ['reviewer', 'admin'] as const;
-export type Role = (typeof ROLES)[number];
-
 /** §7 — 1 Pass · 2 Maybe · 3 Yes · 4 Strong yes. */
 export const SCORES = [1, 2, 3, 4] as const;
 export type Score = (typeof SCORES)[number];

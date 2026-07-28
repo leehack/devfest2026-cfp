@@ -46,6 +46,8 @@ export interface EmailData {
   title: string;
   /** Absolute, so it works from a mail client with no session. */
   proposalUrl: string;
+  /** The CFP's own name — every message is signed with it. */
+  event: string;
   /** Drives the `{visa}` paragraph on an acceptance (§5). */
   needsVisa?: boolean;
 }
@@ -55,8 +57,6 @@ export interface RenderedEmail {
   text: string;
   html: string;
 }
-
-const EVENT = 'DevFest Montréal 2026';
 
 /**
  * What an author may write in a template. `{visa}` is the conditional one: a
@@ -210,11 +210,16 @@ const SIGN_IN: Record<EmailLocale, Template> = {
   },
 };
 
-export function renderSignInEmail(link: string, locale: EmailLocale): RenderedEmail {
+export function renderSignInEmail(
+  link: string,
+  locale: EmailLocale,
+  event: string,
+): RenderedEmail {
   return renderTemplate(SIGN_IN[locale], locale, {
     speakerName: '',
     title: '',
     proposalUrl: link,
+    event,
   });
 }
 
@@ -284,7 +289,7 @@ function substitute(source: string, data: EmailData, locale: EmailLocale): strin
     speakerName: data.speakerName,
     title: data.title,
     proposalUrl: data.proposalUrl,
-    event: EVENT,
+    event: data.event,
     visa: data.needsVisa ? VISA[locale] : '',
   };
   // An unknown name is left untouched rather than blanked: validateTemplate
@@ -324,7 +329,7 @@ export function renderTemplate(
 
   return {
     subject: substitute(template.subject, data, locale),
-    text: [...paragraphs, '', `— ${EVENT}`].join('\n\n'),
+    text: [...paragraphs, '', `— ${data.event}`].join('\n\n'),
     html: [
       '<div style="font:16px/1.55 system-ui,sans-serif;max-width:34rem;color:#16181d">',
       ...paragraphs.map((paragraph) =>
@@ -332,7 +337,7 @@ export function renderTemplate(
           ? `<p><a href="${escapeHtml(paragraph)}">${escapeHtml(paragraph)}</a></p>`
           : `<p>${escapeHtml(paragraph)}</p>`,
       ),
-      `<p style="color:#5f6673;font-size:0.875rem">— ${EVENT}</p>`,
+      `<p style="color:#5f6673;font-size:0.875rem">— ${escapeHtml(data.event)}</p>`,
       '</div>',
     ].join(''),
   };

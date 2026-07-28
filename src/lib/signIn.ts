@@ -17,8 +17,12 @@ import { auth, functions } from '../firebase';
 
 const PENDING = 'cfp.signInEmail';
 
+/**
+ * `cfpId` is optional and decides only who the message comes from and where the
+ * link lands. An account is an account; it is not a membership of anything.
+ */
 export const requestSignInLink = httpsCallable<
-  { email: string; locale: string },
+  { email: string; locale: string; cfpId?: string },
   { ok: boolean }
 >(functions, 'requestSignInLink');
 

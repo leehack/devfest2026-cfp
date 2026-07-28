@@ -22,16 +22,10 @@ import { Checkbox, TextAreaField } from '../components/fields';
 import { formatDate, useI18n } from '../i18n';
 import { toDate } from '../lib/dates';
 import { friendlyError } from '../lib/errors';
-import {
-  loadCfpConfig,
-  loadReviewQueue,
-  loadSpeakers,
-  type ProposalRow,
-  type SpeakerBrief,
-} from '../lib/roles';
+import { loadCfp, loadReviewQueue, type ProposalRow } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
 import { LIMITS, SCORES, type Score } from '@shared/enums';
-import type { Review } from '@shared/types';
+import type { Review, SpeakerSnapshot } from '@shared/types';
 
 interface Draft {
   score: Score | null;
@@ -45,13 +39,12 @@ const draftOf = (review?: Review): Draft => ({
   comment: review?.comment ?? '',
 });
 
-export function ReviewPage({ user }: { user: User }) {
+export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const { t } = useI18n();
   const [order, setOrder] = useState<ProposalRow[]>([]);
   const [own, setOwn] = useState(0);
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
-  const [speakers, setSpeakers] = useState<Map<string, SpeakerBrief>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
   const [index, setIndex] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -64,15 +57,13 @@ export function ReviewPage({ user }: { user: User }) {
     setLoading(true);
     setError('');
     try {
-      const [loaded, config] = await Promise.all([loadReviewQueue(user.uid), loadCfpConfig()]);
-      const [reviews, people] = await Promise.all([
-        loadMyReviews(
-          user.uid,
-          loaded.proposals.map((p) => p.id),
-        ),
-        loadSpeakers(loaded.proposals.flatMap((p) => p.speakerIds ?? [])),
-      ]);
-      const visible = config?.reviewsVisible === true;
+      const [loaded, cfp] = await Promise.all([loadReviewQueue(cfpId, user.uid), loadCfp(cfpId)]);
+      const reviews = await loadMyReviews(
+        cfpId,
+        user.uid,
+        loaded.proposals.map((p) => p.id),
+      );
+      const visible = cfp?.reviewsVisible === true;
 
       // Decided once, here. Once the round is open, disagreement is the point of
       // the meeting, so the widest spreads come first; until then, work through
@@ -87,7 +78,6 @@ export function ReviewPage({ user }: { user: User }) {
       setOwn(loaded.own);
       setMine(reviews);
       setDrafts(new Map(sorted.map((p) => [p.id, draftOf(reviews.get(p.id))])));
-      setSpeakers(people);
       setReviewsVisible(visible);
       setIndex(0);
     } catch (e) {
@@ -95,7 +85,7 @@ export function ReviewPage({ user }: { user: User }) {
     } finally {
       setLoading(false);
     }
-  }, [user.uid, t]);
+  }, [cfpId, user.uid, t]);
 
   useEffect(() => {
     void load();
@@ -132,13 +122,14 @@ export function ReviewPage({ user }: { user: User }) {
       setSaving(true);
       setError('');
       try {
-        await saveReview(id, user.uid, {
+        await saveReview(cfpId, id, user.uid, {
           score: draft.score,
           conflictOfInterest: draft.conflictOfInterest,
           comment: draft.comment,
         });
         setMine((prev) =>
           new Map(prev).set(id, {
+            cfpId,
             score: draft.score as Score,
             conflictOfInterest: draft.conflictOfInterest,
             comment: draft.comment.trim() || undefined,
@@ -152,7 +143,7 @@ export function ReviewPage({ user }: { user: User }) {
         setSaving(false);
       }
     },
-    [user.uid, t],
+    [cfpId, user.uid, t],
   );
 
   /** The whole point of the redesign: one key scores and moves on. */
@@ -301,10 +292,10 @@ export function ReviewPage({ user }: { user: User }) {
 
       <ReviewCard
         key={current.id}
+        cfpId={cfpId}
         proposal={current}
         draft={draft}
         existing={mine.get(current.id)}
-        speakers={speakers}
         reviewsVisible={reviewsVisible}
         saving={saving}
         saved={savedId === current.id}
@@ -323,10 +314,10 @@ export function ReviewPage({ user }: { user: User }) {
 }
 
 interface CardProps {
+  cfpId: string;
   proposal: ProposalRow;
   draft: Draft;
   existing?: Review;
-  speakers: Map<string, SpeakerBrief>;
   reviewsVisible: boolean;
   saving: boolean;
   saved: boolean;
@@ -336,10 +327,10 @@ interface CardProps {
 }
 
 function ReviewCard({
+  cfpId,
   proposal,
   draft,
   existing,
-  speakers,
   reviewsVisible,
   saving,
   saved,
@@ -356,9 +347,14 @@ function ReviewCard({
     top.current?.scrollIntoView({ block: 'start' });
   }, [proposal.id]);
 
-  const people = (proposal.speakerIds ?? [])
-    .map((id) => speakers.get(id))
-    .filter((s): s is SpeakerBrief => Boolean(s));
+  /*
+   * The snapshot frozen onto the proposal at submission, not `speakers/{uid}`.
+   *
+   * A profile belongs to the account and is global; a role is per CFP. Reading
+   * profiles here would hand every committee on the platform the whole speaker
+   * directory — and would show a bio edited in 2028 to a 2026 committee.
+   */
+  const people = proposal.speakerSnapshot ?? [];
 
   const meta = [
     people.map((s) => s.name).filter(Boolean).join(', '),
@@ -382,7 +378,7 @@ function ReviewCard({
       )}
 
       {people.map((s, i) => (
-        <Speaker key={proposal.speakerIds?.[i] ?? i} speaker={s} />
+        <Speaker key={s.uid || i} speaker={s} />
       ))}
 
       <Logistics proposal={proposal} />
@@ -441,7 +437,7 @@ function ReviewCard({
         </span>
       </div>
 
-      {reviewsVisible && <Committee proposalId={proposal.id} />}
+      {reviewsVisible && <Committee cfpId={cfpId} proposalId={proposal.id} />}
     </section>
   );
 }
@@ -505,7 +501,7 @@ function Logistics({ proposal }: { proposal: ProposalRow }) {
  * the abstract did not earn. Deliberate, and the alternative was worse — a
  * reviewer guessing at delivery risk with nothing to go on at all.
  */
-function Speaker({ speaker }: { speaker: SpeakerBrief }) {
+function Speaker({ speaker }: { speaker: SpeakerSnapshot }) {
   const { t } = useI18n();
   const line = [[speaker.jobTitle, speaker.company].filter(Boolean).join(', '), speaker.basedIn]
     .filter(Boolean)
@@ -543,15 +539,15 @@ function Speaker({ speaker }: { speaker: SpeakerBrief }) {
 }
 
 /** Only mounted once an admin opens the round, so nothing anchors before then. */
-function Committee({ proposalId }: { proposalId: string }) {
+function Committee({ cfpId, proposalId }: { cfpId: string; proposalId: string }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<ReviewRow[]>([]);
 
   useEffect(() => {
-    loadReviewsFor(proposalId)
+    loadReviewsFor(cfpId, proposalId)
       .then(setRows)
       .catch(() => setRows([]));
-  }, [proposalId]);
+  }, [cfpId, proposalId]);
 
   if (rows.length === 0) return null;
 

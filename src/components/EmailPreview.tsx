@@ -30,10 +30,14 @@ import {
 } from '@shared/emailTemplates';
 
 export function EmailPreview({
+  cfpId,
+  cfpName,
   configured,
   templates,
   onSaved,
 }: {
+  cfpId: string;
+  cfpName: string;
   configured: boolean;
   templates: TemplateOverrides;
   onSaved: () => Promise<void>;
@@ -68,7 +72,10 @@ export function EmailPreview({
     {
       speakerName: 'Ada Lovelace',
       title: 'Notes on the Analytical Engine',
-      proposalUrl: `${window.location.origin}/#/`,
+      proposalUrl: `${window.location.origin}/#/c/${cfpId}`,
+      // The real name, because {event} appears in every subject line and a
+      // stand-in reads as "Your Your event talk has been accepted".
+      event: cfpName,
       needsVisa,
     },
     { [kind]: { [previewLocale]: draft } },
@@ -159,7 +166,7 @@ export function EmailPreview({
               disabled={busy || Boolean(problem)}
               onClick={() =>
                 run(async () => {
-                  await setEmailTemplate({ kind, locale: previewLocale, ...draft });
+                  await setEmailTemplate({ cfpId, kind, locale: previewLocale, ...draft });
                   await onSaved();
                   return t.admin.emailTemplateSaved;
                 })
@@ -173,7 +180,7 @@ export function EmailPreview({
               disabled={busy || !custom}
               onClick={() =>
                 run(async () => {
-                  await setEmailTemplate({ kind, locale: previewLocale, reset: true });
+                  await setEmailTemplate({ cfpId, kind, locale: previewLocale, reset: true });
                   setDraft(builtInTemplate(kind, previewLocale));
                   await onSaved();
                   return t.admin.emailTemplateReset;
@@ -207,7 +214,7 @@ export function EmailPreview({
         disabled={busy}
         onClick={() =>
           run(async () => {
-            const { data } = await sendTestEmail({ kind, locale: previewLocale, needsVisa });
+            const { data } = await sendTestEmail({ cfpId, kind, locale: previewLocale, needsVisa });
             return data.status === 'dry_run'
               ? t.admin.emailTestDryRun
               : t.admin.emailTestSent.replace('{to}', data.to);

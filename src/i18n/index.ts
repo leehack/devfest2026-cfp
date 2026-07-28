@@ -35,4 +35,16 @@ export function formatDate(value: Date, locale: Locale): string {
   }).format(value);
 }
 
+/**
+ * The day alone, for a listing. A deadline needs its hour — "closes at 11:59
+ * p.m." is the difference between submitting and not — but a directory of a
+ * dozen calls does not, and the times were most of what each row was made of.
+ */
+export function formatDay(value: Date, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
+    dateStyle: 'long',
+    timeZone: 'America/Toronto',
+  }).format(value);
+}
+
 export type { Dictionary };

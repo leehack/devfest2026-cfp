@@ -9,6 +9,7 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  CFP_ID,
   callAs,
   createAccount,
   readProposalById,
@@ -20,7 +21,7 @@ import {
   setConfirmFormDirect,
   storeObjectDirect,
 } from './backend';
-import { signInAs, type Identity } from './form';
+import { at, signInAs, type Identity } from './form';
 
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 const OTHER: Identity = { sub: 'other-sub', email: 'other@example.org', name: 'Robin' };
@@ -42,7 +43,7 @@ test.describe('answering an acceptance', () => {
       status: 'accepted',
     });
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
 
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
@@ -64,7 +65,7 @@ test.describe('answering an acceptance', () => {
       status: 'accepted',
     });
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     page.once('dialog', (dialog) => dialog.dismiss());
     await page.getByRole('button', { name: 'I have to decline' }).click();
 
@@ -198,7 +199,7 @@ test.describe('the confirmation questions', () => {
     await accepted();
     await setConfirmFormDirect([SHIRT, DIET]);
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     // Saying yes opens the questions rather than confirming on the spot.
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await expect(page.getByLabel(/T-shirt size/)).toBeVisible();
@@ -220,7 +221,7 @@ test.describe('the confirmation questions', () => {
     await accepted();
     await setConfirmFormDirect([SHIRT, DIET]);
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByLabel(/food/).fill('No shellfish.');
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
@@ -234,7 +235,7 @@ test.describe('the confirmation questions', () => {
     await accepted();
     await setConfirmFormDirect([SHIRT]);
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'I have to decline' }).click();
 
@@ -246,7 +247,7 @@ test.describe('the confirmation questions', () => {
   test('with no questions configured, confirming stays one click', async ({ page }) => {
     await accepted();
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
   });
@@ -255,7 +256,7 @@ test.describe('the confirmation questions', () => {
     await accepted();
     await setConfirmFormDirect([SHIRT]);
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByLabel(/T-shirt size/).selectOption('M');
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
@@ -302,7 +303,7 @@ test.describe('the confirmation questions', () => {
     await inviteRole(ADMIN.email, 'admin');
     await createAccount(ADMIN);
 
-    await signInAs(page, ADMIN, '#/admin/confirmation');
+    await signInAs(page, ADMIN, at('/admin/confirmation'));
     const panel = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Confirmation questions' }),
     });
@@ -316,7 +317,7 @@ test.describe('the confirmation questions', () => {
     // stored answer is filed under and it does not move afterwards.
     await expect(panel.getByText(/stored under .which_hotel_are_you_at./)).toBeVisible();
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByLabel(/Which hotel/).fill('The one by the station.');
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
@@ -362,7 +363,7 @@ test.describe('a headshot question', () => {
   test('a speaker uploads one and it is stored under their own uid', async ({ page }) => {
     const speaker = await accepted();
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
     await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
@@ -370,16 +371,18 @@ test.describe('a headshot question', () => {
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
 
-    // The path is derived from the uid, which is what makes it unclaimable.
-    const path = `headshots/${speaker.uid}/headshot`;
-    expect(await readStoredObjects('headshots/')).toEqual([path]);
+    // The path is derived from the uid, which is what makes it unclaimable, and
+    // from the CFP, so two programmes can ask the same speaker for different
+    // photographs and deleting one takes its objects with it.
+    const path = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
+    expect(await readStoredObjects(`cfps/${CFP_ID}/headshots/`)).toEqual([path]);
     expect((await readProposalById('p-pic'))?.confirmAnswers).toEqual({ headshot: path });
   });
 
   test('a required photo blocks the confirmation until there is one', async ({ page }) => {
     await accepted();
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
 
@@ -392,7 +395,10 @@ test.describe('a headshot question', () => {
 
     // The browser could say anything here; the callable asks the bucket. Both
     // a plausible path of their own and somebody else's are ignored alike.
-    for (const claimed of [`headshots/${speaker.uid}/headshot`, 'headshots/someone-else/headshot']) {
+    for (const claimed of [
+      `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`,
+      `cfps/${CFP_ID}/headshots/someone-else/headshot`,
+    ]) {
       expect(
         await callAs(speaker.idToken, 'respondToDecision', {
           proposalId: 'p-pic',
@@ -413,13 +419,13 @@ test.describe('a headshot question', () => {
     await inviteRole(ADMIN.email, 'admin');
     await createAccount(ADMIN);
 
-    await signInAs(page, SPEAKER, '#/');
+    await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
 
-    await signInAs(page, ADMIN, '#/admin/proposals');
+    await signInAs(page, ADMIN, at('/admin/proposals'));
     const selected = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Selected speakers' }),
     });
@@ -458,7 +464,11 @@ test.describe('a headshot question', () => {
     // `storage.rules` refuse this on the way in, so it takes going round them to
     // plant one. The callable checks anyway, because what it returns goes into
     // a `data:` URL an organiser's browser will act on.
-    await storeObjectDirect(`headshots/${speaker.uid}/headshot`, 'text/html', '<script>');
+    await storeObjectDirect(
+      `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`,
+      'text/html',
+      '<script>',
+    );
     expect(
       await callAs(admin.idToken, 'headshotImage', { speakerUid: speaker.uid, key: 'headshot' }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });

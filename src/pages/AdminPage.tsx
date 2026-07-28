@@ -7,6 +7,7 @@ import { Confirmation } from './admin/Confirmation';
 import { Email } from './admin/Email';
 import { Proposals } from './admin/Proposals';
 import { Settings } from './admin/Settings';
+import type { CfpRole } from '@shared/cfp';
 
 /**
  * Five jobs that share nothing but an audience.
@@ -17,7 +18,19 @@ import { Settings } from './admin/Settings';
  * whole screen, and keeps its state from being mounted at all until asked for —
  * the proposals table and the email log are a query each.
  */
-export function AdminPage({ user, tab }: { user: User; tab: AdminTab }) {
+export function AdminPage({
+  user,
+  cfpId,
+  cfpName,
+  tab,
+  role,
+}: {
+  user: User;
+  cfpId: string;
+  cfpName: string;
+  tab: AdminTab;
+  role: CfpRole;
+}) {
   const { t } = useI18n();
 
   return (
@@ -29,18 +42,18 @@ export function AdminPage({ user, tab }: { user: User; tab: AdminTab }) {
             type="button"
             className={`subnav__tab${name === tab ? ' subnav__tab--on' : ''}`}
             aria-current={name === tab ? 'page' : undefined}
-            onClick={() => navigate('admin', name)}
+            onClick={() => navigate('admin', { cfpId, tab: name })}
           >
             {t.admin.tabs[name]}
           </button>
         ))}
       </nav>
 
-      {tab === 'proposals' && <Proposals />}
-      {tab === 'committee' && <Committee user={user} />}
-      {tab === 'settings' && <Settings />}
-      {tab === 'confirmation' && <Confirmation />}
-      {tab === 'email' && <Email />}
+      {tab === 'proposals' && <Proposals cfpId={cfpId} />}
+      {tab === 'committee' && <Committee user={user} cfpId={cfpId} />}
+      {tab === 'settings' && <Settings cfpId={cfpId} role={role} />}
+      {tab === 'confirmation' && <Confirmation cfpId={cfpId} />}
+      {tab === 'email' && <Email cfpId={cfpId} cfpName={cfpName} />}
     </>
   );
 }

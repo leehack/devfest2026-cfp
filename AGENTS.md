@@ -16,11 +16,14 @@ Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules
 `scripts/with-java.mjs`, which finds a Homebrew JVM — macOS has none on PATH.
 
 ```bash
-node scripts/grant-role.mjs --email you@example.org --role admin
+node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
+node scripts/set-platform.mjs --url https://cfp.example.org
 ```
 
-Makes the first admin; every later role goes through `#/admin`. Add the emulator
-env vars from the script's own header to point it at the local stack.
+Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
+and the platform's own settings. Both take the emulator env vars from their own
+headers. There is no bootstrap-admin script any more: whoever creates a CFP is
+written as its owner in the same transaction.
 
 ## Layout
 
@@ -29,13 +32,26 @@ shared/      enums, types, zod schema, email copy, pure parsers — BOTH bundles
 src/         the app: pages/ (submit, admin, review), lib/ (data access), i18n/
 functions/   callables: submit, withdraw, roles, window, aggregates, sessionize,
              emailQueue — plus the sendQueuedEmail Firestore trigger
-scripts/     dev.mjs (npm start), grant-role.mjs (first admin), with-java.mjs
+scripts/     dev.mjs (npm start), seed-cfp.mjs, set-platform.mjs, with-java.mjs
 tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 ```
 
-Three routes off one hash router (`src/lib/router.ts`): `#/` the form, `#/review`
-for any role-holder, `#/admin` for admins. Roles live in `reviewers/{uid}`;
-`roleGrants/{email}` holds an invitation until its holder first signs in.
+**It is a platform: everything hangs under `cfps/{cfpId}`, where the id is the
+slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
+are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
+the account), `signInLinks` (a platform-wide throttle) and `config/platform` sit
+outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
+
+Routes off one hash router (`src/lib/router.ts`): `#/` the public listing, `#/new`
+to start one, then `#/c/{cfpId}` the form, `/review` for any role-holder and
+`/admin/{tab}` for admins. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
+`owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
+until its holder first visits. Only an owner archives, deletes or is written by
+`createCfp`; `owner` is deliberately not grantable through `grantRole`.
+
+Every callable takes a `cfpId` and checks the caller's role against *that* id.
+It is never inferred from the caller's memberships — somebody on two CFPs would
+get whichever the server guessed.
 
 A speaker may hold several talks (`LIMITS.maxTalksPerSpeaker`), switched by the
 picker on the form. Only the talk half is cleared between them — the speaker
@@ -63,12 +79,12 @@ Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
 the built-in and an organiser's override are the same shape and one editor
 prefills from either. Overrides live in `config/email.templates`; a half-written
 one (blank subject or body) falls back rather than sending a blank.
-Addresses are data (`config/email`, `setEmailSettings`); the **key is Secret
-Manager only** (`functions/src/secrets.ts`) and never enters Firestore or a
-response — the client sees `keyHint`, the last four characters. Resend's domain
+Addresses are data (`cfps/{id}/config/email`, `setEmailSettings`); the **key is
+Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
+a response — the client sees `keyHint`, the last four characters. Resend's domain
 API is proxied by `emailDomain` so the DNS records can be shown and re-checked.
 `functions/.env*` is only a fallback. `config` is *not* world-readable as a
-collection — the rule names `cfp`.
+collection — the rule names `confirmForm`.
 
 ## Style
 
@@ -185,9 +201,33 @@ collection — the rule names `cfp`.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.
+- **One Resend account serves the whole platform.** So `emailDomain` is pinned to
+  the domain id stored on *this* CFP — `list` used to return the account's whole
+  roster, and `get`/`verify` took an id straight from the caller. `setEmailSettings`
+  refuses a sender that is not on that domain, or one organiser could write as
+  another organiser's verified event.
+- **`config/platform` is unwritable by anyone.** `publicUrl` is the origin of
+  every link the server mails, sign-in links included, and those are bearer
+  credentials — an organiser who could edit it could aim other people's sign-in
+  mail at a host they own. It moves with `scripts/set-platform.mjs`, not a form.
+- **The committee reads `speakerSnapshot`, never `speakers/{uid}`.** The profile
+  is global and a role is per CFP, so reading profiles would hand every committee
+  on the platform the whole speaker directory — and would show a bio edited in
+  2028 to the 2026 committee. `submitProposal` freezes the copy; it deliberately
+  omits the email address.
+- **A collection-group query cannot be filtered by ancestor.** `recomputeAggregates`
+  and the "where you help out" listing both are one, so `reviews` and `members`
+  carry a denormalised `cfpId`/`uid` that the rules pin to the path on write.
+  Both need a `COLLECTION_GROUP` entry in `firestore.indexes.json` `fieldOverrides`
+  — a single-field index is `COLLECTION`-scoped by default, and the emulator does
+  not enforce indexes, so this only fails in production.
+- **`archived` is a boolean that is always written, never an absent timestamp.**
+  Absence-testing does not work inside a `list` rule: `keys().hasAny`, `in` and
+  `get(k, null)` all read true for every document, so an archived CFP stayed on
+  the public listing. The timestamp beside it is for display only.
 - **An image answer is a fact about the bucket, not a value the browser sends.**
-  The file goes straight to `headshots/{uid}/{key}`, which the rules confine to
-  its owner, and `respondToDecision` asks the bucket what is there rather than
+  The file goes straight to `cfps/{cfpId}/headshots/{uid}/{key}`, which the rules
+  confine to its owner, and `respondToDecision` asks the bucket what is there rather than
   believing the answer it was handed. A forged path is worth nothing.
 - **Organisers read headshots through `headshotImage`, which returns the bytes.**
   Storage rules cannot read Firestore, so the committee cannot be named there.

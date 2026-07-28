@@ -5,29 +5,29 @@ import { SelectField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n';
 import { adminError } from '../../lib/errors';
 import { grantRole, loadCommittee, revokeRole, type Person } from '../../lib/roles';
-import { ROLES, type Role } from '@shared/enums';
+import { GRANTABLE_ROLES, type GrantableRole } from '@shared/cfp';
 import type { RoleGrant } from '@shared/types';
 import { Result } from './Result';
 
-export function Committee({ user }: { user: User }) {
+export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
   const { t } = useI18n();
   const [people, setPeople] = useState<Person[]>([]);
   const [pending, setPending] = useState<RoleGrant[]>([]);
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<Role>('reviewer');
+  const [role, setRole] = useState<GrantableRole>('reviewer');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
     try {
-      const committee = await loadCommittee();
+      const committee = await loadCommittee(cfpId);
       setPeople(committee.people);
       setPending(committee.pending);
     } catch (e) {
       setError(adminError(e, t));
     }
-  }, [t]);
+  }, [cfpId, t]);
 
   useEffect(() => {
     void refresh();
@@ -38,7 +38,7 @@ export function Committee({ user }: { user: User }) {
     setNote('');
     setError('');
     try {
-      const { data } = await grantRole({ email, role });
+      const { data } = await grantRole({ cfpId, email, role });
       setNote(data.applied ? t.admin.granted(data.email) : t.admin.invited(data.email));
       setEmail('');
       await refresh();
@@ -54,7 +54,7 @@ export function Committee({ user }: { user: User }) {
     setNote('');
     setError('');
     try {
-      await revokeRole({ email: target });
+      await revokeRole({ cfpId, email: target });
       setNote(t.admin.revoked(target));
       await refresh();
     } catch (e) {
@@ -113,7 +113,7 @@ export function Committee({ user }: { user: User }) {
         <SelectField
           label={t.admin.roleLabel}
           value={role}
-          options={ROLES.map((r) => ({ value: r, label: t.enums.role[r] }))}
+          options={GRANTABLE_ROLES.map((r) => ({ value: r, label: t.enums.role[r] }))}
           onChange={setRole}
           required
           disabled={busy}

@@ -5,7 +5,8 @@ export const en = {
 
   app: {
     title: 'Call for Proposals',
-    event: 'DevFest Montréal 2026',
+    /** Shown above the title when no CFP is open — otherwise its name goes here. */
+    event: 'Calls for proposals',
     signIn: 'Sign in to submit',
     signInHint: 'We use your Google account so you can come back and edit your draft.',
     signInEmailTitle: 'No Google account?',
@@ -35,6 +36,52 @@ export const en = {
     admin: 'Admin',
     forbidden: 'That page is not available to your account.',
     backToForm: 'Go to your proposal',
+  },
+
+  platform: {
+    title: 'Open calls for proposals',
+    help: 'Pick one to submit a talk. Organisers can start their own.',
+    none: 'No calls are open right now.',
+    yours: 'Yours',
+    yoursHelp: 'Including private and archived ones, which nobody else can list.',
+    helping: 'Where you help out',
+    helpingHelp: 'Calls somebody else runs that you have been invited onto.',
+    create: 'Start a call for proposals',
+    createTitle: 'A new call for proposals',
+    createHelp: 'You can change any of this afterwards, apart from the address.',
+    nameLabel: 'Name',
+    nameHelp: 'What speakers will see, and what your emails are signed with.',
+    addressLabel: 'Address',
+    addressHelp: 'Where it lives. Lower case, digits and hyphens. It cannot be changed later.',
+    addressPreview: 'It will be at {url}',
+    visibilityLabel: 'Who can find it',
+    visibilityPublic: 'Public — listed on this page for anyone to find',
+    visibilityPrivate: 'Private — reachable only by its link, and not listed here',
+    visibilityHelp: 'Private means unlisted, not secret: anyone with the link can read it.',
+    opensLabel: 'Opens',
+    closesLabel: 'Closes',
+    submit: 'Create it',
+    creating: 'Creating…',
+    signInFirst: 'Sign in to start a call for proposals.',
+    signInAction: 'Sign in to get started',
+    notFound: 'There is no call for proposals at this address.',
+    back: 'All calls',
+    archived: 'Archived',
+    private: 'Private',
+    closesOn: 'Closes {date}',
+    opensOn: 'Opens {date}',
+    closed: 'Closed',
+    errors: {
+      taken: 'That address is taken. Try another.',
+      idFormat: 'Lower case letters, digits and single hyphens only.',
+      idLength: 'That address is too short or too long.',
+      nameEmpty: 'It needs a name.',
+      nameLong: 'That name is too long.',
+      visibility: 'Choose who can find it.',
+      dates: 'It would close before it opens.',
+      limit: 'You have reached the limit on calls for proposals.',
+      unverified: 'Verify your email address first, then reload this page.',
+    } as Record<string, string>,
   },
 
   window: {
@@ -209,6 +256,7 @@ export const en = {
       withdrawn: 'Withdrawn',
     },
     role: {
+      owner: 'Owner',
       reviewer: 'Reviewer',
       admin: 'Admin',
     },
@@ -322,6 +370,34 @@ export const en = {
     lastAdmin: 'That is the only admin left — give someone else the role first.',
     badInput: 'Check the email address and the dates.',
 
+    identity: 'This call for proposals',
+    identityHelp: 'The name is what speakers see and what your emails are signed with.',
+    identityName: 'Name',
+    identityVisibility: 'Who can find it',
+    identitySave: 'Save',
+    identitySaved: 'Saved.',
+    identityAddress: 'Its address is {url} — that part cannot be changed.',
+
+    archive: 'Archiving',
+    archiveHelp:
+      'An archived call is read-only and drops off the public list. Everything stays where it is, and you can bring it back.',
+    archiveAction: 'Archive it',
+    archiveConfirm:
+      'Archive this call? Nobody will be able to submit, and it disappears from the public list.',
+    archived: 'Archived. It is read-only now.',
+    unarchiveAction: 'Bring it back',
+    unarchived: 'Back in service.',
+    ownerOnly: 'Only an owner can do this.',
+
+    danger: 'Deleting',
+    dangerHelp:
+      'This destroys every proposal, review, photo and email record. It is other people’s writing as well as yours, and it cannot be undone.',
+    dangerNeedsArchive: 'Archive it first. Deleting is deliberately two steps.',
+    dangerConfirmLabel: 'Type {id} to confirm',
+    dangerAction: 'Delete permanently',
+    dangerConfirm: 'Delete this call for proposals and everything in it? There is no undo.',
+    dangerDeleting: 'Deleting…',
+
     window: 'Submission window',
     opensAtLabel: 'Opens',
     closesAtLabel: 'Closes',
@@ -405,6 +481,7 @@ export const en = {
     emailReplyTo: 'Reply-to',
     emailFromHelp:
       'Must be on a domain verified with Resend, or every message fails. Put a display name in angle brackets: DevFest Montréal <cfp@example.org>.',
+    emailDomainFirst: 'Add your sending domain above before setting an address.',
     emailDomainMismatch:
       'You are sending from {sender}, but the domain verified with Resend is {verified}. Resend verifies an exact domain, so this will queue and then fail at send.',
     emailSaveSender: 'Save address',

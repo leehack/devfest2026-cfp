@@ -13,9 +13,11 @@ import {
 import { SubmitPage } from './pages/SubmitPage';
 import { AdminPage } from './pages/AdminPage';
 import { ReviewPage } from './pages/ReviewPage';
+import { HomePage } from './pages/HomePage';
+import { NewCfpPage } from './pages/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
-import { navigate, usePlace, type AdminTab, type Route } from './lib/router';
+import { href, navigate, usePlace, type Place, type Route } from './lib/router';
 import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
 import {
   arrivingFromLink,
@@ -25,7 +27,7 @@ import {
   requestSignInLink,
 } from './lib/signIn';
 import { TextField } from './components/fields';
-import type { Role } from '@shared/enums';
+import type { CfpRole } from '@shared/cfp';
 
 export function App() {
   const [locale, setLocale] = useState<Locale>(detectLocale);
@@ -33,8 +35,9 @@ export function App() {
   const [authReady, setAuthReady] = useState(false);
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
-  const { route, tab } = usePlace();
-  const { role, ready: roleReady } = useRole(user);
+  const place = usePlace();
+  const { route, cfpId } = place;
+  const { role, ready: roleReady } = useRole(user, cfpId);
 
   const t = dictionaries[locale];
 
@@ -42,6 +45,12 @@ export function App() {
     document.documentElement.lang = locale;
     localStorage.setItem('cfp.locale', locale);
   }, [locale]);
+
+  // The tab is how someone finds this among twenty others, so it names the CFP
+  // they are actually on rather than whichever one the HTML was written for.
+  useEffect(() => {
+    document.title = cfp?.name ? `${cfp.name} — ${t.app.title}` : t.app.title;
+  }, [cfp, t]);
 
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);
@@ -52,11 +61,17 @@ export function App() {
   // back to a form still rendering the old one. Speakers never change route, so
   // this costs them nothing.
   useEffect(() => {
-    loadCfpWindow()
+    if (!cfpId) {
+      setCfp(null);
+      setCfpReady(true);
+      return;
+    }
+    setCfpReady(false);
+    loadCfpWindow(cfpId)
       .then(setCfp)
       .catch(() => setCfp(null))
       .finally(() => setCfpReady(true));
-  }, [route]);
+  }, [route, cfpId]);
 
   const i18n = useMemo(() => ({ locale, t, setLocale }), [locale, t]);
 
@@ -64,11 +79,19 @@ export function App() {
     <I18nContext.Provider value={i18n}>
       {/* The form is prose you write, so it keeps a readable measure. Admin and
           review are tables you scan, and 46rem on a wide screen wasted it. */}
-      <div className={route === 'form' ? 'page' : 'page page--wide'}>
+      <div className={route === 'form' || route === 'new' ? 'page' : 'page page--wide'}>
         <header className="header">
           <div>
-            <p className="header__event">{t.app.event}</p>
-            <h1 className="header__title">{t.app.title}</h1>
+            {/* The way back out, everywhere but the page it leads to. The home
+                page needs no eyebrow: it would only repeat its own title. */}
+            {route !== 'home' && (
+              <p className="header__event">
+                <a className="header__home" href={href({ route: 'home' })}>
+                  {t.platform.back}
+                </a>
+              </p>
+            )}
+            <h1 className="header__title">{cfp?.name ?? t.app.title}</h1>
           </div>
           <div className="header__right">
             <button
@@ -86,13 +109,13 @@ export function App() {
           </div>
         </header>
 
-        {role && <Nav route={route} role={role} />}
+        {role && cfpId && <Nav route={route} cfpId={cfpId} role={role} />}
 
         <main className="main">
           {!authReady || !cfpReady ? (
             <p className="muted">{t.app.loading}</p>
           ) : (
-            <Routed route={route} tab={tab} user={user} cfp={cfp} role={role} roleReady={roleReady} />
+            <Routed place={place} user={user} cfp={cfp} role={role} roleReady={roleReady} />
           )}
         </main>
       </div>
@@ -100,9 +123,9 @@ export function App() {
   );
 }
 
-function Nav({ route, role }: { route: Route; role: Role }) {
+function Nav({ route, cfpId, role }: { route: Route; cfpId: string; role: CfpRole }) {
   const { t } = useI18n();
-  const tabs: Route[] = role === 'admin' ? ['form', 'review', 'admin'] : ['form', 'review'];
+  const tabs: Route[] = role === 'reviewer' ? ['form', 'review'] : ['form', 'review', 'admin'];
 
   return (
     <nav className="nav" aria-label={t.app.title}>
@@ -112,9 +135,9 @@ function Nav({ route, role }: { route: Route; role: Role }) {
           type="button"
           className={`nav__tab${tab === route ? ' nav__tab--on' : ''}`}
           aria-current={tab === route ? 'page' : undefined}
-          onClick={() => navigate(tab)}
+          onClick={() => navigate(tab, { cfpId })}
         >
-          {t.nav[tab]}
+          {t.nav[tab as 'form' | 'review' | 'admin']}
         </button>
       ))}
     </nav>
@@ -122,11 +145,10 @@ function Nav({ route, role }: { route: Route; role: Role }) {
 }
 
 interface RoutedProps {
-  route: Route;
-  tab: AdminTab;
+  place: Place;
   user: User | null;
   cfp: CfpWindow | null;
-  role: Role | null;
+  role: CfpRole | null;
   roleReady: boolean;
 }
 
@@ -134,36 +156,65 @@ interface RoutedProps {
  * Only the form is gated on the submission window — reviewing happens after it
  * closes, and an admin needs the window controls precisely when it is shut.
  */
-function Routed({ route, tab, user, cfp, role, roleReady }: RoutedProps) {
+function Routed({ place, user, cfp, role, roleReady }: RoutedProps) {
   const { t } = useI18n();
+  const { route, cfpId, tab } = place;
 
-  if (route === 'form') return <FormRoute user={user} cfp={cfp} />;
+  if (route === 'home') return <HomePage user={user} />;
+  if (route === 'new') {
+    return user ? <NewCfpPage user={user} /> : <SignIn cfp={null} cfpId={null} organising />;
+  }
 
-  if (!user) return <SignIn cfp={cfp} />;
+  // Every route below is inside a CFP, and `currentPlace` will not produce one
+  // without an id — but the narrowing has to be written down for the compiler.
+  if (!cfpId) return <HomePage user={user} />;
+
+  // A link to a CFP that does not exist, or was deleted. Distinguishable from a
+  // closed one, and worth saying plainly rather than rendering an empty form.
+  if (!cfp) {
+    return (
+      <div className="panel">
+        <p>{t.platform.notFound}</p>
+        <button type="button" className="btn btn--primary" onClick={() => navigate('home')}>
+          {t.platform.back}
+        </button>
+      </div>
+    );
+  }
+
+  if (route === 'form') return <FormRoute user={user} cfp={cfp} cfpId={cfpId} />;
+
+  if (!user) return <SignIn cfp={cfp} cfpId={cfpId} />;
   if (!roleReady) return <p className="muted">{t.app.loading}</p>;
 
-  const allowed = route === 'admin' ? role === 'admin' : role !== null;
+  const allowed = route === 'admin' ? role === 'admin' || role === 'owner' : role !== null;
   if (!allowed) {
     return (
       <div className="panel">
         <p>{t.nav.forbidden}</p>
-        <button type="button" className="btn btn--primary" onClick={() => navigate('form')}>
+        <button
+          type="button"
+          className="btn btn--primary"
+          onClick={() => navigate('form', { cfpId })}
+        >
           {t.nav.backToForm}
         </button>
       </div>
     );
   }
 
-  return route === 'admin' ? <AdminPage user={user} tab={tab} /> : <ReviewPage user={user} />;
+  return route === 'admin' ? (
+    <AdminPage user={user} cfpId={cfpId} cfpName={cfp.name} tab={tab} role={role!} />
+  ) : (
+    <ReviewPage user={user} cfpId={cfpId} />
+  );
 }
 
-function FormRoute({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) {
+function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cfpId: string }) {
   const { t, locale } = useI18n();
 
-  // Fail closed: without a config document we cannot prove the window is open,
-  // and the rules would reject every write anyway.
-  if (!cfp) {
-    return <div className="panel">{t.window.notOpen}</div>;
+  if (cfp.state === 'archived') {
+    return <div className="panel">{t.window.closed}</div>;
   }
 
   if (cfp.state === 'before') {
@@ -192,12 +243,26 @@ function FormRoute({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) 
     );
   }
 
-  if (!user) return <SignIn cfp={cfp} />;
+  if (!user) return <SignIn cfp={cfp} cfpId={cfpId} />;
 
-  return <SubmitPage user={user} cfp={cfp} />;
+  return <SubmitPage user={user} cfp={cfp} cfpId={cfpId} />;
 }
 
-function SignIn({ cfp }: { cfp: CfpWindow | null }) {
+/**
+ * `cfpId` decides only who the sign-in mail comes from and where the link lands.
+ * Signing in at the home page is the platform's own, and is how somebody with no
+ * CFP yet gets an account.
+ */
+export function SignIn({
+  cfp,
+  cfpId,
+  organising = false,
+}: {
+  cfp: CfpWindow | null;
+  cfpId: string | null;
+  /** Signing in to start a CFP rather than to submit to one — different words. */
+  organising?: boolean;
+}) {
   const { t, locale } = useI18n();
   const [failed, setFailed] = useState(false);
   const [email, setEmail] = useState(pendingEmail);
@@ -240,7 +305,7 @@ function SignIn({ cfp }: { cfp: CfpWindow | null }) {
     setSending(true);
     setLinkError('');
     try {
-      await requestSignInLink({ email: email.trim(), locale });
+      await requestSignInLink({ email: email.trim(), locale, ...(cfpId ? { cfpId } : {}) });
       // Stored before the confirmation is shown: this is what lets the link
       // complete without asking again when it is opened in this browser.
       rememberPendingEmail(email.trim());
@@ -270,14 +335,14 @@ function SignIn({ cfp }: { cfp: CfpWindow | null }) {
 
   return (
     <div className="panel">
-      <p>{t.app.signInHint}</p>
+      <p>{organising ? t.platform.signInFirst : t.app.signInHint}</p>
       {cfp && (
         <p className="muted">
           {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
         </p>
       )}
       <button type="button" className="btn btn--primary" onClick={signIn}>
-        {t.app.signIn}
+        {organising ? t.platform.signInAction : t.app.signIn}
       </button>
       {failed && (
         <p className="field__error" role="alert">

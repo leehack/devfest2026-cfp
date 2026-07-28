@@ -17,6 +17,15 @@ const DOCS = `${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents`
 
 const day = 24 * 60 * 60 * 1000;
 
+/**
+ * The CFP every helper works on unless told otherwise.
+ *
+ * Everything lives under `cfps/{cfpId}` now, so a spec that wants two tenants
+ * side by side passes the second id explicitly — which is exactly what the
+ * cross-tenant spec does.
+ */
+export const CFP_ID = 'devfest-mtl-2026';
+
 async function expectOk(response: Response, what: string) {
   if (!response.ok) throw new Error(`${what} failed: ${response.status} ${await response.text()}`);
 }
@@ -58,27 +67,64 @@ export interface Window {
   paused?: boolean;
 }
 
-export async function setCfpWindow({
-  opensAt = new Date(Date.now() - 30 * day),
-  closesAt = new Date(Date.now() + 30 * day),
-  paused = false,
-}: Window = {}) {
-  await patch('config/cfp', {
+export async function setCfpWindow(
+  {
+    opensAt = new Date(Date.now() - 30 * day),
+    closesAt = new Date(Date.now() + 30 * day),
+    paused = false,
+  }: Window = {},
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}`, {
     paused: { booleanValue: paused },
     opensAt: { timestampValue: opensAt.toISOString() },
     closesAt: { timestampValue: closesAt.toISOString() },
   });
 }
 
-/** Empty backend, CFP open, nobody signed in. */
+/**
+ * A whole CFP, written straight to Firestore.
+ *
+ * The create flow has its own spec; every other spec needs a tenant to hang
+ * documents under, not a re-run of the form. `archived` is always written
+ * because the rules read it as a boolean rather than testing for its absence.
+ */
+export async function seedCfp(
+  cfpId = CFP_ID,
+  {
+    name = 'DevFest Montréal 2026',
+    visibility = 'public',
+    archived = false,
+    ownerUid,
+    ...window
+  }: Window & {
+    name?: string;
+    visibility?: 'public' | 'private';
+    archived?: boolean;
+    ownerUid?: string;
+  } = {},
+) {
+  await patch(`cfps/${cfpId}`, {
+    name: { stringValue: name },
+    visibility: { stringValue: visibility },
+    archived: { booleanValue: archived },
+    reviewsVisible: { booleanValue: false },
+    ownerUids: {
+      arrayValue: { values: ownerUid ? [{ stringValue: ownerUid }] : [] },
+    },
+  });
+  await setCfpWindow(window, cfpId);
+}
+
+/** Empty backend, one CFP open, nobody signed in. */
 export async function reset(window: Window = {}) {
   await Promise.all([clearFirestore(), clearAuth(), clearStorage()]);
-  await setCfpWindow(window);
+  await seedCfp(CFP_ID, window);
 }
 
 /** Leaves the accounts and roles alone — only the review queue is emptied. */
-export async function clearProposals() {
-  const response = await fetch(`${DOCS}/proposals`, {
+export async function clearProposals(cfpId = CFP_ID) {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals`, {
     headers: { authorization: 'Bearer owner' },
   });
   await expectOk(response, 'clearProposals');
@@ -94,24 +140,55 @@ export async function clearProposals() {
 }
 
 /** Moves a proposal without going through the callable — puts a test where the UI cannot. */
-export async function setProposalStatusDirect(id: string, status: string) {
-  await patch(`proposals/${id}`, { status: { stringValue: status } });
+export async function setProposalStatusDirect(id: string, status: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}/proposals/${id}`, { status: { stringValue: status } });
 }
 
-export async function setReviewsVisible(visible: boolean) {
-  await patch('config/cfp', { reviewsVisible: { booleanValue: visible } });
+export async function setReviewsVisible(visible: boolean, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}`, { reviewsVisible: { booleanValue: visible } });
 }
 
 /**
- * A pending role, as the bootstrap script writes the first admin. `claimRole`
- * turns it into a `reviewers/{uid}` document on that person's first sign-in.
+ * A pending invitation. `claimRole` turns it into a `members/{uid}` document on
+ * that person's first visit to this CFP.
  */
-export async function inviteRole(email: string, role: 'reviewer' | 'admin') {
-  await patch(`roleGrants/${email}`, {
+export async function inviteRole(
+  email: string,
+  role: 'reviewer' | 'admin' | 'owner',
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/roleGrants/${email}`, {
+    cfpId: { stringValue: cfpId },
     email: { stringValue: email },
     role: { stringValue: role },
-    createdBy: { stringValue: 'bootstrap' },
+    createdBy: { stringValue: 'seed' },
   });
+}
+
+/**
+ * A role straight onto the membership, skipping the claim.
+ *
+ * `inviteRole` cannot grant `owner` — the callable refuses it, deliberately —
+ * so an owner-only test (archive, delete) has to be seeded here.
+ */
+export async function seedMember(
+  uid: string,
+  role: 'reviewer' | 'admin' | 'owner',
+  cfpId = CFP_ID,
+  email = `${uid}@example.org`,
+) {
+  await patch(`cfps/${cfpId}/members/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    uid: { stringValue: uid },
+    role: { stringValue: role },
+    email: { stringValue: email },
+    grantedBy: { stringValue: 'seed' },
+  });
+  if (role === 'owner') {
+    await patch(`cfps/${cfpId}`, {
+      ownerUids: { arrayValue: { values: [{ stringValue: uid }] } },
+    });
+  }
 }
 
 /**
@@ -145,6 +222,18 @@ export async function createAccount(who: {
 }
 
 /**
+ * Which CFP a callable is being asked about, unless the caller named one.
+ *
+ * Every callable takes a `cfpId`, and almost every spec is about the single
+ * seeded tenant — writing it out at each of the ~60 call sites would say
+ * nothing. The cross-tenant spec passes its own and this leaves it alone.
+ */
+function withCfp(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  return 'cfpId' in data ? data : { cfpId: CFP_ID, ...data };
+}
+
+/**
  * Calls a callable straight, as a given user.
  *
  * The callable is the enforcement point, so "the UI does not offer the button"
@@ -160,7 +249,7 @@ export async function callAs(
   const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${idToken}` },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: withCfp(data) }),
   });
   const body = await response.json().catch(() => ({}));
   return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
@@ -180,7 +269,7 @@ export async function callPublic(
   const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: withCfp(data) }),
   });
   const body = await response.json().catch(() => ({}));
   return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
@@ -191,15 +280,39 @@ export async function callJson(idToken: string, name: string, data: unknown): Pr
   const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${idToken}` },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: withCfp(data) }),
   });
   await expectOk(response, `${name} call`);
   return (await response.json())?.result ?? {};
 }
 
+/**
+ * One reviewer's score, written straight to Firestore.
+ *
+ * `cfpId` goes on the document because the aggregate recompute is a
+ * collection-group query and cannot be filtered by ancestor. Seeding it is what
+ * lets a test prove the filter is there: without it, a recompute on one CFP
+ * would sweep this in.
+ */
+export async function seedReview(
+  proposalId: string,
+  reviewerUid: string,
+  score: number,
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/reviews/${reviewerUid}`, {
+    cfpId: { stringValue: cfpId },
+    score: { integerValue: String(score) },
+    conflictOfInterest: { booleanValue: false },
+  });
+}
+
 /** The reviews on one proposal, for asserting which talk a score landed on. */
-export async function readReviews(proposalId: string): Promise<Record<string, any>[]> {
-  const response = await fetch(`${DOCS}/proposals/${proposalId}/reviews`, {
+export async function readReviews(
+  proposalId: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any>[]> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals/${proposalId}/reviews`, {
     headers: { authorization: 'Bearer owner' },
   });
   if (!response.ok) return [];
@@ -286,10 +399,11 @@ export async function storeObjectDirect(name: string, contentType: string, body 
 }
 
 /**
- * Where the functions believe this app is reachable, without going through the
- * callable.
+ * Where the functions believe this app is reachable, without going through a
+ * callable — there is none, because this is platform config rather than any one
+ * organiser's to set.
  *
- * `publicUrl()` falls back to `CFP_PUBLIC_URL` and then to a `.web.app` address
+ * `loadPlatform` falls back to `CFP_PUBLIC_URL` and then to a `.web.app` address
  * derived from the project id, so a test that follows a link the server built
  * only lands back on the app if something has said where the app is. Leaving
  * that to the environment meant it worked on a laptop with `.env.local` and
@@ -297,7 +411,7 @@ export async function storeObjectDirect(name: string, contentType: string, body 
  */
 export async function setPublicUrlDirect(url: string) {
   await expectOk(
-    await fetch(`${DOCS}/config/email?updateMask.fieldPaths=publicUrl`, {
+    await fetch(`${DOCS}/config/platform?updateMask.fieldPaths=publicUrl`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
       body: JSON.stringify({ fields: { publicUrl: { stringValue: url } } }),
@@ -306,10 +420,25 @@ export async function setPublicUrlDirect(url: string) {
   );
 }
 
+/**
+ * The domain this CFP has registered with Resend.
+ *
+ * Written directly because the callable that does it spends the API key against
+ * the real Resend, which no test should. `setEmailSettings` refuses a sender
+ * that is not on it — one Resend account serves the whole platform, so without
+ * that check any organiser could write as somebody else's verified domain.
+ */
+export async function setSendingDomainDirect(domain: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}/config/email`, {
+    domain: { stringValue: domain },
+    domainId: { stringValue: `dom-${domain}` },
+  });
+}
+
 /** The organiser's confirmation questions, without going through the callable. */
-export async function setConfirmFormDirect(fields: unknown[]) {
+export async function setConfirmFormDirect(fields: unknown[], cfpId = CFP_ID) {
   await expectOk(
-    await fetch(`${DOCS}/config/confirmForm`, {
+    await fetch(`${DOCS}/cfps/${cfpId}/config/confirmForm`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
       // Written whole rather than through `patch`, which cannot express an
@@ -335,8 +464,8 @@ function encode(value: unknown): Record<string, unknown> {
 }
 
 /** Puts a queue row into a state the UI cannot reach, e.g. mid-send. */
-export async function setEmailStatusDirect(logId: string, status: string) {
-  await patch(`emailLog/${logId}`, { status: { stringValue: status } });
+export async function setEmailStatusDirect(logId: string, status: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}/emailLog/${logId}`, { status: { stringValue: status } });
 }
 
 /**
@@ -350,17 +479,42 @@ export async function seedProposal(
     speakerUid,
     title,
     status,
+    cfpId = CFP_ID,
+    speaker = {},
     ...rest
   }: {
     speakerUid: string;
     title: string;
     status: string;
+    cfpId?: string;
+    /** Overrides on the snapshot the committee reads — see `SpeakerSnapshot`. */
+    speaker?: Record<string, unknown>;
     /** Anything else on the document, so a spec can seed the awkward cases. */
     [field: string]: unknown;
   },
 ) {
-  await patch(`proposals/${id}`, {
+  await patch(`cfps/${cfpId}/proposals/${id}`, {
+    // Denormalised from the path, and pinned to it by the rules.
+    cfpId: { stringValue: cfpId },
     speakerIds: { arrayValue: { values: [{ stringValue: speakerUid }] } },
+    // What the review card renders. Written by `submitProposal` in the real
+    // flow; seeded here because nothing else on the platform may read a global
+    // speaker profile.
+    speakerSnapshot: {
+      arrayValue: {
+        values: [
+          encode({
+            uid: speakerUid,
+            name: 'Test Speaker',
+            bio: 'x'.repeat(120),
+            basedIn: 'Montréal, QC',
+            socials: [],
+            isGde: false,
+            ...speaker,
+          }),
+        ],
+      },
+    },
     status: { stringValue: status },
     title: { stringValue: title },
     abstract: { stringValue: 'x'.repeat(400) },
@@ -433,8 +587,8 @@ export async function seedSpeaker(
  * shut the collection entirely — so the assertions go through the emulator's
  * owner credential.
  */
-export async function readEmailLog(): Promise<Record<string, any>[]> {
-  const response = await fetch(`${DOCS}/emailLog`, {
+export async function readEmailLog(cfpId = CFP_ID): Promise<Record<string, any>[]> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/emailLog`, {
     headers: { authorization: 'Bearer owner' },
   });
   await expectOk(response, 'readEmailLog');
@@ -460,7 +614,7 @@ export async function waitForEmail(
 
 export async function seedSubmittedProposal(
   id: string,
-  talk: { speakerUid: string; title: string },
+  talk: { speakerUid: string; title: string; cfpId?: string; speaker?: Record<string, unknown> },
 ) {
   await seedProposal(id, { ...talk, status: 'submitted' });
 }
@@ -480,8 +634,8 @@ async function patch(path: string, fields: Record<string, unknown>) {
 }
 
 /** Every proposal, for asserting what actually reached Firestore. */
-export async function readProposals(): Promise<Record<string, any>[]> {
-  const response = await fetch(`${DOCS}/proposals`, {
+export async function readProposals(cfpId = CFP_ID): Promise<Record<string, any>[]> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals`, {
     headers: { authorization: 'Bearer owner' },
   });
   await expectOk(response, 'readProposals');
@@ -495,8 +649,11 @@ export async function readProposal(): Promise<Record<string, any> | null> {
 }
 
 /** By id, since `readProposals` unwraps the fields and drops the document name. */
-export async function readProposalById(id: string): Promise<Record<string, any> | null> {
-  const response = await fetch(`${DOCS}/proposals/${id}`, {
+export async function readProposalById(
+  id: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals/${id}`, {
     headers: { authorization: 'Bearer owner' },
   });
   if (!response.ok) return null;

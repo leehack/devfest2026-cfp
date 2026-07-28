@@ -37,13 +37,16 @@ export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 /**
  * Where one speaker's answer to one image question lives.
  *
- * Fully determined by the two ids, which is the point: the client uploads here
- * and the callable looks here, so there is no path for a speaker to *claim* —
- * and therefore no way to claim somebody else's object as their own answer.
+ * Fully determined by the three ids, which is the point: the client uploads
+ * here and the callable looks here, so there is no path for a speaker to
+ * *claim* — and therefore no way to claim somebody else's object as their own
+ * answer. The CFP comes first so that deleting one is a single prefix rather
+ * than a scan of the bucket.
  */
-export function headshotPath(uid: string, key: string): string {
-  return `headshots/${uid}/${key}`;
+export function headshotPath(cfpId: string, uid: string, key: string): string {
+  return `cfps/${cfpId}/headshots/${uid}/${key}`;
 }
+
 
 /**
  * Both languages, because the whole app is bilingual. French is allowed to be

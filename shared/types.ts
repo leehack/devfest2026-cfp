@@ -14,11 +14,11 @@ import type {
   Level,
   ProposalStatus,
   ResolvedLanguage,
-  Role,
   Score,
   SocialPlatform,
 } from './enums';
 import type { Answers } from './confirmForm';
+import type { CfpRole, Visibility } from './cfp';
 
 export interface Social {
   platform: SocialPlatform;
@@ -51,6 +51,78 @@ export interface Speaker {
   updatedAt: unknown;
 }
 
+/**
+ * `cfps/{cfpId}` — one call for proposals, and the tenant everything else
+ * hangs under. The document id is the slug; see `shared/cfp.ts`.
+ */
+export interface Cfp {
+  name: string;
+  /** Denormalised from `members`, so "the CFPs I own" is one query. */
+  ownerUids: string[];
+  /** `private` means unlisted, not secret — anyone with the link can read it. */
+  visibility: Visibility;
+  /**
+   * Read-only from here on, and off the public listing.
+   *
+   * A boolean the rules read, and a timestamp beside it for display. Testing
+   * whether the timestamp is absent does not work inside a `list` rule — with
+   * `keys().hasAny`, with `in` and with `get(k, null)` alike it answers true for
+   * every document — so the flag is always present and always written with it.
+   */
+  archived: boolean;
+  archivedAt?: unknown;
+
+  // The submission window, which used to be a singleton `config/cfp`.
+  opensAt: unknown;
+  closesAt: unknown;
+  paused: boolean;
+  reviewsVisible: boolean;
+
+  createdBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+/**
+ * `cfps/{cfpId}/members/{uid}` — who may do what, within one CFP.
+ *
+ * `cfpId` and `uid` are denormalised onto the document so that "every CFP I am
+ * on" is a single collection-group query. Written only by the role callables.
+ */
+export interface CfpMember {
+  cfpId: string;
+  uid: string;
+  role: CfpRole;
+  /** Copied from the auth token at claim time, for display on the admin page. */
+  email: string;
+  name?: string;
+  createdAt: unknown;
+  /** uid of the member whose grant this claimed. */
+  grantedBy: string;
+}
+
+/**
+ * The speaker as the committee read them, frozen onto the proposal at
+ * submission.
+ *
+ * Two problems, one answer. A profile belongs to the account rather than to any
+ * one talk, so a bio edited in 2028 would otherwise rewrite what the 2026
+ * committee actually judged. And `speakers/{uid}` is global while a role is per
+ * CFP — without this, letting reviewers read profiles would hand every
+ * committee on the platform the whole speaker directory.
+ */
+export interface SpeakerSnapshot {
+  uid: string;
+  name: string;
+  bio: string;
+  company?: string;
+  jobTitle?: string;
+  basedIn: string;
+  socials: Social[];
+  isGde: boolean;
+  pastTalks?: string;
+}
+
 export interface Acks {
   noTravelSupport: boolean;
   coc: boolean;
@@ -74,8 +146,21 @@ export interface ProposalAggregate {
 }
 
 export interface Proposal {
+  /**
+   * Denormalised from the path. Redundant for reading — the document already
+   * lives under its CFP — but `collectionGroup` queries cannot be filtered by
+   * ancestor, and the aggregate recompute is one.
+   */
+  cfpId: string;
+
   /** Array, so co-presenters are supported without reshaping the document. */
   speakerIds: string[];
+
+  /**
+   * The speakers as the committee reads them, frozen at submission. Parallel to
+   * `speakerIds`. Absent on a draft, which nobody but its author ever sees.
+   */
+  speakerSnapshot?: SpeakerSnapshot[];
 
   title: string;
   abstract: string;
@@ -110,29 +195,15 @@ export interface Proposal {
 }
 
 /**
- * `reviewers/{uid}` — who holds a role. Written only by the role callables, so
- * the collection cannot be self-served; see firestore.rules.
- */
-export interface Reviewer {
-  role: Role;
-  /** Copied from the auth token at claim time, for display on the admin page. */
-  email: string;
-  name?: string;
-  createdAt: unknown;
-  /** uid of the admin whose grant this claimed. */
-  grantedBy: string;
-}
-
-/**
- * `roleGrants/{email}` — an invitation, keyed by lowercased email.
+ * `cfps/{cfpId}/roleGrants/{email}` — an invitation, keyed by lowercased email.
  *
  * Roles are granted before the person has ever signed in, so there is no uid to
- * key on yet. `claimRole` turns the grant into a `reviewers/{uid}` document on
- * their first sign-in and records who took it.
+ * key on yet. `claimRole` turns the grant into a `members/{uid}` document on
+ * their first visit and records who took it.
  */
 export interface RoleGrant {
   email: string;
-  role: Role;
+  role: CfpRole;
   createdAt: unknown;
   createdBy: string;
   claimedBy?: string;
@@ -140,12 +211,19 @@ export interface RoleGrant {
 }
 
 /**
- * `proposals/{id}/reviews/{reviewerUid}` — one per reviewer per proposal.
+ * `cfps/{cfpId}/proposals/{id}/reviews/{reviewerUid}` — one per reviewer per
+ * proposal.
  *
  * Keyed by reviewer so nobody can overwrite a colleague's score, and so a
  * reviewer's own document is addressable without a query.
  */
 export interface Review {
+  /**
+   * Denormalised from the path, and pinned to it by the rules. The aggregate
+   * recompute is a `collectionGroup` query, which cannot be filtered by
+   * ancestor — without this it would sweep every CFP's scores into one round.
+   */
+  cfpId: string;
   score: Score;
   /** Excluded from every calculation, including the reviewer's own calibration. */
   conflictOfInterest: boolean;
@@ -154,18 +232,15 @@ export interface Review {
 }
 
 /**
- * The single config document that drives server-side deadline enforcement.
+ * The submission window, which lives on the CFP document itself — it used to be
+ * a singleton `config/cfp`, and a singleton is the one thing a tenant cannot be.
  * Read by firestore.rules and by submitProposal; never client-writable.
+ *
+ * `reviewsVisible` gates cross-reviewer visibility of scores (§7 — reviewers
+ * must not see each other's until the round closes, to avoid anchoring), and is
+ * enforced in the rules rather than only in the review UI.
  */
-export interface CfpConfig {
-  opensAt: unknown;
-  closesAt: unknown;
-  /** Flips the form into read-only mode ahead of the deadline if needed. */
-  paused: boolean;
-  /**
-   * Gates cross-reviewer visibility of scores (§7 — reviewers must not see each
-   * other's scores until the round closes, to avoid anchoring). Enforced in
-   * firestore.rules, not just in the review UI.
-   */
-  reviewsVisible: boolean;
-}
+export type CfpConfig = Pick<
+  Cfp,
+  'opensAt' | 'closesAt' | 'paused' | 'reviewsVisible' | 'archivedAt'
+>;

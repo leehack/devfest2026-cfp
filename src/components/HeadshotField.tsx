@@ -19,6 +19,7 @@ import { useI18n } from '../i18n';
 import { FORM_LIMITS, IMAGE_TYPES, headshotPath } from '@shared/confirmForm';
 
 interface Props {
+  cfpId: string;
   uid: string;
   fieldKey: string;
   label: string;
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export function HeadshotField({
+  cfpId,
   uid,
   fieldKey,
   label,
@@ -53,7 +55,7 @@ export function HeadshotField({
   useEffect(() => {
     if (!uploaded) return;
     let cancelled = false;
-    getDownloadURL(ref(storage, headshotPath(uid, fieldKey)))
+    getDownloadURL(ref(storage, headshotPath(cfpId, uid, fieldKey)))
       .then((url) => {
         if (!cancelled) setPreview(url);
       })
@@ -63,7 +65,7 @@ export function HeadshotField({
     return () => {
       cancelled = true;
     };
-  }, [uploaded, uid, fieldKey]);
+  }, [uploaded, cfpId, uid, fieldKey]);
 
   async function choose(file: File) {
     // Checked here as well as in `storage.rules`, because a rule rejection
@@ -80,7 +82,7 @@ export function HeadshotField({
     setProblem('');
     setBusy(true);
     try {
-      const target = ref(storage, headshotPath(uid, fieldKey));
+      const target = ref(storage, headshotPath(cfpId, uid, fieldKey));
       await uploadBytes(target, file, { contentType: file.type });
       setPreview(await getDownloadURL(target));
       onUploaded();

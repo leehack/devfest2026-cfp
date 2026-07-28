@@ -1,10 +1,16 @@
 rules_version = '2';
 
-// DevFest Montréal 2026 CFP — Firestore security rules (spec §6).
+// CFP platform — Firestore security rules (spec §6).
 //
 // The rules below are the enforcement boundary, not the UI. The Firestore SDK
 // queries straight from the browser, so anything the UI merely hides is still
 // readable unless it is denied here.
+//
+// Tenancy is in the path, not in a field. Everything that belongs to one call
+// for proposals lives under `cfps/{cfpId}/…`, so a cross-tenant read is not a
+// forgotten `where` clause — it is a different path, and there is no path that
+// spans two CFPs. Rules are not filters, and could not have saved us from the
+// alternative.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -29,88 +35,313 @@ service cloud.firestore {
       return request.auth.uid;
     }
 
-    function config() {
-      return get(/databases/$(database)/documents/config/cfp).data;
+    // ------------------------------------------------------- tenant helpers
+    //
+    // Every one of these takes the cfpId from the path. `get()` is cached per
+    // request, so naming the same document from six helpers costs one read.
+
+    function cfp(cfpId) {
+      return get(/databases/$(database)/documents/cfps/$(cfpId)).data;
+    }
+
+    // Reads the boolean, never the timestamp beside it. Asking whether
+    // `archivedAt` is absent — with `keys().hasAny`, with `in`, or with
+    // `get(k, null)` — is silently *true* for every document inside a `list`
+    // rule, so a listing would keep serving archived CFPs while every
+    // single-document check denied them. An always-present boolean has no
+    // absent case to get wrong.
+    function archived(cfpId) {
+      return cfp(cfpId).archived == true;
     }
 
     // §6: "Deadline enforcement happens server-side, not by disabling the
     // submit button." request.time is the server's clock, not the client's.
-    function cfpOpen() {
-      let c = config();
+    // An archived CFP is closed whatever its dates say — archiving is how an
+    // organiser stops a round without having to edit the window.
+    function cfpOpen(cfpId) {
+      let c = cfp(cfpId);
       return c.paused == false
+        && c.archived == false
         && request.time >= c.opensAt
         && request.time < c.closesAt;
     }
 
-    // Holding a role means having a `reviewers` document; admins hold one too,
-    // distinguished by `role`. Anyone signed in may submit a talk, so speakers
-    // need no record at all.
-    function isReviewer() {
-      return signedIn()
-        && exists(/databases/$(database)/documents/reviewers/$(uid()));
+    function memberPath(cfpId) {
+      return /databases/$(database)/documents/cfps/$(cfpId)/members/$(uid());
     }
 
-    function isAdmin() {
-      return isReviewer()
-        && get(/databases/$(database)/documents/reviewers/$(uid())).data.role == 'admin';
+    // Holding any role on this CFP. Anyone signed in may submit a talk, so
+    // speakers need no membership at all.
+    function isReviewer(cfpId) {
+      return signedIn() && exists(memberPath(cfpId));
     }
 
-    // Keys the client may never write, on create or update. `status` and
-    // `aggregate` are function-writable only; the rest are set during selection
-    // and scheduling.
-    function protectedKeys() {
-      return [
-        'status', 'aggregate', 'submittedAt', 'confirmDeadline',
-        'confirmedAt', 'assignedLanguage', 'confirmAnswers'
-      ];
+    function roleOn(cfpId) {
+      return get(memberPath(cfpId)).data.role;
     }
 
-    function touchesProtected() {
-      return request.resource.data.diff(resource.data)
-        .affectedKeys().hasAny(protectedKeys());
+    // `owner` outranks `admin` everywhere admin is enough. The distinction only
+    // matters for archiving, deleting and changing who owns the thing, and
+    // those all go through callables rather than through these rules.
+    function isAdmin(cfpId) {
+      return isReviewer(cfpId) && roleOn(cfpId) in ['admin', 'owner'];
     }
 
-    function isSpeakerOn(doc) {
-      return signedIn() && uid() in doc.speakerIds;
-    }
+    // ------------------------------------------------------------------ cfps
 
-    // ---------------------------------------------------------------- config
+    match /cfps/{cfpId} {
 
-    // The form needs the open/close dates to render its own state, before
-    // anyone has signed in — so `cfp` is public, and only `cfp`. A rule granting
-    // the whole collection would hand out every config document added later;
-    // `config/email` holds the organisers' addresses and reaches the admin page
-    // through the emailQueue callable instead. Writes go through a function.
-    match /config/{docId} {
+      // Anyone, signed in or not. `private` means unlisted, not secret: the
+      // whole point of it is that a link works. Hiding the document from
+      // somebody holding its id would break the feature, not protect it.
+      allow get: if true;
+
+      // Listing is the public directory, so it is the one that has to be
+      // narrow.
+      //
+      // A `list` rule is evaluated against the *query*, not against the
+      // documents it would return — `resource.data` here holds only the fields
+      // the query filters on, and naming any other raises. So this reads as a
+      // requirement on the caller: a listing must carry
+      // `where('visibility','==','public').where('archived','==',false)`, or it
+      // is refused outright. Rules are not filters; this is how they make the
+      // client bring one.
+      //
+      // The second clause is the same bargain for an owner finding their own,
+      // including the private and archived: `where('ownerUids','array-contains',uid)`.
+      allow list: if (resource.data.visibility == 'public'
+                      && resource.data.archived == false)
+        || (signedIn() && uid() in resource.data.ownerUids);
+
+      // Created, renamed, archived and deleted through callables. A client that
+      // could write here could make itself an owner, which is the root of every
+      // other permission in this file.
+      allow write: if false;
+
+      // --------------------------------------------------------- membership
+
+      // A member reads their own document to know they hold a role; seeing the
+      // whole committee is an admin matter.
+      match /members/{memberUid} {
+        allow get: if signedIn() && (memberUid == uid() || isReviewer(cfpId));
+        allow list: if isAdmin(cfpId);
+        allow write: if false;
+      }
+
+      // Pending invitations, keyed by email because a role is assigned before
+      // the person has ever signed in. Holds addresses, so admins only.
+      match /roleGrants/{email} {
+        allow get, list: if isAdmin(cfpId);
+        allow write: if false;
+      }
+
+      // ------------------------------------------------------------- config
+
       // `confirmForm` is the set of questions an accepted speaker is about to
       // answer, so they have to be able to read it — but only once signed in,
       // since it says nothing useful to a stranger and may name sponsors or
       // logistics that are not public yet. `email` stays shut: it holds the key
       // hint and the templates, which reach an admin through a callable.
-      allow read: if docId == 'cfp' || (docId == 'confirmForm' && signedIn());
-      allow write: if false;
+      //
+      // The submission window is not here. It lives on the CFP document, which
+      // is public — the form has to render its own state before anyone signs in.
+      match /config/{docId} {
+        allow read: if docId == 'confirmForm' && signedIn();
+        allow write: if false;
+      }
+
+      // ----------------------------------------------------------- proposals
+
+      match /proposals/{proposalId} {
+
+        function isSpeakerOn(doc) {
+          return signedIn() && uid() in doc.speakerIds;
+        }
+
+        // Rules are evaluated against every document a query returns, so an
+        // applicant's `where('speakerIds', 'array-contains', uid)` lookup passes
+        // while an unconstrained listing of the collection is denied on the
+        // first foreign document.
+        //
+        // A draft was never handed to anybody. Someone may have typed "I am
+        // burning out and want to talk about it" into a pitch and thought better
+        // of sending it — the committee has no claim on that, so reviewers see a
+        // proposal only once its author submitted it. Committee-side queries
+        // must therefore carry `where('status', '!=', 'draft')`.
+        allow get, list: if isSpeakerOn(resource.data)
+          || (isReviewer(cfpId) && resource.data.status != 'draft');
+
+        // Exactly the author, not "the author plus anyone they name".
+        //
+        // The field stays an array because co-presenters are in the data model
+        // (§6), but naming someone is a claim about *them*: it hands them write
+        // access to this document, and — since a speaker may not review their
+        // own talk — silently disqualifies them from reviewing it. Neither
+        // should be possible without their consent, so when co-presenters are
+        // built they get an invitation callable and this rule relaxes to match.
+        //
+        // `cfpId` is pinned to the path. It is denormalised for the aggregate's
+        // collection-group query, and a document claiming to belong to another
+        // CFP would be counted into that CFP's scores.
+        allow create: if signedIn()
+          && cfpOpen(cfpId)
+          && request.resource.data.speakerIds == [uid()]
+          && request.resource.data.get('cfpId', '') == cfpId
+          // The only status a client may ever write, and only at creation.
+          && request.resource.data.status == 'draft'
+          && !request.resource.data.keys().hasAny([
+               'aggregate', 'submittedAt', 'confirmDeadline',
+               'confirmedAt', 'assignedLanguage', 'speakerSnapshot'
+             ]);
+
+        // Keys the client may never write, on create or update. `status` and
+        // `aggregate` are function-writable only; the rest are set during
+        // selection and scheduling. `speakerSnapshot` is what the committee
+        // read, so the person being judged is exactly the wrong author for it.
+        function touchesProtected() {
+          return request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'cfpId', 'status', 'aggregate', 'submittedAt', 'confirmDeadline',
+            'confirmedAt', 'assignedLanguage', 'confirmAnswers', 'speakerSnapshot'
+          ]);
+        }
+
+        // Nothing the committee has started reading may still be changing under
+        // them. Before that point a submitted proposal is still the speaker's to
+        // improve — the deadline is what closes it, not the act of submitting.
+        function beforeReview() {
+          return resource.data.status == 'draft' || resource.data.status == 'submitted';
+        }
+
+        // Alive, but being judged or already decided.
+        function underConsideration() {
+          return resource.data.status in ['under_review', 'accepted', 'confirmed', 'waitlisted'];
+        }
+
+        // Travel plans change for reasons that have nothing to do with the talk,
+        // and they carry no weight in the score — so they stay editable after
+        // the content freezes, and after the window closes.
+        function onlyLogistics() {
+          return request.resource.data.diff(resource.data)
+            .affectedKeys().hasOnly(['attendance', 'updatedAt']);
+        }
+
+        allow update: if signedIn()
+          // Must already be a speaker on this proposal — prevents writing
+          // yourself onto someone else's document.
+          && isSpeakerOn(resource.data)
+          // The cast is fixed once the document exists — see `create` above.
+          && request.resource.data.speakerIds == resource.data.speakerIds
+          // The draft -> submitted transition is done by the submitProposal
+          // function, which runs with admin credentials and bypasses these rules.
+          && !touchesProtected()
+          && !archived(cfpId)
+          && ((cfpOpen(cfpId) && beforeReview()) || (underConsideration() && onlyLogistics()));
+
+        // Withdrawal is a status change, handled by a function. Hard deletes
+        // would break the emailLog audit trail. Deleting a whole CFP is a
+        // callable using admin credentials, which bypasses this.
+        allow delete: if false;
+
+        // ----------------------------------------------------------- reviews
+        //
+        // §6: "Applicants must never be able to read the reviews subcollection."
+        // Note there is no applicant clause anywhere in this block — the only
+        // readers are reviewers, and only of their own document until the round
+        // closes (§7, anchoring).
+        match /reviews/{reviewerUid} {
+
+          // Reviewers and admins may also submit talks, which puts them on both
+          // sides of this subcollection. §6 says an applicant must never read
+          // the reviews of their own proposal, and that outranks any role — so
+          // this gate is applied to reads and writes alike, admins included.
+          function proposal() {
+            return get(/databases/$(database)/documents/cfps/$(cfpId)/proposals/$(proposalId)).data;
+          }
+
+          function speaksOnThis() {
+            return signedIn() && uid() in proposal().speakerIds;
+          }
+
+          // Nothing to score on a draft nobody submitted, or on one its author
+          // took back. Without this a review could be attached to either, and
+          // would then count towards the aggregate.
+          function scorable() {
+            return proposal().status != 'draft' && proposal().status != 'withdrawn';
+          }
+
+          function ownReview() {
+            return isReviewer(cfpId) && reviewerUid == uid() && !speaksOnThis();
+          }
+
+          allow get: if !speaksOnThis()
+            && (ownReview()
+                || (isReviewer(cfpId) && cfp(cfpId).reviewsVisible == true)
+                || isAdmin(cfpId));
+          allow list: if !speaksOnThis()
+            && ((isReviewer(cfpId) && cfp(cfpId).reviewsVisible == true) || isAdmin(cfpId));
+
+          // Each reviewer writes only their own document, so nobody can
+          // overwrite a colleague's score.
+          //
+          // `cfpId` is pinned to the path for the same reason as on the
+          // proposal: `recomputeAggregates` reaches these through a
+          // collection-group query, which cannot be filtered by ancestor, so a
+          // review claiming another CFP would land in that CFP's totals.
+          allow create, update: if ownReview()
+            && scorable()
+            && !archived(cfpId)
+            && request.resource.data.get('cfpId', '') == cfpId
+            && request.resource.data.score is int
+            && request.resource.data.score >= 1
+            && request.resource.data.score <= 4
+            && request.resource.data.conflictOfInterest is bool
+            && (!('comment' in request.resource.data)
+                || (request.resource.data.comment is string
+                    && request.resource.data.comment.size() <= 2000));
+
+          allow delete: if false;
+        }
+      }
+
+      // -------------------------------------------------------- email log
+
+      // Written by the email pipeline (admin SDK) only. Contains applicant
+      // addresses, so it is not client-readable at all.
+      match /emailLog/{logId} {
+        allow read, write: if false;
+      }
     }
 
-    // --------------------------------------------------------- sign-in links
-
-    // How many links an address has asked for lately. Nobody signs in to read
-    // it, and its contents would say who has been trying to — the callable
-    // holds the only handle on it.
-    match /signInLinks/{hash} {
-      allow read, write: if false;
+    // --------------------------------------------------- every CFP I am on
+    //
+    // The one query that deliberately spans tenants, and it returns only the
+    // caller's own membership documents:
+    // `collectionGroup('members').where('uid','==',uid)`.
+    //
+    // Matched on the field rather than on `{memberUid}`, even though the two
+    // hold the same value. A collection-group query does not bind the path
+    // wildcard the way a document read does, so the id comparison is denied for
+    // every document — which is why `uid` is denormalised onto the member.
+    match /{path=**}/members/{memberUid} {
+      allow list: if signedIn() && resource.data.uid == uid();
     }
 
     // --------------------------------------------------------------- speakers
 
+    // Global, because a profile belongs to the account rather than to any one
+    // talk — nobody should retype their bio for every CFP they apply to.
+    //
+    // Which is exactly why nobody else may read it. A role is per CFP; a
+    // profile is not, so "reviewers may read speakers" would hand every
+    // committee on the platform the whole directory. The committee reads
+    // `speakerSnapshot` on the proposal instead, which is scoped to their own
+    // CFP and frozen at the moment they were asked to judge it.
     match /speakers/{speakerId} {
       function ownProfile() {
         return signedIn() && speakerId == uid();
       }
 
-      // Reviewers see speaker context on the review card — §7 is explicit that
-      // this is not a blind review.
-      allow get: if ownProfile() || isReviewer();
-      allow list: if isReviewer();
+      allow get, list: if ownProfile();
 
       allow create: if ownProfile()
         && request.resource.data.email == request.auth.token.email;
@@ -119,160 +350,21 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // -------------------------------------------------------------- proposals
+    // --------------------------------------------------------- sign-in links
 
-    match /proposals/{proposalId} {
-
-      // Rules are evaluated against every document a query returns, so an
-      // applicant's `where('speakerIds', 'array-contains', uid)` lookup passes
-      // while an unconstrained listing of the collection is denied on the first
-      // foreign document. Rules are not filters: the client must carry that
-      // where-clause or the whole query fails.
-      //
-      // A draft was never handed to anybody. Someone may have typed "I am
-      // burning out and want to talk about it" into a pitch and thought better
-      // of sending it — the committee has no claim on that, so reviewers see a
-      // proposal only once its author submitted it. Committee-side queries must
-      // therefore carry `where('status', '!=', 'draft')`.
-      allow get, list: if isSpeakerOn(resource.data)
-        || (isReviewer() && resource.data.status != 'draft');
-
-      // Exactly the author, not "the author plus anyone they name".
-      //
-      // The field stays an array because co-presenters are in the data model
-      // (§6), but naming someone is a claim about *them*: it hands them write
-      // access to this document, and — since a speaker may not review their own
-      // talk — silently disqualifies them from reviewing it. Neither should be
-      // possible without their consent, so when co-presenters are built they get
-      // an invitation callable and this rule relaxes to match. Until then the
-      // write surface stays shut.
-      allow create: if signedIn()
-        && cfpOpen()
-        && request.resource.data.speakerIds == [uid()]
-        // The only status a client may ever write, and only at creation.
-        && request.resource.data.status == 'draft'
-        && !request.resource.data.keys().hasAny([
-             'aggregate', 'submittedAt', 'confirmDeadline',
-             'confirmedAt', 'assignedLanguage'
-           ]);
-
-      // Nothing the committee has started reading may still be changing under
-      // them. Before that point a submitted proposal is still the speaker's to
-      // improve — the deadline is what closes it, not the act of submitting.
-      function beforeReview() {
-        return resource.data.status == 'draft' || resource.data.status == 'submitted';
-      }
-
-      // Alive, but being judged or already decided.
-      function underConsideration() {
-        return resource.data.status in ['under_review', 'accepted', 'confirmed', 'waitlisted'];
-      }
-
-      // Travel plans change for reasons that have nothing to do with the talk,
-      // and they carry no weight in the score — so they stay editable after the
-      // content freezes, and after the window closes.
-      function onlyLogistics() {
-        return request.resource.data.diff(resource.data)
-          .affectedKeys().hasOnly(['attendance', 'updatedAt']);
-      }
-
-      allow update: if signedIn()
-        // Must already be a speaker on this proposal — prevents writing
-        // yourself onto someone else's document.
-        && isSpeakerOn(resource.data)
-        // The cast is fixed once the document exists — see `create` above.
-        && request.resource.data.speakerIds == resource.data.speakerIds
-        // The draft -> submitted transition is done by the submitProposal
-        // function, which runs with admin credentials and bypasses these rules.
-        && !touchesProtected()
-        && ((cfpOpen() && beforeReview()) || (underConsideration() && onlyLogistics()));
-
-      // Withdrawal is a status change, handled by a function. Hard deletes
-      // would break the emailLog audit trail.
-      allow delete: if false;
-
-      // ------------------------------------------------------------- reviews
-      //
-      // §6: "Applicants must never be able to read the reviews subcollection."
-      // Note there is no applicant clause anywhere in this block — the only
-      // readers are reviewers, and only of their own document until the round
-      // closes (§7, anchoring).
-      match /reviews/{reviewerUid} {
-
-        // Reviewers and admins may also submit talks, which puts them on both
-        // sides of this subcollection. §6 says an applicant must never read the
-        // reviews of their own proposal, and that outranks any role — so this
-        // gate is applied to reads and writes alike, admins included.
-        // get() is cached per request, so naming the parent once costs one read
-        // however many of these are evaluated.
-        function proposal() {
-          return get(/databases/$(database)/documents/proposals/$(proposalId)).data;
-        }
-
-        function speaksOnThis() {
-          return signedIn() && uid() in proposal().speakerIds;
-        }
-
-        // Nothing to score on a draft nobody submitted, or on one its author
-        // took back. Without this a review could be attached to either, and
-        // would then count towards the aggregate.
-        function scorable() {
-          return proposal().status != 'draft' && proposal().status != 'withdrawn';
-        }
-
-        function ownReview() {
-          return isReviewer() && reviewerUid == uid() && !speaksOnThis();
-        }
-
-        allow get: if !speaksOnThis()
-          && (ownReview() || (isReviewer() && config().reviewsVisible == true) || isAdmin());
-        allow list: if !speaksOnThis()
-          && ((isReviewer() && config().reviewsVisible == true) || isAdmin());
-
-        // Each reviewer writes only their own document, so nobody can
-        // overwrite a colleague's score.
-        allow create, update: if ownReview()
-          && scorable()
-          && request.resource.data.score is int
-          && request.resource.data.score >= 1
-          && request.resource.data.score <= 4
-          && request.resource.data.conflictOfInterest is bool
-          && (!('comment' in request.resource.data)
-              || (request.resource.data.comment is string
-                  && request.resource.data.comment.size() <= 2000));
-
-        allow delete: if false;
-      }
+    // How many links an address has asked for lately. Platform-wide rather than
+    // per CFP: the throttle protects the sending domain's reputation, which is
+    // one thing however many CFPs are running. Nobody signs in to read it, and
+    // its contents would say who has been trying to.
+    match /signInLinks/{hash} {
+      allow read, write: if false;
     }
 
-    // -------------------------------------------------------------- reviewers
+    // ------------------------------------------------------- platform config
 
-    // A reviewer needs to read their own document to know they hold a role, so
-    // `get` is open to any signed-in user for their own id only. Seeing the
-    // whole committee is an admin matter.
-    match /reviewers/{reviewerId} {
-      allow get: if signedIn() && (reviewerId == uid() || isReviewer());
-      allow list: if isAdmin();
-      // Written only by the role callables. Letting a client write here would
-      // make the collection self-serving, and it is the root of every other
-      // permission in this file.
-      allow write: if false;
-    }
-
-    // --------------------------------------------------------------- grants
-
-    // Pending invitations, keyed by email because a role is assigned before the
-    // person has ever signed in. Holds addresses, so admins only.
-    match /roleGrants/{email} {
-      allow get, list: if isAdmin();
-      allow write: if false;
-    }
-
-    // --------------------------------------------------------------- emailLog
-
-    // Written by the email pipeline (admin SDK) only. Contains applicant
-    // addresses, so it is not client-readable at all.
-    match /emailLog/{logId} {
+    // `config/platform` holds the site's own URL, which only the functions need
+    // in order to build links. Nothing here is client-readable.
+    match /config/{docId} {
       allow read, write: if false;
     }
 

@@ -38,10 +38,12 @@ function Step({ done, title, children }: { done: boolean; title: string; childre
 }
 
 export function EmailSetup({
+  cfpId,
   keyHint,
   domainId,
   onKeySet,
 }: {
+  cfpId: string;
   keyHint: string;
   domainId: string;
   onKeySet: (hint: string) => void;
@@ -60,21 +62,14 @@ export function EmailSetup({
   const refresh = useCallback(async () => {
     if (!keyHint) return;
     try {
-      const { data } = await emailDomain({ action: 'list' });
-      const found = data.domains ?? [];
-      // The list endpoint omits the DNS records, and those are the whole point
-      // of this panel — so fetch the active one in full.
-      const target = found.find((d) => d.id === domainId) ?? found[0];
-      if (target) {
-        const { data: full } = await emailDomain({ action: 'get', domainId: target.id });
-        setDomains(found.map((d) => (d.id === target.id && full.domain ? full.domain : d)));
-      } else {
-        setDomains(found);
-      }
+      // At most one: `list` returns the domain this CFP registered and nothing
+      // else, because the Resend account is shared across the whole platform.
+      const { data } = await emailDomain({ cfpId, action: 'list' });
+      setDomains(data.domains ?? []);
     } catch (e) {
       setError(resendError(e, t));
     }
-  }, [domainId, keyHint, t]);
+  }, [cfpId, keyHint, t]);
 
   useEffect(() => {
     void refresh();
@@ -120,7 +115,7 @@ export function EmailSetup({
           disabled={busy || !apiKey.trim()}
           onClick={() =>
             run(async () => {
-              const { data } = await setEmailSecret({ apiKey: apiKey.trim() });
+              const { data } = await setEmailSecret({ cfpId, apiKey: apiKey.trim() });
               // Out of the page as soon as it is stored; it is not ours to keep.
               setApiKey('');
               onKeySet(data.keyHint);
@@ -156,7 +151,7 @@ export function EmailSetup({
               disabled={busy || !name.trim()}
               onClick={() =>
                 run(async () => {
-                  await emailDomain({ action: 'add', domain: name.trim() });
+                  await emailDomain({ cfpId, action: 'add', domain: name.trim() });
                   await refresh();
                   return t.admin.emailDomainAdded;
                 })
@@ -206,7 +201,7 @@ export function EmailSetup({
               disabled={busy}
               onClick={() =>
                 run(async () => {
-                  const { data } = await emailDomain({ action: 'verify', domainId: active.id });
+                  const { data } = await emailDomain({ cfpId, action: 'verify' });
                   await refresh();
                   return data.domain?.status === 'verified'
                     ? t.admin.emailDomainVerified

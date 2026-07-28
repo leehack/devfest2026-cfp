@@ -7,7 +7,7 @@ export const fr: Dictionary = {
 
   app: {
     title: 'Appel à conférences',
-    event: 'DevFest Montréal 2026',
+    event: 'Appels à conférences',
     signIn: 'Connectez-vous pour soumettre',
     signInHint:
       'Nous utilisons votre compte Google afin que vous puissiez revenir modifier votre brouillon.',
@@ -38,6 +38,54 @@ export const fr: Dictionary = {
     admin: 'Administration',
     forbidden: 'Cette page n’est pas accessible avec votre compte.',
     backToForm: 'Aller à votre proposition',
+  },
+
+  platform: {
+    title: 'Appels à conférences ouverts',
+    help: 'Choisissez-en un pour proposer une conférence. Les organisateurs peuvent lancer le leur.',
+    none: 'Aucun appel n’est ouvert pour le moment.',
+    yours: 'Les vôtres',
+    yoursHelp: 'Y compris les appels privés et archivés, que personne d’autre ne peut lister.',
+    helping: 'Où vous prêtez main-forte',
+    helpingHelp: 'Les appels tenus par d’autres auxquels vous avez été invité.',
+    create: 'Lancer un appel à conférences',
+    createTitle: 'Un nouvel appel à conférences',
+    createHelp: 'Tout est modifiable par la suite, sauf l’adresse.',
+    nameLabel: 'Nom',
+    nameHelp: 'Ce que verront les conférenciers, et la signature de vos courriels.',
+    addressLabel: 'Adresse',
+    addressHelp:
+      'Où il se trouve. Minuscules, chiffres et traits d’union. Elle ne pourra plus être changée.',
+    addressPreview: 'Il sera à {url}',
+    visibilityLabel: 'Qui peut le trouver',
+    visibilityPublic: 'Public — listé sur cette page, visible de tous',
+    visibilityPrivate: 'Privé — accessible uniquement par son lien, et non listé ici',
+    visibilityHelp:
+      'Privé veut dire non listé, pas secret : toute personne ayant le lien peut le consulter.',
+    opensLabel: 'Ouvre',
+    closesLabel: 'Ferme',
+    submit: 'Créer',
+    creating: 'Création…',
+    signInFirst: 'Connectez-vous pour lancer un appel à conférences.',
+    signInAction: 'Se connecter pour commencer',
+    notFound: 'Il n’y a aucun appel à conférences à cette adresse.',
+    back: 'Tous les appels',
+    archived: 'Archivé',
+    private: 'Privé',
+    closesOn: 'Ferme le {date}',
+    opensOn: 'Ouvre le {date}',
+    closed: 'Terminé',
+    errors: {
+      taken: 'Cette adresse est déjà prise. Essayez-en une autre.',
+      idFormat: 'Minuscules, chiffres et traits d’union simples uniquement.',
+      idLength: 'Cette adresse est trop courte ou trop longue.',
+      nameEmpty: 'Il lui faut un nom.',
+      nameLong: 'Ce nom est trop long.',
+      visibility: 'Choisissez qui peut le trouver.',
+      dates: 'Il fermerait avant d’ouvrir.',
+      limit: 'Vous avez atteint la limite d’appels à conférences.',
+      unverified: 'Vérifiez d’abord votre adresse courriel, puis rechargez cette page.',
+    } as Record<string, string>,
   },
 
   window: {
@@ -214,6 +262,7 @@ export const fr: Dictionary = {
       withdrawn: 'Retirée',
     },
     role: {
+      owner: 'Propriétaire',
       reviewer: 'Évaluateur',
       admin: 'Administrateur',
     },
@@ -326,6 +375,36 @@ export const fr: Dictionary = {
     lastAdmin: 'C’est le seul administrateur restant — accordez d’abord le rôle à quelqu’un d’autre.',
     badInput: 'Vérifiez l’adresse courriel et les dates.',
 
+    identity: 'Cet appel à conférences',
+    identityHelp:
+      'Le nom est ce que voient les conférenciers et ce qui signe vos courriels.',
+    identityName: 'Nom',
+    identityVisibility: 'Qui peut le trouver',
+    identitySave: 'Enregistrer',
+    identitySaved: 'Enregistré.',
+    identityAddress: 'Son adresse est {url} — cette partie ne peut pas changer.',
+
+    archive: 'Archivage',
+    archiveHelp:
+      'Un appel archivé est en lecture seule et disparaît de la liste publique. Tout reste en place, et vous pouvez le réactiver.',
+    archiveAction: 'Archiver',
+    archiveConfirm:
+      'Archiver cet appel ? Plus personne ne pourra soumettre, et il disparaîtra de la liste publique.',
+    archived: 'Archivé. Il est désormais en lecture seule.',
+    unarchiveAction: 'Le réactiver',
+    unarchived: 'De nouveau en service.',
+    ownerOnly: 'Seul un propriétaire peut faire cela.',
+
+    danger: 'Suppression',
+    dangerHelp:
+      'Ceci détruit chaque proposition, évaluation, photo et trace de courriel. Ce sont les écrits d’autres personnes autant que les vôtres, et c’est irréversible.',
+    dangerNeedsArchive: 'Archivez-le d’abord. La suppression se fait délibérément en deux temps.',
+    dangerConfirmLabel: 'Tapez {id} pour confirmer',
+    dangerAction: 'Supprimer définitivement',
+    dangerConfirm:
+      'Supprimer cet appel à conférences et tout ce qu’il contient ? Il n’y a pas de retour en arrière.',
+    dangerDeleting: 'Suppression…',
+
     window: 'Période de soumission',
     opensAtLabel: 'Ouverture',
     closesAtLabel: 'Fermeture',
@@ -410,6 +489,7 @@ export const fr: Dictionary = {
     emailReplyTo: 'Répondre à',
     emailFromHelp:
       'L’adresse doit être sur un domaine vérifié auprès de Resend, sinon tous les envois échouent. Le nom affiché se met entre chevrons : DevFest Montréal <cfp@exemple.org>.',
+    emailDomainFirst: 'Ajoutez votre domaine d’envoi ci-dessus avant de définir une adresse.',
     emailDomainMismatch:
       'Vous envoyez depuis {sender}, mais le domaine vérifié auprès de Resend est {verified}. Resend vérifie un domaine exact : le message sera mis en file puis échouera à l’envoi.',
     emailSaveSender: 'Enregistrer l’adresse',

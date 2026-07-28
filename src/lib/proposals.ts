@@ -24,17 +24,29 @@ import type { SessionizeProfile } from '@shared/sessionize';
 import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
 
 export interface CfpWindow {
+  name: string;
   opensAt: Date;
   closesAt: Date;
   paused: boolean;
-  state: 'before' | 'open' | 'paused' | 'closed';
+  /** Archived reads as closed, and is checked first — see `assertCfpOpen`. */
+  state: 'before' | 'open' | 'paused' | 'closed' | 'archived';
 }
 
-export async function loadCfpWindow(): Promise<CfpWindow | null> {
-  const snap = await getDoc(doc(db, 'config', 'cfp'));
+/**
+ * The window, read off the CFP document itself. Null means there is no such CFP
+ * — a mistyped link, or one that has been deleted.
+ */
+export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
+  const snap = await getDoc(doc(db, 'cfps', cfpId));
   if (!snap.exists()) return null;
 
-  const data = snap.data() as { opensAt: Timestamp; closesAt: Timestamp; paused: boolean };
+  const data = snap.data() as {
+    opensAt: Timestamp;
+    closesAt: Timestamp;
+    paused: boolean;
+    archived?: boolean;
+    name?: string;
+  };
   const opensAt = data.opensAt.toDate();
   const closesAt = data.closesAt.toDate();
   const now = Date.now();
@@ -42,11 +54,12 @@ export async function loadCfpWindow(): Promise<CfpWindow | null> {
   // Advisory only. The rules and submitProposal re-check against the server
   // clock — this just decides what the page renders.
   let state: CfpWindow['state'] = 'open';
-  if (data.paused) state = 'paused';
+  if (data.archived) state = 'archived';
+  else if (data.paused) state = 'paused';
   else if (now < opensAt.getTime()) state = 'before';
   else if (now >= closesAt.getTime()) state = 'closed';
 
-  return { opensAt, closesAt, paused: data.paused, state };
+  return { name: data.name ?? cfpId, opensAt, closesAt, paused: data.paused, state };
 }
 
 export interface LoadedProposal {
@@ -64,12 +77,13 @@ export interface LoadedProposal {
  * scoped by `array-contains` because the rules deny an unscoped listing.
  */
 export async function loadMyProposals(
+  cfpId: string,
   user: User,
 ): Promise<{ talks: LoadedProposal[]; speaker: Record<string, any> | undefined }> {
   const [snap, speakerSnap] = await Promise.all([
     getDocs(
       query(
-        collection(db, 'proposals'),
+        collection(db, 'cfps', cfpId, 'proposals'),
         where('speakerIds', 'array-contains', user.uid),
         limit(LIMITS.maxTalksPerSpeaker + 1),
       ),
@@ -95,6 +109,7 @@ export async function loadMyProposals(
  * write and never sent again — the rules reject any update that touches it.
  */
 export async function saveDraft(
+  cfpId: string,
   user: User,
   form: FormState,
   proposalId: string | null,
@@ -136,7 +151,7 @@ export async function saveDraft(
 
     if (scope !== 'none') {
       await setDoc(
-        doc(db, 'proposals', proposalId),
+        doc(db, 'cfps', cfpId, 'proposals', proposalId),
         { ...patch, updatedAt: serverTimestamp() },
         { merge: true },
       );
@@ -144,8 +159,11 @@ export async function saveDraft(
     return proposalId;
   }
 
-  const created = await addDoc(collection(db, 'proposals'), {
+  const created = await addDoc(collection(db, 'cfps', cfpId, 'proposals'), {
     ...forWrite(proposalDoc),
+    // Denormalised from the path so a collection-group query can be filtered by
+    // tenant, and pinned to it by the rules so the field cannot lie.
+    cfpId,
     speakerIds: [user.uid],
     // The only status a client ever writes, and only here (§6).
     status: 'draft',
@@ -160,18 +178,18 @@ interface CallableResult {
   alreadySubmitted?: boolean;
 }
 
-export const submitProposal = httpsCallable<{ proposalId: string }, CallableResult>(
+export const submitProposal = httpsCallable<{ cfpId: string; proposalId: string }, CallableResult>(
   functions,
   'submitProposal',
 );
 
-export const withdrawProposal = httpsCallable<{ proposalId: string }, CallableResult>(
+export const withdrawProposal = httpsCallable<{ cfpId: string; proposalId: string }, CallableResult>(
   functions,
   'withdrawProposal',
 );
 
 export const respondToDecision = httpsCallable<
-  { proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
+  { cfpId: string; proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
   CallableResult & { status: 'confirmed' | 'declined' }
 >(functions, 'respondToDecision');
 
@@ -180,8 +198,8 @@ export const respondToDecision = httpsCallable<
  * document read rather than a callable — the speaker's page needs it before it
  * can render the confirmation.
  */
-export async function loadConfirmForm(): Promise<ConfirmForm> {
-  const snap = await getDoc(doc(db, 'config', 'confirmForm'));
+export async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
+  const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
   const fields = snap.exists() ? snap.data().fields : null;
   return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
 }
