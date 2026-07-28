@@ -1123,6 +1123,48 @@ p {
   overflow-wrap: anywhere;
 }
 
+/* A headshot answer: the photo beside the control that changes it, so the
+   thing being replaced is visible while you replace it. */
+.headshot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  align-items: center;
+  margin-top: var(--s-2);
+}
+
+.headshot__preview,
+.headshot__empty {
+  width: 5rem;
+  height: 5rem;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  flex: none;
+}
+
+.headshot__empty {
+  background: var(--surface-2);
+}
+
+.headshot .field__help {
+  margin: var(--s-1) 0 0;
+}
+
+/* Off-screen rather than `display: none`: a hidden file input still has to be
+   clickable from the button that stands in for it. */
+.headshot__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* One question in the editor, boxed so the pile of them stays readable. */
 .formfield {
   margin-bottom: var(--s-5);

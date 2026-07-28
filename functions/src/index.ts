@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
+import { getStorage } from 'firebase-admin/storage';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions';
@@ -31,6 +32,8 @@ import {
 import { validateSettings, type EmailSettings } from '../../shared/emailSettings';
 import {
   EMPTY_FORM,
+  IMAGE_TYPES,
+  headshotPath,
   normaliseForm,
   validateAnswers,
   validateForm,
@@ -325,6 +328,29 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
  * already the speaker's, so the session is the authentication. A one-time token
  * would be a second, weaker credential to leak, expire and support.
  */
+/**
+ * Which image questions this speaker has actually uploaded a file for.
+ *
+ * Asked of the bucket rather than of the browser. The path is derived from the
+ * caller's own uid, so there is nothing here a speaker could point at somebody
+ * else's object — the answer is a fact we look up, not a claim we accept.
+ */
+async function findUploads(form: ConfirmForm, uid: string): Promise<Record<string, string>> {
+  const images = (form.fields ?? []).filter((field) => field.type === 'image');
+  if (images.length === 0) return {};
+
+  const bucket = getStorage().bucket();
+  const found: Record<string, string> = {};
+  await Promise.all(
+    images.map(async (field) => {
+      const path = headshotPath(uid, field.key);
+      const [exists] = await bucket.file(path).exists();
+      if (exists) found[field.key] = path;
+    }),
+  );
+  return found;
+}
+
 /** The organiser's questions, or none. Missing means nothing extra is asked. */
 async function loadConfirmForm(): Promise<ConfirmForm> {
   const snap = await db.doc('config/confirmForm').get();
@@ -355,7 +381,8 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
   let answers: Answers = {};
   if (status === 'confirmed') {
     const form = await loadConfirmForm();
-    const checked = validateAnswers(form, (data.answers ?? {}) as Answers);
+    const uploads = await findUploads(form, uid);
+    const checked = validateAnswers(form, (data.answers ?? {}) as Answers, uploads);
     if (Object.keys(checked.faults).length > 0) {
       throw new HttpsError('invalid-argument', 'Some answers need fixing.', checked.faults);
     }
@@ -387,6 +414,48 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
 
   logger.info('decision answered', { proposalId, uid, status });
   return { ok: true, status };
+});
+
+/**
+ * One speaker's headshot, for an organiser.
+ *
+ * The bucket stays shut to everyone but the owner: Cloud Storage rules cannot
+ * read Firestore, so "and the committee" is not expressible there, and any rule
+ * loose enough to admit a reviewer would admit everybody. Putting a callable in
+ * the path moves the role check somewhere it can actually be made.
+ *
+ * The bytes come back inline rather than as a signed URL. A signed URL would be
+ * cheaper, but `getSignedUrl` has to sign with a private key: the emulator has
+ * none, and a deployed function only manages it by calling IAM `signBlob`, which
+ * needs a role the runtime service account is not granted by default. So the
+ * link would work here and fail on the one machine that matters. Inline also
+ * means no bearer URL for the photo ever exists to be forwarded or logged.
+ * Answers are capped at `FORM_LIMITS.image`, which bounds the response.
+ */
+export const headshotImage = onCall(CALLABLE, async (request) => {
+  await requireAdmin(request, 'view a headshot');
+  const data = (request.data ?? {}) as { speakerUid?: unknown; key?: unknown };
+  const speakerUid = String(data.speakerUid ?? '');
+  const key = String(data.key ?? '');
+  if (!speakerUid || !key) {
+    throw new HttpsError('invalid-argument', 'speakerUid and key are required.');
+  }
+
+  const file = getStorage().bucket().file(headshotPath(speakerUid, key));
+  const [exists] = await file.exists();
+  if (!exists) throw new HttpsError('not-found', 'No headshot for that speaker.');
+
+  // Read from the object rather than trusting the upload rule, because this
+  // string goes into a `data:` URL an organiser's browser will act on. Anything
+  // that is not one of the three image types we accept is refused outright.
+  const [meta] = await file.getMetadata();
+  const contentType = String(meta.contentType ?? '');
+  if (!(IMAGE_TYPES as readonly string[]).includes(contentType)) {
+    throw new HttpsError('failed-precondition', 'That file is not an image.');
+  }
+
+  const [bytes] = await file.download();
+  return { ok: true, dataUrl: `data:${contentType};base64,${bytes.toString('base64')}` };
 });
 
 /**

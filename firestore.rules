@@ -18,8 +18,11 @@ service cloud.firestore {
     // same provider also allows email+password signup, which proves nothing —
     // and roles are granted by address. Without this, anyone could register a
     // colleague's address with a password and pick up their pending grant.
+    // `get` rather than a plain lookup: a token without the claim at all is an
+    // account that has not verified, and reading the property straight off the
+    // map raises instead of answering false.
     function signedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null && request.auth.token.get('email_verified', false) == true;
     }
 
     function uid() {

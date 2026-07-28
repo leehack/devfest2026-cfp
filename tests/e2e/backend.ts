@@ -10,6 +10,8 @@ const PROJECT = 'demo-devfest-cfp';
 const FIRESTORE = 'http://127.0.0.1:8080';
 const AUTH = 'http://127.0.0.1:9099';
 const FUNCTIONS = 'http://127.0.0.1:5001';
+const STORAGE = 'http://127.0.0.1:9199';
+const BUCKET = 'demo-devfest-cfp.appspot.com';
 const REGION = 'northamerica-northeast1';
 const DOCS = `${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents`;
 
@@ -25,6 +27,21 @@ export async function clearFirestore() {
       method: 'DELETE',
     }),
     'clearFirestore',
+  );
+}
+
+/**
+ * The bucket. Not covered by `clearFirestore`, and a headshot left behind by
+ * one test is a headshot the next one sees.
+ */
+export async function clearStorage() {
+  const names = await readStoredObjects();
+  await Promise.all(
+    names.map((name) =>
+      fetch(`${STORAGE}/storage/v1/b/${BUCKET}/o/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      }),
+    ),
   );
 }
 
@@ -55,7 +72,7 @@ export async function setCfpWindow({
 
 /** Empty backend, CFP open, nobody signed in. */
 export async function reset(window: Window = {}) {
-  await Promise.all([clearFirestore(), clearAuth()]);
+  await Promise.all([clearFirestore(), clearAuth(), clearStorage()]);
   await setCfpWindow(window);
 }
 
@@ -220,6 +237,51 @@ export async function clearSignInAllowance() {
         headers: { authorization: 'Bearer owner' },
       }),
     ),
+  );
+}
+
+/**
+ * Object names in the bucket.
+ *
+ * `/storage/v1` rather than `/v0`: the latter goes through `storage.rules`,
+ * which deny listing — so it answers 403, and a helper that swallowed that
+ * returned an empty list. Every "nothing was uploaded" assertion then passed
+ * whether or not anything had been. Errors throw here for the same reason.
+ */
+export async function readStoredObjects(prefix = ''): Promise<string[]> {
+  const response = await fetch(
+    `${STORAGE}/storage/v1/b/${BUCKET}/o?prefix=${encodeURIComponent(prefix)}`,
+  );
+  await expectOk(response, 'readStoredObjects');
+  const { items } = await response.json();
+  return (items ?? []).map((o: { name: string }) => o.name).sort();
+}
+
+/**
+ * Puts an object in the bucket without going through `storage.rules`, so a test
+ * can plant something the rules would have refused and check what the code
+ * behind them does with it.
+ *
+ * Multipart because the emulator only reads a content type out of the metadata
+ * part: a plain `uploadType=media` POST ignores the request's own header and
+ * files everything as `application/octet-stream`, which is not what these tests
+ * are about.
+ */
+export async function storeObjectDirect(name: string, contentType: string, body = 'x') {
+  const parts = [
+    '--B\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n',
+    JSON.stringify({ name, contentType }),
+    `\r\n--B\r\nContent-Type: ${contentType}\r\n\r\n`,
+    body,
+    '\r\n--B--\r\n',
+  ].join('');
+  await expectOk(
+    await fetch(`${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=multipart`, {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/related; boundary=B' },
+      body: parts,
+    }),
+    'storeObjectDirect',
   );
 }
 

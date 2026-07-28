@@ -13,6 +13,7 @@ import {
   loadCommittee,
   loadSpeakers,
   recomputeAggregates,
+  headshotImage,
   revokeRole,
   sendSpeakerMessage,
   setCfpWindow,
@@ -790,8 +791,58 @@ function WriteToSpeaker({ replyTo, onSent }: { replyTo: string; onSent: () => vo
   );
 }
 
+/**
+ * One headshot, fetched only when an organiser asks for it.
+ *
+ * The bucket is closed, so this goes through an admin-only callable that hands
+ * back the bytes. Behind a button rather than eager: the photos arrive inline,
+ * and a page of forty accepted speakers would otherwise pull forty of them —
+ * most of which nobody looks at — every time it loads.
+ */
+function Headshot({ speakerUid, fieldKey }: { speakerUid: string; fieldKey: string }) {
+  const { t } = useI18n();
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function show() {
+    setBusy(true);
+    setError('');
+    try {
+      const { data } = await headshotImage({ speakerUid, key: fieldKey });
+      setUrl(data.dataUrl);
+    } catch (e) {
+      setError(adminError(e, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (url) return <img className="headshot__preview" src={url} alt="" />;
+  return (
+    <>
+      <button type="button" className="btn btn--ghost" disabled={busy} onClick={show}>
+        {busy ? t.app.loading : t.admin.formViewPhoto}
+      </button>
+      {error && (
+        <span className="field__error" role="alert">
+          {error}
+        </span>
+      )}
+    </>
+  );
+}
+
 /** What one speaker answered, labelled by the questions as they stand now. */
-function Answered({ fields, answers }: { fields: ConfirmField[]; answers?: Answers }) {
+function Answered({
+  fields,
+  answers,
+  speakerUid,
+}: {
+  fields: ConfirmField[];
+  answers?: Answers;
+  speakerUid?: string;
+}) {
   const { t, locale } = useI18n();
   if (!answers || fields.length === 0) return null;
 
@@ -806,11 +857,19 @@ function Answered({ fields, answers }: { fields: ConfirmField[]; answers?: Answe
         <div key={field.key}>
           <dt>{localised(field.label, locale)}</dt>
           <dd>
-            {typeof answers[field.key] === 'boolean'
-              ? answers[field.key]
-                ? t.admin.formYes
-                : t.admin.formNo
-              : String(answers[field.key])}
+            {field.type === 'image' ? (
+              speakerUid ? (
+                <Headshot speakerUid={speakerUid} fieldKey={field.key} />
+              ) : null
+            ) : typeof answers[field.key] === 'boolean' ? (
+              answers[field.key] ? (
+                t.admin.formYes
+              ) : (
+                t.admin.formNo
+              )
+            ) : (
+              String(answers[field.key])
+            )}
           </dd>
         </div>
       ))}
@@ -1057,7 +1116,11 @@ function Proposals() {
                 </span>
                 {/* The whole reason for asking. Without it an organiser reads
                     shirt sizes out of the Firestore console. */}
-                <Answered fields={questions} answers={row.confirmAnswers} />
+                <Answered
+                  fields={questions}
+                  answers={row.confirmAnswers}
+                  speakerUid={(row.speakerIds ?? [])[0]}
+                />
               </li>
             ))}
           </ul>

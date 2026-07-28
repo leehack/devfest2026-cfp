@@ -14,7 +14,7 @@
  * counts.
  */
 
-export const FIELD_TYPES = ['text', 'textarea', 'select', 'checkbox'] as const;
+export const FIELD_TYPES = ['text', 'textarea', 'select', 'checkbox', 'image'] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 
 export const FORM_LIMITS = {
@@ -27,7 +27,23 @@ export const FORM_LIMITS = {
   /** What a speaker may write back, by field type. */
   answerText: 200,
   answerTextarea: 2000,
+  /** Bytes. Restated in `storage.rules`, which is what actually enforces it. */
+  image: 5 * 1024 * 1024,
 } as const;
+
+/** What the bucket will take. Restated in `storage.rules` — change both. */
+export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+/**
+ * Where one speaker's answer to one image question lives.
+ *
+ * Fully determined by the two ids, which is the point: the client uploads here
+ * and the callable looks here, so there is no path for a speaker to *claim* —
+ * and therefore no way to claim somebody else's object as their own answer.
+ */
+export function headshotPath(uid: string, key: string): string {
+  return `headshots/${uid}/${key}`;
+}
 
 /**
  * Both languages, because the whole app is bilingual. French is allowed to be
@@ -185,12 +201,30 @@ export type AnswerFaults = Record<string, AnswerProblem>;
 export function validateAnswers(
   form: ConfirmForm,
   answers: Answers,
+  /**
+   * Which image questions actually have an object in the bucket, by field key,
+   * and where. Supplied by the callable, which is the only party that can look
+   * — an uploaded file is a fact about storage, and asking the browser to
+   * assert it would be asking it to mark its own work.
+   */
+  uploads: Record<string, string> = {},
 ): { faults: AnswerFaults; clean: Answers } {
   const faults: AnswerFaults = {};
   const clean: Answers = {};
 
   for (const field of form.fields ?? []) {
     const raw = answers?.[field.key];
+
+    if (field.type === 'image') {
+      const path = uploads[field.key];
+      // Whatever the browser sent for this key is ignored outright.
+      if (!path) {
+        if (field.required) faults[field.key] = 'required';
+        continue;
+      }
+      clean[field.key] = path;
+      continue;
+    }
 
     if (field.type === 'checkbox') {
       const value = raw === true;

@@ -1,13 +1,50 @@
 rules_version = '2';
 
-// Cloud Storage is not used by the submission form: headshots are collected
-// after acceptance (§3), which keeps storage usage proportional to accepted
-// speakers rather than to all ~200 applicants.
+// Headshots, and nothing else.
 //
-// The bucket is locked shut until build order item 2 needs it. Leaving a
-// default-open bucket around is how CFP tooling leaks headshots.
+// Collected after acceptance (§3), so the bucket holds objects for the handful
+// of speakers on the programme rather than for all ~200 applicants — which is
+// both the storage bill and the thing that would leak if this file were wrong.
 service firebase.storage {
   match /b/{bucket}/o {
+
+    // Verified, matching the Firestore rules. A photo of someone's face is
+    // exactly the thing not to hand to an account that has not proved it owns
+    // the address it claims.
+    // `get` rather than a plain lookup: a token without the claim at all is an
+    // account that has not verified, and reading the property straight off the
+    // map raises instead of answering false.
+    function signedIn() {
+      return request.auth != null && request.auth.token.get('email_verified', false) == true;
+    }
+
+    match /headshots/{uid}/{field} {
+
+      // The owner, and only the owner — in both directions.
+      //
+      // Storage rules cannot read Firestore, so "and the committee" cannot be
+      // expressed here: any rule wide enough to let a reviewer in would be wide
+      // enough to let anyone in. Organisers go through the admin-only
+      // `headshotImage` callable instead, which keeps the bucket shut and puts
+      // a function in the path where the role check can happen.
+      allow read: if signedIn() && request.auth.uid == uid;
+
+      // `write` covers replacing and deleting as well, which is what lets
+      // someone swap out a photo they are unhappy with.
+      //
+      // The content type matters because it is what a browser will act on when
+      // an organiser opens the file, and the size because nothing else bounds
+      // what an accepted speaker can put in the bucket.
+      allow write: if signedIn()
+        && request.auth.uid == uid
+        && (request.resource == null || (
+             request.resource.size < 5 * 1024 * 1024
+             && request.resource.contentType.matches('image/(jpeg|png|webp)')
+           ));
+    }
+
+    // Everything else stays shut. A default-open bucket is how CFP tooling
+    // leaks headshots.
     match /{allPaths=**} {
       allow read, write: if false;
     }

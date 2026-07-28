@@ -15,8 +15,10 @@ import {
   reset,
   seedProposal,
   inviteRole,
+  readStoredObjects,
   seedSpeaker,
   setConfirmFormDirect,
+  storeObjectDirect,
 } from './backend';
 import { signInAs, type Identity } from './form';
 
@@ -323,5 +325,142 @@ test.describe('the confirmation questions', () => {
     expect((await readProposalById('p-q'))?.confirmAnswers).toEqual({
       which_hotel_are_you_at: 'The one by the station.',
     });
+  });
+});
+
+/**
+ * The headshot question.
+ *
+ * A photo is the one answer the browser cannot be trusted to report: everything
+ * else is a value the speaker types, but "there is a file" is a fact about the
+ * bucket. So the claims here are that the callable looks rather than listens,
+ * and that the object lands where the rules confine it.
+ */
+test.describe('a headshot question', () => {
+  const PHOTO = {
+    key: 'headshot',
+    type: 'image',
+    label: { en: 'A photo of you' },
+    help: { en: 'Used on the programme.' },
+    required: true,
+  };
+  const FIXTURE = 'tests/fixtures/headshot.png';
+
+  async function accepted() {
+    await reset();
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
+    await seedProposal('p-pic', {
+      speakerUid: speaker.uid,
+      title: 'Sam on shipping',
+      status: 'accepted',
+    });
+    await setConfirmFormDirect([PHOTO]);
+    return speaker;
+  }
+
+  test('a speaker uploads one and it is stored under their own uid', async ({ page }) => {
+    const speaker = await accepted();
+
+    await signInAs(page, SPEAKER, '#/');
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
+    await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
+    await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+
+    // The path is derived from the uid, which is what makes it unclaimable.
+    const path = `headshots/${speaker.uid}/headshot`;
+    expect(await readStoredObjects('headshots/')).toEqual([path]);
+    expect((await readProposalById('p-pic'))?.confirmAnswers).toEqual({ headshot: path });
+  });
+
+  test('a required photo blocks the confirmation until there is one', async ({ page }) => {
+    await accepted();
+
+    await signInAs(page, SPEAKER, '#/');
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
+
+    await expect(page.getByText('This one is needed.')).toBeVisible();
+    expect(await statusOf('p-pic')).toBe('accepted');
+  });
+
+  test('claiming a photo without uploading one gets you nowhere', async () => {
+    const speaker = await accepted();
+
+    // The browser could say anything here; the callable asks the bucket. Both
+    // a plausible path of their own and somebody else's are ignored alike.
+    for (const claimed of [`headshots/${speaker.uid}/headshot`, 'headshots/someone-else/headshot']) {
+      expect(
+        await callAs(speaker.idToken, 'respondToDecision', {
+          proposalId: 'p-pic',
+          response: 'confirm',
+          answers: { headshot: claimed },
+        }),
+        claimed,
+      ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+    }
+    expect(await statusOf('p-pic')).toBe('accepted');
+    expect(await readStoredObjects('headshots/')).toEqual([]);
+  });
+
+  test('an organiser sees the photo, through a callable rather than an open bucket', async ({
+    page,
+  }) => {
+    await accepted();
+    await inviteRole(ADMIN.email, 'admin');
+    await createAccount(ADMIN);
+
+    await signInAs(page, SPEAKER, '#/');
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
+    await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+
+    await signInAs(page, ADMIN, '#/admin');
+    const selected = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'Selected speakers' }),
+    });
+    await selected.getByRole('button', { name: 'View photo' }).click();
+    const photo = selected.locator('img.headshot__preview');
+    await expect(photo).toBeVisible();
+
+    // Inline, so no fetchable address for the photo was handed out along the
+    // way — the bytes came back through the callable that checked the role.
+    await expect(photo).toHaveAttribute('src', /^data:image\/png;base64,/);
+  });
+
+  test('nobody but an admin can read one back', async () => {
+    const speaker = await accepted();
+    await storeObjectDirect(`headshots/${speaker.uid}/headshot`, 'image/png');
+
+    // Including the speaker whose photo it is: the callable is for organisers,
+    // and the owner already has the bucket. Reviewers are refused too — this is
+    // the only door to a headshot, so it is the only place the role is checked.
+    await inviteRole(OTHER.email, 'reviewer');
+    const reviewer = await createAccount(OTHER);
+    await callAs(reviewer.idToken, 'claimRole', {});
+    for (const who of [speaker, reviewer]) {
+      expect(
+        await callAs(who.idToken, 'headshotImage', { speakerUid: speaker.uid, key: 'headshot' }),
+      ).toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
+    }
+  });
+
+  test('an object that is not an image is refused rather than served', async () => {
+    const speaker = await accepted();
+    await inviteRole(ADMIN.email, 'admin');
+    const admin = await createAccount(ADMIN);
+    await callAs(admin.idToken, 'claimRole', {});
+
+    // `storage.rules` refuse this on the way in, so it takes going round them to
+    // plant one. The callable checks anyway, because what it returns goes into
+    // a `data:` URL an organiser's browser will act on.
+    await storeObjectDirect(`headshots/${speaker.uid}/headshot`, 'text/html', '<script>');
+    expect(
+      await callAs(admin.idToken, 'headshotImage', { speakerUid: speaker.uid, key: 'headshot' }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   });
 });

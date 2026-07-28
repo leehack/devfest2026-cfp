@@ -20,6 +20,7 @@ const DATA_DIR = '.emulator-data';
 const FIRESTORE = '127.0.0.1:8080';
 const AUTH = '127.0.0.1:9099';
 const FUNCTIONS = '127.0.0.1:5001';
+const STORAGE = '127.0.0.1:9199';
 
 const children = [];
 let shuttingDown = false;
@@ -52,7 +53,7 @@ function runToCompletion(command, args, options = {}) {
  * Any HTTP response means listening; the functions emulator 404s at the root.
  */
 async function waitForPorts() {
-  const wanted = { firestore: FIRESTORE, auth: AUTH, functions: FUNCTIONS };
+  const wanted = { firestore: FIRESTORE, auth: AUTH, functions: FUNCTIONS, storage: STORAGE };
   await Promise.all(
     Object.entries(wanted).map(async ([name, host]) => {
       for (let i = 0; i < 240; i++) {
@@ -200,7 +201,7 @@ run(
     'firebase',
     'emulators:start',
     '--only',
-    'auth,firestore,functions',
+    'auth,firestore,functions,storage',
     '--project',
     PROJECT,
     '--import',

@@ -185,6 +185,19 @@ collection — the rule names `cfp`.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.
+- **An image answer is a fact about the bucket, not a value the browser sends.**
+  The file goes straight to `headshots/{uid}/{key}`, which the rules confine to
+  its owner, and `respondToDecision` asks the bucket what is there rather than
+  believing the answer it was handed. A forged path is worth nothing.
+- **Organisers read headshots through `headshotImage`, which returns the bytes.**
+  Storage rules cannot read Firestore, so the committee cannot be named there.
+  Not a signed URL: `getSignedUrl` needs a private key the emulator lacks, and a
+  deployed function only signs by calling IAM `signBlob` — a role the runtime
+  service account does not have by default. It would pass here and fail there.
+- **`readStoredObjects` in the e2e helpers uses `/storage/v1/`, not `/v0/`.** The
+  `/v0/` surface enforces `storage.rules`, which refuse listing, so a helper that
+  swallowed the 403 returned `[]` and made every "nothing was uploaded"
+  assertion pass whether or not anything had been.
 - **The review deck freezes its order at load, and its tests must wait for the
   save.** Sorting by "unscored first" on every render reshuffles the card the
   reviewer is about to score. The reshuffle only lands once the write returns,

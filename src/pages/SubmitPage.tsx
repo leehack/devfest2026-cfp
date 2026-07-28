@@ -38,9 +38,11 @@ import {
   type LoadedProposal,
 } from '../lib/proposals';
 import type { ProposalStatus } from '@shared/enums';
+import { HeadshotField } from '../components/HeadshotField';
 import {
   EMPTY_FORM,
   FORM_LIMITS,
+  headshotPath,
   localised,
   type AnswerFaults,
   type AnswerValue,
@@ -110,6 +112,7 @@ function TalkPicker({
 }
 
 interface QuestionsProps {
+  uid: string;
   fields: ConfirmField[];
   answers: Answers;
   faults: AnswerFaults;
@@ -125,7 +128,7 @@ interface QuestionsProps {
  * "do you need a power outlet" without a deploy ends up chasing forty people
  * by email instead.
  */
-function Questions({ fields, answers, faults, busy, onAnswer }: QuestionsProps) {
+function Questions({ uid, fields, answers, faults, busy, onAnswer }: QuestionsProps) {
   const { t, locale } = useI18n();
   const message = (key: string) => {
     const fault = faults[key];
@@ -138,6 +141,26 @@ function Questions({ fields, answers, faults, busy, onAnswer }: QuestionsProps) 
         const label = localised(field.label, locale);
         const help = localised(field.help, locale) || undefined;
         const value = answers[field.key];
+
+        if (field.type === 'image') {
+          return (
+            <HeadshotField
+              key={field.key}
+              uid={uid}
+              fieldKey={field.key}
+              label={label}
+              help={help}
+              required={field.required}
+              error={message(field.key)}
+              disabled={busy}
+              // The stored answer is the path, so its presence is what says a
+              // file exists. Set locally on upload too, purely so the control
+              // updates — the callable re-derives it from the bucket regardless.
+              uploaded={typeof value === 'string' && value !== ''}
+              onUploaded={() => onAnswer(field.key, headshotPath(uid, field.key))}
+            />
+          );
+        }
 
         if (field.type === 'checkbox') {
           // `field` for the spacing every other question already gets — a
@@ -632,6 +655,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
           onWithdraw={withdrawable ? onWithdraw : undefined}
           onRespond={status === 'accepted' ? onRespond : undefined}
           questions={{
+            uid: user.uid,
             fields: confirmForm.fields,
             answers,
             faults: answerFaults,

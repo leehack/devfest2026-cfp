@@ -110,6 +110,11 @@ export const sendTestEmail = httpsCallable<
   { ok: boolean; status: string; to: string }
 >(functions, 'sendTestEmail');
 
+export const headshotImage = httpsCallable<
+  { speakerUid: string; key: string },
+  { ok: boolean; dataUrl: string }
+>(functions, 'headshotImage');
+
 export const setConfirmForm = httpsCallable<
   { fields: ConfirmField[] },
   { ok: boolean; fields: ConfirmField[] }
