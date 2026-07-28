@@ -412,9 +412,18 @@ test.describe('email pipeline', () => {
     const { chair } = await stage();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
 
-    // `held` is fair game; `queued` belongs to the trigger, and re-queueing one
-    // mid-send is how the same person gets two copies in the same minute.
-    await setEmailStatusDirect('accepted__talk-1', 'queued');
+    /*
+     * `held` is fair game; an in-flight row belongs to the trigger, and
+     * re-queueing one mid-send is how the same person gets two copies in the
+     * same minute.
+     *
+     * Tested at `sending` rather than `queued`: the guard treats them alike,
+     * but writing `queued` wakes the very trigger this is trying to out-race,
+     * so the row can reach `dry_run` before the callable reads it. `sending` is
+     * the state the trigger will not touch, so the refusal is the same every
+     * time rather than only when the machine is quiet.
+     */
+    await setEmailStatusDirect('accepted__talk-1', 'sending');
     const refused = await callAs(chair.idToken, 'emailQueue', {
       action: 'resend',
       logId: 'accepted__talk-1',

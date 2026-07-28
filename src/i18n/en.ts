@@ -8,6 +8,22 @@ export const en = {
     event: 'DevFest Montréal 2026',
     signIn: 'Sign in to submit',
     signInHint: 'We use your Google account so you can come back and edit your draft.',
+    signInEmailTitle: 'No Google account?',
+    signInEmailHint:
+      'We will email you a link that signs you in. No password to pick or remember.',
+    signInEmail: 'Email me a link',
+    linkSending: 'Sending…',
+    linkSent:
+      'If {email} can receive mail, a sign-in link is on its way. It works once, and for about an hour.',
+    linkChecking: 'Signing you in…',
+    linkWhose: 'One more thing',
+    linkWhoseHelp:
+      'This link was opened on a different device from the one that asked for it, so please confirm the address you used.',
+    linkContinue: 'Continue',
+    linkFailed:
+      'That link did not work. It may have been used already or expired — ask for a new one below.',
+    linkTooMany: 'That is a lot of links in a short time. Please try again in an hour.',
+    linkBadEmail: 'That does not look like an email address.',
     signOut: 'Sign out',
     signedInAs: 'Signed in as',
     loading: 'Loading…',

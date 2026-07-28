@@ -11,6 +11,22 @@ export const fr: Dictionary = {
     signIn: 'Connectez-vous pour soumettre',
     signInHint:
       'Nous utilisons votre compte Google afin que vous puissiez revenir modifier votre brouillon.',
+    signInEmailTitle: 'Pas de compte Google ?',
+    signInEmailHint:
+      'Nous vous enverrons un lien de connexion par courriel. Aucun mot de passe à choisir ni à retenir.',
+    signInEmail: 'M’envoyer un lien',
+    linkSending: 'Envoi…',
+    linkSent:
+      'Si {email} peut recevoir du courrier, un lien de connexion est en route. Il fonctionne une fois, pendant environ une heure.',
+    linkChecking: 'Connexion en cours…',
+    linkWhose: 'Une dernière chose',
+    linkWhoseHelp:
+      'Ce lien a été ouvert sur un autre appareil que celui qui l’a demandé. Veuillez confirmer l’adresse utilisée.',
+    linkContinue: 'Continuer',
+    linkFailed:
+      'Ce lien n’a pas fonctionné. Il a peut-être déjà servi ou expiré — demandez-en un nouveau ci-dessous.',
+    linkTooMany: 'Cela fait beaucoup de liens en peu de temps. Veuillez réessayer dans une heure.',
+    linkBadEmail: 'Cela ne ressemble pas à une adresse courriel.',
     signOut: 'Déconnexion',
     signedInAs: 'Connecté en tant que',
     loading: 'Chargement…',

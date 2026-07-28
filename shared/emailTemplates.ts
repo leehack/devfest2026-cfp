@@ -177,6 +177,47 @@ const FR: Record<EmailKind, Template> = {
   },
 };
 
+/**
+ * The sign-in link, for people who do not have a Google account.
+ *
+ * Not an `EmailKind`, and deliberately not overridable: this one is a bearer
+ * credential with a covering note, and the wording is what tells someone
+ * whether a link they did not ask for is worth clicking. That is not copy to
+ * hand to whoever is editing templates that week.
+ *
+ * The link rides in `{proposalUrl}` because that is the renderer's "the URL
+ * this message points at" slot — it gets the same linkifying and escaping as
+ * every other link we send.
+ */
+const SIGN_IN: Record<EmailLocale, Template> = {
+  en: {
+    subject: 'Your {event} sign-in link',
+    body: p(
+      'Here is your link to sign in to the {event} call for proposals:',
+      '{proposalUrl}',
+      'It works once, and only for about an hour. If it has expired, ask for another from the same page.',
+      'If you did not ask to sign in, you can ignore this — the link is useless until someone opens it, and nobody can request one on your behalf without knowing your address.',
+    ),
+  },
+  fr: {
+    subject: 'Votre lien de connexion pour {event}',
+    body: p(
+      'Voici votre lien pour vous connecter à l’appel à conférences de {event} :',
+      '{proposalUrl}',
+      'Il ne fonctionne qu’une fois, et pendant environ une heure. S’il a expiré, demandez-en un autre depuis la même page.',
+      'Si vous n’avez pas demandé à vous connecter, vous pouvez ignorer ce message — le lien ne sert à rien tant que personne ne l’ouvre.',
+    ),
+  },
+};
+
+export function renderSignInEmail(link: string, locale: EmailLocale): RenderedEmail {
+  return renderTemplate(SIGN_IN[locale], locale, {
+    speakerName: '',
+    title: '',
+    proposalUrl: link,
+  });
+}
+
 const VISA = {
   en: 'You told us you will need a visa or eTA. We will send an invitation letter this week — start your application as soon as it arrives, because processing can run to several months.',
   fr: 'Vous nous avez indiqué avoir besoin d’un visa ou d’une AVE. Nous vous enverrons une lettre d’invitation cette semaine — entamez votre demande dès sa réception, les délais pouvant atteindre plusieurs mois.',

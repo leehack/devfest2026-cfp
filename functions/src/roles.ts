@@ -36,9 +36,19 @@ export function normalizeRole(raw: unknown): Role {
   return role as Role;
 }
 
+/**
+ * The account that owns this address, if it has proved that it does.
+ *
+ * An unverified account is treated as no account at all, so the grant stays
+ * pending and `claim` applies it when someone signs in who has actually proved
+ * the mailbox. Email+password signup verifies nothing, so without this an
+ * attacker could register a colleague's address, wait for the grant, and be
+ * handed the role — never having read a single message sent to it.
+ */
 async function uidForEmail(auth: Auth, email: string): Promise<string | undefined> {
   try {
-    return (await auth.getUserByEmail(email)).uid;
+    const user = await auth.getUserByEmail(email);
+    return user.emailVerified ? user.uid : undefined;
   } catch {
     return undefined; // never signed in — the grant waits for them
   }

@@ -149,6 +149,26 @@ export async function callAs(
   return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
 }
 
+/**
+ * A callable that takes no token at all.
+ *
+ * Not `callAs('')`: that sends `Bearer ` with nothing after it, which is a
+ * malformed token rather than an absent one, and is rejected before the
+ * function runs.
+ */
+export async function callPublic(
+  name: string,
+  data: unknown,
+): Promise<{ ok: boolean; code: string }> {
+  const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ data }),
+  });
+  const body = await response.json().catch(() => ({}));
+  return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
+}
+
 /** `callAs` for the cases that assert on the payload rather than the refusal. */
 export async function callJson(idToken: string, name: string, data: unknown): Promise<any> {
   const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
@@ -168,6 +188,39 @@ export async function readReviews(proposalId: string): Promise<Record<string, an
   if (!response.ok) return [];
   const { documents } = await response.json();
   return (documents ?? []).map((d: { fields: Record<string, any> }) => unwrap(d.fields));
+}
+
+/**
+ * The sign-in links the Auth emulator has minted.
+ *
+ * The callable deliberately never returns the link — it is a bearer credential
+ * and is not written to Firestore either — so a test reads it from the place it
+ * genuinely exists: the emulator's own out-of-band code list.
+ */
+export async function readSignInLinks(): Promise<{ email: string; link: string }[]> {
+  const response = await fetch(`${AUTH}/emulator/v1/projects/${PROJECT}/oobCodes`);
+  await expectOk(response, 'readSignInLinks');
+  const { oobCodes } = await response.json();
+  return (oobCodes ?? [])
+    .filter((c: { requestType: string }) => c.requestType === 'EMAIL_SIGNIN')
+    .map((c: { email: string; oobLink: string }) => ({ email: c.email, link: c.oobLink }));
+}
+
+/** Clears the throttle so a test does not inherit another test's allowance. */
+export async function clearSignInAllowance() {
+  const response = await fetch(`${DOCS}/signInLinks`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (!response.ok) return;
+  const { documents } = await response.json();
+  await Promise.all(
+    (documents ?? []).map((d: { name: string }) =>
+      fetch(`${FIRESTORE}/v1/${d.name}`, {
+        method: 'DELETE',
+        headers: { authorization: 'Bearer owner' },
+      }),
+    ),
+  );
 }
 
 /** The organiser's confirmation questions, without going through the callable. */

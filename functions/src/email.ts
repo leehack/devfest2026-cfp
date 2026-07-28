@@ -25,6 +25,7 @@ import {
   type EmailData,
   type EmailKind,
   type EmailLocale,
+  type RenderedEmail,
   type TemplateOverrides,
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
@@ -48,7 +49,7 @@ import { readResendKey } from './secrets';
  */
 const derivedUrl = () => `https://${process.env.GCLOUD_PROJECT ?? 'localhost'}.web.app`;
 
-const publicUrl = (settings: EmailSettings) =>
+export const publicUrl = (settings: EmailSettings) =>
   settings.publicUrl || process.env.CFP_PUBLIC_URL || derivedUrl();
 
 /** Env is the fallback, so a fresh project sends nothing until someone says so. */
@@ -123,6 +124,52 @@ interface SendOutcome {
 }
 
 /**
+ * One rendered message, handed to Resend.
+ *
+ * Split out from `deliver` so a sign-in link can be sent without going through
+ * `emailLog` at all. That link is a bearer credential: anyone who reads it is
+ * signed in as its owner, so it must not be written to a collection, kept in a
+ * retry queue, or held anywhere it could be read back later.
+ */
+export async function sendViaResend(
+  to: string,
+  email: RenderedEmail,
+  apiKey: string,
+  settings: EmailSettings,
+): Promise<SendOutcome> {
+  const sender = settings.from;
+  if (!apiKey || !sender) {
+    logger.warn('email not configured — rendering only', { to, subject: email.subject });
+    return { status: 'dry_run' };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({
+        from: sender,
+        to: [to],
+        subject: email.subject,
+        text: email.text,
+        html: email.html,
+        ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
+      }),
+    });
+  } catch (error) {
+    return { status: 'failed', error: `network: ${String(error)}` };
+  }
+
+  const body = (await response.json().catch(() => ({}))) as { id?: string; message?: string };
+  if (!response.ok) {
+    return { status: 'failed', error: `${response.status}: ${body.message ?? 'unknown'}` };
+  }
+  return { status: 'sent', providerId: body.id };
+}
+
+/**
  * Hands one message to Resend.
  *
  * With no API key configured it renders and logs instead, and records `dry_run`
@@ -149,40 +196,7 @@ export async function deliver(
       ? renderTemplate({ subject: row.subject as string, body: row.body as string }, locale, data)
       : renderEmail(row.kind as EmailKind, locale, data, templates);
 
-  const sender = settings.from;
-  if (!apiKey || !sender) {
-    logger.warn('email not configured — rendering only', {
-      kind: row.kind,
-      to: row.to,
-      subject: email.subject,
-    });
-    return { status: 'dry_run' };
-  }
-
-  let response: Response;
-  try {
-    response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(15_000),
-      body: JSON.stringify({
-        from: sender,
-        to: [row.to],
-        subject: email.subject,
-        text: email.text,
-        html: email.html,
-        ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
-      }),
-    });
-  } catch (error) {
-    return { status: 'failed', error: `network: ${String(error)}` };
-  }
-
-  const body = (await response.json().catch(() => ({}))) as { id?: string; message?: string };
-  if (!response.ok) {
-    return { status: 'failed', error: `${response.status}: ${body.message ?? 'unknown'}` };
-  }
-  return { status: 'sent', providerId: body.id };
+  return sendViaResend(row.to as string, email, apiKey, settings);
 }
 
 /**

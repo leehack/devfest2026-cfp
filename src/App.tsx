@@ -17,6 +17,14 @@ import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
 import { navigate, useRoute, type Route } from './lib/router';
 import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
+import {
+  arrivingFromLink,
+  completeSignInFromLink,
+  pendingEmail,
+  rememberPendingEmail,
+  requestSignInLink,
+} from './lib/signIn';
+import { TextField } from './components/fields';
 import type { Role } from '@shared/enums';
 
 export function App() {
@@ -191,6 +199,28 @@ function FormRoute({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) 
 function SignIn({ cfp }: { cfp: CfpWindow | null }) {
   const { t, locale } = useI18n();
   const [failed, setFailed] = useState(false);
+  const [email, setEmail] = useState(pendingEmail);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [linkError, setLinkError] = useState('');
+  /* Set when the link was opened somewhere that never asked for it — typically
+     requested on a laptop and tapped on a phone. The link is fine; this browser
+     just does not know whose it is. */
+  const [askingWhose, setAskingWhose] = useState(false);
+  const [finishing, setFinishing] = useState(arrivingFromLink);
+
+  // A link in the address bar is the whole reason this page loaded, so it is
+  // finished before anything is offered — landing on a sign-in form after
+  // clicking "sign in" reads as the link having failed.
+  useEffect(() => {
+    if (!arrivingFromLink()) return;
+    void (async () => {
+      const outcome = await completeSignInFromLink();
+      if (outcome === 'needsEmail') setAskingWhose(true);
+      if (outcome === 'failed') setLinkError(t.app.linkFailed);
+      setFinishing(false);
+    })();
+  }, [t]);
 
   // Popups get blocked, closed, and cancelled. Swallowing the rejection left the
   // button looking dead.
@@ -204,6 +234,38 @@ function SignIn({ cfp }: { cfp: CfpWindow | null }) {
       setFailed(true);
     }
   }
+
+  async function sendLink() {
+    setSending(true);
+    setLinkError('');
+    try {
+      await requestSignInLink({ email: email.trim(), locale });
+      // Stored before the confirmation is shown: this is what lets the link
+      // complete without asking again when it is opened in this browser.
+      rememberPendingEmail(email.trim());
+      setSent(true);
+    } catch (error: any) {
+      setLinkError(
+        error?.code === 'functions/resource-exhausted'
+          ? t.app.linkTooMany
+          : error?.code === 'functions/invalid-argument'
+            ? t.app.linkBadEmail
+            : t.app.linkFailed,
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function finishWithEmail() {
+    setSending(true);
+    setLinkError('');
+    const outcome = await completeSignInFromLink(email);
+    if (outcome !== 'signedIn') setLinkError(t.app.linkFailed);
+    setSending(false);
+  }
+
+  if (finishing) return <p className="muted">{t.app.linkChecking}</p>;
 
   return (
     <div className="panel">
@@ -221,6 +283,49 @@ function SignIn({ cfp }: { cfp: CfpWindow | null }) {
           {t.errors.signIn}
         </p>
       )}
+
+      <h3 className="card__subtitle">
+        {askingWhose ? t.app.linkWhose : t.app.signInEmailTitle}
+      </h3>
+      <p className="field__help">{askingWhose ? t.app.linkWhoseHelp : t.app.signInEmailHint}</p>
+
+      {sent ? (
+        // Deliberately the same wording whether or not the address is known to
+        // us — a different message here would answer "did this person apply?".
+        <p className="note note--inline" role="status">
+          {t.app.linkSent.replace('{email}', email.trim())}
+        </p>
+      ) : (
+        <>
+          <TextField
+            label={t.speaker.email}
+            type="email"
+            value={email}
+            onChange={setEmail}
+            required
+            disabled={sending}
+          />
+          <button
+            type="button"
+            className="btn"
+            disabled={sending || !email.trim()}
+            onClick={askingWhose ? finishWithEmail : sendLink}
+          >
+            {sending
+              ? t.app.linkSending
+              : askingWhose
+                ? t.app.linkContinue
+                : t.app.signInEmail}
+          </button>
+        </>
+      )}
+
+      {linkError && (
+        <p className="field__error" role="alert">
+          {linkError}
+        </p>
+      )}
+
       {usingEmulators && (
         <p className="muted" style={{ marginBottom: 0 }}>
           <button type="button" className="btn btn--ghost" onClick={() => signInAsTestSpeaker()}>

@@ -5,6 +5,8 @@
  * against the server clock — neither can be bypassed by posting to Firestore.
  */
 
+import { createHash } from 'node:crypto';
+
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
@@ -20,6 +22,7 @@ import {
   EMAIL_KINDS,
   EMAIL_LOCALES,
   MESSAGE_KIND,
+  renderSignInEmail,
   validateTemplate,
   type EmailKind,
   type EmailLocale,
@@ -35,7 +38,15 @@ import {
   type ConfirmForm,
 } from '../../shared/confirmForm';
 import { claim, grant, revoke, RoleError } from './roles';
-import { deliver, loadSettings, loadTemplates, queueEmail, type EmailStatus } from './email';
+import {
+  deliver,
+  loadSettings,
+  loadTemplates,
+  publicUrl,
+  queueEmail,
+  sendViaResend,
+  type EmailStatus,
+} from './email';
 import { keyHint, readResendKey, writeResendKey } from './secrets';
 import {
   addDomain,
@@ -792,6 +803,90 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
 
   logger.info('email queue advanced', { byUid, action, count: due.length });
   return { ok: true, tally, released: due.length };
+});
+
+/*
+ * Signing in without a Google account.
+ *
+ * A one-time link rather than a password: people touch this site a handful of
+ * times a year, so a password would mostly be a reset flow — and it would mean
+ * holding hashes for everyone who applies, which is a liability the event has
+ * no reason to take on.
+ */
+
+/** Deliberately loose. Delivery is the real check, and this only rejects noise. */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/;
+
+const LINK_WINDOW_MS = 60 * 60 * 1000;
+const LINKS_PER_WINDOW = 5;
+
+/**
+ * Throttles by address, so this callable cannot be turned into a way to mail
+ * someone repeatedly from our verified domain — which would cost us the domain
+ * reputation the whole pipeline depends on.
+ *
+ * Hashed, so the collection is not a readable list of everyone who has ever
+ * tried to sign in.
+ */
+async function takeLinkAllowance(email: string): Promise<void> {
+  const ref = db.doc(`signInLinks/${createHash('sha256').update(email).digest('hex')}`);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const now = Date.now();
+    const startedAt = (snap.get('windowStart') as number) ?? 0;
+    const fresh = now - startedAt > LINK_WINDOW_MS;
+    const used = fresh ? 0 : ((snap.get('count') as number) ?? 0);
+
+    if (used >= LINKS_PER_WINDOW) {
+      throw new HttpsError('resource-exhausted', 'Too many sign-in links. Try again later.');
+    }
+    tx.set(ref, {
+      windowStart: fresh ? now : startedAt,
+      count: used + 1,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+}
+
+/**
+ * Mails a sign-in link. Public: asking for one is how you get an account.
+ *
+ * The answer is the same whether or not the address has ever been seen. A
+ * different reply for a known address turns this into a way to test whether
+ * someone submitted to the CFP, which is not ours to disclose.
+ *
+ * The link never touches `emailLog`. Anyone holding it is signed in as its
+ * owner, so it is rendered and handed to Resend in this one request and not
+ * written anywhere — no queue row, no retry, nothing to read back later.
+ */
+export const requestSignInLink = onCall(CALLABLE, async (request) => {
+  const data = (request.data ?? {}) as { email?: unknown; locale?: unknown };
+  const email = String(data.email ?? '').trim().toLowerCase();
+  const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
+
+  if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    throw new HttpsError('invalid-argument', 'That does not look like an email address.');
+  }
+
+  await takeLinkAllowance(email);
+
+  const [apiKey, settings] = await Promise.all([readResendKey(), loadSettings(db)]);
+  const link = await getAuth().generateSignInWithEmailLink(email, {
+    // Must be one of Auth's authorized domains, or Firebase refuses to mint it.
+    url: `${publicUrl(settings)}/`,
+    handleCodeInApp: true,
+  });
+
+  const outcome = await sendViaResend(email, renderSignInEmail(link, locale), apiKey, settings);
+  // The address is not logged: this line would otherwise be a record of who
+  // tried to sign in, sitting in Cloud Logging with a much wider audience than
+  // Firestore has.
+  logger.info('sign-in link sent', { status: outcome.status, error: outcome.error });
+
+  if (outcome.status === 'failed') {
+    throw new HttpsError('unavailable', 'Could not send the link. Please try again.');
+  }
+  return { ok: true };
 });
 
 /**

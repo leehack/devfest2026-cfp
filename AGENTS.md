@@ -163,6 +163,19 @@ collection — the rule names `cfp`.
   not the claim worth proving; `tests/e2e/backend.ts` calls the callable directly
   with a real ID token. Always pair refusals with one call that succeeds, or a
   broken URL passes as a refusal.
+- **`signedIn()` means verified, not merely authenticated.** Google always
+  verifies, so while it was the only provider the two were the same. Enabling
+  email sign-in also enables email+password signup — the Identity Toolkit has no
+  link-only mode — and that verifies nothing, while roles are granted by address.
+  Without the `email_verified` check anyone could register a colleague's address
+  and pick up their pending grant. `claimRole` and `uidForEmail` check it too.
+- **A custom domain needs adding to Auth's authorized domains by hand.** Firebase
+  Hosting serving it is not enough: `signInWithPopup` refuses from an unlisted
+  origin with `auth/unauthorized-domain`, which looks like a broken button.
+- **The sign-in link never touches `emailLog`.** It is a bearer credential, so
+  `requestSignInLink` renders it and hands it to `sendViaResend` in the one
+  request — no queue row, no retry, nothing to read back. That is also why it
+  cannot reuse the `queueEmail` path everything else goes through.
 - **The confirmation questions are data, and `config/confirmForm` is the only
   readable config document besides `cfp`.** A speaker's browser renders the form
   it is about to answer, so the rule names that document explicitly; `email`

@@ -104,10 +104,18 @@ beforeEach(async () => {
   });
 });
 
-const asApplicant = () => env.authenticatedContext(APPLICANT).firestore();
-const asOther = () => env.authenticatedContext(OTHER_APPLICANT).firestore();
-const asReviewer = () => env.authenticatedContext(REVIEWER).firestore();
-const asOtherReviewer = () => env.authenticatedContext(OTHER_REVIEWER).firestore();
+/**
+ * `signedIn()` requires a verified address, not merely a token — email+password
+ * signup proves nothing, and roles are granted by address. Every ordinary actor
+ * below therefore carries the claim; `asUnverified` is the one that does not.
+ */
+const VERIFIED = { email_verified: true };
+
+const asApplicant = () => env.authenticatedContext(APPLICANT, VERIFIED).firestore();
+const asOther = () => env.authenticatedContext(OTHER_APPLICANT, VERIFIED).firestore();
+const asReviewer = () => env.authenticatedContext(REVIEWER, VERIFIED).firestore();
+const asOtherReviewer = () => env.authenticatedContext(OTHER_REVIEWER, VERIFIED).firestore();
+const asUnverified = () => env.authenticatedContext(APPLICANT, {}).firestore();
 
 describe('applicants read and write only their own proposal', () => {
   it('reads its own proposal', async () => {
@@ -679,6 +687,32 @@ describe('role grants are readable only by admins', () => {
         role: 'admin',
       }),
     );
+  });
+});
+
+/**
+ * Enabling email sign-in also enables email+password signup, which verifies
+ * nothing. An account that has not proved its address must not be able to act
+ * as the person who owns it.
+ */
+describe('an unverified account is not signed in', () => {
+  it('cannot read or write a proposal, even its own', async () => {
+    await assertFails(getDoc(doc(asUnverified(), 'proposals/p-anna')));
+    await assertFails(updateDoc(doc(asUnverified(), 'proposals/p-anna'), { title: 'Mine now' }));
+  });
+
+  it('cannot create a proposal at all', async () => {
+    await assertFails(addDoc(collection(asUnverified(), 'proposals'), draft(APPLICANT)));
+  });
+
+  it('cannot claim a speaker profile for the address it has not proved', async () => {
+    await assertFails(
+      setDoc(doc(asUnverified(), 'speakers', APPLICANT), { email: 'anna@example.org' }),
+    );
+  });
+
+  it('cannot read the confirmation questions', async () => {
+    await assertFails(getDoc(doc(asUnverified(), 'config/confirmForm')));
   });
 });
 
