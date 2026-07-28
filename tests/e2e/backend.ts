@@ -285,6 +285,27 @@ export async function storeObjectDirect(name: string, contentType: string, body 
   );
 }
 
+/**
+ * Where the functions believe this app is reachable, without going through the
+ * callable.
+ *
+ * `publicUrl()` falls back to `CFP_PUBLIC_URL` and then to a `.web.app` address
+ * derived from the project id, so a test that follows a link the server built
+ * only lands back on the app if something has said where the app is. Leaving
+ * that to the environment meant it worked on a laptop with `.env.local` and
+ * failed in CI, which has no such file.
+ */
+export async function setPublicUrlDirect(url: string) {
+  await expectOk(
+    await fetch(`${DOCS}/config/email?updateMask.fieldPaths=publicUrl`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+      body: JSON.stringify({ fields: { publicUrl: { stringValue: url } } }),
+    }),
+    'setPublicUrlDirect',
+  );
+}
+
 /** The organiser's confirmation questions, without going through the callable. */
 export async function setConfirmFormDirect(fields: unknown[]) {
   await expectOk(

@@ -15,9 +15,18 @@ import {
   readEmailLog,
   readSignInLinks,
   reset,
+  setPublicUrlDirect,
 } from './backend';
 
 const ADDRESS = 'nogoogle@example.test';
+
+/**
+ * The server builds the link, so it decides where the link comes back to. Said
+ * here rather than left to the environment: `CFP_PUBLIC_URL` in a gitignored
+ * `functions/.env.local` made these pass on a laptop and fail in CI, where the
+ * fallback pointed at a `.web.app` address that is not this app at all.
+ */
+const HERE = 'http://localhost:5173';
 
 /** Public: no token at all, which is the point of it. */
 const request = (email: string) => callPublic('requestSignInLink', { email, locale: 'en' });
@@ -45,6 +54,7 @@ test.describe('signing in by email link', () => {
   test.beforeEach(async () => {
     await reset();
     await clearSignInAllowance();
+    await setPublicUrlDirect(HERE);
   });
 
   test('a link arrives and signs the person in', async ({ page }) => {
