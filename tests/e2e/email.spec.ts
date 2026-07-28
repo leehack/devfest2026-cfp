@@ -14,12 +14,14 @@ import { expect, test } from '@playwright/test';
 
 import {
   callAs,
+  callJson,
   createAccount,
   inviteRole,
   readEmailLog,
   reset,
   seedProposal,
   seedSpeaker,
+  setEmailStatusDirect,
   setProposalStatusDirect,
   waitForEmail,
 } from './backend';
@@ -178,7 +180,10 @@ test.describe('email pipeline', () => {
 
     // The address and the outcome are both on screen before anything is sent —
     // this table is the last chance to catch a rejection in the wrong row.
-    const queued = panel.getByRole('row', { name: new RegExp(speaker.email) });
+    // Scoped to the held table: the sent-log below lists the same address.
+    const queued = panel
+      .locator('.table--held')
+      .getByRole('row', { name: new RegExp(speaker.email) });
     await expect(queued).toBeVisible();
     await expect(queued).toContainText('Not selected');
 
@@ -357,10 +362,70 @@ test.describe('email pipeline', () => {
   test('only an admin may work the queue', async () => {
     const { author } = await stage();
 
-    for (const action of ['preview', 'release', 'retry'] as const) {
-      const result = await callAs(author.idToken, 'emailQueue', { action });
+    for (const action of ['preview', 'release', 'retry', 'resend'] as const) {
+      const result = await callAs(author.idToken, 'emailQueue', { action, logId: 'x' });
       expect(result.ok, action).toBe(false);
       expect(result.code, action).toBe('PERMISSION_DENIED');
     }
+  });
+
+  test('the queue says who was written to, and what came of it', async () => {
+    const { chair } = await stage();
+    await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
+    await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    await waitForEmail((r) => r[0]?.status === 'dry_run', 'the send');
+
+    const { rows } = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    // Counts alone could not answer "did this speaker get their acceptance".
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      to: speaker.email,
+      kind: 'accepted',
+      status: 'dry_run',
+      logId: 'accepted__talk-1',
+    });
+  });
+
+  test('a sent message can be sent again, deliberately', async () => {
+    const { chair } = await stage();
+    await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
+    await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    await waitForEmail((r) => r[0]?.status === 'dry_run', 'the first send');
+    expect((await readEmailLog())[0].attempts).toBe(1);
+
+    // The deterministic id stops an accidental second copy, which also stopped
+    // a deliberate one — an address that bounced had no route back.
+    const again = await callAs(chair.idToken, 'emailQueue', {
+      action: 'resend',
+      logId: 'accepted__talk-1',
+    });
+    expect(again.ok).toBe(true);
+
+    await waitForEmail((r) => r[0]?.attempts === 2, 'the resend');
+    const rows = await readEmailLog();
+    // Re-queued, not recreated: one row, still the record of what was sent.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('dry_run');
+  });
+
+  test('a message already in flight is not re-queued underneath the trigger', async () => {
+    const { chair } = await stage();
+    await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
+
+    // `held` is fair game; `queued` belongs to the trigger, and re-queueing one
+    // mid-send is how the same person gets two copies in the same minute.
+    await setEmailStatusDirect('accepted__talk-1', 'queued');
+    const refused = await callAs(chair.idToken, 'emailQueue', {
+      action: 'resend',
+      logId: 'accepted__talk-1',
+    });
+    expect(refused).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+  });
+
+  test('resending something that was never queued says so', async () => {
+    const { chair } = await stage();
+    expect(
+      await callAs(chair.idToken, 'emailQueue', { action: 'resend', logId: 'accepted__nope' }),
+    ).toMatchObject({ ok: false, code: 'NOT_FOUND' });
   });
 });

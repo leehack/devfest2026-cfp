@@ -50,6 +50,9 @@ const db = getFirestore();
  */
 const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
 
+/** How many emailLog rows the admin panel gets in one response. */
+const ROW_CAP = 500;
+
 interface CfpWindow {
   paused: boolean;
   opensAt: Timestamp;
@@ -598,9 +601,42 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
  */
 export const emailQueue = onCall(CALLABLE, async (request) => {
   const byUid = await requireAdmin(request, 'manage the email queue');
-  const action = String((request.data as { action?: unknown } | undefined)?.action ?? 'preview');
-  if (!['preview', 'release', 'retry'].includes(action)) {
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const action = String(data.action ?? 'preview');
+  if (!['preview', 'release', 'retry', 'resend'].includes(action)) {
     throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
+  }
+
+  /*
+   * One message again, on purpose.
+   *
+   * The deterministic id is what stops a decision going out twice by accident,
+   * so there was no way to send one on purpose either — an address that bounced
+   * or a speaker who lost the mail had no route back. Re-queueing the existing
+   * row rather than deleting it keeps `emailLog` a complete record of what was
+   * sent: `attempts` goes up, the row does not reappear from nowhere.
+   */
+  if (action === 'resend') {
+    const logId = String(data.logId ?? '');
+    if (!logId) throw new HttpsError('invalid-argument', 'logId is required.');
+
+    const ref = db.doc(`emailLog/${logId}`);
+    const status = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) throw new HttpsError('not-found', 'No such message.');
+
+      // In-flight rows are the trigger's, not ours: re-queueing one mid-send is
+      // how the same person gets it twice in the same minute.
+      const current = snap.get('status') as EmailStatus;
+      if (current === 'queued' || current === 'sending') {
+        throw new HttpsError('failed-precondition', `That message is already ${current}.`);
+      }
+      tx.update(ref, { status: 'queued' satisfies EmailStatus });
+      return current;
+    });
+
+    logger.info('email re-queued', { byUid, logId, was: status });
+    return { ok: true, logId };
   }
 
   const [snap, configSnap] = await Promise.all([
@@ -614,6 +650,26 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     const key = `${doc.get('status')}:${doc.get('kind')}`;
     tally[key] = (tally[key] ?? 0) + 1;
   }
+
+  const at = (doc: (typeof snap.docs)[number], field: string): number =>
+    (doc.get(field) as Timestamp | undefined)?.toMillis() ?? 0;
+
+  const rows = snap.docs
+    .map((d) => ({
+      logId: d.id,
+      kind: d.get('kind') as string,
+      to: d.get('to') as string,
+      status: d.get('status') as string,
+      attempts: (d.get('attempts') as number) ?? 0,
+      title: (d.get('data')?.title as string) ?? '',
+      // Milliseconds rather than a Timestamp: the client formats it, and a
+      // Timestamp does not survive the callable's JSON.
+      sentAt: at(d, 'sentAt') || null,
+      // The provider's reason, not ours — shown as-is to an admin, who is the
+      // one person who can act on "domain is not verified".
+      error: (d.get('error') as string) ?? '',
+    }))
+    .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0) || a.to.localeCompare(b.to));
 
   if (action === 'preview') {
     return {
@@ -632,6 +688,17 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       held: snap.docs
         .filter((d) => d.get('status') === 'held')
         .map((d) => ({ kind: d.get('kind'), to: d.get('to'), title: d.get('data')?.title })),
+      /*
+       * Who was written to, and what happened. The panel used to show counts by
+       * status and nothing else, so "did this person get their acceptance" had
+       * no answer short of the Firestore console.
+       *
+       * Newest first and capped, with `truncated` so a cap never reads as "that
+       * is all of them". A CFP will not reach this; a platform running several
+       * would.
+       */
+      rows: rows.slice(0, ROW_CAP),
+      truncated: Math.max(0, rows.length - ROW_CAP),
     };
   }
 

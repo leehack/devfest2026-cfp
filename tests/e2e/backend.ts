@@ -149,6 +149,22 @@ export async function callAs(
   return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
 }
 
+/** `callAs` for the cases that assert on the payload rather than the refusal. */
+export async function callJson(idToken: string, name: string, data: unknown): Promise<any> {
+  const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ data }),
+  });
+  await expectOk(response, `${name} call`);
+  return (await response.json())?.result ?? {};
+}
+
+/** Puts a queue row into a state the UI cannot reach, e.g. mid-send. */
+export async function setEmailStatusDirect(logId: string, status: string) {
+  await patch(`emailLog/${logId}`, { status: { stringValue: status } });
+}
+
 /**
  * A submitted proposal, written straight to Firestore. The submission flow has
  * its own spec; these tests need something in the review queue, not a re-run of

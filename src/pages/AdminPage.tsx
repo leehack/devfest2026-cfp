@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { Checkbox, SelectField, TextField } from '../components/fields';
-import { useI18n } from '../i18n';
+import { formatDate, useI18n } from '../i18n';
 import { toDate, toDateTimeInput } from '../lib/dates';
 import { adminError } from '../lib/errors';
 import {
@@ -17,6 +17,7 @@ import {
   setCfpWindow,
   setEmailSettings,
   setProposalStatus,
+  type EmailRow,
   type HeldEmail,
   type Person,
   type ProposalRow,
@@ -299,7 +300,7 @@ function Window() {
  * dangerous button is the one that says how many people it is about to write to.
  */
 function Email() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [tally, setTally] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<HeldEmail[]>([]);
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
@@ -307,6 +308,9 @@ function Email() {
   const [domainId, setDomainId] = useState('');
   const [domain, setDomain] = useState('');
   const [templates, setTemplates] = useState<TemplateOverrides>({});
+  const [rows, setRows] = useState<EmailRow[]>([]);
+  const [truncated, setTruncated] = useState(0);
+  const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
@@ -315,12 +319,12 @@ function Email() {
   const editing = useRef(false);
 
   const run = useCallback(
-    async (action: 'preview' | 'release' | 'retry') => {
+    async (action: 'preview' | 'release' | 'retry', logId?: string) => {
       setBusy(true);
       setError('');
       if (action !== 'preview') setNote('');
       try {
-        const { data } = await emailQueue({ action });
+        const { data } = await emailQueue({ action, ...(logId ? { logId } : {}) });
         setTally(data.tally ?? {});
         // Never over the top of someone mid-sentence: this load is async, and
         // an admin who starts typing before it lands would otherwise watch the
@@ -329,6 +333,8 @@ function Email() {
         setKeyHint(data.keyHint ?? '');
         setDomainId(data.domainId ?? '');
         setDomain(data.domain ?? '');
+        setRows(data.rows ?? []);
+        setTruncated(data.truncated ?? 0);
         setTemplates(data.templates ?? {});
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
@@ -370,6 +376,27 @@ function Email() {
   // A `dry_run` row is a message that was never sent, so it belongs with the
   // failures on the retry button rather than looking like a delivery.
   const unsent = count('failed') + count('dry_run');
+
+  /*
+   * Its own function rather than another `run` action: resend answers with an
+   * acknowledgement, not a queue snapshot, so folding it into `run` would blank
+   * the tally and the rows the moment it returned.
+   */
+  async function resend(row: EmailRow) {
+    if (!window.confirm(t.admin.emailResendConfirm.replace('{to}', row.to))) return;
+    setBusy(true);
+    setNote('');
+    setError('');
+    try {
+      await emailQueue({ action: 'resend', logId: row.logId });
+      setNote(t.admin.emailResent.replace('{to}', row.to));
+      await run('preview');
+    } catch (e) {
+      setError(adminError(e, t));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveSender() {
     setSenderNote('');
@@ -468,7 +495,7 @@ function Email() {
       </dl>
 
       {held.length > 0 && (
-        <table className="table">
+        <table className="table table--held">
           <thead>
             <tr>
               <th>{t.admin.emailKind}</th>
@@ -512,6 +539,81 @@ function Email() {
       </div>
 
       <Result ok={note} error={error} />
+
+      {/*
+        The record of what was actually sent to whom. Counts alone could not
+        answer "did this speaker get their acceptance", which is the question an
+        organiser actually has.
+      */}
+      <h3 className="card__subtitle">{t.admin.emailLog}</h3>
+      {rows.length === 0 ? (
+        <p className="muted">{t.admin.emailLogEmpty}</p>
+      ) : (
+        <>
+          <div className="grid grid--3">
+            <SelectField
+              label={t.admin.emailLogFilter}
+              value={filter}
+              options={[
+                { value: '', label: t.admin.emailLogAll },
+                ...(['held', 'queued', 'sent', 'dry_run', 'failed'] as const).map((s) => ({
+                  value: s,
+                  label: t.admin.emailStatus[s],
+                })),
+              ]}
+              onChange={setFilter}
+              disabled={busy}
+            />
+          </div>
+
+          <div className="table__scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t.admin.emailTo}</th>
+                  <th>{t.admin.emailKind}</th>
+                  <th>{t.admin.emailStatusColumn}</th>
+                  <th>{t.admin.emailSentAt}</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows
+                  .filter((r) => !filter || r.status === filter)
+                  .map((row) => (
+                    <tr key={row.logId}>
+                      <td>{row.to}</td>
+                      <td>{t.admin.emailKinds[row.kind] ?? row.kind}</td>
+                      <td>
+                        {(t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
+                        {/* The provider's reason: the only thing on screen that
+                            says what to fix. */}
+                        {row.error && <span className="muted"> — {row.error}</span>}
+                      </td>
+                      <td>{row.sentAt ? formatDate(new Date(row.sentAt), locale) : '—'}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn--ghost"
+                          disabled={busy || row.status === 'queued' || row.status === 'sending'}
+                          onClick={() => resend(row)}
+                        >
+                          {t.admin.emailResend}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+
+          {truncated > 0 && (
+            <p className="muted">
+              {t.admin.emailLogTruncated.replace('{count}', String(truncated))}
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }

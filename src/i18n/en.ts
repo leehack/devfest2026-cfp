@@ -407,6 +407,17 @@ export const en = {
     emailConfirm: 'Send {count} decision emails now? This cannot be undone.',
     emailRetry: 'Retry {count} unsent',
     emailSent: '{count} messages queued.',
+    emailLog: 'What was sent',
+    emailLogEmpty: 'Nothing has been queued yet.',
+    emailLogFilter: 'Show',
+    emailLogAll: 'Everything',
+    emailStatusColumn: 'Outcome',
+    emailSentAt: 'Sent',
+    emailResend: 'Send again',
+    emailResendConfirm:
+      'Send this message to {to} again? They will receive a second copy of it.',
+    emailResent: 'Queued again for {to}.',
+    emailLogTruncated: '{count} older messages are not shown.',
 
     proposals: 'Proposals',
     proposalsHelp: 'Best score first. Recompute after a round of scoring, then decide.',

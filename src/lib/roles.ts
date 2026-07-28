@@ -34,7 +34,7 @@ export interface HeldEmail {
   title?: string;
 }
 export const emailQueue = httpsCallable<
-  { action: 'preview' | 'release' | 'retry' },
+  { action: 'preview' | 'release' | 'retry' | 'resend'; logId?: string },
   {
     ok: boolean;
     tally: Record<string, number>;
@@ -47,8 +47,23 @@ export const emailQueue = httpsCallable<
     /** The verified domain's name, to check the sender against. */
     domain?: string;
     templates?: TemplateOverrides;
+    rows?: EmailRow[];
+    /** How many rows the cap left out, so it never reads as "that is all". */
+    truncated?: number;
   }
 >(functions, 'emailQueue');
+
+export interface EmailRow {
+  logId: string;
+  kind: string;
+  to: string;
+  status: string;
+  attempts: number;
+  title: string;
+  /** Milliseconds, because a Timestamp does not survive the callable's JSON. */
+  sentAt: number | null;
+  error: string;
+}
 
 export const setEmailSettings = httpsCallable<EmailSettings, { ok: boolean }>(
   functions,

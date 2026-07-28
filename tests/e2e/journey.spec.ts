@@ -82,8 +82,12 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   await page.getByRole('button', { name: 'Recompute scores' }).click();
   await expect(page.getByText('2 reviews across 2 proposals.')).toBeVisible();
 
-  // Ranked best first, so the 4 outranks the 2.
-  const titles = await page.locator('.table tbody tr td:first-child').allInnerTexts();
+  // Ranked best first, so the 4 outranks the 2. Scoped to the Proposals
+  // section — the admin page has several tables, and the email log is one.
+  const proposals = page.locator('.section', {
+    has: page.getByRole('heading', { name: 'Proposals' }),
+  });
+  const titles = await proposals.locator('.table tbody tr td:first-child').allInnerTexts();
   expect(titles).toEqual([FIRST, SECOND]);
 
   await page.getByLabel(`Status: ${FIRST}`).selectOption('accepted');

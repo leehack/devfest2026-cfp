@@ -413,6 +413,17 @@ export const fr: Dictionary = {
     emailConfirm: 'Envoyer {count} courriels de décision maintenant ? C’est irréversible.',
     emailRetry: 'Renvoyer {count} non envoyés',
     emailSent: '{count} messages mis en file.',
+    emailLog: 'Ce qui a été envoyé',
+    emailLogEmpty: 'Rien n’a encore été mis en file.',
+    emailLogFilter: 'Afficher',
+    emailLogAll: 'Tout',
+    emailStatusColumn: 'Résultat',
+    emailSentAt: 'Envoyé',
+    emailResend: 'Renvoyer',
+    emailResendConfirm:
+      'Renvoyer ce message à {to} ? La personne en recevra une seconde copie.',
+    emailResent: 'Remis en file pour {to}.',
+    emailLogTruncated: '{count} messages plus anciens ne sont pas affichés.',
 
     proposals: 'Propositions',
     proposalsHelp:
