@@ -163,6 +163,16 @@ collection — the rule names `cfp`.
   not the claim worth proving; `tests/e2e/backend.ts` calls the callable directly
   with a real ID token. Always pair refusals with one call that succeeds, or a
   broken URL passes as a refusal.
+- **The review deck freezes its order at load, and its tests must wait for the
+  save.** Sorting by "unscored first" on every render reshuffles the card the
+  reviewer is about to score. The reshuffle only lands once the write returns,
+  so a position asserted straight after the keypress reads the frame before it
+  and passes either way — wait for the `n of m scored` counter first.
+- **`check()` cannot be used on a control that navigates.** It verifies and
+  retries, so a score button that advances the deck is found unpressed on the
+  *next* card and clicked again, scoring the whole queue. Use `click()`. The
+  control is a button with `aria-pressed` rather than a radio for the same
+  reason: radios are expected to stay put.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.

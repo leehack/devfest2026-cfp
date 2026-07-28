@@ -6,6 +6,7 @@ import {
   createAccount,
   inviteRole,
   readProposals,
+  readReviews,
   reset,
   seedProposal,
   seedSpeaker,
@@ -228,16 +229,26 @@ test.describe('reviewing', () => {
     await expect(page.getByRole('heading', { name: 'Sam on shipping' })).toBeVisible();
     await expect(page.getByText('0 of 1 scored')).toBeVisible();
 
-    await page.getByRole('radio', { name: '3 — Yes' }).check();
+    // Scoring saves on its own; Save is for coming back to add a note to a
+    // talk you have already scored.
+    await page.getByRole('button', { name: '3 — Yes' }).click();
+    await expect(page.getByText('1 of 1 scored')).toBeVisible();
+
     await page
       .getByRole('textbox', { name: /^Notes for the committee/ })
       .fill('Solid, wants a tighter close.');
     await page.getByRole('button', { name: 'Save review' }).click();
-    await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+    // Waiting on "Saved" would prove nothing — the score already put it there.
+    await expect
+      .poll(async () => (await readReviews('p-sam'))[0]?.comment)
+      .toBe('Solid, wants a tighter close.');
 
     await page.reload();
     await expect(page.getByText('1 of 1 scored')).toBeVisible();
-    await expect(page.getByRole('radio', { name: '3 — Yes' })).toBeChecked();
+    await expect(page.getByRole('button', { name: '3 — Yes' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(page.getByRole('textbox', { name: /^Notes for the committee/ })).toHaveValue(
       'Solid, wants a tighter close.',
     );
@@ -288,9 +299,8 @@ test.describe('reviewing', () => {
   });
 
   test('other scores stay hidden until an admin opens the round', async ({ page }) => {
-    await page.getByRole('radio', { name: '4 — Strong yes' }).check();
-    await page.getByRole('button', { name: 'Save review' }).click();
-    await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '4 — Strong yes' }).click();
+    await expect(page.getByText('1 of 1 scored')).toBeVisible();
 
     await expect(page.getByText(/scores stay hidden/)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Committee scores' })).toHaveCount(0);

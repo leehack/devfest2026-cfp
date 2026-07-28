@@ -1,7 +1,24 @@
-import { useCallback, useEffect, useState } from 'react';
+/**
+ * One proposal at a time, scored from the keyboard.
+ *
+ * The list this replaces made a reviewer scroll past everything they had
+ * already done to reach what they had not, and scoring meant finding the right
+ * radio in the right card. Reviewing forty proposals is the committee's least
+ * pleasant evening; the shape that survives it is a deck — read, press a
+ * number, land on the next one.
+ *
+ * Two things had to be true for that to be safe. The order is frozen when the
+ * queue loads: it used to be recomputed from `mine` on every render, which is
+ * invisible in a list and fatal in a deck, where scoring would reshuffle the
+ * thing you are about to navigate to. And the save is bound to the proposal it
+ * came from, not to whatever is on screen when it lands, so a slow write can
+ * never attach a score to the wrong talk.
+ */
+
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { Checkbox, RadioGroup, TextAreaField } from '../components/fields';
+import { Checkbox, TextAreaField } from '../components/fields';
 import { useI18n } from '../i18n';
 import { friendlyError } from '../lib/errors';
 import {
@@ -9,21 +26,38 @@ import {
   loadReviewQueue,
   loadSpeakers,
   type ProposalRow,
-  type ReviewQueue,
   type SpeakerBrief,
 } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
 import { LIMITS, SCORES, type Score } from '@shared/enums';
 import type { Review } from '@shared/types';
 
+interface Draft {
+  score: Score | null;
+  conflictOfInterest: boolean;
+  comment: string;
+}
+
+const draftOf = (review?: Review): Draft => ({
+  score: review?.score ?? null,
+  conflictOfInterest: review?.conflictOfInterest ?? false,
+  comment: review?.comment ?? '',
+});
+
 export function ReviewPage({ user }: { user: User }) {
   const { t } = useI18n();
-  const [queue, setQueue] = useState<ReviewQueue>({ proposals: [], own: 0 });
+  const [order, setOrder] = useState<ProposalRow[]>([]);
+  const [own, setOwn] = useState(0);
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
+  const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
   const [speakers, setSpeakers] = useState<Map<string, SpeakerBrief>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
+  const [index, setIndex] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [help, setHelp] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,10 +71,24 @@ export function ReviewPage({ user }: { user: User }) {
         ),
         loadSpeakers(loaded.proposals.flatMap((p) => p.speakerIds ?? [])),
       ]);
-      setQueue(loaded);
+      const visible = config?.reviewsVisible === true;
+
+      // Decided once, here. Once the round is open, disagreement is the point of
+      // the meeting, so the widest spreads come first; until then, work through
+      // what is unscored. Either way the deck holds still while you use it.
+      const sorted = [...loaded.proposals].sort((a, b) =>
+        visible
+          ? (b.aggregate?.stdDev ?? 0) - (a.aggregate?.stdDev ?? 0)
+          : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
+      );
+
+      setOrder(sorted);
+      setOwn(loaded.own);
       setMine(reviews);
+      setDrafts(new Map(sorted.map((p) => [p.id, draftOf(reviews.get(p.id))])));
       setSpeakers(people);
-      setReviewsVisible(config?.reviewsVisible === true);
+      setReviewsVisible(visible);
+      setIndex(0);
     } catch (e) {
       setError(friendlyError(e, t));
     } finally {
@@ -52,87 +100,260 @@ export function ReviewPage({ user }: { user: User }) {
     void load();
   }, [load]);
 
+  const current = order[index];
+
+  // Clamped rather than wrapping: the ends are ends, so a held-down arrow does
+  // not quietly loop back to the start.
+  const go = useCallback(
+    (delta: number) => {
+      setIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(order.length - 1, 0)));
+      setSavedId('');
+    },
+    [order.length],
+  );
+
+  const patch = useCallback((id: string, part: Partial<Draft>) => {
+    setDrafts((prev) => {
+      const next = new Map(prev);
+      next.set(id, { ...draftOf(), ...prev.get(id), ...part });
+      return next;
+    });
+  }, []);
+
+  /**
+   * `id` and `draft` are arguments rather than reads of current state: by the
+   * time this resolves the reviewer may be two proposals further on, and a save
+   * that looked at the screen would write their score onto the wrong talk.
+   */
+  const persist = useCallback(
+    async (id: string, draft: Draft) => {
+      if (draft.score === null) return;
+      setSaving(true);
+      setError('');
+      try {
+        await saveReview(id, user.uid, {
+          score: draft.score,
+          conflictOfInterest: draft.conflictOfInterest,
+          comment: draft.comment,
+        });
+        setMine((prev) =>
+          new Map(prev).set(id, {
+            score: draft.score as Score,
+            conflictOfInterest: draft.conflictOfInterest,
+            comment: draft.comment.trim() || undefined,
+            updatedAt: null,
+          }),
+        );
+        setSavedId(id);
+      } catch (e) {
+        setError(friendlyError(e, t));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [user.uid, t],
+  );
+
+  /** The whole point of the redesign: one key scores and moves on. */
+  const scoreAndAdvance = useCallback(
+    (score: Score) => {
+      if (!current) return;
+      const draft = { ...draftOf(mine.get(current.id)), ...drafts.get(current.id), score };
+      patch(current.id, { score });
+      void persist(current.id, draft);
+      // Navigation does not wait for the write. The save carries its own id, so
+      // landing on the next card cannot misattribute it.
+      go(1);
+    },
+    [current, drafts, mine, patch, persist, go],
+  );
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      // Never steal a keystroke from someone writing a comment.
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (event.key >= '1' && event.key <= '4') {
+        event.preventDefault();
+        scoreAndAdvance(Number(event.key) as Score);
+        return;
+      }
+      if (event.key === 'ArrowRight' || event.key === 'j') {
+        event.preventDefault();
+        go(1);
+        return;
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'k') {
+        event.preventDefault();
+        go(-1);
+        return;
+      }
+      if (event.key === '?') {
+        event.preventDefault();
+        setHelp((open) => !open);
+      }
+    }
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [scoreAndAdvance, go]);
+
   if (loading) return <p className="muted">{t.app.loading}</p>;
-  if (error) {
+  if (error && order.length === 0) {
     return (
       <p className="field__error" role="alert">
         {error}
       </p>
     );
   }
-  if (queue.proposals.length === 0) {
+  if (order.length === 0) {
     // "Nothing to review" reads as a bug when the one submission on the system
     // is your own. Say which of the two it is.
-    return <p className="muted">{queue.own > 0 ? t.review.onlyYours : t.review.empty}</p>;
+    return <p className="muted">{own > 0 ? t.review.onlyYours : t.review.empty}</p>;
   }
+  if (!current) return null;
 
-  // Once the round is open, disagreement is the point of the meeting, so the
-  // widest spreads come first. Until then, work through what is unscored.
-  const ordered = [...queue.proposals].sort((a, b) =>
-    reviewsVisible
-      ? (b.aggregate?.stdDev ?? 0) - (a.aggregate?.stdDev ?? 0)
-      : Number(mine.has(a.id)) - Number(mine.has(b.id)),
-  );
+  const draft = drafts.get(current.id) ?? draftOf(mine.get(current.id));
 
   return (
-    <>
+    <div className="deck">
+      <div className="deck__bar">
+        <p className="deck__progress">
+          <strong>{t.review.position(index + 1, order.length)}</strong>
+          <span className="muted"> · {t.review.progress(mine.size, order.length)}</span>
+        </p>
+        <div className="deck__nav">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={index === 0}
+            onClick={() => go(-1)}
+            aria-label={t.review.previous}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={index >= order.length - 1}
+            onClick={() => go(1)}
+            aria-label={t.review.next}
+          >
+            →
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            aria-expanded={help}
+            onClick={() => setHelp((open) => !open)}
+          >
+            {t.review.shortcuts}
+          </button>
+        </div>
+      </div>
+
+      {/* Dots rather than a bar: at forty proposals the shape of what is left
+          is more useful than a percentage. */}
+      <ol className="deck__dots" aria-hidden="true">
+        {order.map((p, i) => (
+          <li
+            key={p.id}
+            className={`deck__dot${mine.has(p.id) ? ' deck__dot--done' : ''}${
+              i === index ? ' deck__dot--here' : ''
+            }`}
+          />
+        ))}
+      </ol>
+
+      {help && (
+        <dl className="shortcuts">
+          <div>
+            <dt>1 – 4</dt>
+            <dd>{t.review.shortcutScore}</dd>
+          </div>
+          <div>
+            <dt>← / →</dt>
+            <dd>{t.review.shortcutMove}</dd>
+          </div>
+          <div>
+            <dt>?</dt>
+            <dd>{t.review.shortcutHelp}</dd>
+          </div>
+        </dl>
+      )}
+
       <p className="section__help">
         {reviewsVisible ? t.review.sortedByDisagreement : t.review.help}
-      </p>
-      <p className="deadline">
-        {t.review.progress(mine.size, queue.proposals.length)}
         {!reviewsVisible && ` · ${t.review.othersHidden}`}
       </p>
 
-      {ordered.map((proposal) => (
-        <ReviewCard
-          key={proposal.id}
-          uid={user.uid}
-          proposal={proposal}
-          existing={mine.get(proposal.id)}
-          speakers={speakers}
-          reviewsVisible={reviewsVisible}
-          onSaved={(review) => setMine((prev) => new Map(prev).set(proposal.id, review))}
-        />
-      ))}
-    </>
+      <ReviewCard
+        key={current.id}
+        proposal={current}
+        draft={draft}
+        existing={mine.get(current.id)}
+        speakers={speakers}
+        reviewsVisible={reviewsVisible}
+        saving={saving}
+        saved={savedId === current.id}
+        onPatch={(part) => patch(current.id, part)}
+        onScore={scoreAndAdvance}
+        onSave={() => persist(current.id, draft)}
+      />
+
+      {error && (
+        <p className="field__error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
 interface CardProps {
-  uid: string;
   proposal: ProposalRow;
+  draft: Draft;
   existing?: Review;
   speakers: Map<string, SpeakerBrief>;
   reviewsVisible: boolean;
-  onSaved: (review: Review) => void;
+  saving: boolean;
+  saved: boolean;
+  onPatch: (part: Partial<Draft>) => void;
+  onScore: (score: Score) => void;
+  onSave: () => void;
 }
 
-function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved }: CardProps) {
+function ReviewCard({
+  proposal,
+  draft,
+  existing,
+  speakers,
+  reviewsVisible,
+  saving,
+  saved,
+  onPatch,
+  onScore,
+  onSave,
+}: CardProps) {
   const { t } = useI18n();
-  const [score, setScore] = useState<Score | null>(existing?.score ?? null);
-  const [conflict, setConflict] = useState(existing?.conflictOfInterest ?? false);
-  const [comment, setComment] = useState(existing?.comment ?? '');
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState('');
+  const top = useRef<HTMLElement>(null);
 
-  async function save() {
-    if (score === null) return;
-    setBusy(true);
-    setSaved(false);
-    setError('');
-    try {
-      const draft = { score, conflictOfInterest: conflict, comment };
-      await saveReview(proposal.id, uid, draft);
-      setSaved(true);
-      onSaved({ ...draft, comment: comment.trim() || undefined, updatedAt: null });
-    } catch (e) {
-      setError(friendlyError(e, t));
-    } finally {
-      setBusy(false);
-    }
-  }
+  // A new proposal starts at its title, not wherever the last one was scrolled
+  // to — otherwise pressing 2 lands you halfway down an abstract you cannot see.
+  useEffect(() => {
+    top.current?.scrollIntoView({ block: 'start' });
+  }, [proposal.id]);
 
   const people = (proposal.speakerIds ?? [])
     .map((id) => speakers.get(id))
@@ -147,7 +368,7 @@ function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved
   ].filter(Boolean);
 
   return (
-    <section className="section card">
+    <section className="section card" ref={top}>
       <h2>{proposal.title || '—'}</h2>
       <p className="section__help">{meta.join(' · ')}</p>
 
@@ -163,50 +384,59 @@ function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved
         <Speaker key={proposal.speakerIds?.[i] ?? i} speaker={s} />
       ))}
 
-      <RadioGroup
-        label={t.review.scoreLabel}
-        value={score === null ? '' : String(score)}
-        options={SCORES.map((s) => ({ value: String(s), label: t.review.scores[s] }))}
-        onChange={(v) => setScore(Number(v) as Score)}
-        required
-        disabled={busy}
-      />
+      {/* Buttons, not radios. These both record a choice and move the deck on,
+          and a control that navigates away the moment you touch it is not a
+          radio — assistive tech and test tooling alike expect a radio to stay
+          put and stay selected. `aria-pressed` carries the state instead.
+          Never disabled while saving: scoring fast is the entire point, and
+          each save already carries its own id. */}
+      <p className="scores__label" id={`score-${proposal.id}`}>
+        {t.review.scoreLabel}
+      </p>
+      <div className="scores" role="group" aria-labelledby={`score-${proposal.id}`}>
+        {SCORES.map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={`btn score${draft.score === s ? ' score--on' : ''}`}
+            aria-pressed={draft.score === s}
+            onClick={() => onScore(s)}
+          >
+            {t.review.scores[s]}
+          </button>
+        ))}
+      </div>
 
       <Checkbox
         label={t.review.conflict}
-        checked={conflict}
-        onChange={setConflict}
-        disabled={busy}
+        checked={draft.conflictOfInterest}
+        onChange={(conflictOfInterest) => onPatch({ conflictOfInterest })}
+        disabled={saving}
       />
       <p className="field__help">{t.review.conflictHelp}</p>
 
       <TextAreaField
         label={t.review.comment}
-        value={comment}
-        onChange={setComment}
+        value={draft.comment}
+        onChange={(comment) => onPatch({ comment })}
         maxLength={LIMITS.reviewCommentMax}
         rows={3}
-        disabled={busy}
+        disabled={saving}
       />
 
       <div className="card__actions">
         <button
           type="button"
           className="btn btn--primary"
-          disabled={busy || score === null}
-          onClick={save}
+          disabled={saving || draft.score === null}
+          onClick={onSave}
         >
-          {busy ? t.review.saving : t.review.save}
+          {saving ? t.review.saving : t.review.save}
         </button>
         <span className="muted" aria-live="polite">
           {saved ? t.review.saved : existing ? '' : t.review.notScored}
         </span>
       </div>
-      {error && (
-        <p className="field__error" role="alert">
-          {error}
-        </p>
-      )}
 
       {reviewsVisible && <Committee proposalId={proposal.id} />}
     </section>
@@ -224,10 +454,7 @@ function ReviewCard({ uid, proposal, existing, speakers, reviewsVisible, onSaved
  */
 function Speaker({ speaker }: { speaker: SpeakerBrief }) {
   const { t } = useI18n();
-  const line = [
-    [speaker.jobTitle, speaker.company].filter(Boolean).join(', '),
-    speaker.basedIn,
-  ]
+  const line = [[speaker.jobTitle, speaker.company].filter(Boolean).join(', '), speaker.basedIn]
     .filter(Boolean)
     .join(' · ');
 
@@ -282,9 +509,7 @@ function Committee({ proposalId }: { proposalId: string }) {
         {rows.map((row) => (
           <li key={row.reviewerUid}>
             <strong>{t.review.scores[row.score]}</strong>
-            {row.conflictOfInterest && (
-              <span className="muted"> · {t.review.conflictDeclared}</span>
-            )}
+            {row.conflictOfInterest && <span className="muted"> · {t.review.conflictDeclared}</span>}
             {row.comment && <p className="card__text">{row.comment}</p>}
           </li>
         ))}

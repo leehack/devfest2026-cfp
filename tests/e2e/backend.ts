@@ -160,6 +160,16 @@ export async function callJson(idToken: string, name: string, data: unknown): Pr
   return (await response.json())?.result ?? {};
 }
 
+/** The reviews on one proposal, for asserting which talk a score landed on. */
+export async function readReviews(proposalId: string): Promise<Record<string, any>[]> {
+  const response = await fetch(`${DOCS}/proposals/${proposalId}/reviews`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (!response.ok) return [];
+  const { documents } = await response.json();
+  return (documents ?? []).map((d: { fields: Record<string, any> }) => unwrap(d.fields));
+}
+
 /** Puts a queue row into a state the UI cannot reach, e.g. mid-send. */
 export async function setEmailStatusDirect(logId: string, status: string) {
   await patch(`emailLog/${logId}`, { status: { stringValue: status } });

@@ -1205,6 +1205,117 @@ p {
   align-items: center;
 }
 
+/* ------------------------------------------------------------- review deck */
+
+.deck__bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--s-3);
+}
+
+.deck__progress {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.deck__nav {
+  display: flex;
+  gap: var(--s-2);
+}
+
+/* One per proposal: at forty of them the shape of what is left reads faster
+   than a percentage, and shows where the unscored ones actually are. */
+.deck__dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 0 0 var(--s-4);
+  padding: 0;
+  list-style: none;
+}
+
+.deck__dot {
+  width: 1.25rem;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--line);
+}
+
+.deck__dot--done {
+  background: var(--accent);
+}
+
+.deck__dot--here {
+  background: var(--fg);
+}
+
+.shortcuts {
+  display: grid;
+  gap: var(--s-2) var(--s-4);
+  margin: 0 0 var(--s-4);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.shortcuts > div {
+  display: flex;
+  gap: var(--s-3);
+  align-items: baseline;
+}
+
+.shortcuts dt {
+  flex: 0 0 5rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.shortcuts dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+.scores__label {
+  margin: var(--s-5) 0 var(--s-2);
+  font-weight: 600;
+}
+
+/* Two up on a phone, the whole scale in one row once there is room — a glance
+   and a reach, rather than a column to read down forty times an evening. */
+.scores {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s-2);
+  margin-bottom: var(--s-5);
+}
+
+@media (min-width: 40rem) {
+  .scores {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.score {
+  padding: var(--s-3) var(--s-2);
+  font-weight: 600;
+}
+
+.score--on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.score--on:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
 /* The speaker behind the talk. Set apart, so it reads as context rather than
    as more of the abstract — a reviewer scores the proposal, not the CV. */
 .speaker {

@@ -65,15 +65,23 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   await inviteRole(REVIEWER.email, 'reviewer');
   await signInAs(page, REVIEWER, '#/review');
 
+  // One at a time now: the second proposal is a keystroke away, not a scroll.
   await expect(page.getByText('0 of 2 scored')).toBeVisible();
-  await expect(page.getByRole('heading', { name: FIRST })).toBeVisible();
-  await expect(page.getByRole('heading', { name: SECOND })).toBeVisible();
+  await expect(page.getByText('1 of 2')).toBeVisible();
+  await expect(page.locator('.card h2')).toHaveCount(1);
   // Not a blind review (§7) — the speaker's name is on the card.
   await expect(page.getByText('Test Speaker', { exact: false }).first()).toBeVisible();
 
-  await scoreTalk(page, FIRST, '4 — Strong yes');
-  await scoreTalk(page, SECOND, '2 — Maybe');
-  await expect(page.getByText('2 of 2 scored')).toBeVisible();
+  // The queue has no `orderBy`, so which talk the deck opens on is Firestore's
+  // choice. Score whichever is up, then assert the ranking — the run has to
+  // come out the same either way.
+  const scores: Record<string, string> = { [FIRST]: '4 — Strong yes', [SECOND]: '2 — Maybe' };
+  const opened = await page.locator('.card h2').innerText();
+  const then = opened === FIRST ? SECOND : FIRST;
+
+  await scoreTalk(page, opened, scores[opened], 1);
+  // Scoring advanced the deck on its own; nothing here asked it to.
+  await scoreTalk(page, then, scores[then], 2);
 
   // ------------------------------------------------------------------ admin
   await inviteRole(ADMIN.email, 'admin');
@@ -108,9 +116,15 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   expect(decided.find((p) => p.title === SECOND)?.status).toBe('rejected');
 });
 
-async function scoreTalk(page: Page, title: string, score: string) {
+/**
+ * The review screen is a deck — one proposal on screen, and the score button
+ * both saves and moves on. So this asserts the counter rather than a "Saved"
+ * that has already navigated away, and clicks rather than checks: a control
+ * that navigates cannot be verified-and-retried.
+ */
+async function scoreTalk(page: Page, title: string, score: string, scoredAfter: number) {
   const card = page.locator('.card', { has: page.getByRole('heading', { name: title }) });
-  await card.getByRole('radio', { name: score }).check();
-  await card.getByRole('button', { name: 'Save review' }).click();
-  await expect(card.getByText('Saved', { exact: true })).toBeVisible();
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: score }).click();
+  await expect(page.getByText(`${scoredAfter} of 2 scored`)).toBeVisible();
 }
