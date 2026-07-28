@@ -1082,6 +1082,57 @@ p {
   border-top: 1px solid var(--line);
 }
 
+/* A speaker plus what they answered: the name stays one line, the answers go
+   underneath rather than fighting it for the same row. */
+.people__row--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.people__who {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.answers {
+  display: grid;
+  gap: var(--s-1) var(--s-4);
+  margin: var(--s-2) 0 0;
+  font-size: var(--text-sm);
+}
+
+/* Label above value on a phone, side by side once there is room to line them
+   up — a shirt size is two words and does not need half a screen. */
+@media (min-width: 34rem) {
+  .answers > div {
+    display: grid;
+    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+    gap: var(--s-3);
+  }
+}
+
+.answers dt {
+  color: var(--muted);
+}
+
+.answers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* One question in the editor, boxed so the pile of them stays readable. */
+.formfield {
+  margin-bottom: var(--s-5);
+}
+
+.formfield legend {
+  padding: 0 var(--s-2);
+  font-weight: 600;
+}
+
 .people__meta {
   color: var(--muted);
   font-size: var(--text-sm);

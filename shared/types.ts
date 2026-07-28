@@ -18,6 +18,7 @@ import type {
   Score,
   SocialPlatform,
 } from './enums';
+import type { Answers } from './confirmForm';
 
 export interface Social {
   platform: SocialPlatform;
@@ -96,6 +97,8 @@ export interface Proposal {
   status: ProposalStatus;
   confirmDeadline?: unknown;
   confirmedAt?: unknown;
+  /** The organiser's own questions, answered on confirmation. */
+  confirmAnswers?: Answers;
   /** Set at scheduling when deliveryLanguage is `either`. */
   assignedLanguage?: ResolvedLanguage;
 

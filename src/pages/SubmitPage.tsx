@@ -28,6 +28,7 @@ import {
   type FormState,
 } from '../lib/formState';
 import {
+  loadConfirmForm,
   loadMyProposals,
   saveDraft,
   submitProposal,
@@ -37,6 +38,16 @@ import {
   type LoadedProposal,
 } from '../lib/proposals';
 import type { ProposalStatus } from '@shared/enums';
+import {
+  EMPTY_FORM,
+  FORM_LIMITS,
+  localised,
+  type AnswerFaults,
+  type AnswerValue,
+  type Answers,
+  type ConfirmField,
+  type ConfirmForm,
+} from '@shared/confirmForm';
 
 type Errors = Record<string, string>;
 
@@ -98,6 +109,88 @@ function TalkPicker({
   );
 }
 
+interface QuestionsProps {
+  fields: ConfirmField[];
+  answers: Answers;
+  faults: AnswerFaults;
+  busy: boolean;
+  onAnswer: (key: string, value: AnswerValue) => void;
+}
+
+/**
+ * The organiser's own questions, rendered from `config/confirmForm`.
+ *
+ * Nothing here is hard-coded — a t-shirt size and a dietary note are one
+ * event's questions, not the platform's, and an organiser who cannot add
+ * "do you need a power outlet" without a deploy ends up chasing forty people
+ * by email instead.
+ */
+function Questions({ fields, answers, faults, busy, onAnswer }: QuestionsProps) {
+  const { t, locale } = useI18n();
+  const message = (key: string) => {
+    const fault = faults[key];
+    return fault ? t.form.answerErrors[fault] : undefined;
+  };
+
+  return (
+    <>
+      {fields.map((field) => {
+        const label = localised(field.label, locale);
+        const help = localised(field.help, locale) || undefined;
+        const value = answers[field.key];
+
+        if (field.type === 'checkbox') {
+          // `field` for the spacing every other question already gets — a
+          // checkbox carries none of its own and ends up against the buttons.
+          return (
+            <div key={field.key} className="field">
+              <Checkbox
+                label={label}
+                checked={value === true}
+                onChange={(next) => onAnswer(field.key, next)}
+                disabled={busy}
+                error={message(field.key)}
+              />
+              {help && <p className="field__help">{help}</p>}
+            </div>
+          );
+        }
+
+        const text = typeof value === 'string' ? value : '';
+        const common = {
+          key: field.key,
+          label,
+          help,
+          required: field.required,
+          disabled: busy,
+          error: message(field.key),
+          value: text,
+          onChange: (next: string) => onAnswer(field.key, next),
+        };
+
+        if (field.type === 'select') {
+          return (
+            <SelectField
+              {...common}
+              options={[
+                { value: '', label: t.form.answerPick },
+                ...(field.options ?? []).map((option) => ({
+                  value: option.value,
+                  label: localised(option.label, locale),
+                })),
+              ]}
+            />
+          );
+        }
+        if (field.type === 'textarea') {
+          return <TextAreaField {...common} maxLength={FORM_LIMITS.answerTextarea} rows={3} />;
+        }
+        return <TextField {...common} maxLength={FORM_LIMITS.answerText} />;
+      })}
+    </>
+  );
+}
+
 interface StatusBannerProps {
   status: ProposalStatus;
   scope: EditScope;
@@ -106,12 +199,31 @@ interface StatusBannerProps {
   onWithdraw?: () => void;
   /** Present only while an acceptance is unanswered. */
   onRespond?: (response: 'confirm' | 'decline') => void;
+  questions: QuestionsProps;
+  /** Open once they have said yes and there is something left to ask. */
+  asking: boolean;
+  onAsk: () => void;
+  onCancelAsk: () => void;
+  /** Present once confirmed, so an answer can still be corrected afterwards. */
+  onSaveAnswers?: () => void;
 }
 
 /** Where the talk stands, and what is still theirs to change about it. */
-function StatusBanner({ status, scope, busy, onWithdraw, onRespond }: StatusBannerProps) {
+function StatusBanner({
+  status,
+  scope,
+  busy,
+  onWithdraw,
+  onRespond,
+  questions,
+  asking,
+  onAsk,
+  onCancelAsk,
+  onSaveAnswers,
+}: StatusBannerProps) {
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
+  const hasQuestions = questions.fields.length > 0;
 
   return (
     <div className={`panel${good ? ' panel--good' : ''}`}>
@@ -123,14 +235,17 @@ function StatusBanner({ status, scope, busy, onWithdraw, onRespond }: StatusBann
         because an accepted speaker who cannot come needs a way to say so that
         is not "ignore it until someone chases me" — an unanswered slot is the
         expensive one for the programme.
+
+        Declining never asks the questions. Someone who cannot come should not
+        have to pick a t-shirt size to say so.
       */}
-      {onRespond && (
+      {onRespond && !asking && (
         <div className="card__actions">
           <button
             type="button"
             className="btn btn--primary"
             disabled={busy}
-            onClick={() => onRespond('confirm')}
+            onClick={() => (hasQuestions ? onAsk() : onRespond('confirm'))}
           >
             {t.form.confirmAccept}
           </button>
@@ -143,6 +258,42 @@ function StatusBanner({ status, scope, busy, onWithdraw, onRespond }: StatusBann
             {t.form.confirmDecline}
           </button>
         </div>
+      )}
+
+      {onRespond && asking && (
+        <>
+          <p className="field__help">{t.form.answersHelp}</p>
+          <Questions {...questions} />
+          <div className="card__actions">
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy}
+              onClick={() => onRespond('confirm')}
+            >
+              {t.form.answersSubmit}
+            </button>
+            <button type="button" className="btn btn--ghost" disabled={busy} onClick={onCancelAsk}>
+              {t.form.answersCancel}
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Answered already, but a size guessed in a hurry should not be final. */}
+      {onSaveAnswers && hasQuestions && (
+        <>
+          <h3 className="card__subtitle">{t.form.answersTitle}</h3>
+          <Questions {...questions} />
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={onSaveAnswers}
+          >
+            {t.form.answersSave}
+          </button>
+        </>
       )}
 
       <p className="muted">{t.form.editHelp[scope]}</p>
@@ -186,6 +337,10 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const [confirmForm, setConfirmForm] = useState<ConfirmForm>(EMPTY_FORM);
+  const [answers, setAnswers] = useState<Answers>({});
+  const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
+  const [asking, setAsking] = useState(false);
 
   const dirty = useRef(false);
   const scope = editScope(status, cfp.state === 'open');
@@ -200,10 +355,17 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     let cancelled = false;
     (async () => {
       try {
-        const { talks: found, speaker: profile } = await loadMyProposals(user);
+        // Both at once: the questions are organiser config, and waiting for the
+        // proposals first would put a second round trip in front of a page that
+        // already loads two documents.
+        const [{ talks: found, speaker: profile }, questions] = await Promise.all([
+          loadMyProposals(user),
+          loadConfirmForm(),
+        ]);
         if (cancelled) return;
         setTalks(found);
         setSpeaker(profile);
+        setConfirmForm(questions);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
@@ -212,6 +374,7 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
           setForm(fromDocuments(open.proposal, profile));
           setProposalId(open.id);
           setStatus(open.status);
+          setAnswers((open.proposal.confirmAnswers ?? {}) as Answers);
         } else {
           // Prefill from the Google account rather than making people retype it.
           setForm({
@@ -299,6 +462,9 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     setForm(fromDocuments(talk.proposal, speaker));
     setProposalId(id);
     setStatus(talk.status);
+    setAnswers((talk.proposal.confirmAnswers ?? {}) as Answers);
+    setAnswerFaults({});
+    setAsking(false);
     setShowErrors(false);
     setBanner(null);
     setSaveState('idle');
@@ -370,12 +536,30 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
     // afterwards, but a decline given by accident gives the slot away.
     if (response === 'decline' && !window.confirm(t.form.confirmDeclineConfirm)) return;
     setSubmitting(true);
+    setAnswerFaults({});
     try {
-      const { data } = await respondToDecision({ proposalId, response });
+      const { data } = await respondToDecision({
+        proposalId,
+        response,
+        ...(response === 'confirm' ? { answers } : {}),
+      });
       setStatus(data.status);
       markTalk(proposalId, data.status);
+      setAsking(false);
+      setBanner(null);
     } catch (error: any) {
-      setBanner(friendlyError(error, t));
+      /*
+       * The callable answers a bad form with the faults keyed by field, so the
+       * questions can mark themselves rather than showing one banner that does
+       * not say which of eight answers is the problem.
+       */
+      const faults = error?.details as AnswerFaults | undefined;
+      if (error?.code === 'functions/invalid-argument' && faults && typeof faults === 'object') {
+        setAnswerFaults(faults);
+        setBanner(t.form.answersIncomplete);
+      } else {
+        setBanner(friendlyError(error, t));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -447,6 +631,17 @@ export function SubmitPage({ user, cfp }: SubmitPageProps) {
           busy={submitting}
           onWithdraw={withdrawable ? onWithdraw : undefined}
           onRespond={status === 'accepted' ? onRespond : undefined}
+          questions={{
+            fields: confirmForm.fields,
+            answers,
+            faults: answerFaults,
+            busy: submitting,
+            onAnswer: (key, value) => setAnswers((prev) => ({ ...prev, [key]: value })),
+          }}
+          asking={asking}
+          onAsk={() => setAsking(true)}
+          onCancelAsk={() => setAsking(false)}
+          onSaveAnswers={status === 'confirmed' ? () => onRespond('confirm') : undefined}
         />
       )}
 

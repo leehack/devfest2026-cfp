@@ -21,6 +21,7 @@ import { mapEmpty, toDocuments, type FormState } from './formState';
 import type { EditScope } from './lifecycle';
 import { LIMITS, type ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
+import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
 
 export interface CfpWindow {
   opensAt: Date;
@@ -170,9 +171,20 @@ export const withdrawProposal = httpsCallable<{ proposalId: string }, CallableRe
 );
 
 export const respondToDecision = httpsCallable<
-  { proposalId: string; response: 'confirm' | 'decline' },
+  { proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
   CallableResult & { status: 'confirmed' | 'declined' }
 >(functions, 'respondToDecision');
+
+/**
+ * The organiser's questions. Readable by anyone signed in, so this is a plain
+ * document read rather than a callable — the speaker's page needs it before it
+ * can render the confirmation.
+ */
+export async function loadConfirmForm(): Promise<ConfirmForm> {
+  const snap = await getDoc(doc(db, 'config', 'confirmForm'));
+  const fields = snap.exists() ? snap.data().fields : null;
+  return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
+}
 
 export const importSessionizeProfile = httpsCallable<
   { url: string },

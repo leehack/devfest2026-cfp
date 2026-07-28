@@ -170,6 +170,34 @@ export async function readReviews(proposalId: string): Promise<Record<string, an
   return (documents ?? []).map((d: { fields: Record<string, any> }) => unwrap(d.fields));
 }
 
+/** The organiser's confirmation questions, without going through the callable. */
+export async function setConfirmFormDirect(fields: unknown[]) {
+  await expectOk(
+    await fetch(`${DOCS}/config/confirmForm`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+      // Written whole rather than through `patch`, which cannot express an
+      // array of maps in Firestore's REST encoding.
+      body: JSON.stringify({
+        fields: { fields: { arrayValue: { values: fields.map(encode) } } },
+      }),
+    }),
+    'setConfirmFormDirect',
+  );
+}
+
+/** The inverse of `unwrap`: enough of it for a form definition. */
+function encode(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(encode) } };
+  return {
+    mapValue: {
+      fields: Object.fromEntries(Object.entries(value as object).map(([k, v]) => [k, encode(v)])),
+    },
+  };
+}
+
 /** Puts a queue row into a state the UI cannot reach, e.g. mid-send. */
 export async function setEmailStatusDirect(logId: string, status: string) {
   await patch(`emailLog/${logId}`, { status: { stringValue: status } });

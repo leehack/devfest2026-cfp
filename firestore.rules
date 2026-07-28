@@ -51,7 +51,7 @@ service cloud.firestore {
     function protectedKeys() {
       return [
         'status', 'aggregate', 'submittedAt', 'confirmDeadline',
-        'confirmedAt', 'assignedLanguage'
+        'confirmedAt', 'assignedLanguage', 'confirmAnswers'
       ];
     }
 
@@ -72,7 +72,12 @@ service cloud.firestore {
     // `config/email` holds the organisers' addresses and reaches the admin page
     // through the emailQueue callable instead. Writes go through a function.
     match /config/{docId} {
-      allow read: if docId == 'cfp';
+      // `confirmForm` is the set of questions an accepted speaker is about to
+      // answer, so they have to be able to read it — but only once signed in,
+      // since it says nothing useful to a stranger and may name sponsors or
+      // logistics that are not public yet. `email` stays shut: it holds the key
+      // hint and the templates, which reach an admin through a callable.
+      allow read: if docId == 'cfp' || (docId == 'confirmForm' && signedIn());
       allow write: if false;
     }
 

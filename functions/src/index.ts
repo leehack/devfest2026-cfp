@@ -26,6 +26,14 @@ import {
   type Template,
 } from '../../shared/emailTemplates';
 import { validateSettings, type EmailSettings } from '../../shared/emailSettings';
+import {
+  EMPTY_FORM,
+  normaliseForm,
+  validateAnswers,
+  validateForm,
+  type Answers,
+  type ConfirmForm,
+} from '../../shared/confirmForm';
 import { claim, grant, revoke, RoleError } from './roles';
 import { deliver, loadSettings, loadTemplates, queueEmail, type EmailStatus } from './email';
 import { keyHint, readResendKey, writeResendKey } from './secrets';
@@ -306,15 +314,42 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
  * already the speaker's, so the session is the authentication. A one-time token
  * would be a second, weaker credential to leak, expire and support.
  */
+/** The organiser's questions, or none. Missing means nothing extra is asked. */
+async function loadConfirmForm(): Promise<ConfirmForm> {
+  const snap = await db.doc('config/confirmForm').get();
+  const fields = snap.data()?.fields;
+  return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
+}
+
 export const respondToDecision = onCall(CALLABLE, async (request) => {
   const uid = requireUid(request, 'answer a decision');
   const proposalId = requireProposalId(request.data);
-  const response = String((request.data as { response?: unknown } | undefined)?.response ?? '');
+  const data = (request.data ?? {}) as { response?: unknown; answers?: unknown };
+  const response = String(data.response ?? '');
 
   if (response !== 'confirm' && response !== 'decline') {
     throw new HttpsError('invalid-argument', 'Answer must be "confirm" or "decline".');
   }
   const status = response === 'confirm' ? 'confirmed' : 'declined';
+
+  /*
+   * Only a confirmation carries answers. Someone who cannot come should not
+   * have to fill in a t-shirt size to say so — a decline that is harder than
+   * silence is a decline we do not hear until it is too late to fill the slot.
+   *
+   * Validated here rather than trusted from the browser: `confirmAnswers` is in
+   * `protectedKeys`, so this callable is the only way it is ever written, and
+   * the client's copy of the form is a convenience.
+   */
+  let answers: Answers = {};
+  if (status === 'confirmed') {
+    const form = await loadConfirmForm();
+    const checked = validateAnswers(form, (data.answers ?? {}) as Answers);
+    if (Object.keys(checked.faults).length > 0) {
+      throw new HttpsError('invalid-argument', 'Some answers need fixing.', checked.faults);
+    }
+    answers = checked.clean;
+  }
 
   await db.runTransaction(async (tx) => {
     const proposalRef = db.doc(`proposals/${proposalId}`);
@@ -333,11 +368,45 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
       status,
       confirmedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
+      // Replaced wholesale, not merged: confirming again is how a speaker
+      // corrects an answer, and a merge would leave the old one behind.
+      ...(status === 'confirmed' ? { confirmAnswers: answers } : {}),
     });
   });
 
   logger.info('decision answered', { proposalId, uid, status });
   return { ok: true, status };
+});
+
+/**
+ * The questions asked after someone says yes. Admin only, and stored rather
+ * than coded so an organiser can add "do you need a power outlet" the week they
+ * discover they need to know.
+ *
+ * Replaces the whole list. Editing one field of a form held in one document is
+ * a read-modify-write either way; doing it in the browser and sending the
+ * result keeps the merge where the admin can see it.
+ */
+export const setConfirmForm = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'change the confirmation form');
+  const fields = (request.data as { fields?: unknown } | undefined)?.fields;
+  if (!Array.isArray(fields)) {
+    throw new HttpsError('invalid-argument', 'fields must be a list.');
+  }
+
+  const form = normaliseForm({ fields } as ConfirmForm);
+  const fault = validateForm(form);
+  if (fault) {
+    throw new HttpsError(
+      'invalid-argument',
+      fault.key ? `${fault.problem} on "${fault.key}"` : fault.problem,
+      fault,
+    );
+  }
+
+  await db.doc('config/confirmForm').set(form);
+  logger.info('confirm form saved', { byUid, fields: form.fields.length });
+  return { ok: true, fields: form.fields };
 });
 
 /**

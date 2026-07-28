@@ -195,6 +195,17 @@ describe('status and aggregate are function-writable only', () => {
     );
   });
 
+  /*
+   * The confirmation answers are validated by `respondToDecision` against the
+   * form as it stands. A speaker who could write the map directly would answer
+   * questions that were never asked — or skip the ones that were.
+   */
+  it('denies writing the confirmation answers directly', async () => {
+    await assertFails(
+      updateDoc(doc(asApplicant(), 'proposals/p-anna'), { confirmAnswers: { shirt: 'XXL' } }),
+    );
+  });
+
   /**
    * Naming a co-presenter is a claim about someone else: it hands them write
    * access, and disqualifies them from reviewing the talk. Until there is an
@@ -710,6 +721,27 @@ describe('config', () => {
     // here would reopen a closed CFP or redirect the mail.
     await assertFails(updateDoc(doc(asApplicant(), 'config/cfp'), { paused: false }));
     await assertFails(setDoc(doc(asApplicant(), 'config/email'), { from: 'me@evil.example' }));
+  });
+
+  /*
+   * The one exception to "only `cfp` is readable": the confirmation questions
+   * are rendered by the speaker who is about to answer them, so their browser
+   * has to be able to read the document.
+   */
+  it('lets a signed-in speaker read the confirmation questions', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'config/confirmForm'), { fields: [] });
+    });
+    await assertSucceeds(getDoc(doc(asApplicant(), 'config/confirmForm')));
+  });
+
+  it('keeps the questions from a signed-out visitor, and shut to writes', async () => {
+    await assertFails(
+      getDoc(doc(env.unauthenticatedContext().firestore(), 'config/confirmForm')),
+    );
+    // Writable only by the callable — otherwise anyone could ask a speaker
+    // anything from a page carrying our name.
+    await assertFails(setDoc(doc(asApplicant(), 'config/confirmForm'), { fields: [] }));
   });
 });
 

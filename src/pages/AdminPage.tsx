@@ -27,6 +27,7 @@ import {
 import { BarChart, ScoreHistogram, StackedBar } from '../components/charts';
 import { EmailSetup } from '../components/EmailSetup';
 import { EmailPreview } from '../components/EmailPreview';
+import { ConfirmFormEditor } from '../components/ConfirmFormEditor';
 import {
   CATEGORIES,
   DELIVERY_LANGUAGES,
@@ -43,6 +44,8 @@ import {
   type EmailSettings,
 } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
+import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
+import { loadConfirmForm } from '../lib/proposals';
 import type { RoleGrant } from '@shared/types';
 
 function Result({ ok, error }: { ok: string; error: string }) {
@@ -64,8 +67,47 @@ export function AdminPage({ user }: { user: User }) {
       <People user={user} />
       <Window />
       <Proposals />
+      <ConfirmQuestions />
       <Email />
     </>
+  );
+}
+
+/**
+ * What a speaker is asked once they accept. Its own section rather than part of
+ * Proposals: it is set up once at the start of a round and then left alone,
+ * while the table above it is worked through every day.
+ */
+function ConfirmQuestions() {
+  const { t } = useI18n();
+  const [fields, setFields] = useState<ConfirmField[] | null>(null);
+  const [error, setError] = useState('');
+
+  const refresh = useCallback(async () => {
+    try {
+      setFields((await loadConfirmForm()).fields);
+    } catch (e) {
+      setError(adminError(e, t));
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return (
+    <section className="section">
+      <h2>{t.admin.form}</h2>
+      {error && (
+        <p className="field__error" role="alert">
+          {error}
+        </p>
+      )}
+      {/* Mounted only once the stored form has arrived, so the editor seeds
+          itself from it. Not re-keyed afterwards: it owns the list from then
+          on, and remounting would throw away what is being typed. */}
+      {fields === null ? <p className="muted">{t.app.loading}</p> : <ConfirmFormEditor fields={fields} />}
+    </section>
   );
 }
 
@@ -748,6 +790,34 @@ function WriteToSpeaker({ replyTo, onSent }: { replyTo: string; onSent: () => vo
   );
 }
 
+/** What one speaker answered, labelled by the questions as they stand now. */
+function Answered({ fields, answers }: { fields: ConfirmField[]; answers?: Answers }) {
+  const { t, locale } = useI18n();
+  if (!answers || fields.length === 0) return null;
+
+  // A field added after someone confirmed has no answer from them, and showing
+  // an empty row for it reads as "they skipped it" rather than "we never asked".
+  const given = fields.filter((field) => answers[field.key] !== undefined);
+  if (given.length === 0) return null;
+
+  return (
+    <dl className="answers">
+      {given.map((field) => (
+        <div key={field.key}>
+          <dt>{localised(field.label, locale)}</dt>
+          <dd>
+            {typeof answers[field.key] === 'boolean'
+              ? answers[field.key]
+                ? t.admin.formYes
+                : t.admin.formNo
+              : String(answers[field.key])}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 // ----------------------------------------------------------------- proposals
 
 
@@ -830,14 +900,16 @@ function Proposals() {
   const { t } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [speakers, setSpeakers] = useState<Map<string, SpeakerBrief>>(new Map());
+  const [questions, setQuestions] = useState<ConfirmField[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
     try {
-      const all = await loadAllProposals();
+      const [all, form] = await Promise.all([loadAllProposals(), loadConfirmForm()]);
       setRows(all);
+      setQuestions(form.fields);
       setSpeakers(await loadSpeakers(all.flatMap((p) => p.speakerIds ?? [])));
     } catch (e) {
       setError(adminError(e, t));
@@ -972,15 +1044,20 @@ function Proposals() {
         ) : (
           <ul className="people">
             {accepted.map((row) => (
-              <li key={row.id} className="people__row">
-                <span>
-                  <strong>{names(row) || '—'}</strong>
-                  <span className="people__meta">
-                    {row.title}
-                    {row.aggregate && ` · ${row.aggregate.avgScore.toFixed(2)}`}
+              <li key={row.id} className="people__row people__row--stack">
+                <span className="people__who">
+                  <span>
+                    <strong>{names(row) || '—'}</strong>
+                    <span className="people__meta">
+                      {row.title}
+                      {row.aggregate && ` · ${row.aggregate.avgScore.toFixed(2)}`}
+                    </span>
                   </span>
+                  <span className="muted">{t.enums.status[row.status]}</span>
                 </span>
-                <span className="muted">{t.enums.status[row.status]}</span>
+                {/* The whole reason for asking. Without it an organiser reads
+                    shirt sizes out of the Firestore console. */}
+                <Answered fields={questions} answers={row.confirmAnswers} />
               </li>
             ))}
           </ul>

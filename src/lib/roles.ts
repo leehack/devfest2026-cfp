@@ -7,6 +7,7 @@ import { db, functions } from '../firebase';
 import type { ProposalStatus, Role } from '@shared/enums';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
+import type { ConfirmField } from '@shared/confirmForm';
 import type { Proposal, Reviewer, RoleGrant } from '@shared/types';
 
 export const claimRole = httpsCallable<void, { role: Role | null }>(functions, 'claimRole');
@@ -108,6 +109,11 @@ export const sendTestEmail = httpsCallable<
   { kind: string; locale: string; needsVisa?: boolean },
   { ok: boolean; status: string; to: string }
 >(functions, 'sendTestEmail');
+
+export const setConfirmForm = httpsCallable<
+  { fields: ConfirmField[] },
+  { ok: boolean; fields: ConfirmField[] }
+>(functions, 'setConfirmForm');
 
 export const sendSpeakerMessage = httpsCallable<
   { proposalId: string; subject: string; body: string },

@@ -163,6 +163,15 @@ collection — the rule names `cfp`.
   not the claim worth proving; `tests/e2e/backend.ts` calls the callable directly
   with a real ID token. Always pair refusals with one call that succeeds, or a
   broken URL passes as a refusal.
+- **The confirmation questions are data, and `config/confirmForm` is the only
+  readable config document besides `cfp`.** A speaker's browser renders the form
+  it is about to answer, so the rule names that document explicitly; `email`
+  stays shut. `confirmAnswers` is in `protectedKeys`, so `respondToDecision` is
+  the only writer — the browser's copy of the form is a convenience and
+  `validateAnswers` in the callable is what counts.
+- **A field's `key` never moves.** Every stored answer is filed under it, so the
+  editor generates it once from the English label and then shows it read-only.
+  Renaming it would orphan the answers already collected, silently.
 - **The review deck freezes its order at load, and its tests must wait for the
   save.** Sorting by "unscored first" on every render reshuffles the card the
   reviewer is about to score. The reshuffle only lands once the write returns,
