@@ -301,6 +301,14 @@ export const fr: Dictionary = {
   },
 
   admin: {
+    sections: 'Sections d’administration',
+    tabs: {
+      proposals: 'Propositions',
+      committee: 'Comité',
+      settings: 'Paramètres',
+      confirmation: 'Confirmation',
+      email: 'Courriel',
+    },
     people: 'Comité',
     peopleHelp: 'Invitez par courriel. Le rôle s’applique dès la première connexion.',
     emailLabel: 'Adresse courriel',

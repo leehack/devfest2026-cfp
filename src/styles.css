@@ -789,6 +789,7 @@ p {
 @media (pointer: coarse) {
   .btn,
   .nav__tab,
+  .subnav__tab,
   .talks__tab,
   .talks__add,
   .field__input {
@@ -1045,6 +1046,40 @@ p {
 
 .nav__tab--on {
   border-bottom-color: var(--accent);
+  color: var(--fg);
+  font-weight: 650;
+}
+
+/* The admin screen's own tabs, one level in. Pills rather than a second
+   underlined row, so the two navigations do not read as siblings. */
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: var(--s-5) 0;
+}
+
+.subnav__tab {
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill, 999px);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.subnav__tab:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.subnav__tab--on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--fg);
   font-weight: 650;
 }

@@ -15,7 +15,7 @@ import { AdminPage } from './pages/AdminPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
-import { navigate, useRoute, type Route } from './lib/router';
+import { navigate, usePlace, type AdminTab, type Route } from './lib/router';
 import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
 import {
   arrivingFromLink,
@@ -33,7 +33,7 @@ export function App() {
   const [authReady, setAuthReady] = useState(false);
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
-  const route = useRoute();
+  const { route, tab } = usePlace();
   const { role, ready: roleReady } = useRole(user);
 
   const t = dictionaries[locale];
@@ -92,7 +92,7 @@ export function App() {
           {!authReady || !cfpReady ? (
             <p className="muted">{t.app.loading}</p>
           ) : (
-            <Routed route={route} user={user} cfp={cfp} role={role} roleReady={roleReady} />
+            <Routed route={route} tab={tab} user={user} cfp={cfp} role={role} roleReady={roleReady} />
           )}
         </main>
       </div>
@@ -123,6 +123,7 @@ function Nav({ route, role }: { route: Route; role: Role }) {
 
 interface RoutedProps {
   route: Route;
+  tab: AdminTab;
   user: User | null;
   cfp: CfpWindow | null;
   role: Role | null;
@@ -133,7 +134,7 @@ interface RoutedProps {
  * Only the form is gated on the submission window — reviewing happens after it
  * closes, and an admin needs the window controls precisely when it is shut.
  */
-function Routed({ route, user, cfp, role, roleReady }: RoutedProps) {
+function Routed({ route, tab, user, cfp, role, roleReady }: RoutedProps) {
   const { t } = useI18n();
 
   if (route === 'form') return <FormRoute user={user} cfp={cfp} />;
@@ -153,7 +154,7 @@ function Routed({ route, user, cfp, role, roleReady }: RoutedProps) {
     );
   }
 
-  return route === 'admin' ? <AdminPage user={user} /> : <ReviewPage user={user} />;
+  return route === 'admin' ? <AdminPage user={user} tab={tab} /> : <ReviewPage user={user} />;
 }
 
 function FormRoute({ user, cfp }: { user: User | null; cfp: CfpWindow | null }) {

@@ -172,7 +172,7 @@ test.describe('email pipeline', () => {
     const { chair } = await stage();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'rejected' });
 
-    await signInAs(page, admin, '#/admin');
+    await signInAs(page, admin, '#/admin/email');
 
     const panel = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Email' }),
@@ -235,7 +235,7 @@ test.describe('email pipeline', () => {
       await route.continue();
     });
 
-    await signInAs(page, admin, '#/admin');
+    await signInAs(page, admin, '#/admin/email');
     const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
 
     // Unset is called out, because it is the reason nothing is going out.
@@ -524,7 +524,7 @@ test.describe('a message to one speaker', () => {
 
   test('the admin panel composes one and shows it in the log', async ({ page }) => {
     await stage();
-    await signInAs(page, admin, '#/admin');
+    await signInAs(page, admin, '#/admin/email');
 
     const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
     const send = panel.getByRole('button', { name: 'Send message' });

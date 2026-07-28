@@ -23,11 +23,26 @@ const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', na
 
 const tab = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
 
-/** The first admin, the way `scripts/grant-role.mjs` makes one. */
-async function asAdmin(page: Page) {
+/** The label on each admin sub-tab, so a test can say where it means to land. */
+const SECTIONS = {
+  proposals: 'Proposals',
+  committee: 'Committee',
+  settings: 'Settings',
+  confirmation: 'Confirmation',
+  email: 'Email',
+} as const;
+
+/**
+ * The first admin, the way `scripts/grant-role.mjs` makes one.
+ *
+ * The section is named rather than left to the default, and waited for: the
+ * admin screen is five tabs, so "the page loaded" and "the part I am about to
+ * assert on is mounted" are no longer the same statement.
+ */
+async function asAdmin(page: Page, section: keyof typeof SECTIONS = 'committee') {
   await inviteRole(ADMIN.email, 'admin');
-  await signInAs(page, ADMIN, '#/admin');
-  await expect(page.getByRole('heading', { name: 'Committee' })).toBeVisible();
+  await signInAs(page, ADMIN, `#/admin/${section}`);
+  await expect(tab(page, SECTIONS[section])).toHaveAttribute('aria-current', 'page');
 }
 
 test.describe('roles', () => {
@@ -202,7 +217,7 @@ test.describe('roles', () => {
   });
 
   test('the window controls reach the form', async ({ page }) => {
-    await asAdmin(page);
+    await asAdmin(page, 'settings');
 
     await page.getByRole('checkbox', { name: /Pause submissions/ }).check();
     await page.getByRole('button', { name: 'Save window' }).click();

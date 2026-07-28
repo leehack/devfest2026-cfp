@@ -302,7 +302,7 @@ test.describe('the confirmation questions', () => {
     await inviteRole(ADMIN.email, 'admin');
     await createAccount(ADMIN);
 
-    await signInAs(page, ADMIN, '#/admin');
+    await signInAs(page, ADMIN, '#/admin/confirmation');
     const panel = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Confirmation questions' }),
     });
@@ -419,7 +419,7 @@ test.describe('a headshot question', () => {
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
 
-    await signInAs(page, ADMIN, '#/admin');
+    await signInAs(page, ADMIN, '#/admin/proposals');
     const selected = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Selected speakers' }),
     });

@@ -297,6 +297,14 @@ export const en = {
   },
 
   admin: {
+    sections: 'Admin sections',
+    tabs: {
+      proposals: 'Proposals',
+      committee: 'Committee',
+      settings: 'Settings',
+      confirmation: 'Confirmation',
+      email: 'Email',
+    },
     people: 'Committee',
     peopleHelp: 'Invite by email. The role applies the first time they sign in.',
     emailLabel: 'Email address',
