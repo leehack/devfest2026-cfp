@@ -89,6 +89,40 @@ test.describe('email pipeline', () => {
     expect(sent[0].attempts).toBe(1);
   });
 
+  /*
+   * The reversal case, which is the reason decisions are held rather than sent
+   * on the spot. Releasing used to queue every held row without re-reading the
+   * proposal, so a decision taken back during the window went out anyway —
+   * telling somebody they were accepted after the committee had undone it.
+   */
+  test('a decision taken back before release is not sent', async () => {
+    const { chair } = await stage();
+
+    await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
+    const held = await waitForEmail((rows) => rows.length > 0, 'the decision to be queued');
+    expect(held[0].status).toBe('held');
+
+    // The committee changes its mind while the batch is still waiting.
+    await callAs(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'under_review',
+    });
+
+    const released = await callJson(chair.idToken, 'emailQueue', { action: 'release' });
+    expect(released).toMatchObject({ ok: true, released: 0, stale: 1 });
+
+    // Still held, not sent and not destroyed: re-accepting must be able to
+    // release it normally rather than leave the speaker with no answer at all.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect((await readEmailLog())[0].status).toBe('held');
+
+    await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'release' })).toMatchObject({
+      released: 1,
+      stale: 0,
+    });
+  });
+
   test('re-deciding after the send does not send again', async () => {
     const { chair } = await stage();
 

@@ -266,6 +266,19 @@ function snapshotOf(uid: string, speaker: FirebaseFirestore.DocumentData): Speak
 const STILL_BEING_JUDGED: readonly string[] = ['submitted', 'under_review'];
 
 /**
+ * Which proposal statuses a held decision email is still true of.
+ *
+ * `accepted` covers the speaker's own answer as well: confirming or declining
+ * happens *after* the acceptance, so a row queued before they replied is still
+ * the message they were owed. Anything else means the decision moved.
+ */
+const DECISION_STILL_TRUE: Record<string, readonly string[]> = {
+  accepted: ['accepted', 'confirmed', 'declined'],
+  waitlisted: ['waitlisted'],
+  rejected: ['rejected'],
+};
+
+/**
  * Keeps the committee's copy of a speaker current until their talk is decided.
  *
  * `speakerSnapshot` is frozen so a bio rewritten in 2028 cannot change what the
@@ -1192,7 +1205,33 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   // was rendered while no sender was configured. Retrying picks those up once
   // the domain is, so a receipt written during setup still reaches its speaker.
   const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
-  const due = snap.docs.filter((d) => from.includes(d.get('status')));
+  let due = snap.docs.filter((d) => from.includes(d.get('status')));
+
+  /*
+   * A decision reversed after it was queued must not go out anyway.
+   *
+   * Holding decisions so they release together buys the committee a window to
+   * change its mind — and the whole point is lost if the row queued during that
+   * window sends regardless. Nothing else re-reads the proposal: `held` was
+   * written when the status changed, and a later change does not revisit it.
+   *
+   * Stale rows stay `held` rather than being deleted, so restoring the decision
+   * releases them normally on the next pass.
+   */
+  let stale = 0;
+  if (action === 'release' && due.length > 0) {
+    const proposals = await db.getAll(
+      ...due.map((d) => db.doc(`cfps/${cfpId}/proposals/${d.get('proposalId')}`)),
+    );
+    const current = new Map(proposals.map((p) => [p.id, p.get('status') as string]));
+    const fresh = due.filter((d) => {
+      const holds = DECISION_STILL_TRUE[d.get('kind') as string];
+      // A kind with no entry is not a decision at all, so nothing to check.
+      return !holds || holds.includes(current.get(d.get('proposalId') as string) ?? '');
+    });
+    stale = due.length - fresh.length;
+    due = fresh;
+  }
 
   const CHUNK = 400;
   for (let i = 0; i < due.length; i += CHUNK) {
@@ -1203,8 +1242,8 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     await batch.commit();
   }
 
-  logger.info('email queue advanced', { byUid, action, count: due.length });
-  return { ok: true, tally, released: due.length };
+  logger.info('email queue advanced', { byUid, action, count: due.length, stale });
+  return { ok: true, tally, released: due.length, stale };
 });
 
 /*
