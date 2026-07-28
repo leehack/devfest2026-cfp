@@ -1,3 +1,5 @@
+import type { FieldType } from '@shared/confirmForm';
+
 export const en = {
   locale: 'en',
   localeName: 'English',
@@ -580,12 +582,16 @@ export const en = {
     formHelpEn: 'Hint (English)',
     formHelpFr: 'Hint (French)',
     formType: 'Answer type',
+    // `satisfies`, not a `Record<string, string>` cast: the cast let this fall a
+    // type behind `FIELD_TYPES`, and the editor rendered the missing one as a
+    // nameless row in the dropdown rather than failing to compile.
     formTypes: {
       text: 'Short text',
       textarea: 'Long text',
       select: 'Pick one',
       checkbox: 'Tick box',
-    } as Record<string, string>,
+      image: 'Photo',
+    } satisfies Record<FieldType, string>,
     formRequired: 'Must be answered',
     formOptions: 'Options',
     formOptionsHelp: 'One per line. Each line is shown as written and stored as written.',

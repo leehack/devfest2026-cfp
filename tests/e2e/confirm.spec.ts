@@ -22,6 +22,7 @@ import {
   storeObjectDirect,
 } from './backend';
 import { at, signInAs, type Identity } from './form';
+import { FIELD_TYPES } from '../../shared/confirmForm';
 
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 const OTHER: Identity = { sub: 'other-sub', email: 'other@example.org', name: 'Robin' };
@@ -296,6 +297,36 @@ test.describe('the confirmation questions', () => {
     expect(
       await callAs(speaker.idToken, 'setConfirmForm', { fields: [SHIRT] }),
     ).toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
+  });
+
+  /*
+   * The dictionary went a type behind `FIELD_TYPES` and nothing caught it: the
+   * labels were cast to `Record<string, string>`, so the missing one type-checked
+   * and rendered as a nameless row in the dropdown. An organiser looking for
+   * "Photo" could not find it, and the one field type that needed explaining
+   * was the one with no name.
+   */
+  test('every answer type is offered by name', async ({ page }) => {
+    await accepted();
+    await inviteRole(ADMIN.email, 'admin');
+    await createAccount(ADMIN);
+
+    await signInAs(page, ADMIN, at('/admin/confirmation'));
+    const panel = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'Confirmation questions' }),
+    });
+    await panel.getByRole('button', { name: 'Add a question' }).click();
+
+    // The placeholder is deliberately blank and disabled; every real choice
+    // has to be readable.
+    const offered = await panel
+      .getByLabel('Answer type')
+      .locator('option:not([disabled])')
+      .allTextContents();
+
+    expect(offered).toHaveLength(FIELD_TYPES.length);
+    expect(offered.filter((label) => !label.trim())).toEqual([]);
+    expect(offered).toContain('Photo');
   });
 
   test('an admin writes a question and a speaker is asked it', async ({ page }) => {
