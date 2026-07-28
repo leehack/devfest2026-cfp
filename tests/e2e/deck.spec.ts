@@ -13,6 +13,7 @@ import {
   inviteRole,
   readReviews,
   reset,
+  seedProposal,
   seedSpeaker,
   seedSubmittedProposal,
 } from './backend';
@@ -149,5 +150,52 @@ test.describe('the review deck', () => {
     await expect(page.getByText('Score, and move to the next one')).toBeVisible();
     await page.keyboard.press('?');
     await expect(page.getByText('Score, and move to the next one')).toHaveCount(0);
+  });
+
+  /*
+   * The applicant answers all of this and none of it used to reach the card, so
+   * a talk could be scored without anyone seeing that its speaker needs a visa
+   * and expects to hear about funding after the programme locks.
+   */
+  test('the card shows what it takes to put the talk on the schedule', async ({ page }) => {
+    await reset();
+    await createAccount(REVIEWER);
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
+    await inviteRole(REVIEWER.email, 'reviewer');
+    await seedProposal('deck-far', {
+      speakerUid: speaker.uid,
+      title: 'Coming a long way',
+      status: 'submitted',
+      deliveryLanguage: 'either',
+      languagePreference: 'French if the room is up for it.',
+      attendance: {
+        status: 'pending',
+        fundingSource: 'Applying to the GDE programme.',
+        decisionBy: '2026-10-01',
+        needsVisa: true,
+      },
+    });
+
+    await signInAs(page, REVIEWER, '#/review');
+    await expect(heading(page, 'Coming a long way')).toBeVisible();
+
+    await expect(page.getByText('Expected but not confirmed')).toBeVisible();
+    await expect(page.getByText('Applying to the GDE programme.')).toBeVisible();
+    await expect(page.getByText('2026-10-01')).toBeVisible();
+    await expect(page.getByText(/Needs a visa or eTA/)).toBeVisible();
+    await expect(page.getByText('French if the room is up for it.')).toBeVisible();
+  });
+
+  /*
+   * The three acknowledgements are `z.literal(true)`, so every proposal carries
+   * the same values and a row for them says nothing about this one. The
+   * speaker's address is contact detail rather than evidence about the talk.
+   */
+  test('it does not pad itself with what every proposal has in common', async ({ page }) => {
+    await stage(page);
+
+    await expect(page.getByText(/code of conduct/i)).toHaveCount(0);
+    await expect(page.getByText(SPEAKER.email)).toHaveCount(0);
   });
 });

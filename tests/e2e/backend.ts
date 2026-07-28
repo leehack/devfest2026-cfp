@@ -346,7 +346,18 @@ export async function setEmailStatusDirect(logId: string, status: string) {
  */
 export async function seedProposal(
   id: string,
-  { speakerUid, title, status }: { speakerUid: string; title: string; status: string },
+  {
+    speakerUid,
+    title,
+    status,
+    ...rest
+  }: {
+    speakerUid: string;
+    title: string;
+    status: string;
+    /** Anything else on the document, so a spec can seed the awkward cases. */
+    [field: string]: unknown;
+  },
 ) {
   await patch(`proposals/${id}`, {
     speakerIds: { arrayValue: { values: [{ stringValue: speakerUid }] } },
@@ -376,6 +387,9 @@ export async function seedProposal(
         },
       },
     },
+    // Last, so a spec can override any of the defaults above — the local,
+    // visa-free speaker is the easy case, and not the one worth a test.
+    ...Object.fromEntries(Object.entries(rest).map(([key, value]) => [key, encode(value)])),
   });
 }
 

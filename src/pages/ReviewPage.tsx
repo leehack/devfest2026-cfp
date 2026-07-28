@@ -19,7 +19,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { Checkbox, TextAreaField } from '../components/fields';
-import { useI18n } from '../i18n';
+import { formatDate, useI18n } from '../i18n';
+import { toDate } from '../lib/dates';
 import { friendlyError } from '../lib/errors';
 import {
   loadCfpConfig,
@@ -384,6 +385,8 @@ function ReviewCard({
         <Speaker key={proposal.speakerIds?.[i] ?? i} speaker={s} />
       ))}
 
+      <Logistics proposal={proposal} />
+
       {/* Buttons, not radios. These both record a choice and move the deck on,
           and a control that navigates away the moment you touch it is not a
           radio — assistive tech and test tooling alike expect a radio to stay
@@ -440,6 +443,56 @@ function ReviewCard({
 
       {reviewsVisible && <Committee proposalId={proposal.id} />}
     </section>
+  );
+}
+
+/**
+ * What it takes to actually put this talk on the schedule.
+ *
+ * The applicant answers all of this and none of it reached the committee, so a
+ * reviewer scored a talk without knowing the speaker needs a visa and expects
+ * to hear about funding after the programme locks. That is not a tie-breaker
+ * between two good talks — it is the difference between a session that happens
+ * and a hole in the grid.
+ *
+ * Two things the applicant sent are deliberately still not here. `acks` are
+ * three `z.literal(true)` fields, so every proposal carries the same three
+ * values and rendering them says nothing about this one. The speaker's email
+ * address is contact detail, not evidence about the talk; the admin screen has
+ * it for the people who need to write to them.
+ */
+function Logistics({ proposal }: { proposal: ProposalRow }) {
+  const { t, locale } = useI18n();
+  const { attendance } = proposal;
+  const submitted = toDate(proposal.submittedAt);
+
+  // `languagePreference` only exists when the delivery language is `either` —
+  // the schema rejects it otherwise — so it needs no guard of its own.
+  const rows: [string, string][] = [
+    proposal.languagePreference
+      ? [t.review.languagePreference, proposal.languagePreference]
+      : null,
+    attendance?.status ? [t.review.travel, t.review.attendance[attendance.status]] : null,
+    attendance?.fundingSource ? [t.review.funding, attendance.fundingSource] : null,
+    attendance?.decisionBy ? [t.review.decisionBy, attendance.decisionBy] : null,
+    attendance?.needsVisa ? [t.review.visa, t.review.visaYes] : null,
+    submitted ? [t.review.submitted, formatDate(submitted, locale)] : null,
+  ].filter((row): row is [string, string] => row !== null);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <>
+      <h3 className="card__subtitle">{t.review.logistics}</h3>
+      <dl className="answers">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }
 
