@@ -84,7 +84,7 @@ test.describe('signing in by email link', () => {
     expect(rows).toHaveLength(0);
   });
 
-  test('opening it on another device asks whose it is', async ({ page, browser }) => {
+  test('opening it in another browser asks whose it is', async ({ page, browser }) => {
     await request(ADDRESS);
     const link = await latestLink(ADDRESS);
 

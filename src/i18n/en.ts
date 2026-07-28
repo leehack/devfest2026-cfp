@@ -20,8 +20,12 @@ export const en = {
       'If {email} can receive mail, a sign-in link is on its way. It works once, and for about an hour.',
     linkChecking: 'Signing you in…',
     linkWhose: 'One more thing',
+    // "Browser", not "device": the address is kept in localStorage, so opening
+    // the link in a different browser on the *same* machine asks again too —
+    // and being told it was a different device when it plainly was not reads
+    // as a bug rather than as the check it is.
     linkWhoseHelp:
-      'This link was opened on a different device from the one that asked for it, so please confirm the address you used.',
+      'This link was opened in a different browser from the one that asked for it, so please confirm the address you used.',
     linkContinue: 'Continue',
     linkFailed:
       'That link did not work. It may have been used already or expired — ask for a new one below.',

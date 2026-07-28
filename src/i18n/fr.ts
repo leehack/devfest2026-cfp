@@ -21,7 +21,7 @@ export const fr: Dictionary = {
     linkChecking: 'Connexion en cours…',
     linkWhose: 'Une dernière chose',
     linkWhoseHelp:
-      'Ce lien a été ouvert sur un autre appareil que celui qui l’a demandé. Veuillez confirmer l’adresse utilisée.',
+      'Ce lien a été ouvert dans un autre navigateur que celui qui l’a demandé. Veuillez confirmer l’adresse utilisée.',
     linkContinue: 'Continuer',
     linkFailed:
       'Ce lien n’a pas fonctionné. Il a peut-être déjà servi ou expiré — demandez-en un nouveau ci-dessous.',
