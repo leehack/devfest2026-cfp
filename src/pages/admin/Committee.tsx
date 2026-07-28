@@ -9,6 +9,39 @@ import { GRANTABLE_ROLES, type GrantableRole } from '@shared/cfp';
 import type { RoleGrant } from '@shared/types';
 import { Result } from './Result';
 
+/**
+ * The role, as a control rather than as a word.
+ *
+ * Bare rather than a `SelectField`: inside a list row the label and the
+ * Required chip are noise, and the column heading is the row itself. The
+ * accessible name comes from `aria-label` instead.
+ */
+function RoleSelect({
+  who,
+  value,
+  onChange,
+}: {
+  who: string;
+  value: GrantableRole;
+  onChange: (next: GrantableRole) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <select
+      className="people__role"
+      value={value}
+      aria-label={t.admin.roleFor(who)}
+      onChange={(e) => onChange(e.target.value as GrantableRole)}
+    >
+      {GRANTABLE_ROLES.map((r) => (
+        <option key={r} value={r}>
+          {t.enums.role[r]}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
   const { t } = useI18n();
   const [people, setPeople] = useState<Person[]>([]);
@@ -49,6 +82,26 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
     }
   }
 
+  /**
+   * Re-roling is the same call as inviting — `grant` merges onto the member
+   * document. The server refuses the two changes that would break the CFP
+   * (touching the owner, demoting the last admin); this only declines to offer
+   * the first of them.
+   */
+  async function changeRole(target: string, next: GrantableRole) {
+    setNote('');
+    setError('');
+    try {
+      const { data } = await grantRole({ cfpId, email: target, role: next });
+      setNote(data.applied ? t.admin.granted(data.email) : t.admin.invited(data.email));
+    } catch (e) {
+      setError(adminError(e, t));
+    }
+    // Refresh either way: on failure this is what puts the select back to the
+    // role the server actually still holds.
+    await refresh();
+  }
+
   async function remove(target: string) {
     if (!window.confirm(t.admin.revokeConfirm(target))) return;
     setNote('');
@@ -75,27 +128,46 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
             <li key={person.uid} className="people__row">
               <span>
                 <strong>{person.name ?? person.email}</strong>
-                <span className="people__meta">
-                  {t.enums.role[person.role]}
-                  {person.uid === user.uid && ` · ${t.admin.isYou}`}
-                </span>
+                {person.uid === user.uid && <span className="people__meta">{t.admin.isYou}</span>}
               </span>
-              <button type="button" className="btn btn--ghost" onClick={() => remove(person.email)}>
-                {t.admin.revoke}
-              </button>
+              {/* The owner's row is read-only, because the server refuses both
+                  controls on it — showing them would only offer two errors. */}
+              {person.role === 'owner' ? (
+                <span className="people__meta people__meta--plain">{t.enums.role.owner}</span>
+              ) : (
+                <span className="people__actions">
+                  <RoleSelect
+                    who={person.name ?? person.email}
+                    value={person.role}
+                    onChange={(next) => changeRole(person.email, next)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => remove(person.email)}
+                  >
+                    {t.admin.revoke}
+                  </button>
+                </span>
+              )}
             </li>
           ))}
           {pending.map((grant) => (
             <li key={grant.email} className="people__row">
               <span>
                 <strong>{grant.email}</strong>
-                <span className="people__meta">
-                  {t.enums.role[grant.role]} · {t.admin.awaitingSignIn}
-                </span>
+                <span className="people__meta">{t.admin.awaitingSignIn}</span>
               </span>
-              <button type="button" className="btn btn--ghost" onClick={() => remove(grant.email)}>
-                {t.admin.revoke}
-              </button>
+              <span className="people__actions">
+                <RoleSelect
+                  who={grant.email}
+                  value={grant.role}
+                  onChange={(next) => changeRole(grant.email, next)}
+                />
+                <button type="button" className="btn btn--ghost" onClick={() => remove(grant.email)}>
+                  {t.admin.revoke}
+                </button>
+              </span>
             </li>
           ))}
         </ul>

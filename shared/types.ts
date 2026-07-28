@@ -18,7 +18,7 @@ import type {
   SocialPlatform,
 } from './enums';
 import type { Answers } from './confirmForm';
-import type { CfpRole, Visibility } from './cfp';
+import type { CfpRole, GrantableRole, Visibility } from './cfp';
 
 export interface Social {
   platform: SocialPlatform;
@@ -203,7 +203,9 @@ export interface Proposal {
  */
 export interface RoleGrant {
   email: string;
-  role: CfpRole;
+  /** Never `owner`: `normalizeRole` refuses it, so it is written once and only
+      by `createCfp`, straight to `members`. */
+  role: GrantableRole;
   createdAt: unknown;
   createdBy: string;
   claimedBy?: string;

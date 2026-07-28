@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import {
+  CFP_ID,
   callAs,
   clearProposals,
   createAccount,
@@ -8,6 +9,7 @@ import {
   readProposals,
   readReviews,
   reset,
+  seedMember,
   seedProposal,
   seedSpeaker,
   seedSubmittedProposal,
@@ -22,6 +24,15 @@ const REVIEWER: Identity = { sub: 'reviewer-sub', email: 'reviewer@example.org',
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 
 const tab = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+
+/** One person's line on the committee list, found by whatever it calls them. */
+const row = (page: Page, who: string) => page.locator('.people__row', { hasText: who });
+
+/**
+ * The invite form's Role select. Scoped rather than found by name: every row in
+ * the list carries a role select of its own now, so "Role" is ambiguous.
+ */
+const inviteRoleField = (page: Page) => page.locator('.grid--2').getByRole('combobox');
 
 /** The label on each admin sub-tab, so a test can say where it means to land. */
 const SECTIONS = {
@@ -67,7 +78,7 @@ test.describe('roles', () => {
     await asAdmin(page);
 
     await page.getByRole('textbox', { name: /^Email address/ }).fill(REVIEWER.email);
-    await page.getByRole('combobox', { name: /^Role/ }).selectOption('reviewer');
+    await inviteRoleField(page).selectOption('reviewer');
     await page.getByRole('button', { name: 'Invite' }).click();
 
     // Nobody with that address exists yet, so the grant has to wait for them.
@@ -89,6 +100,57 @@ test.describe('roles', () => {
 
     await expect(page.getByText(/only admin left/)).toBeVisible();
     await expect(page.getByText('Ada')).toBeVisible();
+  });
+
+  test('an admin changes a member’s role from the list', async ({ page }) => {
+    const reviewer = await createAccount(REVIEWER);
+    await seedMember(reviewer.uid, 'reviewer', CFP_ID, REVIEWER.email);
+    await asAdmin(page);
+
+    const rey = row(page, REVIEWER.email).getByRole('combobox');
+    await expect(rey).toHaveValue('reviewer');
+    await rey.selectOption('admin');
+    await expect(page.getByText(`${REVIEWER.email} now holds that role.`)).toBeVisible();
+
+    // Reloaded, because the point is the member document and not the select.
+    await page.reload();
+    await expect(row(page, REVIEWER.email).getByRole('combobox')).toHaveValue('admin');
+    await signInAs(page, REVIEWER, at('/admin/committee'));
+    await expect(tab(page, 'Admin')).toBeVisible();
+  });
+
+  test('the last admin cannot demote themselves', async ({ page }) => {
+    await asAdmin(page);
+    await row(page, 'Ada').getByRole('combobox').selectOption('reviewer');
+
+    await expect(page.getByText(/only admin left/)).toBeVisible();
+    // The refusal has to reach the control as well — a select left showing
+    // "Reviewer" says the change went through.
+    await expect(row(page, 'Ada').getByRole('combobox')).toHaveValue('admin');
+    await expect(tab(page, 'Admin')).toBeVisible();
+  });
+
+  test('the owner’s row offers neither control, and the callable refuses both', async ({ page }) => {
+    const owner = await createAccount({ sub: 'owner-sub', email: 'owner@example.org', name: 'Ozzy' });
+    await seedMember(owner.uid, 'owner', CFP_ID, 'owner@example.org');
+    await asAdmin(page);
+
+    const theirs = row(page, 'owner@example.org');
+    await expect(theirs.getByText('Owner', { exact: true })).toBeVisible();
+    await expect(theirs.getByRole('combobox')).toHaveCount(0);
+    await expect(theirs.getByRole('button', { name: 'Revoke' })).toHaveCount(0);
+
+    // Hiding the controls is a courtesy; the refusal is the rule.
+    const admin = await createAccount(ADMIN);
+    for (const [fn, args] of [
+      ['grantRole', { email: 'owner@example.org', role: 'reviewer' }],
+      ['revokeRole', { email: 'owner@example.org' }],
+    ] as const) {
+      expect(await callAs(admin.idToken, fn, args)).toMatchObject({
+        ok: false,
+        code: 'FAILED_PRECONDITION',
+      });
+    }
   });
 
   test('deciding a proposal is refused to everyone but an admin', async ({ page }) => {

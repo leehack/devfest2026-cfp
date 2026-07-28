@@ -9,7 +9,7 @@ export const en = {
     title: 'Call for Proposals',
     /** Shown above the title when no CFP is open — otherwise its name goes here. */
     event: 'Calls for proposals',
-    signIn: 'Sign in to submit',
+    signInGoogle: 'Sign in with Google',
     signInHint: 'We use your Google account so you can come back and edit your draft.',
     signInEmailTitle: 'No Google account?',
     signInEmailHint:
@@ -69,7 +69,6 @@ export const en = {
     submit: 'Create it',
     creating: 'Creating…',
     signInFirst: 'Sign in to start a call for proposals.',
-    signInAction: 'Sign in to get started',
     notFound: 'There is no call for proposals at this address.',
     back: 'All calls',
     archived: 'Archived',
@@ -363,6 +362,8 @@ export const en = {
     peopleHelp: 'Invite by email. The role applies the first time they sign in.',
     emailLabel: 'Email address',
     roleLabel: 'Role',
+    /** On the list, where several selects would otherwise all be called "Role". */
+    roleFor: (who: string) => `Role for ${who}`,
     invite: 'Invite',
     inviting: 'Inviting…',
     granted: (email: string) => `${email} now holds that role.`,

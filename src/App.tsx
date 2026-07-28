@@ -10,6 +10,7 @@ import {
   useI18n,
   type Locale,
 } from './i18n';
+import { GoogleButton } from './components/GoogleButton';
 import { SubmitPage } from './pages/SubmitPage';
 import { AdminPage } from './pages/AdminPage';
 import { ReviewPage } from './pages/ReviewPage';
@@ -77,9 +78,11 @@ export function App() {
 
   return (
     <I18nContext.Provider value={i18n}>
-      {/* The form is prose you write, so it keeps a readable measure. Admin and
-          review are tables you scan, and 46rem on a wide screen wasted it. */}
-      <div className={route === 'form' || route === 'new' ? 'page' : 'page page--wide'}>
+      {/* One width for the chrome, always. The measure belongs to what you read,
+          not to the header above it — capping the whole page on the form routes
+          pulled the title, the language switch and the nav inwards, so they
+          jumped every time you moved between a form and anything else. */}
+      <div className="page page--wide">
         <header className="header">
           <div>
             {/* The way back out, everywhere but the page it leads to. The home
@@ -111,7 +114,11 @@ export function App() {
 
         {role && cfpId && <Nav route={route} cfpId={cfpId} role={role} />}
 
-        <main className="main">
+        {/* The form is prose you write, so it keeps a readable measure. Admin
+            and review are tables you scan, and 46rem on a wide screen wasted
+            it. Left-aligned rather than centred, so the column starts under the
+            title instead of floating away from it. */}
+        <main className={`main${route === 'form' || route === 'new' ? ' main--narrow' : ''}`}>
           {!authReady || !cfpReady ? (
             <p className="muted">{t.app.loading}</p>
           ) : (
@@ -341,9 +348,10 @@ export function SignIn({
           {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
         </p>
       )}
-      <button type="button" className="btn btn--primary" onClick={signIn}>
-        {organising ? t.platform.signInAction : t.app.signIn}
-      </button>
+      {/* Google's own button, wording included. What the sign-in is *for* is
+          said by the sentence above it, not by relabelling somebody else's
+          identity control. */}
+      <GoogleButton onClick={signIn} />
       {failed && (
         <p className="field__error" role="alert">
           {t.errors.signIn}

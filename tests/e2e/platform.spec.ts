@@ -56,7 +56,7 @@ test.describe('the front door', () => {
 
     await page.goto(`/#/c/${OTHER}`);
     await expect(page.getByRole('heading', { name: 'Someone Else’s Conf' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Sign in to submit' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
   });
 
   test('an archived call drops off the list', async ({ page }) => {

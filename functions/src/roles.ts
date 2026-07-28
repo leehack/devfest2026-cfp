@@ -79,6 +79,13 @@ async function adminUids(db: Firestore, cfpId: string): Promise<string[]> {
  * Records a grant, and applies it immediately if the person already has an
  * account. Otherwise it waits in `roleGrants` for `claim` to pick up on their
  * first visit to this CFP.
+ *
+ * Granting to someone who already holds a role re-roles them in place, which is
+ * how the committee list changes a role. That makes it a way *down* as well as
+ * up, so it carries the same two refusals as `revoke`: the owner is not an
+ * admin's to demote, and the last admin cannot be demoted out of the job.
+ * Both are checked before either write, so a refused change leaves nothing
+ * behind in `roleGrants` either.
  */
 export async function grant(
   db: Firestore,
@@ -93,6 +100,19 @@ export async function grant(
   const email = normalizeEmail(rawEmail);
   const role = normalizeRole(rawRole);
   const uid = await uidForEmail(auth, email);
+
+  if (uid) {
+    const current = (await memberDoc(db, cfpId, uid).get()).data()?.role;
+    if (current === 'owner') {
+      throw new RoleError('failed-precondition', "An owner's role cannot be changed.");
+    }
+    if (current === 'admin' && role !== 'admin') {
+      const admins = await adminUids(db, cfpId);
+      if (admins.length <= 1) {
+        throw new RoleError('failed-precondition', 'That is the only admin left.');
+      }
+    }
+  }
 
   await grantDoc(db, cfpId, email).set(
     {

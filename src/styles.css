@@ -277,6 +277,69 @@ p {
   padding-top: var(--s-6);
 }
 
+/* See App.tsx: the measure is the content's, not the page's. */
+.main--narrow {
+  max-width: var(--page-w);
+}
+
+/*
+ * Google's sign-in button. Its colours are literals rather than tokens on
+ * purpose — they are Google's, not this design system's, and following the
+ * palette here would put the mark on a background it is not approved for.
+ * Everything else (focus ring, motion, touch target) still follows the rest of
+ * the file.
+ */
+.google-btn {
+  display: inline-flex;
+  gap: 0.625rem;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid #747775;
+  border-radius: var(--r);
+  background: #fff;
+  color: #1f1f1f;
+  font-family: 'Roboto', var(--font);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.google-btn:hover:not(:disabled) {
+  background: #f7f8f8;
+}
+
+.google-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.google-btn__mark {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+}
+
+/* The label never wraps or truncates — a half-shown provider name is worse
+   than a button that grows. */
+.google-btn__label {
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .google-btn {
+    border-color: #8e918f;
+    background: #131314;
+    color: #e3e3e3;
+  }
+
+  .google-btn:hover:not(:disabled) {
+    background: #1e1f20;
+  }
+}
+
 .muted {
   color: var(--muted);
 }
@@ -860,7 +923,8 @@ p {
   .subnav__tab,
   .talks__tab,
   .talks__add,
-  .field__input {
+  .field__input,
+  .people__role {
     min-height: 44px;
   }
 }
@@ -1285,6 +1349,46 @@ p {
 
 .people__meta::before {
   content: ' — ';
+}
+
+/* The owner's role sits at the end of its row rather than after the name, so
+   the dash that joins the two would be joining nothing. */
+.people__meta--plain::before {
+  content: none;
+}
+
+.people__actions {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+/* Sized to the row rather than to a form: a full field control here is taller
+   than the name beside it and turns a four-person list into a stack of boxes. */
+.people__role {
+  padding: 0.3rem 1.9rem 0.3rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position: calc(100% - 0.85rem) 55%, calc(100% - 0.5rem) 55%;
+  background-size: 0.35rem 0.35rem;
+  background-repeat: no-repeat;
+}
+
+.people__role:hover {
+  border-color: var(--muted);
+}
+
+.people__role:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* ------------------------------------------------------------------ tables */

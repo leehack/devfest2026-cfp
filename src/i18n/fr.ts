@@ -8,7 +8,7 @@ export const fr: Dictionary = {
   app: {
     title: 'Appel à conférences',
     event: 'Appels à conférences',
-    signIn: 'Connectez-vous pour soumettre',
+    signInGoogle: 'Se connecter avec Google',
     signInHint:
       'Nous utilisons votre compte Google afin que vous puissiez revenir modifier votre brouillon.',
     signInEmailTitle: 'Pas de compte Google ?',
@@ -67,7 +67,6 @@ export const fr: Dictionary = {
     submit: 'Créer',
     creating: 'Création…',
     signInFirst: 'Connectez-vous pour lancer un appel à conférences.',
-    signInAction: 'Se connecter pour commencer',
     notFound: 'Il n’y a aucun appel à conférences à cette adresse.',
     back: 'Tous les appels',
     archived: 'Archivé',
@@ -362,6 +361,7 @@ export const fr: Dictionary = {
     peopleHelp: 'Invitez par courriel. Le rôle s’applique dès la première connexion.',
     emailLabel: 'Adresse courriel',
     roleLabel: 'Rôle',
+    roleFor: (who: string) => `Rôle de ${who}`,
     invite: 'Inviter',
     inviting: 'Invitation…',
     granted: (email: string) => `${email} détient maintenant ce rôle.`,

@@ -49,6 +49,6 @@ test.describe('the submission window', () => {
     await reset();
     await page.goto(`/${at()}`);
     await expect(page.getByText('Submissions close on')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Sign in to submit' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
   });
 });
