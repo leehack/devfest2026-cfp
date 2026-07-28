@@ -242,6 +242,10 @@ function Lifecycle({
               label={t.admin.dangerConfirmLabel.replace('{id}', cfpId)}
               value={confirm}
               onChange={setConfirm}
+              // Every field carries a required/optional chip, and "Optional"
+              // beside "type the address to confirm" reads as the opposite of
+              // what this control is for.
+              required
               disabled={busy}
             />
             <button
