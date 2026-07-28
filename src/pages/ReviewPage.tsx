@@ -356,8 +356,17 @@ function ReviewCard({
    */
   const people = proposal.speakerSnapshot ?? [];
 
-  const meta = [
-    people.map((s) => s.name).filter(Boolean).join(', '),
+  const names = people.map((s) => s.name).filter(Boolean).join(', ');
+
+  /*
+   * A chip each, rather than the one dot-separated grey line this used to be.
+   *
+   * That line ran the speaker's name into four taxonomy values at caption
+   * weight, and "Either — you choose" wrapped mid-phrase, so its em dash and
+   * the separators read as the same punctuation. A reviewer looked straight at
+   * it and reported the category and format as missing from the card.
+   */
+  const facets = [
     t.enums.category[proposal.category],
     t.enums.format[proposal.format],
     t.enums.level[proposal.level],
@@ -367,7 +376,16 @@ function ReviewCard({
   return (
     <section className="section card" ref={top}>
       <h2>{proposal.title || '—'}</h2>
-      <p className="section__help">{meta.join(' · ')}</p>
+      {names && <p className="card__byline">{names}</p>}
+      {facets.length > 0 && (
+        <ul className="facets">
+          {facets.map((facet) => (
+            <li key={facet} className="facet">
+              {facet}
+            </li>
+          ))}
+        </ul>
+      )}
 
       <p className="card__text">{proposal.abstract}</p>
       {proposal.pitch && (

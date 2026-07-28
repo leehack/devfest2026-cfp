@@ -139,7 +139,12 @@ collection — the rule names `confirmForm`.
   either way. Always write a value that differs.
 - **The emulator serves `functions/lib`, not `functions/src`.** A mutation test
   against a callable or trigger has to `npm --prefix functions run build` first,
-  or it silently re-runs the unmutated code and "passes".
+  or it silently re-runs the unmutated code and "passes". Note that the root
+  `npm run build` does *not* reach `functions/` — it is its own `tsc`.
+- **Rebuilding is not enough; the emulator has to be restarted.** It loads the
+  definitions once at startup and does not watch `lib`. A mutation check that
+  only rebuilds reports a clean pass against the code it replaced, which is the
+  most convincing false negative available.
 - **A listening functions port is not a working one.** It accepts connections
   ~4s before it registers the code, and callables 404 with "does not exist" in
   between — indistinguishable from a real missing function. `dev.mjs` probes an

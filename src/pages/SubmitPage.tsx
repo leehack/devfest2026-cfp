@@ -844,10 +844,12 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         />
 
         <div className="grid grid--2">
-          {/* Not required — independents and between-jobs applicants exist (§3). */}
+          {/* Not required — independents and between-jobs applicants exist (§3).
+              Said by the Optional chip on both fields rather than by help text
+              under one of them, which pushed its input out of line with the
+              other's and read as a broken row. */}
           <TextField
             label={t.speaker.company}
-            help={t.speaker.employerHelp}
             value={form.company}
             onChange={(v) => set('company', v)}
             maxLength={LIMITS.companyMax}

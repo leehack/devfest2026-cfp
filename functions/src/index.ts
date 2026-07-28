@@ -12,6 +12,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
 import { inStatusSet, LIMITS, STATUS_SETS } from '../../shared/enums';
@@ -260,6 +261,71 @@ function snapshotOf(uid: string, speaker: FirebaseFirestore.DocumentData): Speak
     ...(speaker.pastTalks ? { pastTalks: speaker.pastTalks as string } : {}),
   };
 }
+
+/** Statuses where the committee has not answered yet, so the copy may still move. */
+const STILL_BEING_JUDGED: readonly string[] = ['submitted', 'under_review'];
+
+/**
+ * Keeps the committee's copy of a speaker current until their talk is decided.
+ *
+ * `speakerSnapshot` is frozen so a bio rewritten in 2028 cannot change what the
+ * 2026 committee actually read. Freezing it at *submission* went too far: a
+ * speaker who fills in their employer, job title or past talks an hour after
+ * submitting is not rewriting history, and the committee simply never saw it.
+ * That is not hypothetical — it is what happened on the first real submission
+ * this ran for. So the freeze starts at the decision instead.
+ *
+ * Rules cannot express this: the speaker may not write their own snapshot, or
+ * they could tell the committee whatever they liked about themselves.
+ */
+export const refreshSpeakerSnapshots = onDocumentWritten(
+  {
+    document: 'speakers/{uid}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: false,
+  },
+  async (event) => {
+    const after = event.data?.after;
+    if (!after?.exists) return;
+
+    const uid = event.params.uid;
+    const next = snapshotOf(uid, after.data()!);
+
+    // Most profile writes are a locale, an email or an `updatedAt`, none of
+    // which the committee reads. Comparing first keeps those from each costing
+    // a collection-group query across every CFP on the platform.
+    const before = event.data?.before;
+    if (before?.exists && JSON.stringify(snapshotOf(uid, before.data()!)) === JSON.stringify(next)) {
+      return;
+    }
+
+    const mine = await db
+      .collectionGroup('proposals')
+      .where('speakerIds', 'array-contains', uid)
+      .get();
+
+    // Filtered here rather than in the query: a speaker has at most a handful
+    // of proposals, and a second `where` would need its own composite index at
+    // collection-group scope for the sake of skipping two documents.
+    const open = mine.docs.filter((doc) =>
+      STILL_BEING_JUDGED.includes(doc.get('status') as string),
+    );
+    if (open.length === 0) return;
+
+    const batch = db.batch();
+    for (const doc of open) {
+      // Replace this speaker's entry and leave any co-presenter's alone.
+      const current = (doc.get('speakerSnapshot') as SpeakerSnapshot[] | undefined) ?? [];
+      batch.update(doc.ref, {
+        speakerSnapshot: current.map((person) => (person.uid === uid ? next : person)),
+      });
+    }
+    await batch.commit();
+
+    logger.info('speaker snapshot refreshed', { uid, proposals: open.length });
+  },
+);
 
 /**
  * Everything an email needs about a proposal, gathered inside the caller's

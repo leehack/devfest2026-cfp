@@ -349,6 +349,26 @@ p {
   .grid--3 {
     grid-template-columns: repeat(3, 1fr);
   }
+
+  /*
+   * Side-by-side fields keep their controls on one line even when only one of
+   * them carries help text.
+   *
+   * Grid stretches both columns to the tallest, so without this the help sits
+   * in the flow above its own input and shoves it down past its neighbour's —
+   * a row that looks misaligned rather than annotated. Pushing the control to
+   * the bottom of each column puts the slack under the shorter label instead.
+   */
+  .grid--2 > .field,
+  .grid--3 > .field {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .grid--2 > .field > .field__input,
+  .grid--3 > .field > .field__input {
+    margin-top: auto;
+  }
 }
 
 /* ------------------------------------------------------------------ fields */
@@ -1536,6 +1556,37 @@ p {
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+/*
+ * The taxonomy on a review card: one chip per value.
+ *
+ * Muted body text is right for a byline and wrong for the four facts a
+ * reviewer sorts on. Chips give each value an edge so none of them can be read
+ * as part of its neighbour, and they wrap a value at a time.
+ */
+.facets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-4);
+  padding: 0;
+  list-style: none;
+}
+
+.facet {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+/* Who is giving the talk, under its title. */
+.card__byline {
+  margin: 0 0 var(--s-3);
+  color: var(--muted);
+  font-size: var(--text-md);
 }
 
 .reviews {
