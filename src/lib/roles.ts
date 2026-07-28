@@ -60,6 +60,8 @@ export interface EmailRow {
   status: string;
   attempts: number;
   title: string;
+  /** Only a message has one — the templates take theirs from the copy. */
+  subject: string;
   /** Milliseconds, because a Timestamp does not survive the callable's JSON. */
   sentAt: number | null;
   error: string;
@@ -106,6 +108,11 @@ export const sendTestEmail = httpsCallable<
   { kind: string; locale: string; needsVisa?: boolean },
   { ok: boolean; status: string; to: string }
 >(functions, 'sendTestEmail');
+
+export const sendSpeakerMessage = httpsCallable<
+  { proposalId: string; subject: string; body: string },
+  { ok: boolean; logId: string }
+>(functions, 'sendSpeakerMessage');
 
 /**
  * The signed-in user's role, or null for the ordinary case of a speaker.

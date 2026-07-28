@@ -19,6 +19,7 @@ import {
   DECISION_KINDS,
   EMAIL_KINDS,
   EMAIL_LOCALES,
+  MESSAGE_KIND,
   validateTemplate,
   type EmailKind,
   type EmailLocale,
@@ -662,6 +663,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       status: d.get('status') as string,
       attempts: (d.get('attempts') as number) ?? 0,
       title: (d.get('data')?.title as string) ?? '',
+      // Only a message has one. Two of them to the same speaker are otherwise
+      // indistinguishable in the log.
+      subject: (d.get('subject') as string) ?? '',
       // Milliseconds rather than a Timestamp: the client formats it, and a
       // Timestamp does not survive the callable's JSON.
       sentAt: at(d, 'sentAt') || null,
@@ -719,6 +723,79 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
 
   logger.info('email queue advanced', { byUid, action, count: due.length });
   return { ok: true, tally, released: due.length };
+});
+
+/**
+ * A message an organiser writes themselves, to one speaker.
+ *
+ * Everything else in `emailLog` is a template fired by a status change, so
+ * asking a speaker a question — a clash in the schedule, a missing detail, a
+ * correction — meant mailing from a personal account. That reaches the speaker
+ * from an address they have no reason to trust, and leaves no record here at
+ * all, so nobody else on the committee knows it happened.
+ *
+ * The id is Firestore's rather than derived from the content, because repeats
+ * are the entire point. That gives up the dedupe every other kind gets: the
+ * compose form is what stops a double-send, and this log is the receipt.
+ */
+export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
+  const byUid = await requireAdmin(request, 'write to a speaker');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const proposalId = requireProposalId(data);
+  const subject = String(data.subject ?? '').trim();
+  const body = String(data.body ?? '').trim();
+
+  if (subject.length > LIMITS.messageSubjectMax) {
+    throw new HttpsError('invalid-argument', 'That subject is too long.');
+  }
+  if (body.length > LIMITS.messageBodyMax) {
+    throw new HttpsError('invalid-argument', 'That message is too long.');
+  }
+
+  // The same check the template editor runs, for the same reason: a mistyped
+  // `{speaker}` would print as itself in front of the person it names.
+  const problem = validateTemplate({ subject, body });
+  if (problem) {
+    throw new HttpsError(
+      'invalid-argument',
+      problem.problem === 'unknownPlaceholder'
+        ? `There is no {${problem.detail}} placeholder.`
+        : 'A subject and a message are both required.',
+    );
+  }
+
+  const logId = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(db.doc(`proposals/${proposalId}`));
+    if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
+
+    // A draft is nobody's but its author's, and writing to someone about a talk
+    // they have not submitted tells them it was read.
+    if (snap.get('status') === 'draft') {
+      throw new HttpsError('failed-precondition', 'That proposal has not been submitted.');
+    }
+
+    const context = await emailContext(tx, snap.data()!);
+    if (!context) throw new HttpsError('failed-precondition', 'No address on file for that speaker.');
+
+    const ref = db.collection('emailLog').doc();
+    tx.create(ref, {
+      kind: MESSAGE_KIND,
+      proposalId,
+      subject,
+      body,
+      ...context,
+      // Queued, not held: a message is one deliberate act, not part of a batch
+      // that has to leave together.
+      status: 'queued' satisfies EmailStatus,
+      attempts: 0,
+      byUid,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return ref.id;
+  });
+
+  logger.info('message queued', { byUid, proposalId, logId });
+  return { ok: true, logId };
 });
 
 /**

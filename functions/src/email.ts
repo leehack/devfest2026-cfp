@@ -19,7 +19,9 @@ import { logger } from 'firebase-functions';
 
 import {
   DECISION_KINDS,
+  MESSAGE_KIND,
   renderEmail,
+  renderTemplate,
   type EmailData,
   type EmailKind,
   type EmailLocale,
@@ -133,12 +135,19 @@ export async function deliver(
   settings: EmailSettings,
   templates?: TemplateOverrides,
 ): Promise<SendOutcome> {
-  const email = renderEmail(
-    row.kind as EmailKind,
-    (row.locale ?? 'en') as EmailLocale,
-    { ...(row.data as Omit<EmailData, 'proposalUrl'>), proposalUrl: publicUrl(settings) },
-    templates,
-  );
+  const locale = (row.locale ?? 'en') as EmailLocale;
+  const data = {
+    ...(row.data as Omit<EmailData, 'proposalUrl'>),
+    proposalUrl: publicUrl(settings),
+  };
+
+  // A message carries its own copy on the row. It was written once, for one
+  // person, so there is nothing to look up and nothing an override could apply
+  // to — but it still goes through the same renderer.
+  const email =
+    row.kind === MESSAGE_KIND
+      ? renderTemplate({ subject: row.subject as string, body: row.body as string }, locale, data)
+      : renderEmail(row.kind as EmailKind, locale, data, templates);
 
   const sender = settings.from;
   if (!apiKey || !sender) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { Checkbox, SelectField, TextField } from '../components/fields';
+import { Checkbox, SelectField, TextAreaField, TextField } from '../components/fields';
 import { formatDate, useI18n } from '../i18n';
 import { toDate, toDateTimeInput } from '../lib/dates';
 import { adminError } from '../lib/errors';
@@ -14,6 +14,7 @@ import {
   loadSpeakers,
   recomputeAggregates,
   revokeRole,
+  sendSpeakerMessage,
   setCfpWindow,
   setEmailSettings,
   setProposalStatus,
@@ -29,6 +30,7 @@ import { EmailPreview } from '../components/EmailPreview';
 import {
   CATEGORIES,
   DELIVERY_LANGUAGES,
+  LIMITS,
   ROLES,
   STATUS_SETS,
   inStatusSet,
@@ -540,6 +542,9 @@ function Email() {
 
       <Result ok={note} error={error} />
 
+      <h3 className="card__subtitle">{t.admin.messageTitle}</h3>
+      <WriteToSpeaker replyTo={settings.replyTo} onSent={() => run('preview')} />
+
       {/*
         The record of what was actually sent to whom. Counts alone could not
         answer "did this speaker get their acceptance", which is the question an
@@ -583,7 +588,12 @@ function Email() {
                   .map((row) => (
                     <tr key={row.logId}>
                       <td>{row.to}</td>
-                      <td>{t.admin.emailKinds[row.kind] ?? row.kind}</td>
+                      <td>
+                        {t.admin.emailKinds[row.kind] ?? row.kind}
+                        {/* Two messages to the same speaker are otherwise the
+                            same row twice. */}
+                        {row.subject && <span className="muted"> — {row.subject}</span>}
+                      </td>
                       <td>
                         {(t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
                         {/* The provider's reason: the only thing on screen that
@@ -615,6 +625,126 @@ function Email() {
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * A message to one speaker, written here rather than in a personal mail client.
+ *
+ * The templates cover the lifecycle and nothing else, so a clash in the
+ * schedule or a missing detail had no route that the speaker could recognise as
+ * coming from us, and none the rest of the committee could see afterwards.
+ *
+ * Cleared on success. There is no deterministic id behind this one, so sending
+ * twice sends twice — an empty form is the difference between a second thought
+ * and a second copy.
+ */
+function WriteToSpeaker({ replyTo, onSent }: { replyTo: string; onSent: () => void }) {
+  const { t } = useI18n();
+  const [rows, setRows] = useState<ProposalRow[]>([]);
+  const [speakers, setSpeakers] = useState<Map<string, SpeakerBrief>>(new Map());
+  const [proposalId, setProposalId] = useState('');
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        // Drafts are excluded: writing to someone about a talk they have not
+        // submitted tells them it was read.
+        const sendable = (await loadAllProposals()).filter((row) => row.status !== 'draft');
+        setRows(sendable);
+        setSpeakers(await loadSpeakers(sendable.flatMap((row) => row.speakerIds ?? [])));
+      } catch (e) {
+        setError(adminError(e, t));
+      }
+    })();
+  }, [t]);
+
+  const nameOf = (row?: ProposalRow) =>
+    (row?.speakerIds ?? [])
+      .map((id) => speakers.get(id)?.name)
+      .filter(Boolean)
+      .join(', ');
+
+  const target = rows.find((row) => row.id === proposalId);
+  const to = nameOf(target) || t.admin.emailTo;
+
+  async function send() {
+    if (!target) return;
+    if (!confirm(t.admin.messageConfirm.replace('{name}', to))) return;
+
+    setBusy(true);
+    setNote('');
+    setError('');
+    try {
+      await sendSpeakerMessage({ proposalId, subject, body });
+      setSubject('');
+      setBody('');
+      setNote(t.admin.messageSent.replace('{name}', to));
+      onSent();
+    } catch (e) {
+      setError(adminError(e, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (rows.length === 0) return <p className="muted">{t.admin.messageNoTalks}</p>;
+
+  return (
+    <>
+      <p className="field__help">{t.admin.messageHelp}</p>
+      {/* A message inviting a reply, from an address that accepts none, is the
+          one failure the speaker cannot work around. */}
+      {!replyTo && <p className="note note--inline">{t.admin.messageNoReplyTo}</p>}
+
+      <SelectField
+        label={t.admin.messageTalk}
+        required
+        value={proposalId}
+        options={[
+          { value: '', label: t.admin.messagePick },
+          ...rows.map((row) => ({
+            value: row.id,
+            label: [row.title || '—', nameOf(row)].filter(Boolean).join(' — '),
+          })),
+        ]}
+        onChange={setProposalId}
+        disabled={busy}
+      />
+      <TextField
+        label={t.admin.messageSubject}
+        required
+        value={subject}
+        onChange={setSubject}
+        maxLength={LIMITS.messageSubjectMax}
+        disabled={busy}
+      />
+      <TextAreaField
+        label={t.admin.messageBody}
+        required
+        help={t.admin.messageBodyHelp}
+        value={body}
+        onChange={setBody}
+        maxLength={LIMITS.messageBodyMax}
+        rows={6}
+        disabled={busy}
+      />
+
+      <button
+        type="button"
+        className="btn btn--primary"
+        disabled={busy || !proposalId || !subject.trim() || !body.trim()}
+        onClick={send}
+      >
+        {busy ? t.admin.messageSending : t.admin.messageSend}
+      </button>
+      <Result ok={note} error={error} />
+    </>
   );
 }
 

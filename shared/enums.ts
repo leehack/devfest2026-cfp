@@ -144,6 +144,8 @@ export const LIMITS = {
   handleMax: 200,
   maxSocials: 6,
   reviewCommentMax: 2000,
+  messageSubjectMax: 200,
+  messageBodyMax: 4000,
   /**
    * Submitted talks per speaker. Drafts above this are harmless — reviewers
    * never see them — so the cap is enforced in `submitProposal`, which is the

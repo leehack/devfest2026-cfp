@@ -5,6 +5,7 @@ import {
   EMAIL_KINDS,
   builtInTemplate,
   renderEmail,
+  renderTemplate,
   validateTemplate,
   type EmailData,
 } from '@shared/emailTemplates';
@@ -134,6 +135,41 @@ describe('overrides', () => {
     const html = renderEmail('accepted', 'en', { ...data, title: '<img onerror=x>' }, withTitle).html;
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;img');
+  });
+});
+
+/**
+ * The free-form path. An organiser's one-off message has no stored copy behind
+ * it, so this is the only place its rendering is checked — and it reaches the
+ * same inbox as everything else, escaping and all.
+ */
+describe('renderTemplate', () => {
+  it('fills the same placeholders a template would', () => {
+    const email = renderTemplate(
+      { subject: 'About “{title}”', body: 'Hi {speakerName}, see {proposalUrl}.' },
+      'en',
+      data,
+    );
+    expect(email.subject).toBe('About “Notes on the Analytical Engine”');
+    expect(email.text).toContain('Hi Ada Lovelace, see https://cfp.example/#/.');
+  });
+
+  it('escapes what an organiser typed', () => {
+    // The compose box is a plain textarea; anything in it lands inside an HTML
+    // document, whether or not it was meant to.
+    const html = renderTemplate({ subject: 's', body: '<img onerror=x>' }, 'en', data).html;
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('linkifies a paragraph that is only a URL, as the templates do', () => {
+    const html = renderTemplate({ subject: 's', body: 'Hi\n\n{proposalUrl}' }, 'en', data).html;
+    expect(html).toContain(`<a href="${data.proposalUrl}">`);
+  });
+
+  it('signs off, so a message is not mistaken for a personal mail', () => {
+    const email = renderTemplate({ subject: 's', body: 'Quick question.' }, 'en', data);
+    expect(email.text).toContain('DevFest Montréal 2026');
   });
 });
 

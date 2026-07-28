@@ -27,6 +27,20 @@ export type EmailKind = (typeof EMAIL_KINDS)[number];
 /** Decisions go out together or not at all — see the queue's `held` status. */
 export const DECISION_KINDS: readonly EmailKind[] = ['accepted', 'waitlisted', 'rejected'];
 
+/**
+ * A one-off an organiser writes themselves — a question, a correction, a
+ * detail the templates do not cover.
+ *
+ * Deliberately not an `EmailKind`: it has no stored copy, so it must not appear
+ * in the template dictionaries or in the editor that walks them. It carries its
+ * own subject and body on the `emailLog` row instead, and goes through the same
+ * substitution and HTML derivation as everything else.
+ */
+export const MESSAGE_KIND = 'message';
+
+/** What an `emailLog` row's `kind` may be. */
+export type LogKind = EmailKind | typeof MESSAGE_KIND;
+
 export interface EmailData {
   speakerName: string;
   title: string;
@@ -246,8 +260,20 @@ export function renderEmail(
   data: EmailData,
   overrides?: TemplateOverrides,
 ): RenderedEmail {
-  const template = activeTemplate(kind, locale, overrides);
+  return renderTemplate(activeTemplate(kind, locale, overrides), locale, data);
+}
 
+/**
+ * The rendering itself, given copy from anywhere — a dictionary, an organiser's
+ * override, or a message typed once and never stored. A free-form message gets
+ * the same placeholders, the same escaping and the same linkified URLs as the
+ * templates, because it reaches the same inbox.
+ */
+export function renderTemplate(
+  template: Template,
+  locale: EmailLocale,
+  data: EmailData,
+): RenderedEmail {
   const paragraphs = template.body
     .split(/\n\s*\n/)
     .map((paragraph) => substitute(paragraph.trim(), data, locale))

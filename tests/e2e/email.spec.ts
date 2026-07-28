@@ -429,3 +429,133 @@ test.describe('email pipeline', () => {
     ).toMatchObject({ ok: false, code: 'NOT_FOUND' });
   });
 });
+
+/**
+ * A message an organiser writes themselves.
+ *
+ * Its id is Firestore's rather than derived from the content, which deliberately
+ * gives up the dedupe every other kind gets — so the claims worth proving are
+ * that repeats really do repeat, and that nobody but an admin can send one.
+ */
+test.describe('a message to one speaker', () => {
+  const message = { subject: 'About your room', body: 'Hi {speakerName}, quick question.' };
+
+  test('is queued, sent, and carries the copy that was typed', async () => {
+    const { chair } = await stage();
+
+    const sent = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      proposalId: 'talk-1',
+      ...message,
+    });
+    expect(sent.logId).toBeTruthy();
+
+    // On the terminal status, not merely on the row: it is created `queued`, so
+    // waiting for its existence would race the trigger that renders it.
+    const rows = await waitForEmail(
+      (all) => all.some((r) => r.kind === 'message' && r.status === 'dry_run'),
+      'the message',
+    );
+    const row = rows.find((r) => r.kind === 'message')!;
+    expect(row).toMatchObject({
+      to: speaker.email,
+      subject: message.subject,
+      body: message.body,
+      // No API key under the emulator, so the trigger renders and records this
+      // rather than claiming a delivery it did not make.
+      status: 'dry_run',
+    });
+  });
+
+  test('two of them are two emails, not one overwritten row', async () => {
+    const { chair } = await stage();
+
+    await callJson(chair.idToken, 'sendSpeakerMessage', { proposalId: 'talk-1', ...message });
+    await callJson(chair.idToken, 'sendSpeakerMessage', {
+      proposalId: 'talk-1',
+      subject: 'One more thing',
+      body: 'Sorry — also this.',
+    });
+
+    const rows = await waitForEmail(
+      (all) => all.filter((r) => r.kind === 'message' && r.status === 'dry_run').length === 2,
+      'both messages',
+    );
+    const subjects = rows.filter((r) => r.kind === 'message').map((r) => r.subject).sort();
+    expect(subjects).toEqual(['About your room', 'One more thing']);
+  });
+
+  test('only an admin can write to a speaker', async () => {
+    const { author } = await stage();
+    await inviteRole('rev@example.test', 'reviewer');
+    const reviewer = await createAccount({ sub: 'msg-rev', email: 'rev@example.test', name: 'Rev' });
+    await callAs(reviewer.idToken, 'claimRole', {});
+
+    for (const who of [reviewer, author]) {
+      expect(
+        await callAs(who.idToken, 'sendSpeakerMessage', { proposalId: 'talk-1', ...message }),
+      ).toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
+    }
+    expect(await readEmailLog()).toHaveLength(0);
+  });
+
+  test('a draft is not something to write to anyone about', async () => {
+    const { chair, author } = await stage();
+    await seedProposal('talk-draft', {
+      speakerUid: author.uid,
+      title: 'Half an idea',
+      status: 'draft',
+    });
+
+    // Writing about an unsubmitted talk tells its author it was read.
+    expect(
+      await callAs(chair.idToken, 'sendSpeakerMessage', { proposalId: 'talk-draft', ...message }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await readEmailLog()).toHaveLength(0);
+  });
+
+  test('the admin panel composes one and shows it in the log', async ({ page }) => {
+    await stage();
+    await signInAs(page, admin, '#/admin');
+
+    const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
+    const send = panel.getByRole('button', { name: 'Send message' });
+
+    // Nothing to send until there is somebody to send it to and something to
+    // say — a message with a blank body is only ever a slip.
+    await expect(send).toBeDisabled();
+
+    const talk = panel.getByLabel('Talk');
+    // The picker names the speaker as well as the talk — an organiser choosing
+    // who to write to is thinking about the person, not the title.
+    await expect(talk).toContainText('Notes on the Analytical Engine — Ada Lovelace');
+    await talk.selectOption('talk-1');
+    await panel.getByRole('textbox', { name: /^Subject/ }).fill('About your room');
+    await panel.getByRole('textbox', { name: /^Message/ }).fill('Hi {speakerName}, quick question.');
+    await expect(send).toBeEnabled();
+
+    page.once('dialog', (d) => d.accept());
+    await send.click();
+
+    await expect(panel.getByText(`Sent to ${speaker.name}.`)).toBeVisible();
+    // Cleared, because there is no deterministic id to collapse a second send.
+    await expect(panel.getByRole('textbox', { name: /^Subject/ })).toHaveValue('');
+
+    const log = panel.locator('.table__scroll');
+    await expect(log.getByRole('row', { name: /About your room/ })).toBeVisible();
+  });
+
+  const bad = {
+    'a placeholder that does not exist': { subject: 'Hi {speaker}', body: 'x' },
+    'an empty subject': { subject: '   ', body: 'x' },
+    'an empty body': { subject: 'x', body: '  ' },
+  };
+  for (const [what, draft] of Object.entries(bad)) {
+    test(`refuses ${what}`, async () => {
+      const { chair } = await stage();
+      expect(
+        await callAs(chair.idToken, 'sendSpeakerMessage', { proposalId: 'talk-1', ...draft }),
+      ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+      expect(await readEmailLog()).toHaveLength(0);
+    });
+  }
+});
