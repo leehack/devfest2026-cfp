@@ -2,7 +2,7 @@
  * Generates a review corpus so the evaluation side can be exercised.
  *
  *   FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-devfest-cfp \
- *     node scripts/seed-corpus.mjs --proposals 40
+ *     node scripts/seed-corpus.mjs --proposals 40 [--cfp devfest-mtl-2026]
  *
  * Each proposal gets a hidden "true quality" that reviewers express through a
  * persona — generous, harsh, polarised, flat. Uniformly calibrated reviewers
@@ -41,6 +41,8 @@ function arg(name, fallback) {
 const PROPOSALS = Number(arg('proposals', 40));
 const SEED = Number(arg('seed', 20260726));
 const REVIEWS_EACH = Number(arg('reviewsEach', 3));
+/** Which call for proposals to fill. It has to exist already — see seed-cfp.mjs. */
+const CFP = arg('cfp', 'devfest-mtl-2026');
 
 /** mulberry32 — small, seedable, and good enough for fixtures. */
 function rng(seed) {
@@ -170,9 +172,21 @@ for (const p of proposals) {
   ]);
 
   batchWrites.push([
-    db.doc(`proposals/${p.id}`),
+    db.doc(`cfps/${CFP}/proposals/${p.id}`),
     {
+      cfpId: CFP,
       speakerIds: [p.speakerId],
+      // What the committee reads. The global profile is not theirs to see.
+      speakerSnapshot: [
+        {
+          uid: p.speakerId,
+          name: `Seed Speaker ${p.speakerId.slice(-3)}`,
+          bio: paragraph(120),
+          basedIn: p.basedIn,
+          socials: [],
+          isGde: false,
+        },
+      ],
       title: p.title,
       abstract: paragraph(260),
       pitch: rand() < 0.7 ? paragraph(90) : '',
@@ -199,8 +213,9 @@ for (const p of proposals) {
     const conflict = rand() < 0.06;
     const score = reviewer.score(p.quality);
     batchWrites.push([
-      db.doc(`proposals/${p.id}/reviews/${reviewer.uid}`),
+      db.doc(`cfps/${CFP}/proposals/${p.id}/reviews/${reviewer.uid}`),
       {
+        cfpId: CFP,
         score,
         note: conflict ? 'Former colleague.' : '',
         conflictOfInterest: conflict,
@@ -218,15 +233,15 @@ for (const p of proposals) {
 
 for (const r of REVIEWERS) {
   batchWrites.push([
-    db.doc(`reviewers/${r.uid}`),
-    { name: r.name, email: `${r.uid}@example.org`, role: r.role },
+    db.doc(`cfps/${CFP}/members/${r.uid}`),
+    { cfpId: CFP, uid: r.uid, name: r.name, email: `${r.uid}@example.org`, role: r.role },
   ]);
 }
 
 // Compute aggregates with the same code the Cloud Function uses.
 const aggregates = aggregateReviews(reviewRecords);
 for (const [proposalId, aggregate] of aggregates) {
-  batchWrites.push([db.doc(`proposals/${proposalId}`), { aggregate }, true]);
+  batchWrites.push([db.doc(`cfps/${CFP}/proposals/${proposalId}`), { aggregate }, true]);
 }
 
 const CHUNK = 400;

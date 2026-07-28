@@ -1,7 +1,11 @@
-# DevFest Montréal 2026 — CFP
+# A call-for-proposals platform
 
-Submission form, Firestore write path, security rules. `SPEC.md` is the design;
+Anyone signed in starts a call for proposals and owns it. Submission form,
+Firestore write path, security rules. `SPEC.md` is the design;
 [`AGENTS.md`](AGENTS.md) is the working conventions.
+
+It began as one event's CFP — DevFest Montréal 2026 — which is still the shape
+of the form and of the spec.
 
 Vite + React + TypeScript on Firebase. One zod schema in `shared/` compiles into
 both the browser bundle and the functions bundle, so the field limits cannot
@@ -14,9 +18,25 @@ functions/    submit, withdraw, roles, window, aggregates, sessionize import
 firestore.rules   the enforcement boundary (§6)
 ```
 
-Three screens behind one hash router: `#/` the submission form, `#/review` for
-anyone holding a role, `#/admin` for admins. Everyone may submit a talk,
+Everything hangs under `cfps/{cfpId}`, where the id is the slug — `proposals`,
+`reviews`, `members`, `roleGrants`, `config` and `emailLog` are subcollections of
+one call. The document id being the slug means creating one *is* the uniqueness
+check: there is no second index to keep honest, and no window in which two people
+both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
+account, not to any one talk), `signInLinks` (a platform-wide throttle) and
+`config/platform` sit outside.
+
+Screens behind one hash router: `#/` lists the public calls, `#/new` starts one,
+and then `#/c/{cfpId}` is the submission form, `/review` is for anyone holding a
+role on it and `/admin/{tab}` is for its admins. Everyone may submit a talk,
 reviewers and admins included — they simply never get their own in the queue.
+
+A call is **public** (listed on the home page) or **private** (unlisted, but
+readable by anyone with the link — private means unlisted, not secret). Its owner
+can **archive** it, which makes it read-only and drops it off the listing, and
+then **delete** it, which destroys every proposal, review, photo and email record
+under it. Deleting is two steps and needs the address typed back, because it is
+other people's writing as well as the owner's.
 
 One speaker, up to three talks. The picker on the form switches between them;
 the speaker profile and the travel answers are shared, so a second submission
@@ -34,16 +54,16 @@ npm start
 [`scripts/dev.mjs`](scripts/dev.mjs) does the four things that each fail
 silently if you skip them: finds a JVM, rebuilds `functions/lib` (the emulator
 serves the compiled output, not the TypeScript), starts **auth, firestore and
-functions**, and seeds `config/cfp` with a window around today. Then Vite on
-<http://localhost:5173>.
+functions**, and seeds a `devfest-mtl-2026` call with a window around today.
+Then Vite on <http://localhost:5173>.
 
 Emulator data is kept in `.emulator-data/` between runs; `npm start -- --fresh`
 discards it.
 
 Miss any of those and the app fails closed rather than guessing: without
 `functions` every callable hits a closed port while drafts still autosave, so
-the breakage looks like a bug in the import feature; without `config/cfp` the
-form correctly reports "not open yet". A committed `.env` supplies emulator
+the breakage looks like a bug in the import feature; with no call seeded the home
+page is simply an empty list. A committed `.env` supplies emulator
 placeholders — without one, `getAuth()` throws `auth/invalid-api-key` during
 module load and nothing renders at all.
 
@@ -133,9 +153,12 @@ becomes a submit-time error with no visible field to point at.
 after a write.
 
 **Roles are granted by email, before the person has ever signed in.** There is no
-uid to key on yet, so `roleGrants/{email}` holds the invitation and `claimRole`
-turns it into `reviewers/{uid}` on first sign-in. The first admin has to come
-from outside the app — `scripts/grant-role.mjs` calls the same `grant()` the
+uid to key on yet, so `cfps/{cfpId}/roleGrants/{email}` holds the invitation and
+`claimRole` turns it into `cfps/{cfpId}/members/{uid}` on first visit. There is
+no bootstrap problem any more: whoever creates a call is written as its `owner`
+in the same transaction. `owner` is deliberately not grantable through
+`grantRole` — otherwise an admin could promote themselves and archive the call
+out from under its owner. The callables call the same `grant()` the
 callable does, so "what granting means" cannot drift between them.
 
 **A reviewer who is also a speaker must never read the reviews of their own
@@ -173,6 +196,14 @@ is an invitation flow.
 `speakers/{uid}` shared by every proposal, editable throughout — including while
 a talk is frozen, because a changed employer is not a changed talk.
 
+**But the committee reads a copy, not the profile.** `submitProposal` freezes a
+`speakerSnapshot` onto the proposal. Two reasons, one answer: a profile is global
+while a role is per call, so letting reviewers read profiles would hand every
+committee on the platform the whole speaker directory; and a bio rewritten in
+2028 would otherwise change what the 2026 committee is recorded as having judged.
+The snapshot deliberately omits the email address — a reviewer judging a talk has
+no need of it.
+
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept
 themselves. `setProposalStatus` takes only the four outcomes a committee decides
@@ -197,8 +228,11 @@ peaking at a few hundred submissions in the final hour has no legitimate reason
 to autoscale past that — anything beyond is a loop or an attack, and should
 queue rather than bill.
 
-**Storage is not set up** and `firebase deploy` fails on it, so deploy
-`--only firestore,functions,hosting`. Headshots are post-acceptance (§3).
+One Resend account serves every call on the platform, so each one registers its
+own sending domain and `setEmailSettings` refuses a `from` that is not on it.
+`config/platform` holds the site's own origin and is writable by nobody through
+the app — it is where every mailed link points, sign-in links included, and those
+are bearer credentials. Move it with `scripts/set-platform.mjs`.
 
 Google sign-in is enabled, `config/cfp` is seeded (open 2026-07-27 →
 2026-09-15), and `leehack@gmail.com` holds the first admin role. The window is
@@ -341,7 +375,7 @@ Still open, in rough order of how much they would matter on the day:
 ```bash
 npm --prefix functions run build
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GCLOUD_PROJECT=demo-devfest-cfp \
-  node scripts/seed-corpus.mjs --proposals 40
+  node scripts/seed-corpus.mjs --proposals 40 --cfp devfest-mtl-2026
 ```
 
 Deterministic: the same `--seed` gives the same corpus, so a ranking that moves
