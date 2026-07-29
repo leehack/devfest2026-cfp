@@ -1,7 +1,6 @@
 import { GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
 import { auth } from '../firebase';
-
-export const usingEmulators = import.meta.env.VITE_USE_EMULATORS === 'true';
+import { usingEmulators } from './emulators';
 
 /**
  * Emulator-only sign-in. `signInWithPopup` needs a real popup to post back to,
@@ -30,8 +29,18 @@ export async function signInAsTestSpeaker(profile?: {
   return signInWithCredential(auth, GoogleAuthProvider.credential(JSON.stringify(claims)));
 }
 
-// The sign-in button only ever mints the default speaker. The end-to-end tests
-// need admins and reviewers too, and Vite drops this branch from a real build.
-if (usingEmulators) {
+/**
+ * Hands the end-to-end tests a way to mint admins and reviewers, not just the
+ * default speaker the sign-in button makes.
+ *
+ * Called explicitly rather than run on import. It used to be a module-scope
+ * `if (usingEmulators)`, which was safe only because Vite replaced that constant
+ * at build time and dropped the branch. Nothing guarantees the next bundler
+ * does, and `signInWithCredential` against real Auth is not a thing to leave to
+ * a minifier — so the whole module is now behind a dynamic import that
+ * production never asks for.
+ */
+export function installTestSignIn(): void {
+  if (!usingEmulators) return;
   (window as unknown as Record<string, unknown>).signInAsTestSpeaker = signInAsTestSpeaker;
 }

@@ -12,13 +12,21 @@
  * find that out by reading, not by clicking something and seeing what happens.
  */
 
+import { useEffect, useState } from 'react';
+
 import { useI18n } from '../i18n/context';
 import { analyticsAvailable } from '../lib/analytics';
-import { consent } from '../lib/consent';
+import { consent, type Consent } from '../lib/consent';
 
 export function ConsentControl({ onReopen }: { onReopen: () => void }) {
   const { t } = useI18n();
-  const answer = consent();
+  /*
+   * Read after mount, not during render. The answer is in storage, which does
+   * not exist on a server — rendered there this reads `unasked` and the control
+   * is absent from the HTML, so rendering it during hydration is a mismatch.
+   */
+  const [answer, setAnswer] = useState<Consent>('unasked');
+  useEffect(() => setAnswer(consent()), []);
 
   // Nothing to say when nothing is measured, and nothing to withdraw while the
   // banner is still on screen asking.

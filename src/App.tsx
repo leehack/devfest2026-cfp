@@ -20,7 +20,7 @@ import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
 import { consent, forgetConsent } from './lib/consent';
-import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
+import { usingEmulators } from './lib/emulators';
 import {
   arrivingFromLink,
   completeSignInFromLink,
@@ -38,9 +38,16 @@ export function App() {
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
   const place = usePlace();
-  // Owned here rather than inside the banner, so the footer control can put the
-  // question back on screen. Withdrawing has to be as easy as agreeing.
-  const [askConsent, setAskConsent] = useState(() => consent() === 'unasked');
+  /*
+   * Owned here rather than inside the banner, so the footer control can put the
+   * question back on screen. Withdrawing has to be as easy as agreeing.
+   *
+   * Starts false and is decided after mount, never in the initialiser. On a
+   * server there is no storage, `consent()` reads that as `unasked`, and the
+   * prerendered HTML would carry the banner for every visitor including the ones
+   * who already answered — a hydration mismatch that also asks twice.
+   */
+  const [askConsent, setAskConsent] = useState(false);
   const { route, cfpId } = place;
   const { role, ready: roleReady } = useRole(user, cfpId);
 
@@ -57,10 +64,26 @@ export function App() {
     document.title = cfp?.name ? `${cfp.name} — ${t.app.title}` : t.app.title;
   }, [cfp, t]);
 
-  // Starts the SDK for somebody who agreed on an earlier visit. A no-op for
-  // everyone else, including anyone who has simply never been asked.
+  /*
+   * Starts the SDK for somebody who agreed on an earlier visit. A no-op for
+   * everyone else, including anyone who has simply never been asked.
+   *
+   * The banner's own question is settled here too, for the reason above: the
+   * answer lives in storage, and storage does not exist until this runs.
+   */
   useEffect(() => {
     applyConsent();
+    if (consent() === 'unasked') setAskConsent(true);
+  }, []);
+
+  /*
+   * The end-to-end tests reach for `window.signInAsTestSpeaker`. Installed from
+   * a chunk production never requests, rather than from a branch we hope the
+   * bundler removes. `tests/e2e/form.ts` already waits for the function to
+   * appear, so arriving a tick late changes nothing.
+   */
+  useEffect(() => {
+    if (usingEmulators) void import('./lib/devAuth').then((m) => m.installTestSignIn());
   }, []);
 
   // One page_view per navigation, with the CFP slug as a parameter and out of
@@ -442,7 +465,11 @@ export function SignIn({
 
       {usingEmulators && (
         <p className="muted" style={{ marginBottom: 0 }}>
-          <button type="button" className="btn btn--ghost" onClick={() => signInAsTestSpeaker()}>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => void import('./lib/devAuth').then((m) => m.signInAsTestSpeaker())}
+          >
             Sign in as a test speaker (emulator only)
           </button>
         </p>
