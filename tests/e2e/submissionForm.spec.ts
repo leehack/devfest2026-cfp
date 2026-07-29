@@ -186,13 +186,26 @@ test.describe('the admin editor', () => {
     await signInAs(page, ADMIN, at('/admin/submission'));
 
     const categories = page.locator('fieldset').filter({ hasText: 'Categories' });
-    await categories.getByRole('textbox', { name: 'Label (English)' }).first().fill('Building apps');
+
+    // The save is only offered once something has changed, and says so.
+    await expect(page.getByRole('button', { name: 'Save the form' })).toBeDisabled();
+    await expect(page.getByText('Everything is saved.')).toBeVisible();
+
+    await categories
+      .getByRole('textbox', { name: 'English label for App Dev' })
+      .fill('Building apps');
+    await expect(page.getByText('Unsaved changes.')).toBeVisible();
+
+    // The dropdown a speaker will see, rendered from what is being typed.
+    await expect(categories.locator('.optionlist__preview select')).toContainText('Building apps');
+
     await page.getByRole('button', { name: 'Save the form' }).click();
     await expect(page.getByText('Submission form saved.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save the form' })).toBeDisabled();
 
     // The stored code is untouched, so the talks already filed under it stay
     // filed under it — only the wording moved.
-    await expect(categories.getByText('Stored as “app_dev”.')).toBeVisible();
+    await expect(categories.getByText('app_dev', { exact: true })).toBeVisible();
 
     await page.goto(at());
     await expect(select(page, 'Category')).toContainText('Building apps');
@@ -205,13 +218,13 @@ test.describe('the admin editor', () => {
 
     const formats = page.locator('fieldset').filter({ hasText: 'Formats' });
     page.on('dialog', (dialog) => void dialog.accept());
-    await expect(formats.getByRole('button', { name: 'Remove' })).toHaveCount(3);
+    await expect(formats.getByRole('button', { name: /^Remove / })).toHaveCount(3);
     for (let i = 0; i < 3; i++) {
-      await formats.getByRole('button', { name: 'Remove' }).first().click();
+      await formats.getByRole('button', { name: /^Remove / }).first().click();
     }
 
     await page.getByRole('button', { name: 'Save the form' }).click();
-    await expect(page.getByRole('alert')).toContainText('Formats has no choices');
+    await expect(page.locator('.editorbar__error')).toContainText('Formats has no choices');
   });
 
   test('a reviewer cannot change the form', async () => {

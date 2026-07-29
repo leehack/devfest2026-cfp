@@ -18,17 +18,26 @@
  *    them down, and holding a picture of someone for that is not something an
  *    organiser should be able to switch on by accident (§3). The acceptance
  *    form is where an image question belongs, and it has one.
+ *
+ * On the shape of the page. The first version gave every choice a full field
+ * treatment — two labelled inputs and three buttons each — which came to 5,300
+ * pixels, 68 buttons and the words "Label (English)" thirty-six times, with the
+ * save button below all of it. A choice is one short string; it gets one row,
+ * and the column headings are said once. The bar at the bottom stays put so
+ * saving is never a scroll away from the thing being edited, and each list
+ * carries the dropdown it produces, because an organiser reading "app_dev,
+ * ai_ml, cloud" is doing translation work the page should be doing for them.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { FieldRows } from './FieldRows';
 import { withKeys } from './ConfirmFormEditor';
-import { Checkbox, TextField } from './fields';
+import { Checkbox } from './fields';
 import { useI18n } from '../i18n';
 import { adminError } from '../lib/errors';
 import { setSubmissionForm } from '../lib/roles';
-import { FORM_LIMITS, validateForm, type FieldOption, type FieldType } from '@shared/confirmForm';
+import { FORM_LIMITS, localised, validateForm, type FieldOption, type FieldType } from '@shared/confirmForm';
 import { DELIVERY_LANGUAGES } from '@shared/enums';
 import {
   validateSubmissionForm,
@@ -45,7 +54,7 @@ const codeFrom = (label: string, taken: string[]): string => {
     label
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
+      .replace(/\p{Diacritic}/gu, '')
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '')
       .slice(0, 40) || 'option';
@@ -55,7 +64,30 @@ const codeFrom = (label: string, taken: string[]): string => {
   return code;
 };
 
-/** One of the three free lists: category, format, level. */
+/**
+ * The dropdown this list produces, disabled, in the reader's language.
+ *
+ * Not decoration: the stored codes are what the editor shows and the labels are
+ * what a speaker reads, and those diverge the moment anybody renames anything.
+ * Seeing the real control is how an organiser notices they have two choices
+ * called "Other".
+ */
+function Preview({ options }: { options: FieldOption[] }) {
+  const { t, locale } = useI18n();
+  if (options.length === 0) return null;
+  return (
+    <p className="optionlist__preview">
+      <span className="muted">{t.admin.previewLabel}</span>{' '}
+      <select className="field__input field__input--inline" disabled>
+        {options.map((option, i) => (
+          <option key={i}>{localised(option.label, locale) || option.value || '—'}</option>
+        ))}
+      </select>
+    </p>
+  );
+}
+
+/** One of the three free lists: category, format, level. One row per choice. */
 function OptionList({
   legend,
   options,
@@ -81,79 +113,134 @@ function OptionList({
   }
 
   return (
-    <fieldset className="fieldset formfield">
-      <legend>{legend}</legend>
+    <fieldset className="fieldset optionlist">
+      <legend>
+        {legend} <span className="muted">· {t.admin.choiceCount(options.length)}</span>
+      </legend>
 
-      {options.length === 0 && <p className="muted">{t.admin.optionsEmpty}</p>}
+      <Preview options={options} />
 
-      {options.map((option, index) => (
-        <div className="formfield__row" key={index}>
-          <div className="grid grid--2">
-            <TextField
-              label={t.admin.optionLabelEn}
-              required
-              value={option.label.en}
-              onChange={(en) => patch(index, { label: { ...option.label, en } })}
-              maxLength={FORM_LIMITS.optionLabel}
-              disabled={busy}
-            />
-            <TextField
-              label={t.admin.optionLabelFr}
-              help={t.admin.formLabelFrHelp}
-              value={option.label.fr ?? ''}
-              onChange={(fr) => patch(index, { label: { ...option.label, fr } })}
-              maxLength={FORM_LIMITS.optionLabel}
-              disabled={busy}
-            />
-          </div>
+      {options.length === 0 ? (
+        <p className="muted">{t.admin.optionsEmpty}</p>
+      ) : (
+        <div className="optionlist__grid">
+          {/* Said once, as column headings, rather than on all thirty-six inputs. */}
+          <span className="optionlist__head">{t.admin.columnEnglish}</span>
+          <span className="optionlist__head">{t.admin.columnFrench}</span>
+          <span className="optionlist__head">{t.admin.columnCode}</span>
+          <span className="optionlist__head optionlist__head--actions">
+            {t.admin.columnOrder}
+          </span>
 
-          <div className="row row--wrap">
-            {option.value && (
-              <span className="field__help">
-                {t.admin.optionCode.replace('{code}', option.value)}
-              </span>
-            )}
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={busy || index === 0}
-              onClick={() => move(index, -1)}
-            >
-              {t.admin.formUp}
-            </button>
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={busy || index === options.length - 1}
-              onClick={() => move(index, 1)}
-            >
-              {t.admin.formDown}
-            </button>
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={busy}
-              onClick={() => {
+          {options.map((option, index) => (
+            <Row
+              key={index}
+              option={option}
+              index={index}
+              count={options.length}
+              busy={busy}
+              onPatch={(part) => patch(index, part)}
+              onMove={(delta) => move(index, delta)}
+              onRemove={() => {
                 if (!confirm(t.admin.optionRemoveConfirm.replace('{label}', option.label.en || '—')))
                   return;
                 onChange(options.filter((_, i) => i !== index));
               }}
-            >
-              {t.admin.formRemove}
-            </button>
-          </div>
+            />
+          ))}
         </div>
-      ))}
+      )}
 
       <button
         type="button"
-        className="btn"
+        className="btn btn--small"
         disabled={busy || options.length >= FORM_LIMITS.options}
         onClick={() => onChange([...options, { value: '', label: { en: '' } }])}
       >
         {t.admin.optionAdd}
       </button>
     </fieldset>
+  );
+}
+
+/**
+ * Bare inputs with `aria-label`, not `TextField`. The visible heading is the
+ * column, and repeating it per row is what made the page five screens long —
+ * but a screen reader still has to be told which cell it is in, so the label
+ * moves to the attribute rather than disappearing.
+ */
+function Row({
+  option,
+  index,
+  count,
+  busy,
+  onPatch,
+  onMove,
+  onRemove,
+}: {
+  option: FieldOption;
+  index: number;
+  count: number;
+  busy: boolean;
+  onPatch: (part: Partial<FieldOption>) => void;
+  onMove: (delta: number) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useI18n();
+  const which = option.label.en || t.admin.optionUnnamed;
+
+  return (
+    <>
+      <input
+        className="field__input"
+        value={option.label.en}
+        aria-label={t.admin.optionLabelEnFor(which)}
+        maxLength={FORM_LIMITS.optionLabel}
+        disabled={busy}
+        onChange={(e) => onPatch({ label: { ...option.label, en: e.target.value } })}
+      />
+      <input
+        className="field__input"
+        value={option.label.fr ?? ''}
+        aria-label={t.admin.optionLabelFrFor(which)}
+        maxLength={FORM_LIMITS.optionLabel}
+        disabled={busy}
+        onChange={(e) => onPatch({ label: { ...option.label, fr: e.target.value } })}
+      />
+      {/* Shown, never editable: every proposal filed under it says this. */}
+      <code className="optionlist__code" title={t.admin.optionCodeHelp}>
+        {option.value || t.admin.optionCodeOnSave}
+      </code>
+      <span className="optionlist__actions">
+        <button
+          type="button"
+          className="iconbtn"
+          disabled={busy || index === 0}
+          aria-label={t.admin.moveUpOf(which)}
+          onClick={() => onMove(-1)}
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          className="iconbtn"
+          disabled={busy || index === count - 1}
+          aria-label={t.admin.moveDownOf(which)}
+          onClick={() => onMove(1)}
+        >
+          ↓
+        </button>
+        <button
+          type="button"
+          className="iconbtn iconbtn--danger"
+          disabled={busy}
+          aria-label={t.admin.removeOf(which)}
+          onClick={onRemove}
+        >
+          ✕
+        </button>
+      </span>
+    </>
   );
 }
 
@@ -175,14 +262,19 @@ function LanguageList({
   const at = (value: string) => options.find((o) => o.value === value);
 
   return (
-    <fieldset className="fieldset formfield">
-      <legend>{t.admin.taxonomy.deliveryLanguage}</legend>
+    <fieldset className="fieldset optionlist">
+      <legend>
+        {t.admin.taxonomy.deliveryLanguage}{' '}
+        <span className="muted">· {t.admin.choiceCount(options.length)}</span>
+      </legend>
       <p className="field__help">{t.admin.languagesHelp}</p>
+
+      <Preview options={options} />
 
       {DELIVERY_LANGUAGES.map((value) => {
         const option = at(value);
         return (
-          <div className="formfield__row" key={value}>
+          <div className="langrow" key={value}>
             <Checkbox
               label={t.enums.deliveryLanguage[value]}
               checked={Boolean(option)}
@@ -194,44 +286,42 @@ function LanguageList({
                       // so toggling twice does not reshuffle the dropdown.
                       DELIVERY_LANGUAGES.filter(
                         (v) => v === value || options.some((o) => o.value === v),
-                      ).map(
-                        (v) =>
-                          at(v) ?? { value: v, label: { en: t.enums.deliveryLanguage[v] } },
-                      )
+                      ).map((v) => at(v) ?? { value: v, label: { en: t.enums.deliveryLanguage[v] } })
                     : options.filter((o) => o.value !== value),
                 )
               }
             />
             {option && (
-              <div className="grid grid--2">
-                <TextField
-                  label={t.admin.optionLabelEn}
-                  required
+              <span className="langrow__labels">
+                <input
+                  className="field__input"
                   value={option.label.en}
-                  onChange={(en) =>
+                  aria-label={t.admin.optionLabelEnFor(t.enums.deliveryLanguage[value])}
+                  maxLength={FORM_LIMITS.optionLabel}
+                  disabled={busy}
+                  onChange={(e) =>
                     onChange(
                       options.map((o) =>
-                        o.value === value ? { ...o, label: { ...o.label, en } } : o,
+                        o.value === value ? { ...o, label: { ...o.label, en: e.target.value } } : o,
                       ),
                     )
                   }
-                  maxLength={FORM_LIMITS.optionLabel}
-                  disabled={busy}
                 />
-                <TextField
-                  label={t.admin.optionLabelFr}
+                <input
+                  className="field__input"
                   value={option.label.fr ?? ''}
-                  onChange={(fr) =>
+                  aria-label={t.admin.optionLabelFrFor(t.enums.deliveryLanguage[value])}
+                  maxLength={FORM_LIMITS.optionLabel}
+                  disabled={busy}
+                  onChange={(e) =>
                     onChange(
                       options.map((o) =>
-                        o.value === value ? { ...o, label: { ...o.label, fr } } : o,
+                        o.value === value ? { ...o, label: { ...o.label, fr: e.target.value } } : o,
                       ),
                     )
                   }
-                  maxLength={FORM_LIMITS.optionLabel}
-                  disabled={busy}
                 />
-              </div>
+              </span>
             )}
           </div>
         );
@@ -240,12 +330,27 @@ function LanguageList({
   );
 }
 
-export function SubmissionFormEditor({ cfpId, form: saved }: { cfpId: string; form: SubmissionForm }) {
+export function SubmissionFormEditor({
+  cfpId,
+  form: saved,
+}: {
+  cfpId: string;
+  form: SubmissionForm;
+}) {
   const { t } = useI18n();
   const [form, setForm] = useState<SubmissionForm>(saved);
+  const [stored, setStored] = useState<SubmissionForm>(saved);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+
+  // Against the last thing the server confirmed, not against a dirty flag: an
+  // organiser who types a word and deletes it again has not changed anything,
+  // and telling them they have is how a save prompt stops being believed.
+  const dirty = useMemo(
+    () => JSON.stringify(form) !== JSON.stringify(stored),
+    [form, stored],
+  );
 
   const set = <K extends keyof SubmissionForm>(key: K, value: SubmissionForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -301,6 +406,7 @@ export function SubmissionFormEditor({ cfpId, form: saved }: { cfpId: string; fo
       const { data } = await setSubmissionForm({ cfpId, ...next });
       // What was actually stored, not what we sent: the callable trims and drops.
       setForm(data.form);
+      setStored(data.form);
       setNote(t.admin.submissionSaved);
     } catch (e) {
       setError(adminError(e, t));
@@ -329,53 +435,74 @@ export function SubmissionFormEditor({ cfpId, form: saved }: { cfpId: string; fo
         busy={busy}
       />
 
-      <h3 className="card__subtitle">{t.admin.acksTitle}</h3>
-      <p className="field__help">{t.admin.acksHelp}</p>
-      <FieldRows
-        fields={form.acks}
-        onChange={(acks) => set('acks', acks)}
-        busy={busy}
-        consent
-        max={FORM_LIMITS.fields}
-        labels={{
-          empty: t.admin.acksEmpty,
-          untitled: t.admin.ackUntitled,
-          labelEn: t.admin.ackLabelEn,
-          labelFr: t.admin.ackLabelFr,
-          add: t.admin.ackAdd,
-          removeConfirm: t.admin.ackRemoveConfirm,
-        }}
-      />
+      <fieldset className="fieldset optionlist">
+        <legend>{t.admin.acksTitle}</legend>
+        <p className="field__help">{t.admin.acksHelp}</p>
+        <FieldRows
+          fields={form.acks}
+          onChange={(acks) => set('acks', acks)}
+          busy={busy}
+          consent
+          max={FORM_LIMITS.fields}
+          labels={{
+            empty: t.admin.acksEmpty,
+            untitled: t.admin.ackUntitled,
+            labelEn: t.admin.ackLabelEn,
+            labelFr: t.admin.ackLabelFr,
+            add: t.admin.ackAdd,
+            removeConfirm: t.admin.ackRemoveConfirm,
+          }}
+        />
+      </fieldset>
 
-      <h3 className="card__subtitle">{t.admin.extraTitle}</h3>
-      <p className="field__help">{t.admin.extraHelp}</p>
-      <FieldRows
-        fields={form.fields}
-        onChange={(fields) => set('fields', fields)}
-        busy={busy}
-        types={EXTRA_TYPES}
-        labels={{
-          empty: t.admin.extraEmpty,
-          untitled: t.admin.formUntitled,
-          labelEn: t.admin.formLabelEn,
-          labelFr: t.admin.formLabelFr,
-          add: t.admin.extraAdd,
-          removeConfirm: t.admin.formRemoveConfirm,
-        }}
-      />
+      <fieldset className="fieldset optionlist">
+        <legend>{t.admin.extraTitle}</legend>
+        <p className="field__help">{t.admin.extraHelp}</p>
+        <FieldRows
+          fields={form.fields}
+          onChange={(fields) => set('fields', fields)}
+          busy={busy}
+          types={EXTRA_TYPES}
+          labels={{
+            empty: t.admin.extraEmpty,
+            untitled: t.admin.formUntitled,
+            labelEn: t.admin.formLabelEn,
+            labelFr: t.admin.formLabelFr,
+            add: t.admin.extraAdd,
+            removeConfirm: t.admin.formRemoveConfirm,
+          }}
+        />
+      </fieldset>
 
-      <div className="row row--wrap">
-        <button type="button" className="btn btn--primary" disabled={busy} onClick={save}>
-          {busy ? t.admin.formSaving : t.admin.submissionSave}
-        </button>
+      {/*
+        Stays with you down the page. The save used to sit below five screens of
+        inputs, which meant every error message did too — you fixed something at
+        the top, scrolled to the bottom to save, and scrolled back to read what
+        was wrong.
+      */}
+      <div className="editorbar" role="region" aria-label={t.admin.submissionSave}>
+        <div className="editorbar__inner">
+          <p className="editorbar__state" aria-live="polite">
+            {error ? (
+              <span className="editorbar__error">{error}</span>
+            ) : busy ? (
+              t.admin.formSaving
+            ) : dirty ? (
+              t.admin.unsaved
+            ) : (
+              note || t.admin.upToDate
+            )}
+          </p>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busy || !dirty}
+            onClick={save}
+          >
+            {busy ? t.admin.formSaving : t.admin.submissionSave}
+          </button>
+        </div>
       </div>
-
-      {note && <p className="note note--inline">{note}</p>}
-      {error && (
-        <p className="field__error" role="alert">
-          {error}
-        </p>
-      )}
     </>
   );
 }

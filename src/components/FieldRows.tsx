@@ -13,6 +13,8 @@
  * warning attached to it, for a string nobody outside this panel ever reads.
  */
 
+import { Fragment } from 'react';
+
 import { Checkbox, SelectField, TextAreaField, TextField } from './fields';
 import { useI18n } from '../i18n';
 import { FIELD_TYPES, FORM_LIMITS, type ConfirmField, type FieldType } from '@shared/confirmForm';
@@ -91,6 +93,91 @@ export function FieldRows({
     // the form they meant to change.
     if (!confirm(labels.removeConfirm.replace('{label}', fields[index].label.en || '—'))) return;
     onChange(fields.filter((_, i) => i !== index));
+  }
+
+  /*
+   * A consent is a line of wording and nothing else — no type, no "must be
+   * answered", no hint. Giving it the full boxed field treatment is what turned
+   * three tick boxes into most of a screen, so it gets one row, like a choice.
+   */
+  if (consent) {
+    return (
+      <>
+        {fields.length === 0 ? (
+          <p className="muted">{labels.empty}</p>
+        ) : (
+          <div className="optionlist__grid optionlist__grid--consent">
+            <span className="optionlist__head">{labels.labelEn}</span>
+            <span className="optionlist__head">{labels.labelFr}</span>
+            <span className="optionlist__head optionlist__head--actions">
+              {t.admin.columnOrder}
+            </span>
+
+            {fields.map((field, index) => {
+              const which = field.label.en || labels.untitled;
+              return (
+                <Fragment key={index}>
+                  <input
+                    className="field__input"
+                    value={field.label.en}
+                    aria-label={`${labels.labelEn} — ${which}`}
+                    maxLength={FORM_LIMITS.label}
+                    disabled={busy}
+                    onChange={(e) => patch(index, { label: { ...field.label, en: e.target.value } })}
+                  />
+                  <input
+                    className="field__input"
+                    value={field.label.fr ?? ''}
+                    aria-label={`${labels.labelFr} — ${which}`}
+                    maxLength={FORM_LIMITS.label}
+                    disabled={busy}
+                    onChange={(e) => patch(index, { label: { ...field.label, fr: e.target.value } })}
+                  />
+                  <span className="optionlist__actions">
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      disabled={busy || index === 0}
+                      aria-label={t.admin.moveUpOf(which)}
+                      onClick={() => move(index, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      disabled={busy || index === fields.length - 1}
+                      aria-label={t.admin.moveDownOf(which)}
+                      onClick={() => move(index, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="iconbtn iconbtn--danger"
+                      disabled={busy}
+                      aria-label={t.admin.removeOf(which)}
+                      onClick={() => remove(index)}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                </Fragment>
+              );
+            })}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={busy || fields.length >= max}
+          onClick={add}
+        >
+          {labels.add}
+        </button>
+      </>
+    );
   }
 
   return (
@@ -201,7 +288,12 @@ export function FieldRows({
         </fieldset>
       ))}
 
-      <button type="button" className="btn" disabled={busy || fields.length >= max} onClick={add}>
+      <button
+        type="button"
+        className="btn btn--small"
+        disabled={busy || fields.length >= max}
+        onClick={add}
+      >
         {labels.add}
       </button>
     </>

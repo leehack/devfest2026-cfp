@@ -967,6 +967,13 @@ p {
   .people__role {
     min-height: 44px;
   }
+
+  /* Square, so the width has to come up with the height — a 44×32 target is
+     still a miss half the time. */
+  .iconbtn {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 /* ------------------------------------------------------------------ charts */
@@ -1383,6 +1390,182 @@ p {
   margin-top: var(--s-4);
   padding-top: var(--s-4);
   border-top: 1px solid var(--line);
+}
+
+/* ------------------------------------------------------- the option editor */
+
+.optionlist {
+  margin-bottom: var(--s-5);
+}
+
+.optionlist__preview {
+  margin: 0 0 var(--s-4);
+  font-size: var(--text-sm);
+}
+
+/* Inline so the preview reads as a sentence rather than as another form field
+   the organiser is meant to fill in. */
+.field__input--inline {
+  display: inline-block;
+  width: auto;
+  max-width: 20rem;
+  vertical-align: baseline;
+}
+
+/*
+  One row per choice: English, French, the stored code, and the controls. The
+  headings are said once at the top instead of on every input — repeating
+  "Label (English)" down the page is what made this five screens long.
+*/
+.optionlist__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto;
+  gap: var(--s-2) var(--s-3);
+  align-items: center;
+  margin-bottom: var(--s-4);
+}
+
+.optionlist__grid--consent {
+  grid-template-columns: 1fr 1fr auto;
+}
+
+.optionlist__head {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.optionlist__head--actions {
+  /* Present for screen readers and alignment; the arrows say the rest. */
+  text-align: center;
+}
+
+.optionlist__code {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.optionlist__actions {
+  display: flex;
+  gap: var(--s-1);
+}
+
+/*
+  A square control for a one-glyph action. Three of these per row instead of
+  three word-buttons is the difference between sixty-eight buttons reading as a
+  wall and reading as a list.
+*/
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.iconbtn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.iconbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.iconbtn--danger:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.btn--small {
+  padding: var(--s-1) var(--s-3);
+  font-size: var(--text-sm);
+  min-height: 2rem;
+}
+
+/* A language is a switch plus, once switched on, its two labels. */
+.langrow {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) 2fr;
+  gap: var(--s-3);
+  align-items: center;
+  padding: var(--s-2) 0;
+}
+
+.langrow__labels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+}
+
+/*
+  The save, and whatever the save has to say, travelling with you down the page.
+  It used to sit below every input on the page, which meant the error telling you
+  what was wrong was five screens from the thing that was wrong.
+*/
+.editorbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  margin-top: var(--s-5);
+  padding: var(--s-3) 0;
+  background: var(--bg);
+  border-top: 1px solid var(--line-strong);
+}
+
+.editorbar__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editorbar__state {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.editorbar__error {
+  color: var(--error);
+}
+
+/* Two columns of inputs plus three buttons does not fit a phone, and shrinking
+   them to fit makes both unusable. Stacked, with the headings dropped — a
+   single-column list does not need column titles. */
+@media (max-width: 40rem) {
+  .optionlist__grid,
+  .optionlist__grid--consent {
+    grid-template-columns: 1fr;
+    gap: var(--s-2);
+  }
+
+  .optionlist__head {
+    display: none;
+  }
+
+  .optionlist__grid > .optionlist__actions {
+    justify-content: flex-end;
+    margin-bottom: var(--s-3);
+    padding-bottom: var(--s-3);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .langrow,
+  .langrow__labels {
+    grid-template-columns: 1fr;
+  }
 }
 
 .formfield legend {
