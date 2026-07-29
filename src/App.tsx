@@ -20,7 +20,6 @@ import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
 import { consent, forgetConsent } from './lib/consent';
-import { usingEmulators } from './lib/emulators';
 import {
   arrivingFromLink,
   completeSignInFromLink,
@@ -96,7 +95,16 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
    * appear, so arriving a tick late changes nothing.
    */
   useEffect(() => {
-    if (usingEmulators) void import('./lib/devAuth').then((m) => m.installTestSignIn());
+    /*
+     * The comparison is written out in full rather than reading the shared
+     * constant, because that literal form is what lets the bundler fold this to
+     * `false` and drop the import — and with it the whole module, rather than
+     * emitting it as a chunk nothing ever asks for. A downloadable file
+     * containing signInWithCredential is not worth the tidier import.
+     */
+    if (process.env.NEXT_PUBLIC_USE_EMULATORS === 'true') {
+      void import('./lib/devAuth').then((m) => m.installTestSignIn());
+    }
   }, []);
 
   // One page_view per navigation, with the CFP slug as a parameter and out of
@@ -476,7 +484,7 @@ export function SignIn({
         </p>
       )}
 
-      {usingEmulators && (
+      {process.env.NEXT_PUBLIC_USE_EMULATORS === 'true' && (
         <p className="muted" style={{ marginBottom: 0 }}>
           <button
             type="button"
