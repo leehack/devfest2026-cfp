@@ -533,10 +533,6 @@ export const fr: Dictionary = {
     emailSaveSender: 'Enregistrer l’adresse',
     emailNoSender:
       'Aucune adresse d’expéditeur n’est configurée : rien n’est envoyé. Les messages sont tout de même mis en file et partiront dès qu’une adresse sera définie.',
-    emailPublicUrl: 'Lien dans les courriels',
-    emailPublicUrlHelp:
-      'L’adresse vers laquelle les conférenciers sont dirigés pour confirmer ou lire une décision. Laissez vide pour utiliser l’adresse du projet ; renseignez-la dès que l’appel a son propre domaine.',
-    emailPublicUrlPlaceholder: 'https://cfp.exemple.org',
     emailSender: {
       empty: 'Une adresse d’expéditeur est requise.',
       format: 'Cela ne ressemble pas à une adresse courriel.',
@@ -652,7 +648,6 @@ export const fr: Dictionary = {
     formViewPhoto: 'Voir la photo',
     formYes: 'Oui',
     formNo: 'Non',
-    formAnswers: 'Réponses',
     formErrors: {
       tooManyFields: 'Cela dépasse le nombre de questions possible.',
       badKey: 'Un problème avec la question « {key} » — vérifiez son type.',
@@ -675,9 +670,6 @@ export const fr: Dictionary = {
     },
     languagesHelp:
       'Les langues dans lesquelles vous acceptez une conférence. Les quatre sont fixes — l’horaire et la gestion du bilinguisme reposent dessus — mais vous choisissez lesquelles offrir et comment les nommer.',
-    optionLabelEn: 'Libellé (anglais)',
-    optionLabelFr: 'Libellé (français)',
-    optionCode: 'Enregistré sous « {code} ».',
     optionAdd: 'Ajouter un choix',
     previewLabel: 'Ce que verront les conférenciers :',
     choiceCount: (n: number) => (n === 1 ? '1 choix' : `${n} choix`),
@@ -788,7 +780,6 @@ export const fr: Dictionary = {
       'Les notes des autres évaluateurs restent masquées jusqu’à leur ouverture par un administrateur.',
     others: 'Notes du comité',
     sortedByDisagreement: 'Triées par désaccord — celles qui méritent discussion sont en tête.',
-    spread: 'Écart',
     conflictDeclared: 'conflit déclaré',
   },
 

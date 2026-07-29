@@ -535,10 +535,6 @@ export const en = {
     emailSaveSender: 'Save address',
     emailNoSender:
       'No sending address is set, so nothing is going out. Messages still queue, and send once you set one.',
-    emailPublicUrl: 'Link in emails',
-    emailPublicUrlHelp:
-      'Where speakers are sent to confirm or read a decision. Leave it empty to use this project’s own address; set it once the CFP has a domain of its own.',
-    emailPublicUrlPlaceholder: 'https://cfp.example.org',
     emailSender: {
       empty: 'A sending address is required.',
       format: 'That does not look like an email address.',
@@ -653,7 +649,6 @@ export const en = {
     formViewPhoto: 'View photo',
     formYes: 'Yes',
     formNo: 'No',
-    formAnswers: 'Answers',
     formErrors: {
       tooManyFields: 'That is more questions than the form can hold.',
       badKey: 'Something is wrong with the question “{key}” — please check its type.',
@@ -676,9 +671,6 @@ export const en = {
     },
     languagesHelp:
       'Which languages you will take a talk in. The four are fixed — the schedule and the bilingual handling are built on them — but you choose which to offer and what to call them.',
-    optionLabelEn: 'Label (English)',
-    optionLabelFr: 'Label (French)',
-    optionCode: 'Stored as “{code}”.',
     optionAdd: 'Add a choice',
     previewLabel: 'Speakers will see:',
     choiceCount: (n: number) => (n === 1 ? '1 choice' : `${n} choices`),
@@ -784,7 +776,6 @@ export const en = {
     othersHidden: 'Other reviewers’ scores stay hidden until an admin opens them.',
     others: 'Committee scores',
     sortedByDisagreement: 'Sorted by disagreement — the ones worth discussing are first.',
-    spread: 'Spread',
     conflictDeclared: 'conflict declared',
   },
 
