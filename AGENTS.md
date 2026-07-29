@@ -172,6 +172,24 @@ collection — the rule names the two readable documents one at a time.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.
+- **`reviewsVisible` is a UI convention, not a boundary — do not treat it as
+  one.** It hides individual scores and notes, and the rules do enforce that. But
+  `aggregate` is a *field on the proposal*, and any reviewer may read any
+  submitted proposal, so `aggregate.avgScore` is available to them at any time.
+  Firestore rules cannot hide a single field. `src/screens/ReviewPage.tsx` honours
+  the intent — it sorts by `stdDev` only once the round is open and never renders
+  the aggregate on the card — so the gap is reachable through devtools, not
+  through the app. Accepted deliberately: reviewers are already trusted with every
+  proposal and this is a committee rather than an adversary. If it ever has to be
+  real, the field has to move to its own document (`proposals/{id}/aggregate/…`,
+  gated on `reviewsVisible || isAdmin`), which means the rules,
+  `recomputeAggregates`, the Proposals dashboard, the review sort, and a backfill.
+- **A review document carries exactly five keys**, pinned by `hasOnly` in the
+  rules: `cfpId`, `score`, `conflictOfInterest`, `comment`, `updatedAt`. Without
+  that the `comment` cap is decorative, because the same text goes in under any
+  other name. The cap itself is `LIMITS.reviewCommentMax`, duplicated as a literal
+  in the rules because rules cannot import TypeScript, and pinned to it by
+  `tests/reviewComment.test.ts`.
 - **`status` is function-writable only**, so every decision is a callable.
   `setProposalStatus` is admin-only and refuses `draft` and `withdrawn` — the
   first is not the committee's to touch, the second is the speaker's call.
