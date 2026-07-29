@@ -7,7 +7,7 @@ Firestore write path, security rules. `SPEC.md` is the design;
 It began as one event's CFP — DevFest Montréal 2026 — which is still the shape
 of the form and of the spec.
 
-Vite + React + TypeScript on Firebase. One zod schema in `shared/` compiles into
+Next.js App Router + React + TypeScript on Firebase. One zod schema in `shared/` compiles into
 both the browser bundle and the functions bundle, so the field limits cannot
 drift apart.
 
@@ -58,7 +58,7 @@ npm start
 silently if you skip them: finds a JVM, rebuilds `functions/lib` (the emulator
 serves the compiled output, not the TypeScript), starts **auth, firestore and
 functions**, and seeds a `devfest-mtl-2026` call with a window around today.
-Then Vite on <http://localhost:5173>.
+Then `next dev` on <http://localhost:5173>.
 
 Emulator data is kept in `.emulator-data/` between runs; `npm start -- --fresh`
 discards it.
@@ -215,16 +215,33 @@ which outranks the committee's).
 
 ## The deployed project
 
-Project **`devfest-mtl-2026-cfp`**, Firestore and functions both in
-`northamerica-northeast1`. Live at <https://devfest-mtl-2026-cfp.web.app>.
+Project **`devfest-mtl-2026-cfp`**. Firestore and the 27 functions are in
+`northamerica-northeast1`; the App Hosting backend is in `us-east4`, because App
+Hosting has no Canadian region. No personal data leaves the country — a proposal
+goes from the browser to Firestore directly and never touches the backend.
+
+Live at <https://cfp.gdgmontreal.com>. The `.web.app` and `.firebaseapp.com`
+addresses belong to the old Hosting site, which stays published rather than
+disabled because `.firebaseapp.com` is the `authDomain` and serves
+`/__/auth/handler` — every sign-in completes through it. What it serves is
+replaced by redirects to the canonical origin; see
+[hosting-redirect/](hosting-redirect/README.md), which explains why disabling the
+site is not the same thing.
 
 ```bash
-npm run build && npx firebase deploy
+npm run verify                                  # lint, types, build, bundle gates, 3 suites
+npx firebase deploy --only apphosting           # the app, from local source
+npx firebase deploy --only functions,firestore  # the callables and the rules
 ```
 
+The six public Firebase values reach a cloud build from Secret Manager, named
+`next-public-firebase-*`, wired up in `apphosting.yaml`.
+
 Real config lives in `.env.production.local` (gitignored) rather than
-`.env.local`, so `npm run dev` stays on the emulators; the tracked `.env` holds
-only `demo-` placeholders.
+`.env.local`, so `npm start` stays on the emulators; the tracked `.env` holds
+only `demo-` placeholders. `next.config.ts` refuses to build if the projectId
+still starts with `demo-`, because Next reads `.env` in every mode and a build
+that picked those up would deploy a site that cannot sign anybody in.
 
 Every callable sets `maxInstances: 10`. Blaze bills per invocation, and a CFP
 peaking at a few hundred submissions in the final hour has no legitimate reason
