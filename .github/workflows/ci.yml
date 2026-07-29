@@ -24,7 +24,33 @@ jobs:
       - run: npm ci --prefix functions
 
       - run: npm run lint
+      - run: npm run typecheck
+
+      # `next build` refuses to run on the tracked `.env`, by design: it holds
+      # `demo-` emulator placeholders, Next reads `.env` in every mode, and a
+      # deployment built from them would look perfect and sign nobody in. See
+      # assertPublicEnv in next.config.ts.
+      #
+      # So CI has to supply something, and it cannot be the real config — this
+      # repo is public and the values live in Secret Manager. These are fake but
+      # deliberately not `demo-`, which is the exact string both that guard and
+      # check-bundle key on. Nothing here is deployed; the build is a compile and
+      # prerender check, and the strings only get inlined.
       - run: npm run build
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: ci-not-a-real-key
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci-build-check.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ci-build-check
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ci-build-check.appspot.com
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000000'
+          NEXT_PUBLIC_FIREBASE_APP_ID: '1:000000000000:web:0000000000000000000000'
+          NEXT_PUBLIC_USE_EMULATORS: 'false'
+          SITE_ORIGIN: https://ci.invalid
+
+      # The two things Vite used to guarantee and nothing does now: no emulator
+      # config in a client chunk, and no reachable call to the emulator sign-in.
+      - run: npm run check:bundle
+
       - run: npm test
 
       # Rules are the enforcement boundary; a green build with broken rules is
@@ -55,9 +81,13 @@ jobs:
         continue-on-error: true
         run: npx playwright test tests/e2e/sessionize.spec.ts
 
+      # `|| true`, because this runs on any failure — including one that happened
+      # long before the stack was started, when the file does not exist. Without
+      # it the diagnostic step fails too, and the log ends on a missing-file error
+      # rather than on the thing that actually broke.
       - name: Stack log
         if: failure()
-        run: cat /tmp/stack.log
+        run: cat /tmp/stack.log || true
 
       - uses: actions/upload-artifact@v4
         if: failure()
