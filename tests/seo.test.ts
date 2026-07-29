@@ -1,16 +1,17 @@
+/**
+ * What is left of the SEO layer once the framework owns the tags.
+ *
+ * The tests for `metaFor`, `inject`, `robotsTxt` and `sitemapXml` went with those
+ * functions. Their claims did not: "Open Graph and Twitter carry the same words",
+ * "an unlisted call tells a crawler to stay away", "the sitemap lists every
+ * public call" are all asserted against the real rendered output now, in
+ * `tests/e2e/cfpPage.spec.ts` — which is a better place for them, because it is
+ * the served bytes rather than a string builder that has to be right.
+ */
+
 import { describe, expect, it } from 'vitest';
 
-import { inject, metaFor, robotsTxt, sitemapXml, summarise } from '../shared/seo';
-
-const SHELL = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Call for proposals</title>
-    <script type="module" src="/assets/index-abc.js"></script>
-  </head>
-  <body><div id="root"></div></body>
-</html>`;
+import { CRAWL_DISALLOW, summarise } from '../shared/seo';
 
 describe('cutting a description down', () => {
   it('leaves one that already fits alone, ellipsis and all', () => {
@@ -35,90 +36,17 @@ describe('cutting a description down', () => {
   });
 });
 
-describe('the tags', () => {
-  const base = {
-    title: 'DevFest Montréal 2026',
-    description: 'Talks about building things.',
-    url: 'https://cfp.example/c/devfest-mtl-2026',
-    siteName: 'Calls for proposals',
-    indexable: true,
-  };
-
-  it('carries the same words to Open Graph and to Twitter', () => {
-    const meta = metaFor(base);
-    expect(meta).toContain('<meta property="og:title" content="DevFest Montréal 2026">');
-    expect(meta).toContain('<meta name="twitter:title" content="DevFest Montréal 2026">');
-    expect(meta).toContain(`<link rel="canonical" href="${base.url}">`);
-    expect(meta).not.toContain('noindex');
+describe('what stays out of the crawl', () => {
+  it('names the three role-gated paths and nothing else', () => {
+    // Not access control — the rules do that. This is crawl budget, and keeping
+    // "sign in" out of a search result page.
+    expect([...CRAWL_DISALLOW]).toEqual(['/c/*/admin', '/c/*/review', '/c/*/submit']);
   });
 
-  /*
-   * The one that matters: private means unlisted, and the audience it has to be
-   * unlisted *from* is a crawler. Everything else about a private call is a
-   * courtesy; this is the mechanism.
-   */
-  it('tells a crawler to stay away from an unlisted call', () => {
-    expect(metaFor({ ...base, indexable: false })).toContain(
-      '<meta name="robots" content="noindex">',
-    );
-  });
-
-  /*
-   * A CFP name is typed by an organiser and lands inside an HTML attribute. A
-   * quote in it would close the attribute and everything after it would be
-   * markup somebody else wrote.
-   */
-  it('escapes a name that would otherwise break out of the attribute', () => {
-    const meta = metaFor({ ...base, title: 'Ship "it" & <script>alert(1)</script>' });
-    expect(meta).not.toContain('<script>');
-    expect(meta).toContain('&quot;it&quot; &amp; &lt;script&gt;');
-  });
-});
-
-describe('putting them into the shell', () => {
-  it('replaces the title and keeps the script tag', () => {
-    const html = inject(SHELL, 'DevFest Montréal 2026 — Calls', metaFor({
-      title: 'DevFest Montréal 2026',
-      description: 'Talks.',
-      url: 'https://cfp.example/c/devfest-mtl-2026',
-      siteName: 'Calls',
-      indexable: true,
-    }));
-
-    expect(html).toContain('<title>DevFest Montréal 2026 — Calls</title>');
-    expect(html).not.toContain('<title>Call for proposals</title>');
-    expect(html).toContain('src="/assets/index-abc.js"');
-    // Inside the head, or a crawler that stops at </head> never sees it.
-    expect(html.indexOf('og:title')).toBeLessThan(html.indexOf('</head>'));
-  });
-});
-
-describe('robots and the sitemap', () => {
-  it('keeps a crawler away from the committee, and off the form', () => {
-    const txt = robotsTxt();
-    expect(txt).toContain('Disallow: /c/*/admin');
-    expect(txt).toContain('Disallow: /c/*/review');
-    expect(txt).toContain('Disallow: /c/*/submit');
-    // A call's public page is the whole point of having one.
-    expect(txt).toContain('Allow: /');
-  });
-
-  it('names no origin at all', () => {
-    // Whoever deploys this picks the origin, so there is none to name at build
-    // time — and the sitemap is at the root, where a crawler already looks.
-    expect(robotsTxt()).not.toMatch(/https?:/);
-  });
-
-  it('lists the front door and every call given to it', () => {
-    const xml = sitemapXml('https://cfp.example', [
-      { id: 'devfest-mtl-2026', lastModified: '2026-07-01' },
-      { id: 'other-conf' },
-    ]);
-    expect(xml).toContain('<loc>https://cfp.example/</loc>');
-    expect(xml).toContain(
-      '<loc>https://cfp.example/c/devfest-mtl-2026</loc><lastmod>2026-07-01</lastmod>',
-    );
-    // No `lastmod` at all rather than an empty one, which is not valid.
-    expect(xml).toContain('<loc>https://cfp.example/c/other-conf</loc></url>');
+  it('names no origin, because this is a platform', () => {
+    for (const path of CRAWL_DISALLOW) {
+      expect(path.startsWith('/')).toBe(true);
+      expect(path).not.toMatch(/^https?:/);
+    }
   });
 });

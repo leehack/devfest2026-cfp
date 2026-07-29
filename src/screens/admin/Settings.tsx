@@ -25,7 +25,13 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
   const [closesAt, setClosesAt] = useState('');
   const [paused, setPaused] = useState(false);
   const [reviewsVisible, setReviewsVisible] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /*
+   * Starts true, so the fields are disabled until the call's current settings
+   * have arrived. Editable-but-empty is a trap: type into it fast enough and the
+   * load lands afterwards and replaces what you wrote. Every field already reads
+   * `busy`, so this costs nothing but the initial value.
+   */
+  const [busy, setBusy] = useState(true);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
@@ -58,7 +64,7 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh();
+    void refresh().finally(() => setBusy(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfpId]);
 

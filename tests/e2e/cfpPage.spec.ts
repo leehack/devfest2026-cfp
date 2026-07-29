@@ -8,7 +8,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { inviteRole, reset } from './backend';
+import { CFP_ID, inviteRole, reset, seedCfp } from './backend';
 import { at, signInAs, type Identity, alerts } from './form';
 
 const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'Ada' };
@@ -87,5 +87,77 @@ test.describe('a call’s front page', () => {
     await expect(alerts(page)).toBeVisible();
     await page.goto(at(''));
     await expect(page.getByRole('link', { name: /alert/ })).toHaveCount(0);
+  });
+});
+
+/**
+ * What a crawler and a link unfurl get, asserted on the served bytes.
+ *
+ * These are the claims the unit tests for `metaFor`/`inject`/`sitemapXml` used
+ * to make about a string builder. They belong here now: the framework writes the
+ * tags, so the only thing worth checking is what actually leaves the server —
+ * and `request` fetches it without running a line of JavaScript, which is
+ * precisely the audience this page exists for.
+ */
+test.describe('what leaves the server', () => {
+  test.beforeEach(async () => {
+    await reset();
+  });
+
+  test('a public call carries its own title and description, before any JS runs', async ({
+    page,
+    request,
+  }) => {
+    await describeTheEvent(page);
+
+    const html = await (await request.get(at(''))).text();
+    expect(html).toContain('<title>DevFest Montréal 2026</title>');
+    expect(html).toContain(BLURB.slice(0, 60));
+
+    // Open Graph and Twitter say the same thing as each other. A preview that
+    // disagrees with the page is worse than no preview.
+    for (const tag of ['og:title', 'twitter:title']) {
+      expect(html).toMatch(new RegExp(`${tag}"?[^>]*DevFest Montr`));
+    }
+    // And it is indexable, which is the whole point of a public call.
+    expect(html).not.toContain('name="robots"');
+  });
+
+  test('an unlisted call renders but tells a crawler to stay away', async ({ request }) => {
+    // Private means unlisted, not secret — the rules publish it to anyone with
+    // the link. A search result is the one place it must not turn up.
+    await seedCfp('quiet-call', { visibility: 'private' });
+
+    const res = await request.get('/c/quiet-call');
+    const html = await res.text();
+    expect(html).toContain('noindex');
+    /*
+     * Nor may a shared cache hold it: unlisting a call has no invalidation hook.
+     * The exact header differs by host — `next dev` sends
+     * `no-cache, must-revalidate` and does not apply next.config.ts's `headers()`
+     * at all, while a production build sends the pinned `private, no-store`. What
+     * has to hold on both is that nothing shared is allowed to keep it.
+     */
+    const cache = res.headers()['cache-control'] ?? '';
+    expect(cache).not.toContain('public');
+    expect(cache).toMatch(/no-store|no-cache/);
+
+    const sitemap = await (await request.get('/sitemap.xml')).text();
+    expect(sitemap).not.toContain('quiet-call');
+  });
+
+  test('the sitemap lists the public calls and robots.txt guards the rest', async ({ request }) => {
+    await seedCfp('another-call', { visibility: 'public' });
+
+    const sitemap = await (await request.get('/sitemap.xml')).text();
+    expect(sitemap).toContain('/c/another-call');
+    expect(sitemap).toContain(`/c/${CFP_ID}`);
+
+    const robots = await (await request.get('/robots.txt')).text();
+    for (const path of ['/c/*/admin', '/c/*/review', '/c/*/submit']) {
+      expect(robots).toContain(`Disallow: ${path}`);
+    }
+    // No origin: this is a platform, whoever deploys it picks one.
+    expect(robots).not.toContain('Sitemap:');
   });
 });
