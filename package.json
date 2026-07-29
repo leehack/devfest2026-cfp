@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "typecheck": "tsc -p tsconfig.test.json && tsc -p functions/tsconfig.json --noEmit",
-    "emulators": "firebase emulators:start --only auth,firestore,functions,storage,hosting",
+    "emulators": "firebase emulators:start --only auth,firestore,functions,storage",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
     "test": "vitest run --project unit",
     "test:rules": "node scripts/with-java.mjs npx firebase emulators:exec --only firestore,storage --project demo-devfest-cfp \"vitest run --project rules\"",

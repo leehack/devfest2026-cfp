@@ -79,7 +79,6 @@ import {
 } from './domains';
 
 export { sendQueuedEmail } from './email';
-export { cfpPage } from './cfpPage';
 
 initializeApp();
 const db = getFirestore();
