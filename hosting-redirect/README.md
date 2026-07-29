@@ -27,15 +27,29 @@ that after deploying, not before:
 
 ## Order matters
 
-**Do not deploy this until `cfp.gdgmontreal.com` is served by App Hosting.** Until
-the certificate is minted, that domain is still attached to *this* Hosting site —
-so a catch-all redirect to it would send production in a loop.
+**Do not deploy this until `cfp.gdgmontreal.com` is served by App Hosting.**
 
-Check first:
+There were two reasons, and only one is still live.
 
-    curl -s https://cfp.gdgmontreal.com/ | grep -o '/_next/static'
+The loop is no longer possible. It would have been, while the domain's DNS still
+pointed at Hosting: a catch-all redirect to a domain Hosting itself was serving
+sends production round in a circle. That ended when the A record moved to App
+Hosting's edge — Hosting cannot receive a request for a name that does not
+resolve to it, whether or not the domain object is still attached to the site.
 
-Empty means Hosting is still serving it. Wait.
+What is left is smaller and still worth waiting for: until App Hosting finishes
+binding the domain, its edge answers 404, so deploying early would point the old
+front door at a missing page instead of a working one. There is nothing to gain
+by getting there first.
+
+Check the destination, not the source — a 200 from the edge itself:
+
+    curl -s -o /dev/null -w '%{http_code}\n' \
+      --resolve cfp.gdgmontreal.com:443:35.219.200.192 https://cfp.gdgmontreal.com/
+
+`--resolve` because a local resolver can hold the old CNAME for its full hour
+and answer from Hosting long after the zone stopped saying so. 404 means the
+backend has not claimed the domain yet. Wait.
 
 ## Deploy
 
