@@ -45,6 +45,14 @@ env:
   - variable: NEXT_PUBLIC_USE_EMULATORS
     value: 'false'
 
+  # The Code of Conduct link beside the acknowledgement checkbox. Empty here means
+  # the checkbox renders without one, which is the current production state and is
+  # worse than it looks: a speaker ticks "I agree to the Code of Conduct" with no
+  # way to read it. The slot exists so that filling it in is one line rather than
+  # a rebuild of this file; the address itself is GDG Montréal's to give.
+  - variable: NEXT_PUBLIC_COC_URL
+    value: ''
+
   # The second home of the origin, and worth knowing about:
   # config/platform.publicUrl is what the functions build mailed links from (a
   # sign-in link is a bearer credential), and this is what crawlers read in the
