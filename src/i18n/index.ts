@@ -38,4 +38,19 @@ export function formatDay(value: Date, locale: Locale): string {
   }).format(value);
 }
 
+/**
+ * A calendar date — an event day — formatted without moving it between zones.
+ *
+ * `timeZone: 'UTC'` is not a default leaking through; it is the point. The value
+ * came from `calendarDate`, which pins UTC midnight, and anything else here would
+ * shift the printed day for readers on one side of Montréal or the other. See the
+ * note on `calendarDate` for the two ways this has been wrong before.
+ */
+export function formatCalendarDay(value: Date, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
+    dateStyle: 'long',
+    timeZone: 'UTC',
+  }).format(value);
+}
+
 export type { Dictionary };

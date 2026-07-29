@@ -127,9 +127,44 @@ export function validateProfile(profile: CfpProfile): CfpProblem | null {
   // The date input already produces this shape; the check is for everything
   // that does not come from the date input.
   if (eventDate && !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) return 'eventDate';
-  if (eventDate && Number.isNaN(Date.parse(`${eventDate}T00:00:00Z`))) return 'eventDate';
+  if (eventDate && !calendarDate(eventDate)) return 'eventDate';
 
   return null;
+}
+
+/**
+ * A `YYYY-MM-DD` event date as an instant, for formatting.
+ *
+ * It is a *calendar date*, not a moment: "the 14th of November" is the same day
+ * whether you read it in Montréal or Munich, and it has no hour to be wrong
+ * about. So this pins it to UTC midnight, and it must be rendered with
+ * `formatCalendarDay`, which formats in UTC — the pair round-trips the stored
+ * date unchanged for every reader.
+ *
+ * Both halves have been wrong here before, in opposite directions. Parsing with
+ * `new Date('2026-11-14')` gives UTC midnight, which printed in `America/Toronto`
+ * is the evening of the 13th, so the date showed a day early for everyone. The
+ * fix for that built the day in *local* time instead — correct in Montréal and
+ * wrong for every reader east of it, which is how it reached production: the
+ * timezone that exposes it is not the one it was developed in. A calendar date
+ * simply must not be converted between zones.
+ *
+ * A deadline is the opposite case and stays a real instant — see `formatDate`,
+ * which pins Montréal on purpose so a server elsewhere cannot move it.
+ */
+export function calendarDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [, y, m, d] = match;
+  const at = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  if (Number.isNaN(at.getTime())) return null;
+  /*
+   * Rejects the dates that parse but roll over — 2026-02-30 becomes 2 March,
+   * because Date.UTC normalises rather than refusing. A silently shifted date is
+   * worse than a rejected one.
+   */
+  if (at.getUTCMonth() !== Number(m) - 1 || at.getUTCDate() !== Number(d)) return null;
+  return at;
 }
 
 /**

@@ -6,39 +6,32 @@
  * how long there is left. It renders the same signed out as signed in, because
  * the audience it exists for has not signed in and may never.
  *
- * `functions/src/cfpPage.ts` puts the same facts into the HTML as meta tags, so
- * a link to this page previews as itself in a message rather than as the app's
- * generic title.
+ * `generateMetadata` in `src/app/c/[cfpId]/page.tsx` puts the same facts into the
+ * HTML as meta tags, so a link to this page previews as itself in a message
+ * rather than as the app's generic title.
  */
 
-import { formatDate, formatDay } from '../i18n';
+import { formatCalendarDay, formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { href } from '../lib/router';
 import { Link } from '../components/Link';
 import type { CfpWindow } from '../lib/proposals';
+import { calendarDate } from '@shared/cfp';
 import { localised } from '@shared/confirmForm';
-
-/** A `YYYY-MM-DD` read as a local day. `new Date('2026-11-14')` is UTC midnight,
-    which in Montréal is the evening of the 13th — the date would print a day early. */
-function eventDay(value: string): Date | null {
-  const [y, m, d] = value.split('-').map(Number);
-  if (!y || !m || !d) return null;
-  const date = new Date(y, m - 1, d);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
 
 export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
   const { t, locale } = useI18n();
   const { description, eventDate, venue, location, website } = cfp.profile;
 
   const blurb = localised(description, locale);
-  const day = eventDate ? eventDay(eventDate) : null;
+  const day = eventDate ? calendarDate(eventDate) : null;
 
   const facts: { label: string; value: React.ReactNode }[] = [];
-  // `formatDay`, not `formatDate`: this is a day, and the deadline below is the
-  // only thing here with an hour worth printing. "at 12:00 a.m." beside an
-  // event date reads as a bug, because it is one.
-  if (day) facts.push({ label: t.cfpPage.when, value: formatDay(day, locale) });
+  // `formatCalendarDay`, not `formatDate`: this is a day, and the deadline below
+  // is the only thing here with an hour worth printing. "at 12:00 a.m." beside an
+  // event date reads as a bug, because it is one. It also must not be converted
+  // between zones — see `calendarDate`.
+  if (day) facts.push({ label: t.cfpPage.when, value: formatCalendarDay(day, locale) });
   if (venue || location) {
     facts.push({ label: t.cfpPage.where, value: [venue, location].filter(Boolean).join(', ') });
   }
