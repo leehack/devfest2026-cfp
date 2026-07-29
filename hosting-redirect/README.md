@@ -25,6 +25,35 @@ that after deploying, not before:
 
     curl -sI https://devfest-mtl-2026-cfp.firebaseapp.com/__/auth/handler | head -1
 
+## Detach the domain from Hosting first, or App Hosting never binds
+
+This cost an hour, so it is written down.
+
+App Hosting reported `hostState: HOST_NON_FAH`, `ownershipState:
+OWNERSHIP_MISSING`, and a `requiredDnsUpdates` block saying to **remove** a
+`CNAME cfp.gdgmontreal.com → devfest-mtl-2026-cfp.web.app`. No such record
+existed. All four authoritative nameservers, and every public resolver checked,
+returned the A record App Hosting had asked for and nothing else — and the check
+was fresh, not cached, its `checkTime` moving with each poll.
+
+The record it "discovered" was not in DNS. It was the domain still being attached
+to the Hosting *site*, which the Hosting API reported as `DOMAIN_ACTIVE` with
+`expectedIps: [199.36.158.100]` — and which Firebase represents internally as
+precisely that CNAME. Two Firebase properties cannot hold the same custom domain,
+and the reconciler will sit at `HOST_NON_FAH` indefinitely rather than say so.
+
+Detach it from Hosting. There is no CLI for this — Firebase has never exposed
+Hosting custom domains outside the console and the REST API:
+
+    curl -X DELETE -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+      -H "x-goog-user-project: devfest-mtl-2026-cfp" \
+      https://firebasehosting.googleapis.com/v1beta1/sites/devfest-mtl-2026-cfp/domains/cfp.gdgmontreal.com
+
+or Hosting → the site → the domain → **Delete**. This is safe by the time DNS has
+moved: the domain no longer resolves to Hosting, so detaching it takes away
+nothing that was still serving. It does not touch `.web.app`, `.firebaseapp.com`,
+or the `/__/auth/*` namespace — see below for why those matter.
+
 ## Order matters
 
 **Do not deploy this until `cfp.gdgmontreal.com` is served by App Hosting.**
