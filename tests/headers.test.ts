@@ -1,0 +1,85 @@
+/**
+ * The headers `next.config.ts` promises.
+ *
+ * Asserted against the config rather than a response, because `next dev` does not
+ * apply `headers()` at all — so the e2e suite, which runs against it, cannot see
+ * these. That leaves the config itself as the only thing testable without a
+ * deploy, and it is worth testing: every header here was absent from production
+ * until someone went and looked, and a deletion would be just as quiet.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import nextConfig from '../next.config';
+
+async function headerRules() {
+  const config = nextConfig('phase-development-server');
+  const rules = await config.headers?.();
+  expect(rules, 'next.config.ts declares no headers at all').toBeTruthy();
+  return rules!;
+}
+
+/** Every header that applies to `path`, flattened, later rules winning. */
+function headersFor(
+  rules: Awaited<ReturnType<typeof headerRules>>,
+  matches: (source: string) => boolean,
+): Record<string, string> {
+  const found: Record<string, string> = {};
+  for (const rule of rules) {
+    if (!matches(rule.source)) continue;
+    for (const { key, value } of rule.headers) found[key.toLowerCase()] = value;
+  }
+  return found;
+}
+
+describe('the security headers', () => {
+  it('are declared for every route, including the root', async () => {
+    const rules = await headerRules();
+    const catchAll = rules.filter((rule) => /^\/\(\.\*\)$|^\/:\w+\*$/.test(rule.source));
+    expect(catchAll, 'no catch-all header rule').not.toHaveLength(0);
+  });
+
+  it('include the three App Hosting does not send on its own', async () => {
+    const rules = await headerRules();
+    const all = headersFor(rules, (source) => source === '/(.*)');
+
+    // Firebase Hosting sent this for free. App Hosting does not, so the migration
+    // dropped it without anything failing.
+    expect(all['strict-transport-security']).toMatch(/max-age=\d{7,}/);
+    expect(all['x-content-type-options']).toBe('nosniff');
+    // A sign-in code rides in the query string. This is what keeps it out of a
+    // Referer sent to whatever an organiser linked to.
+    expect(all['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  });
+
+  it('do not claim subdomains this host does not speak for', async () => {
+    const rules = await headerRules();
+    const hsts = headersFor(rules, (source) => source === '/(.*)')['strict-transport-security'];
+    expect(hsts).not.toContain('includeSubDomains');
+    // preload requires includeSubDomains, and is a one-way door besides.
+    expect(hsts).not.toContain('preload');
+  });
+});
+
+describe("a call's front page", () => {
+  /*
+   * The reason this is pinned at all: whether a call is private is data, a
+   * route's cache config is module-level, and unlisting one is a Firestore write
+   * with no invalidation hook. A shared cache would keep serving the page it had.
+   */
+  it('is never cacheable by anything shared', async () => {
+    const rules = await headerRules();
+    const page = headersFor(rules, (source) => source === '/c/:cfpId');
+
+    expect(page['cache-control']).toBe('private, no-store');
+    expect(page['cache-control']).not.toContain('public');
+  });
+
+  it('is pinned on the page itself, not the whole family under it', async () => {
+    const rules = await headerRules();
+    // `/c/:cfpId` must not swallow `/c/:cfpId/submit` — the admin tabs and the
+    // form are a different audience with different needs.
+    expect(rules.some((rule) => rule.source === '/c/:cfpId')).toBe(true);
+    expect(rules.some((rule) => rule.source.startsWith('/c/:cfpId/'))).toBe(false);
+  });
+});

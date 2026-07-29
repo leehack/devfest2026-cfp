@@ -36,9 +36,44 @@ function assertPublicEnv(): void {
   }
 }
 
+/**
+ * What Firebase Hosting used to add on its own and App Hosting does not.
+ *
+ * Verified against the deployed backend rather than assumed: the responses came
+ * back with no `Strict-Transport-Security`, no `X-Content-Type-Options` and no
+ * `Referrer-Policy`. Hosting sent HSTS for free, so the migration lost it
+ * silently — nothing failed, the header just stopped being there.
+ *
+ * `Referrer-Policy` is the one with a concrete leak behind it. A sign-in link is
+ * a bearer credential carried in the query string, and this app renders outbound
+ * links — an event website, a Sessionize profile, a code of conduct — on pages
+ * that can be reached with one still in the URL. Under the older
+ * `no-referrer-when-downgrade` default, following one of those hands the whole
+ * URL, code included, to a third party. Current browsers already default to the
+ * value set here; this is for the ones that do not.
+ *
+ * Deliberately not set: `X-Frame-Options`. Nothing in the app frames itself and
+ * Firebase's auth iframe lives on the authDomain rather than here, so it looks
+ * safe — but "looks safe" is not the standard for a header that can break
+ * sign-in, and sign-in is the one flow that cannot be verified from a terminal.
+ * It wants a human at a browser first.
+ */
+const SECURITY_HEADERS = [
+  // A year, no includeSubDomains: this host has no subdomains to speak for, and
+  // claiming them would commit names nobody here controls.
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+];
+
 const config: NextConfig = {
   async headers() {
     return [
+      // `/(.*)` rather than `/:path*`: both are path-to-regexp here, but the
+      // explicit catch-all is the one Next documents for "every route", and the
+      // sibling Firebase config in hosting-redirect/ is a standing reminder that
+      // a named-splat pattern can quietly fail to match `/`.
+      { source: '/(.*)', headers: SECURITY_HEADERS },
       {
         /*
          * One segment, exactly as the Hosting rewrite was: `/c/:cfpId` does not
