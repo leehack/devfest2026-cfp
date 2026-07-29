@@ -123,6 +123,33 @@ test.describe('what leaves the server', () => {
     expect(html).not.toContain('name="robots"');
   });
 
+  /*
+   * This shipped broken once. `generateMetadata` is given paths, and Next emits a
+   * path verbatim unless `metadataBase` gives it an origin to resolve against —
+   * so `og:url` went out as `/c/devfest-mtl-2026`, which Open Graph does not
+   * allow and an unfurler cannot follow. The tags were all present and the suite
+   * was green, because it only ever asserted on the titles.
+   *
+   * Asserted as "absolute, ending in the right path" rather than against a
+   * literal origin: the origin is deployment config, and pinning it here would
+   * make the test fail on the very thing it is meant to let vary.
+   */
+  test('the canonical and og:url are absolute, so an unfurler can follow them', async ({
+    request,
+  }) => {
+    const html = await (await request.get(at(''))).text();
+
+    for (const [what, pattern] of [
+      ['og:url', /property="og:url" content="([^"]+)"/],
+      ['canonical', /rel="canonical" href="([^"]+)"/],
+    ] as const) {
+      const url = html.match(pattern)?.[1];
+      expect(url, `${what} is missing`).toBeTruthy();
+      expect(url, `${what} is relative`).toMatch(/^https?:\/\//);
+      expect(new URL(url!).pathname).toBe(`/c/${CFP_ID}`);
+    }
+  });
+
   test('an unlisted call renders but tells a crawler to stay away', async ({ request }) => {
     // Private means unlisted, not secret — the rules publish it to anyone with
     // the link. A search result is the one place it must not turn up.

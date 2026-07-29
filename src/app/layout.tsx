@@ -1,14 +1,22 @@
 import type { Metadata } from 'next';
 
 import { legacyHashScript } from '@shared/legacyHash';
+import { SITE_ORIGIN } from '../server/site';
 import '../styles.css';
 
 /**
  * The shell. Generic on purpose: one deploy serves every call for proposals on
  * it, so the per-CFP title and description come from each route's own
  * `generateMetadata` rather than from here.
+ *
+ * `metadataBase` is the exception, and it is not cosmetic. Next emits a relative
+ * `canonical` or `og:url` verbatim when it has no origin to resolve against, and
+ * Open Graph requires an absolute URL — so `og:url` of `/c/devfest-mtl-2026` is
+ * one an unfurler cannot follow. That defeats the reason this render moved to a
+ * server at all. Set once here; every route inherits it.
  */
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_ORIGIN),
   title: 'Call for Proposals',
   description: 'Submit a talk proposal. Soumettez une proposition de conférence.',
 };

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import { ClientApp } from '../../[[...slug]]/ClientApp';
 import { readCfp } from '../../../server/publicCfps';
+import { SITE_NAME } from '../../../server/site';
 import { paths } from '../../../lib/paths';
 import { localised } from '@shared/confirmForm';
 import { summarise } from '@shared/seo';
@@ -49,8 +50,22 @@ export async function generateMetadata({
      * public, and a search result is one more place it can be found.
      */
     robots: listed ? undefined : { index: false, follow: false },
+    /*
+     * Paths, not URLs: `metadataBase` in the root layout resolves both against
+     * the deployment's origin. Writing them absolute here would put the origin in
+     * a third place, and the two it is already in have to be kept in step as it
+     * is (see `src/server/site.ts`).
+     */
     alternates: { canonical: paths.cfp(cfpId) },
-    openGraph: { title: cfp.name, description, url: paths.cfp(cfpId), type: 'website' },
+    openGraph: {
+      title: cfp.name,
+      description,
+      url: paths.cfp(cfpId),
+      type: 'website',
+      // Not inherited: a route's `openGraph` replaces the parent's rather than
+      // merging into it, so this cannot be set once in the layout.
+      siteName: SITE_NAME,
+    },
     twitter: { card: 'summary', title: cfp.name, description },
   };
 }
