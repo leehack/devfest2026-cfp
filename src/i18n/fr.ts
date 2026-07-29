@@ -1,13 +1,10 @@
 import type { Dictionary } from './en';
 
 export const fr: Dictionary = {
-  locale: 'fr',
-  localeName: 'Français',
   switchTo: 'English',
 
   app: {
     title: 'Appel à conférences',
-    event: 'Appels à conférences',
     signInGoogle: 'Se connecter avec Google',
     signInHint:
       'Nous utilisons votre compte Google afin que vous puissiez revenir modifier votre brouillon.',
@@ -28,7 +25,6 @@ export const fr: Dictionary = {
     linkTooMany: 'Cela fait beaucoup de liens en peu de temps. Veuillez réessayer dans une heure.',
     linkBadEmail: 'Cela ne ressemble pas à une adresse courriel.',
     signOut: 'Déconnexion',
-    signedInAs: 'Connecté en tant que',
     loading: 'Chargement…',
   },
 
@@ -199,7 +195,6 @@ export const fr: Dictionary = {
       'Rédigez-la dans la langue de votre choix. Si votre conférence est retenue, nous l’utiliserons pour votre promotion — écrivez-la comme vous souhaitez être présenté.',
     company: 'Entreprise',
     jobTitle: 'Poste',
-    employerHelp: 'Les deux sont facultatifs.',
     basedIn: 'Lieu de résidence',
     basedInHelp: 'Ville et région — par exemple, Montréal, QC.',
     socials: 'Liens',
@@ -222,11 +217,7 @@ export const fr: Dictionary = {
   },
 
   acks: {
-    noTravelSupport:
-      "Je comprends que les déplacements et l'hébergement ne sont pas couverts par l'événement.",
-    coc: 'J’ai lu et j’accepte le code de conduite.',
     cocLink: 'Lire le code de conduite',
-    recording: "Je consens à ce que ma conférence soit enregistrée et publiée.",
   },
 
   attendance: {
@@ -248,26 +239,6 @@ export const fr: Dictionary = {
   },
 
   enums: {
-    category: {
-      app_dev: 'Développement d’applications',
-      ai_ml: 'IA et apprentissage automatique',
-      cloud: 'Infonuagique',
-      web: 'Web',
-      ui_ux: 'Interface et expérience utilisateur',
-      soft_skills_career: 'Compétences humaines et carrière',
-      other: 'Autre',
-    },
-    format: {
-      session_40: 'Session — 40 minutes',
-      lightning_15: 'Conférence éclair — 15 minutes',
-      workshop_90: 'Atelier — 90 minutes',
-    },
-    level: {
-      beginner: 'Débutant',
-      intermediate: 'Intermédiaire',
-      advanced: 'Avancé',
-      all: 'Tous les niveaux',
-    },
     deliveryLanguage: {
       en: 'Anglais',
       fr: 'Français',
@@ -313,7 +284,6 @@ export const fr: Dictionary = {
     saveFailed: 'Impossible d’enregistrer votre brouillon',
     submit: 'Soumettre la proposition',
     submitting: 'Soumission…',
-    submitted: 'Votre proposition a été soumise.',
     submittedHelp: 'Nous vous avons envoyé une copie par courriel.',
 
     statusHelp: {

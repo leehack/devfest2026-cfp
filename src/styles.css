@@ -1384,14 +1384,6 @@ p {
   margin-bottom: var(--s-5);
 }
 
-/* One choice inside a boxed list. A rule between them rather than another box:
-   nesting two borders makes a list of seven categories read as seven cards. */
-.formfield__row + .formfield__row {
-  margin-top: var(--s-4);
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--line);
-}
-
 /* ------------------------------------------------------- the option editor */
 
 .optionlist {

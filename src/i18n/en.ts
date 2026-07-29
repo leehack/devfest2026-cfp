@@ -1,14 +1,10 @@
 import type { FieldType } from '@shared/confirmForm';
 
 export const en = {
-  locale: 'en',
-  localeName: 'English',
   switchTo: 'Français',
 
   app: {
     title: 'Call for Proposals',
-    /** Shown above the title when no CFP is open — otherwise its name goes here. */
-    event: 'Calls for proposals',
     signInGoogle: 'Sign in with Google',
     signInHint: 'We use your Google account so you can come back and edit your draft.',
     signInEmailTitle: 'No Google account?',
@@ -32,7 +28,6 @@ export const en = {
     linkTooMany: 'That is a lot of links in a short time. Please try again in an hour.',
     linkBadEmail: 'That does not look like an email address.',
     signOut: 'Sign out',
-    signedInAs: 'Signed in as',
     loading: 'Loading…',
   },
 
@@ -202,7 +197,6 @@ export const en = {
       'Write it in whichever language you prefer. If your talk is accepted we will use this to promote you, so write it the way you want to be introduced.',
     company: 'Company',
     jobTitle: 'Job title',
-    employerHelp: 'Both optional.',
     basedIn: 'Based in',
     basedInHelp: 'City and region — for example, Montréal, QC.',
     socials: 'Links',
@@ -225,12 +219,11 @@ export const en = {
   },
 
   acks: {
-    noTravelSupport:
-      'I understand that travel and accommodation are not covered by the event.',
-    coc: 'I have read and agree to the Code of Conduct.',
+    /**
+     * Only the link text. The wording of each acknowledgement is the call's own
+     * now — it lives in `DEFAULT_SUBMISSION_FORM` and an organiser can edit it.
+     */
     cocLink: 'Read the Code of Conduct',
-    recording:
-      'I consent to my talk being recorded and published.',
   },
 
   attendance: {
@@ -251,26 +244,13 @@ export const en = {
   },
 
   enums: {
-    category: {
-      app_dev: 'App Dev',
-      ai_ml: 'AI & ML',
-      cloud: 'Cloud',
-      web: 'Web',
-      ui_ux: 'UI & UX',
-      soft_skills_career: 'Soft Skills & Career',
-      other: 'Other',
-    },
-    format: {
-      session_40: 'Session — 40 minutes',
-      lightning_15: 'Lightning talk — 15 minutes',
-      workshop_90: 'Workshop — 90 minutes',
-    },
-    level: {
-      beginner: 'Beginner',
-      intermediate: 'Intermediate',
-      advanced: 'Advanced',
-      all: 'All levels',
-    },
+    /*
+     * Category, format and level are not here. They are the call's own taxonomy
+     * now — read from `cfps/{id}/config/submissionForm` through `labelOf`, so a
+     * second organiser is not stuck with DevFest's list. `deliveryLanguage`
+     * stays because its *values* are the code's business: `either` is what
+     * drives the bilingual handling.
+     */
     deliveryLanguage: {
       en: 'English',
       fr: 'French',
@@ -316,7 +296,6 @@ export const en = {
     saveFailed: 'Could not save your draft',
     submit: 'Submit proposal',
     submitting: 'Submitting…',
-    submitted: 'Your proposal has been submitted.',
     submittedHelp: 'We have emailed you a copy.',
 
     /** What has happened to the talk. Falls back to `submittedHelp`. */
