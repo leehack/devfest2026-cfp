@@ -52,11 +52,18 @@ function assertPublicEnv(): void {
  * URL, code included, to a third party. Current browsers already default to the
  * value set here; this is for the ones that do not.
  *
- * Deliberately not set: `X-Frame-Options`. Nothing in the app frames itself and
- * Firebase's auth iframe lives on the authDomain rather than here, so it looks
- * safe — but "looks safe" is not the standard for a header that can break
- * sign-in, and sign-in is the one flow that cannot be verified from a terminal.
- * It wants a human at a browser first.
+ * `X-Frame-Options` was held back until the sign-in flow had actually been read
+ * rather than assumed. It is `signInWithPopup` — a popup window, which is not a
+ * frame — and the email-link flow is a plain navigation. The only `<iframe>` in
+ * the app is the email preview, which is `srcDoc` with `sandbox=""`: this app
+ * embedding its own generated HTML, and a header about who may embed *us* has no
+ * bearing on it. So nothing here can be broken by refusing to be framed.
+ *
+ * `SAMEORIGIN` rather than `DENY`: nothing frames the app today, but this is a
+ * platform meant for other organisers, and an organiser embedding their own
+ * submission form is a plausible thing to want. SAMEORIGIN refuses the
+ * clickjacking case — a third-party page framing the admin panel over its own
+ * controls — without also ruling out a future same-origin embed.
  */
 const SECURITY_HEADERS = [
   // A year, no includeSubDomains: this host has no subdomains to speak for, and
@@ -64,6 +71,7 @@ const SECURITY_HEADERS = [
   { key: 'Strict-Transport-Security', value: 'max-age=31536000' },
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
 ];
 
 const config: NextConfig = {

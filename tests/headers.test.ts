@@ -52,6 +52,19 @@ describe('the security headers', () => {
     expect(all['referrer-policy']).toBe('strict-origin-when-cross-origin');
   });
 
+  it('refuses third-party framing without ruling out a same-origin embed', async () => {
+    const rules = await headerRules();
+    const all = headersFor(rules, (source) => source === '/(.*)');
+
+    /*
+     * Safe because sign-in is signInWithPopup — a popup, not a frame — and the
+     * one iframe in the app is a srcDoc email preview, which is this app
+     * embedding itself. Not DENY: an organiser embedding their own submission
+     * form is a plausible thing to want from a platform.
+     */
+    expect(all['x-frame-options']).toBe('SAMEORIGIN');
+  });
+
   it('do not claim subdomains this host does not speak for', async () => {
     const rules = await headerRules();
     const hsts = headersFor(rules, (source) => source === '/(.*)')['strict-transport-security'];
