@@ -8,6 +8,15 @@ export function toDate(value: unknown): Date | null {
     return (value as { toDate: () => Date }).toDate();
   }
   if (value === null || value === undefined || value === '') return null;
+  /*
+   * Epoch millis, which is how a Timestamp survives being handed from the server
+   * to the browser — a Timestamp itself does not serialise. Before the branch
+   * existed this fell through to `new Date(String(value))`, where a number is
+   * either an Invalid Date or, worse, read as a year.
+   */
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? new Date(value) : null;
+  }
   const at = new Date(String(value));
   return Number.isNaN(at.valueOf()) ? null : at;
 }

@@ -99,15 +99,19 @@ export function inject(html: string, title: string, meta: string): string {
  * It cannot come from a function: the Cloud Functions runtime answers
  * `/robots.txt` and `/favicon.ico` itself, before any handler runs.
  */
+/**
+ * Kept out of the crawl. Not access control — the rules do that — but crawl
+ * budget, and keeping a sign-in prompt out of search results.
+ *
+ * Named separately from `robotsTxt` because the framework emits robots.txt from
+ * an object now, and the list is the part worth having one copy of.
+ */
+export const CRAWL_DISALLOW = ['/c/*/admin', '/c/*/review', '/c/*/submit'] as const;
+
 export function robotsTxt(): string {
-  return [
-    'User-agent: *',
-    'Allow: /',
-    'Disallow: /c/*/admin',
-    'Disallow: /c/*/review',
-    'Disallow: /c/*/submit',
-    '',
-  ].join('\n');
+  return ['User-agent: *', 'Allow: /', ...CRAWL_DISALLOW.map((p) => `Disallow: ${p}`), ''].join(
+    '\n',
+  );
 }
 
 export interface SitemapEntry {

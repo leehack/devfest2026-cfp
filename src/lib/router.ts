@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 
+import { ADMIN_TABS, isAdminTab, type AdminTab } from './adminTabs';
+import { paths } from './paths';
 import { validateCfpId } from '@shared/cfp';
+
+// Re-exported so the 20-odd existing importers do not all have to move at once.
+export { ADMIN_TABS };
+export type { AdminTab };
+export { pageShape } from './pageShape';
 
 /**
  * Path routing, in a hundred lines, because this is a small tool.
@@ -16,22 +23,6 @@ import { validateCfpId } from '@shared/cfp';
  */
 export type Route = 'home' | 'new' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
 
-/**
- * The admin screen is five unrelated jobs, so it is five tabs rather than one
- * scroll. The tab lives in the URL rather than in component state so that it
- * survives a reload and can be linked to — "the email queue is stuck" is worth
- * being able to answer with a URL.
- */
-export const ADMIN_TABS = [
-  'proposals',
-  'committee',
-  'settings',
-  'submission',
-  'confirmation',
-  'email',
-] as const;
-export type AdminTab = (typeof ADMIN_TABS)[number];
-
 export interface Place {
   route: Route;
   /**
@@ -44,9 +35,6 @@ export interface Place {
   /** Only meaningful on `admin`; the first tab is the default. */
   tab: AdminTab;
 }
-
-const isTab = (value: string): value is AdminTab =>
-  (ADMIN_TABS as readonly string[]).includes(value);
 
 const HOME: Place = { route: 'home', cfpId: null, tab: ADMIN_TABS[0] };
 
@@ -73,7 +61,7 @@ export function placeOf(path: string): Place {
         : section === 'submit'
           ? 'form'
           : 'cfp';
-  return { route, cfpId, tab: isTab(tab) ? tab : ADMIN_TABS[0] };
+  return { route, cfpId, tab: isAdminTab(tab) ? tab : ADMIN_TABS[0] };
 }
 
 export function currentPlace(): Place {
@@ -82,14 +70,14 @@ export function currentPlace(): Place {
 
 /** The path for a place, so links and `navigate` cannot drift apart. */
 export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTab }): string {
-  if (place.route === 'home') return '/';
-  if (place.route === 'new') return '/new';
-  if (place.route === 'me') return '/me';
-  const base = `/c/${place.cfpId}`;
-  if (place.route === 'cfp') return base;
-  if (place.route === 'form') return `${base}/submit`;
-  if (place.route === 'admin') return place.tab ? `${base}/admin/${place.tab}` : `${base}/admin`;
-  return `${base}/review`;
+  if (place.route === 'home') return paths.home();
+  if (place.route === 'new') return paths.new();
+  if (place.route === 'me') return paths.me();
+  const cfpId = place.cfpId ?? '';
+  if (place.route === 'cfp') return paths.cfp(cfpId);
+  if (place.route === 'form') return paths.submit(cfpId);
+  if (place.route === 'admin') return paths.admin(cfpId, place.tab);
+  return paths.review(cfpId);
 }
 
 /**
@@ -144,21 +132,4 @@ export function usePlace(): Place {
     return () => window.removeEventListener('popstate', onChange);
   }, []);
   return place;
-}
-
-/**
- * The URL with its variable parts named rather than filled in.
- *
- * `/c/devfest-mtl-2026/admin/email` becomes `/c/{cfpId}/admin/{tab}`. The CFP
- * slug still travels as its own parameter — it is public and it is the thing an
- * organiser wants to group by — but keeping it out of the path means GA's page
- * reports have one row per screen instead of one per call, which is the report
- * anybody actually reads.
- */
-export function pageShape(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  if (parts[0] !== 'c' || parts.length < 2) return `/${parts.join('/')}`;
-  const rest = parts.slice(2);
-  if (rest[0] === 'admin') return '/c/{cfpId}/admin/{tab}';
-  return rest.length ? `/c/{cfpId}/${rest.join('/')}` : '/c/{cfpId}';
 }
