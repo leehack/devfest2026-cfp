@@ -45,13 +45,16 @@ env:
   - variable: NEXT_PUBLIC_USE_EMULATORS
     value: 'false'
 
-  # The Code of Conduct link beside the acknowledgement checkbox. Empty here means
-  # the checkbox renders without one, which is the current production state and is
-  # worse than it looks: a speaker ticks "I agree to the Code of Conduct" with no
-  # way to read it. The slot exists so that filling it in is one line rather than
-  # a rebuild of this file; the address itself is GDG Montréal's to give.
-  - variable: NEXT_PUBLIC_COC_URL
-    value: ''
+  # The Code of Conduct link beside the acknowledgement checkbox, commented out
+  # rather than left empty: App Hosting rejects `value: ''` outright with
+  # "either 'value' or 'secret' field is required", so there is no such thing as a
+  # declared-but-blank variable here.
+  #
+  # Production therefore has no CoC link, which is worse than it looks — a speaker
+  # ticks "I agree to the Code of Conduct" with no way to read it. Uncomment with
+  # GDG Montréal's address to fix it; nothing else needs to change.
+  # - variable: NEXT_PUBLIC_COC_URL
+  #   value: https://gdgmontreal.com/code-of-conduct
 
   # The second home of the origin, and worth knowing about:
   # config/platform.publicUrl is what the functions build mailed links from (a
