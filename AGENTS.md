@@ -184,6 +184,11 @@ collection — the rule names the two readable documents one at a time.
   `shared/seo.ts` — one definition, still under test. It names no origin: this
   is a platform, whoever deploys it picks the origin, and the sitemap is at the
   root where a crawler looks anyway.
+- **`firebase/storage` is loaded on demand, from `lib/storage.ts`.** It is ~34 KB
+  and the only thing that uses it is the image answer on the *confirmation*
+  form — an accepted speaker, once, and only if asked for a photo. `firebase.ts`
+  must not import it, or the bundler puts it back in the main chunk and every
+  visitor pays for it again.
 - **Analytics is off until somebody says yes, and off by default entirely.**
   `VITE_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the module is
   inert and the consent banner does not render, which is the state of the
@@ -195,6 +200,14 @@ collection — the rule names the two readable documents one at a time.
   plain `.btn`; a quiet grey decline would not survive being looked at.
   Unanswered and declined must behave identically — to somebody who scrolled
   past the banner they are the same thing.
+- **Withdrawing consent is checked before the cached instance, not after.**
+  `start()` returns null on `!granted()` *first*; the other order looks
+  equivalent and is not, because `instance` survives a withdrawal and `track()`
+  would keep pushing into `dataLayer`. `setAnalyticsCollectionEnabled` does stop
+  those reaching Google — it sets gtag's own `ga-disable-*` flag — but that puts
+  the whole withdrawal on one third-party switch. The footer control that
+  reopens the banner is not decoration either: GDPR Art. 7(3) and Law 25 require
+  withdrawing to be as easy as agreeing, and "clear your browser storage" is not.
 - **Never put anything personal in an event parameter.** `track()` takes
   `Record<string, string | number>` so an object cannot be passed by accident,
   and every call site sends codes: a CFP slug, a category value, a route shape.

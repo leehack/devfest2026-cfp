@@ -781,6 +781,9 @@ export const fr: Dictionary = {
       'Nous aimerions compter les visites de ce site afin de savoir si l’appel à conférences se rend jusqu’aux gens. Cela passe par Google Analytics, qui dépose un identifiant sur votre appareil. Ce n’est jamais lié à votre proposition, et refuser ne change rien au fonctionnement du site pour vous.',
     accept: 'Autoriser',
     decline: 'Non merci',
+    stateOn: 'Les visites de ce site sont comptées.',
+    stateOff: 'Les visites de ce site ne sont pas comptées.',
+    change: 'Modifier ce choix',
   },
   errors: {
     generic: 'Une erreur est survenue. Veuillez réessayer.',

@@ -778,6 +778,9 @@ export const en = {
       'We would like to count visits to this site so we know whether people are finding the call for proposals. It uses Google Analytics, which sets an identifier on your device. It is never linked to your proposal, and declining changes nothing about how this site works for you.',
     accept: 'Allow',
     decline: 'No thanks',
+    stateOn: 'Visits to this site are being counted.',
+    stateOff: 'Visits to this site are not being counted.',
+    change: 'Change this',
   },
   errors: {
     generic: 'Something went wrong. Please try again.',

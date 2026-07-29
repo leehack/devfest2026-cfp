@@ -1932,3 +1932,41 @@ p {
   min-width: 9rem;
   justify-content: center;
 }
+
+/*
+  Where the measurement answer is stated and can be taken back. Quiet, but on
+  every page: a withdrawal buried one page deep is not as easy as the Allow
+  button that was put in front of everybody.
+*/
+.footer {
+  margin-top: var(--s-7);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line);
+}
+
+.footer:empty {
+  display: none;
+}
+
+.consent__status {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* A button that reads as a link, because it changes a setting rather than
+   navigating — the affordance should say "link", the element should say
+   "button". */
+.linkish {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.linkish:hover {
+  color: var(--fg);
+}

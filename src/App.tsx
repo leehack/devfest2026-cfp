@@ -23,7 +23,9 @@ import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
 import { href, navigate, usePlace, type Place, type Route } from './lib/router';
 import { ConsentBanner } from './components/ConsentBanner';
+import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
+import { consent, forgetConsent } from './lib/consent';
 import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
 import {
   arrivingFromLink,
@@ -42,6 +44,9 @@ export function App() {
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
   const place = usePlace();
+  // Owned here rather than inside the banner, so the footer control can put the
+  // question back on screen. Withdrawing has to be as easy as agreeing.
+  const [askConsent, setAskConsent] = useState(() => consent() === 'unasked');
   const { route, cfpId } = place;
   const { role, ready: roleReady } = useRole(user, cfpId);
 
@@ -148,8 +153,17 @@ export function App() {
             <Routed place={place} user={user} cfp={cfp} role={role} roleReady={roleReady} />
           )}
         </main>
+
+        <footer className="footer">
+          <ConsentControl
+            onReopen={() => {
+              forgetConsent();
+              setAskConsent(true);
+            }}
+          />
+        </footer>
       </div>
-      <ConsentBanner />
+      <ConsentBanner open={askConsent} onAnswered={() => setAskConsent(false)} />
     </I18nContext.Provider>
   );
 }

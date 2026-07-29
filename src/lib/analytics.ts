@@ -49,8 +49,14 @@ let starting: Promise<Analytics | null> | null = null;
  * caller gets the first one's promise rather than a second GA instance.
  */
 async function start(): Promise<Analytics | null> {
-  if (instance) return instance;
+  // Consent is checked before the cached instance is handed back, not after.
+  // The other order looks equivalent and is not: once somebody has agreed and
+  // then withdrawn, `instance` is still set, so `track()` would go on pushing
+  // events into `dataLayer`. `setAnalyticsCollectionEnabled` does stop those
+  // reaching Google — it sets gtag's own `ga-disable-*` flag — but relying on
+  // that alone puts the whole withdrawal on one third-party switch.
   if (!analyticsAvailable() || !granted()) return null;
+  if (instance) return instance;
 
   starting ??= (async () => {
     // `isSupported` is not ceremony: it is false in a ServiceWorker, in some
@@ -66,12 +72,28 @@ async function start(): Promise<Analytics | null> {
 }
 
 /**
- * Called when the banner is answered. Granting starts the SDK immediately so
- * the visit that consented is the visit that gets measured; denying does
- * nothing, because there is nothing loaded to turn off.
+ * Called when the banner is answered, either way.
+ *
+ * Granting starts the SDK immediately, so the visit that consented is the visit
+ * that gets measured. Withdrawing has to do real work: by then the SDK is
+ * loaded and `gtag` exists, so it is told to stop collecting rather than merely
+ * being left out of the next page load. A withdrawal that only takes effect
+ * after a reload is not a withdrawal.
  */
 export function applyConsent(): void {
-  if (granted()) void start();
+  if (granted()) {
+    void start();
+    return;
+  }
+  if (!instance) return;
+  void (async () => {
+    try {
+      const { setAnalyticsCollectionEnabled } = await import('firebase/analytics');
+      setAnalyticsCollectionEnabled(instance!, false);
+    } catch {
+      // Nothing useful to do — the next load will not start it at all.
+    }
+  })();
 }
 
 /**
@@ -87,6 +109,8 @@ export function track(event: string, params: Record<string, string | number> = {
     try {
       const analytics = await start();
       if (!analytics) return;
+      // Already resolved — `start()` imported this module — so this is a cache
+      // hit rather than a second fetch.
       const { logEvent } = await import('firebase/analytics');
       logEvent(analytics, event, params);
     } catch {

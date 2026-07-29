@@ -11,23 +11,19 @@
  * whose answer changes nothing is worse than not asking.
  */
 
-import { useState } from 'react';
-
 import { useI18n } from '../i18n';
-import { analyticsAvailable } from '../lib/analytics';
-import { applyConsent } from '../lib/analytics';
-import { consent, setConsent } from '../lib/consent';
+import { analyticsAvailable, applyConsent } from '../lib/analytics';
+import { setConsent } from '../lib/consent';
 
-export function ConsentBanner() {
+export function ConsentBanner({ open, onAnswered }: { open: boolean; onAnswered: () => void }) {
   const { t } = useI18n();
-  const [answered, setAnswered] = useState(() => consent() !== 'unasked');
 
-  if (answered || !analyticsAvailable()) return null;
+  if (!open || !analyticsAvailable()) return null;
 
   function answer(choice: 'granted' | 'denied') {
     setConsent(choice);
     applyConsent();
-    setAnswered(true);
+    onAnswered();
   }
 
   return (

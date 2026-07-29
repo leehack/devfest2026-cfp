@@ -12,9 +12,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 
-import { storage } from '../firebase';
+import { storage } from '../lib/storage';
 import { useI18n } from '../i18n';
 import { FORM_LIMITS, IMAGE_TYPES, headshotPath } from '@shared/confirmForm';
 
@@ -55,13 +54,15 @@ export function HeadshotField({
   useEffect(() => {
     if (!uploaded) return;
     let cancelled = false;
-    getDownloadURL(ref(storage, headshotPath(cfpId, uid, fieldKey)))
-      .then((url) => {
+    void (async () => {
+      try {
+        const { getDownloadURL, ref } = await import('firebase/storage');
+        const url = await getDownloadURL(ref(await storage(), headshotPath(cfpId, uid, fieldKey)));
         if (!cancelled) setPreview(url);
-      })
-      .catch(() => {
+      } catch {
         /* The answer is recorded either way; a missing preview is cosmetic. */
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -82,7 +83,8 @@ export function HeadshotField({
     setProblem('');
     setBusy(true);
     try {
-      const target = ref(storage, headshotPath(cfpId, uid, fieldKey));
+      const { getDownloadURL, ref, uploadBytes } = await import('firebase/storage');
+      const target = ref(await storage(), headshotPath(cfpId, uid, fieldKey));
       await uploadBytes(target, file, { contentType: file.type });
       setPreview(await getDownloadURL(target));
       onUploaded();
