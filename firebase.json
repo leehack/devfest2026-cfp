@@ -21,10 +21,7 @@
         "function": { "functionId": "cfpPage", "region": "northamerica-northeast1" }
       },
       {
-        "source": "/robots.txt",
-        "function": { "functionId": "cfpPage", "region": "northamerica-northeast1" }
-      },
-      {
+        "//": "`/robots.txt` is deliberately absent: the Cloud Functions runtime answers it itself before any handler runs, so it is a static file emitted into dist/ by the Vite build. The sitemap has to stay dynamic — it lists the public calls.",
         "source": "/sitemap.xml",
         "function": { "functionId": "cfpPage", "region": "northamerica-northeast1" }
       },

@@ -94,10 +94,19 @@ describe('putting them into the shell', () => {
 });
 
 describe('robots and the sitemap', () => {
-  it('points a crawler at the sitemap and away from the committee', () => {
-    const txt = robotsTxt('https://cfp.example');
-    expect(txt).toContain('Sitemap: https://cfp.example/sitemap.xml');
+  it('keeps a crawler away from the committee, and off the form', () => {
+    const txt = robotsTxt();
     expect(txt).toContain('Disallow: /c/*/admin');
+    expect(txt).toContain('Disallow: /c/*/review');
+    expect(txt).toContain('Disallow: /c/*/submit');
+    // A call's public page is the whole point of having one.
+    expect(txt).toContain('Allow: /');
+  });
+
+  it('names no origin at all', () => {
+    // Whoever deploys this picks the origin, so there is none to name at build
+    // time — and the sitemap is at the root, where a crawler already looks.
+    expect(robotsTxt()).not.toMatch(/https?:/);
   });
 
   it('lists the front door and every call given to it', () => {

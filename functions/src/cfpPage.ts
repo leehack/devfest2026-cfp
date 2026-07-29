@@ -21,7 +21,7 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions';
 
 import { localised } from '../../shared/confirmForm';
-import { inject, metaFor, robotsTxt, sitemapXml, summarise, type SitemapEntry } from '../../shared/seo';
+import { inject, metaFor, sitemapXml, summarise, type SitemapEntry } from '../../shared/seo';
 import type { Cfp } from '../../shared/types';
 import { loadPlatform } from './email';
 
@@ -67,12 +67,10 @@ export const cfpPage = onRequest(
     const origin = platform.publicUrl.replace(/\/+$/, '');
     const path = req.path.split('?')[0];
 
-    if (path === '/robots.txt') {
-      res.set('Cache-Control', 'public, max-age=3600');
-      res.type('text/plain').send(robotsTxt(origin));
-      return;
-    }
-
+    // `/robots.txt` is not here: the Cloud Functions runtime answers it — and
+    // `/favicon.ico` — with an empty 404 before this handler is called, in the
+    // emulator and in production alike. Hosting serves it as a static file
+    // instead, generated at build time from the same `robotsTxt()`.
     if (path === '/sitemap.xml') {
       res.set('Cache-Control', 'public, max-age=3600');
       res.type('application/xml').send(sitemapXml(origin, await publicCfps(db)));

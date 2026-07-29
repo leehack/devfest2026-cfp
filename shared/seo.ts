@@ -86,15 +86,26 @@ export function inject(html: string, title: string, meta: string): string {
  * about crawl budget and about not filling a search result page with rows of
  * "sign in", not about access.
  */
-export function robotsTxt(origin: string): string {
+/**
+ * No `Sitemap:` line, and no origin, for two reasons that point the same way.
+ *
+ * The directive takes an absolute URL, and this is a platform — whoever deploys
+ * it picks the origin, so baking one in at build time would be baking in
+ * somebody else's. And the sitemap is at `/sitemap.xml`, which is where every
+ * crawler looks without being told. The line would buy nothing and could be
+ * wrong.
+ *
+ * That leaves this a constant, which is what lets Hosting serve it as a file.
+ * It cannot come from a function: the Cloud Functions runtime answers
+ * `/robots.txt` and `/favicon.ico` itself, before any handler runs.
+ */
+export function robotsTxt(): string {
   return [
     'User-agent: *',
     'Allow: /',
     'Disallow: /c/*/admin',
     'Disallow: /c/*/review',
     'Disallow: /c/*/submit',
-    '',
-    `Sitemap: ${origin}/sitemap.xml`,
     '',
   ].join('\n');
 }

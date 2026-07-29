@@ -173,14 +173,17 @@ collection — the rule names the two readable documents one at a time.
   one document belonging to the account. A form opened at a CFP the speaker has
   never submitted to seeds from that profile, not from blank — it is global, so
   they have usually written it already.
-- **`/robots.txt` cannot be tested against the emulator.** The functions
-  emulator runtime swallows `/favicon.ico` and `/robots.txt` before any handler
-  sees them (`app.all("/favicon.ico|/robots.txt", … 404)` in
-  `firebase-tools/lib/emulator/functionsEmulatorRuntime.js`). Nothing in the
-  deployed runtime does that, so `cfpPage` serves it fine in production and
-  404s locally. `/sitemap.xml` goes through the same rewrite and *does* work
-  locally, which is what makes the difference confusing rather than obvious —
-  check robots against the deployed site.
+- **`/robots.txt` can never come from a function.** The runtime answers it, and
+  `/favicon.ico`, with an empty 404 before any handler is called
+  (`app.all("/favicon.ico|/robots.txt", … 404)` in
+  `firebase-tools/lib/emulator/functionsEmulatorRuntime.js`, and the deployed
+  runtime does the same — an empty `text/html` with no charset is the tell).
+  `/sitemap.xml` goes through the identical rewrite and works, which is what
+  made this look like an emulator quirk. So Hosting serves `robots.txt` as a
+  file, emitted into `dist/` by a Vite plugin from `robotsTxt()` in
+  `shared/seo.ts` — one definition, still under test. It names no origin: this
+  is a platform, whoever deploys it picks the origin, and the sitemap is at the
+  root where a crawler looks anyway.
 - **`#/c/{id}` links are still out there.** The router moved from the hash to the
   path so a call for proposals could have a public page a crawler and a link
   preview can read. Every acceptance and sign-in link mailed before that carries
