@@ -389,6 +389,17 @@ collection — the rule names the two readable documents one at a time.
 - **Deploy with `npx firebase deploy --only apphosting`** — local source, no
   GitHub connection. `next dev` renders the public pages too, so it needs
   `FIRESTORE_EMULATOR_HOST` and `GCLOUD_PROJECT`; `scripts/dev.mjs` passes both.
+- **Live at `cfp.gdgmontreal.com`. Do not disable the Hosting site.** `authDomain`
+  is `devfest-mtl-2026-cfp.firebaseapp.com`, and that site is what answers
+  `/__/auth/*` — every sign-in completes through it. It serves nothing but 301s to
+  the canonical origin; `hosting-redirect/` is that release and explains the rest,
+  including why App Hosting's domain reconciler will report a CNAME that no
+  nameserver serves.
+- **`next dev` does not apply `headers()` from `next.config.ts`.** So no e2e test
+  can see a header — assert on the config instead, as `tests/headers.test.ts`
+  does, and confirm the real thing with `curl -sI` after a deploy. App Hosting
+  also sends none of the security headers Firebase Hosting used to add for free,
+  which is why they are declared explicitly.
 
 ## Keeping this file
 
