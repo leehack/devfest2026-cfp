@@ -1,0 +1,15 @@
+{
+  "//": "A Hosting release whose only job is to stop serving the old app. See ./README.md — in particular, do not deploy it while cfp.gdgmontreal.com is still served by Hosting.",
+  "hosting": {
+    "public": "hosting-redirect/public",
+    "ignore": ["**/.*"],
+    "redirects": [
+      {
+        "//": "301, not 302: this is permanent, and a search engine holding the .web.app copy should transfer it to the canonical origin rather than keep both.",
+        "source": "/**",
+        "destination": "https://cfp.gdgmontreal.com/:splat*",
+        "type": 301
+      }
+    ]
+  }
+}
