@@ -1,6 +1,6 @@
 import { LIMITS, SOCIAL_PLATFORMS, type SocialPlatform } from '@shared/enums';
 import type { Social } from '@shared/types';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 
 interface SocialsInputProps {
   value: Social[];

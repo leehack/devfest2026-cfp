@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { navigate } from '../lib/router';
 import { createCfp } from '../lib/roles';
 import { RadioGroup, TextField } from '../components/fields';

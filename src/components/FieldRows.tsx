@@ -16,7 +16,7 @@
 import { Fragment } from 'react';
 
 import { Checkbox, SelectField, TextAreaField, TextField } from './fields';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { FIELD_TYPES, FORM_LIMITS, type ConfirmField, type FieldType } from '@shared/confirmForm';
 
 /** One option per line. The line is the stored value and its own label. */

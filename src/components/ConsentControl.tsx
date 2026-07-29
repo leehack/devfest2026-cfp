@@ -12,7 +12,7 @@
  * find that out by reading, not by clicking something and seeing what happens.
  */
 
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { analyticsAvailable } from '../lib/analytics';
 import { consent } from '../lib/consent';
 

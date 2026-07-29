@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { SelectField, TextAreaField, TextField } from '../../components/fields';
-import { formatDate, useI18n } from '../../i18n';
+import { formatDate } from '../../i18n';
+import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import {
   emailQueue,

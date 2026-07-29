@@ -11,7 +11,8 @@
  * generic title.
  */
 
-import { formatDate, formatDay, useI18n } from '../i18n';
+import { formatDate, formatDay } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { href } from '../lib/router';
 import { Link } from '../components/Link';
 import type { CfpWindow } from '../lib/proposals';

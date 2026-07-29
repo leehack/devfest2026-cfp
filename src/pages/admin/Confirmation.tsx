@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { useI18n } from '../../i18n';
+import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { ConfirmFormEditor } from '../../components/ConfirmFormEditor';
 import { loadConfirmForm } from '../../lib/proposals';

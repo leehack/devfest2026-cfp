@@ -13,7 +13,8 @@ import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../
 import { Reveal } from '../components/Reveal';
 import { SessionizeImport } from '../components/SessionizeImport';
 import { SpeakerFields } from '../components/SpeakerFields';
-import { formatDate, useI18n, type Dictionary } from '../i18n';
+import { formatDate, type Dictionary } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';

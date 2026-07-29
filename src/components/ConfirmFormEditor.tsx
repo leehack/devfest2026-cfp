@@ -12,7 +12,7 @@
 import { useState } from 'react';
 
 import { FieldRows } from './FieldRows';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
 import { setConfirmForm } from '../lib/roles';
 import { keyFromLabel, validateForm, type ConfirmField } from '@shared/confirmForm';

@@ -34,7 +34,7 @@ import { useMemo, useState } from 'react';
 import { FieldRows } from './FieldRows';
 import { withKeys } from './ConfirmFormEditor';
 import { Checkbox } from './fields';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
 import { setSubmissionForm } from '../lib/roles';
 import { FORM_LIMITS, localised, validateForm, type FieldOption, type FieldType } from '@shared/confirmForm';

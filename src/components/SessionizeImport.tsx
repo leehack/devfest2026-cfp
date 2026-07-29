@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { SessionizeProfile, SessionizeSession } from '@shared/sessionize';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import {
   applySessionizeProfile,
   applySessionizeSession,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { Checkbox, RadioGroup, TextAreaField, TextField } from '../../components/fields';
-import { useI18n } from '../../i18n';
+import { useI18n } from '../../i18n/context';
 import { toDate, toDateTimeInput } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { archiveCfp, deleteCfp, loadCfp, setCfpWindow, updateCfp } from '../../lib/roles';

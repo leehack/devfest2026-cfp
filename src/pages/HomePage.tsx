@@ -10,7 +10,8 @@
 import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { useI18n, formatDay } from '../i18n';
+import { formatDay } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { href, navigate } from '../lib/router';
 import { Link } from '../components/Link';
 import {

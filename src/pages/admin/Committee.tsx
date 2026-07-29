@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { SelectField, TextField } from '../../components/fields';
-import { useI18n } from '../../i18n';
+import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { grantRole, loadCommittee, revokeRole, type Person } from '../../lib/roles';
 import { GRANTABLE_ROLES, type GrantableRole } from '@shared/cfp';

@@ -13,7 +13,7 @@
 import { Checkbox, TextAreaField, TextField } from './fields';
 import { Reveal } from './Reveal';
 import { SocialsInput } from './SocialsInput';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import type { FormState } from '../lib/formState';
 import { LIMITS } from '@shared/enums';
 

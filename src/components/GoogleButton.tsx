@@ -11,7 +11,7 @@
  * renders wrong on a slow connection, which is exactly when it matters.
  */
 
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 
 /** The four-colour G, at its official proportions. */
 function GoogleMark() {

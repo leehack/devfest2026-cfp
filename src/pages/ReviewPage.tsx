@@ -19,7 +19,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { Checkbox, TextAreaField } from '../components/fields';
-import { formatDate, useI18n } from '../i18n';
+import { formatDate } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
 import { friendlyError } from '../lib/errors';
 import { loadSubmissionForm } from '../lib/proposals';

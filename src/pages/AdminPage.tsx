@@ -1,6 +1,6 @@
 import type { User } from 'firebase/auth';
 
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { ADMIN_TABS, navigate, type AdminTab } from '../lib/router';
 import { Committee } from './admin/Committee';
 import { Confirmation } from './admin/Confirmation';

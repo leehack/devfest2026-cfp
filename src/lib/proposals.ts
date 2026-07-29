@@ -19,6 +19,7 @@ import { db, functions } from '../firebase';
 import type { Locale } from '../i18n';
 import { mapEmpty, toDocuments, type FormState } from './formState';
 import type { EditScope } from './lifecycle';
+import { cfpState } from '@shared/cfpWindow';
 import { LIMITS, type ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
 import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
@@ -57,11 +58,15 @@ export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
 
   // Advisory only. The rules and submitProposal re-check against the server
   // clock — this just decides what the page renders.
-  let state: CfpWindow['state'] = 'open';
-  if (data.archived) state = 'archived';
-  else if (data.paused) state = 'paused';
-  else if (now < opensAt.getTime()) state = 'before';
-  else if (now >= closesAt.getTime()) state = 'closed';
+  const state = cfpState(
+    {
+      archived: data.archived,
+      paused: data.paused,
+      opensAtMs: opensAt.getTime(),
+      closesAtMs: closesAt.getTime(),
+    },
+    now,
+  );
 
   return {
     name: data.name ?? cfpId,

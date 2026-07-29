@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { SpeakerFields } from '../components/SpeakerFields';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { friendlyError } from '../lib/errors';
 import { emptyForm, fromDocuments, toSubmission, type FormState } from '../lib/formState';
 import { loadProfile, saveProfile } from '../lib/proposals';

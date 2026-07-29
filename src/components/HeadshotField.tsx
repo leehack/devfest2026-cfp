@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { storage } from '../lib/storage';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { FORM_LIMITS, IMAGE_TYPES, headshotPath } from '@shared/confirmForm';
 
 interface Props {

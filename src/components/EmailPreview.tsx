@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 
 import { SelectField, TextField, TextAreaField, Checkbox } from './fields';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
 import { sendTestEmail, setEmailTemplate } from '../lib/roles';
 import {

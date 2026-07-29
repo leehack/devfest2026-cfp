@@ -2,14 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 
 import { auth, googleProvider } from './firebase';
-import {
-  dictionaries,
-  detectLocale,
-  formatDate,
-  I18nContext,
-  useI18n,
-  type Locale,
-} from './i18n';
+import { dictionaries, formatDate, type Locale } from './i18n';
+import { detectLocale, I18nContext, useI18n } from './i18n/context';
 import { GoogleButton } from './components/GoogleButton';
 import { Link } from './components/Link';
 import { SubmitPage } from './pages/SubmitPage';

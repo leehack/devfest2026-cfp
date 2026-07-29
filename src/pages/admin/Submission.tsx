@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { useI18n } from '../../i18n';
+import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { SubmissionFormEditor } from '../../components/SubmissionFormEditor';
 import { loadSubmissionForm } from '../../lib/proposals';

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { TextField } from './fields';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { resendError } from '../lib/errors';
 import { emailDomain, setEmailSecret, type Domain } from '../lib/roles';
 

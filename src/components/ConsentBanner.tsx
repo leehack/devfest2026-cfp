@@ -11,7 +11,7 @@
  * whose answer changes nothing is worse than not asking.
  */
 
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/context';
 import { analyticsAvailable, applyConsent } from '../lib/analytics';
 import { setConsent } from '../lib/consent';
 

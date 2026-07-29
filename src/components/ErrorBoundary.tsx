@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
-import { dictionaries, detectLocale } from '../i18n';
+import { dictionaries } from '../i18n';
+import { detectLocale } from '../i18n/context';
 
 /**
  * Without this, a render error unmounts the tree and leaves a blank white page —
