@@ -102,9 +102,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     }
   }, [cfpId, user.uid, t]);
 
+  /*
+   * Keyed on the call, not on the loader's identity. The loader is rebuilt
+   * whenever the dictionary changes — and the dictionary changes once on every
+   * page load now, because the locale cannot be known until after mount. Running
+   * it again would refetch and overwrite whatever is on screen unsaved.
+   */
   useEffect(() => {
     void load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfpId, user.uid]);
 
   const current = order[index];
 

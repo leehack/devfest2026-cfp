@@ -242,4 +242,18 @@ await runToCompletion(
 );
 
 console.log(`\n▸ dev server on http://localhost:5173/c/${DEV_CFP}\n`);
-run('npx', ['next', 'dev', '-p', '5173'], { env }).on('exit', (code) => void shutdown(code ?? 0));
+run('npx', ['next', 'dev', '-p', '5173'], {
+  env: {
+    ...env,
+    /*
+     * The dev server renders the public pages, so it needs Firestore too — and
+     * unlike the browser it has no `connectFirestoreEmulator` call to redirect
+     * it. These two are what the admin SDK reads instead: with the host set it
+     * skips credentials entirely, which is why `next dev` needs no service
+     * account.
+     */
+    FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+    GCLOUD_PROJECT: 'demo-devfest-cfp',
+    SITE_ORIGIN: 'http://localhost:5173',
+  },
+}).on('exit', (code) => void shutdown(code ?? 0));

@@ -24,9 +24,16 @@ export function Confirmation({ cfpId }: { cfpId: string }) {
     }
   }, [cfpId, t]);
 
+  /*
+   * Keyed on the call, not on the loader's identity. The loader is rebuilt
+   * whenever the dictionary changes — and the dictionary changes once on every
+   * page load now, because the locale cannot be known until after mount. Running
+   * it again would refetch and overwrite whatever is on screen unsaved.
+   */
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfpId]);
 
   return (
     <section className="section">
