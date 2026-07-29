@@ -8,11 +8,11 @@ import { defineWorkspace } from 'vitest/config';
 const RULES = ['tests/rules.test.ts', 'tests/storageRules.test.ts'];
 export default defineWorkspace([
   {
-    extends: './vite.config.ts',
+    extends: './vitest.config.ts',
     test: { name: 'unit', include: ['tests/**/*.test.ts'], exclude: RULES },
   },
   {
-    extends: './vite.config.ts',
+    extends: './vitest.config.ts',
     test: { name: 'rules', include: RULES },
   },
 ]);

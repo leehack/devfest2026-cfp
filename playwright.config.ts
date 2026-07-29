@@ -7,6 +7,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e',
+  // Not tsconfig.json: Next owns that and sets jsx: preserve.
+  tsconfig: './tsconfig.test.json',
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,

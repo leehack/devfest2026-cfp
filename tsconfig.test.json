@@ -1,0 +1,17 @@
+{
+  "//": "The tests, the configs and functions/src. Separate from tsconfig.json because Next owns that one and sets jsx: preserve, which no test runner here can use.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "src",
+    "shared",
+    "tests",
+    "functions/src",
+    "vitest.config.ts",
+    "vitest.workspace.ts",
+    "playwright.config.ts"
+  ]
+}

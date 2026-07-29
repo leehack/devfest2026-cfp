@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false --pretty",
+    "typecheck": "tsc -p tsconfig.test.json && tsc -p functions/tsconfig.json --noEmit",
     "emulators": "firebase emulators:start --only auth,firestore,functions,storage,hosting",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
     "test": "vitest run --project unit",
@@ -26,6 +26,7 @@
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
     "@playwright/test": "^1.62.0",
+    "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
