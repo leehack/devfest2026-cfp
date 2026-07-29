@@ -775,6 +775,13 @@ export const fr: Dictionary = {
     conflictDeclared: 'conflit déclaré',
   },
 
+  consent: {
+    title: 'Une petite question sur la mesure d’audience.',
+    body:
+      'Nous aimerions compter les visites de ce site afin de savoir si l’appel à conférences se rend jusqu’aux gens. Cela passe par Google Analytics, qui dépose un identifiant sur votre appareil. Ce n’est jamais lié à votre proposition, et refuser ne change rien au fonctionnement du site pour vous.',
+    accept: 'Autoriser',
+    decline: 'Non merci',
+  },
   errors: {
     generic: 'Une erreur est survenue. Veuillez réessayer.',
     signIn: 'Connexion impossible. Veuillez réessayer.',

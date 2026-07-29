@@ -11,6 +11,11 @@ const config = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  // Absent until GA4 is linked to the project in the console, and absent for
+  // the emulators. `src/lib/analytics.ts` treats that as "analytics is off"
+  // rather than as a misconfiguration — it is the correct state for anyone
+  // running this platform who does not want to measure anybody.
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
 export const app = initializeApp(config);

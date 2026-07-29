@@ -22,6 +22,8 @@ import { NewCfpPage } from './pages/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
 import { href, navigate, usePlace, type Place, type Route } from './lib/router';
+import { ConsentBanner } from './components/ConsentBanner';
+import { applyConsent, trackPageView } from './lib/analytics';
 import { signInAsTestSpeaker, usingEmulators } from './lib/devAuth';
 import {
   arrivingFromLink,
@@ -55,6 +57,19 @@ export function App() {
   useEffect(() => {
     document.title = cfp?.name ? `${cfp.name} — ${t.app.title}` : t.app.title;
   }, [cfp, t]);
+
+  // Starts the SDK for somebody who agreed on an earlier visit. A no-op for
+  // everyone else, including anyone who has simply never been asked.
+  useEffect(() => {
+    applyConsent();
+  }, []);
+
+  // One page_view per navigation, with the CFP slug as a parameter and out of
+  // the path — see `pageShape`. The router is a real router now, so nothing
+  // else would report a screen change.
+  useEffect(() => {
+    trackPageView(window.location.pathname, cfpId || null);
+  }, [route, cfpId]);
 
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);
@@ -134,6 +149,7 @@ export function App() {
           )}
         </main>
       </div>
+      <ConsentBanner />
     </I18nContext.Provider>
   );
 }

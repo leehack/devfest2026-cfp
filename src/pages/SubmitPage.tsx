@@ -16,6 +16,7 @@ import { SpeakerFields } from '../components/SpeakerFields';
 import { formatDate, useI18n, type Dictionary } from '../i18n';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
+import { track } from '../lib/analytics';
 import { editScope, type EditScope } from '../lib/lifecycle';
 import {
   clearTalk,
@@ -573,6 +574,15 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       const id = await saveDraft(cfpId, user, form, proposalId, 'all', locale);
       setProposalId(id);
       await submitProposal({ cfpId, proposalId: id });
+      // Codes only — never the title, the abstract or anything about the
+      // person. This answers "which tracks are people proposing to", which is
+      // the one thing page views cannot tell an organiser.
+      track('proposal_submitted', {
+        cfp_id: cfpId,
+        category: form.category,
+        format: form.format,
+        delivery_language: form.deliveryLanguage,
+      });
       setStatus('submitted');
       markTalk(id, 'submitted', form.title);
       window.scrollTo({ top: 0, behavior: 'smooth' });

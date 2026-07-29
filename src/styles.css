@@ -1880,3 +1880,55 @@ p {
   font-size: var(--text-sm);
   white-space: pre-wrap;
 }
+
+/* ----------------------------------------------------------------- consent */
+
+/*
+  Pinned to the bottom rather than laid over the page. It is a question, not an
+  interruption: somebody who came here to write a proposal can start typing and
+  answer it whenever, which is also why it takes no focus and traps none.
+*/
+.consent {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 20;
+  padding: var(--s-3) var(--s-4);
+  background: var(--surface);
+  border-top: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-2);
+}
+
+.consent__inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-4);
+  align-items: center;
+  justify-content: space-between;
+  max-width: 80rem;
+  margin: 0 auto;
+}
+
+.consent__text {
+  flex: 1 1 24rem;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+
+/*
+  Both buttons are plain `.btn` — same size, same weight, no primary among them.
+  Law 25 requires refusing to be as easy as agreeing, and a decline styled as a
+  quiet link is a decline designed to be missed. Reversed on a narrow screen so
+  the thumb does not land on "Allow" by being nearest the edge.
+*/
+.consent__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+
+.consent__actions .btn {
+  flex: 1 1 auto;
+  min-width: 9rem;
+  justify-content: center;
+}

@@ -772,6 +772,13 @@ export const en = {
     conflictDeclared: 'conflict declared',
   },
 
+  consent: {
+    title: 'A quick question about measurement.',
+    body:
+      'We would like to count visits to this site so we know whether people are finding the call for proposals. It uses Google Analytics, which sets an identifier on your device. It is never linked to your proposal, and declining changes nothing about how this site works for you.',
+    accept: 'Allow',
+    decline: 'No thanks',
+  },
   errors: {
     generic: 'Something went wrong. Please try again.',
     signIn: 'Could not sign you in. Please try again.',

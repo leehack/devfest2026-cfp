@@ -184,6 +184,23 @@ collection — the rule names the two readable documents one at a time.
   `shared/seo.ts` — one definition, still under test. It names no origin: this
   is a platform, whoever deploys it picks the origin, and the sitemap is at the
   root where a crawler looks anyway.
+- **Analytics is off until somebody says yes, and off by default entirely.**
+  `VITE_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the module is
+  inert and the consent banner does not render, which is the state of the
+  emulators and of anyone else deploying this. With one, nothing loads until the
+  banner is answered — `firebase/analytics` is a dynamic import inside
+  `start()`, because a top-level import writes its cookie on init and would
+  defeat the gate whatever the banner said. Law 25 and the GDPR also require
+  refusing to be as easy as agreeing, which is why both buttons are the same
+  plain `.btn`; a quiet grey decline would not survive being looked at.
+  Unanswered and declined must behave identically — to somebody who scrolled
+  past the banner they are the same thing.
+- **Never put anything personal in an event parameter.** `track()` takes
+  `Record<string, string | number>` so an object cannot be passed by accident,
+  and every call site sends codes: a CFP slug, a category value, a route shape.
+  The path is reduced by `pageShape` first, so GA sees `/c/{cfpId}/submit` and
+  the slug travels separately — one row per screen in the report instead of one
+  per call.
 - **`#/c/{id}` links are still out there.** The router moved from the hash to the
   path so a call for proposals could have a public page a crawler and a link
   preview can read. Every acceptance and sign-in link mailed before that carries
