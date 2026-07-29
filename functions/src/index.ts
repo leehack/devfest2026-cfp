@@ -17,6 +17,13 @@ import { logger } from 'firebase-functions';
 
 import { inStatusSet, LIMITS, STATUS_SETS } from '../../shared/enums';
 import { submissionSchema } from '../../shared/schema';
+import {
+  DEFAULT_SUBMISSION_FORM,
+  mergeSubmissionForm,
+  normaliseSubmissionForm,
+  validateSubmissionForm,
+  type SubmissionForm,
+} from '../../shared/submissionForm';
 import { aggregateReviews, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
 import {
@@ -250,6 +257,18 @@ function assemble(proposal: FirebaseFirestore.DocumentData, speaker: FirebaseFir
 }
 
 /**
+ * The form this call actually asks, from `config/submissionForm`.
+ *
+ * Absent for every call that predates the form being configurable, and the
+ * defaults are what those calls were already using — so a missing document is a
+ * working document rather than a reason to refuse a submission.
+ */
+async function submissionFormFor(cfpId: string): Promise<SubmissionForm> {
+  const snap = await db.doc(`cfps/${cfpId}/config/submissionForm`).get();
+  return mergeSubmissionForm(snap.exists ? snap.data() : undefined);
+}
+
+/**
  * The speaker as the committee will read them.
  *
  * `email` is deliberately absent. A reviewer judging a talk has no need of the
@@ -387,6 +406,10 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
   await assertCfpOpen(cfpId);
 
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
+  // Outside the transaction: config, not state — nothing in here depends on it
+  // being read at the same instant as the proposal, and a transaction that
+  // reads it would retry on every unrelated edit to the form.
+  const shape = await submissionFormFor(cfpId);
 
   const result = await db.runTransaction(async (tx) => {
     const proposal = await readOwnProposal(tx, proposalRef, uid);
@@ -422,11 +445,24 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
     }
 
     // The authoritative pass; the browser's copy only renders inline errors.
-    const parsed = submissionSchema.safeParse(assemble(proposal, speakerSnap.data()!));
+    // Against this call's own form, not against a taxonomy compiled into the
+    // bundle — that is the whole point of the config being data.
+    const parsed = submissionSchema(shape).safeParse(assemble(proposal, speakerSnap.data()!));
     if (!parsed.success) {
       throw new HttpsError('invalid-argument', 'The proposal is incomplete.', {
         issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })),
       });
+    }
+
+    // The call's own questions. Same machinery as the confirmation form, and
+    // the same rule: unknown keys are dropped rather than refused, because a
+    // form edited while somebody was filling it in is not their mistake.
+    const { faults, clean } = validateAnswers(
+      { fields: shape.fields },
+      (proposal.answers ?? {}) as Answers,
+    );
+    if (Object.keys(faults).length > 0) {
+      throw new HttpsError('invalid-argument', 'The proposal is incomplete.', { faults });
     }
 
     // Queued in the same transaction as the status change: no receipt for a
@@ -443,6 +479,8 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
       // account and is global; this is the only copy of it this CFP gets, so a
       // bio rewritten years later cannot rewrite what was judged.
       speakerSnapshot: [snapshotOf(uid, speakerSnap.data()!)],
+      // Only what the form still asks for, which is what `clean` is.
+      answers: clean,
       submittedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -670,6 +708,52 @@ export const setConfirmForm = onCall(CALLABLE, async (request) => {
 });
 
 /**
+ * The submission form itself: what this call asks a speaker for.
+ *
+ * Whole-document replace, like `setConfirmForm` and for the same reason — the
+ * merge happens in the browser where an admin can see what they are doing.
+ * Validated twice over: the taxonomy and the consents by `validateSubmissionForm`,
+ * the custom questions by the confirmation form's own `validateForm`, because
+ * they are the same shape and deserve the same rules.
+ */
+export const setSubmissionForm = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'change the submission form');
+
+  const form = normaliseSubmissionForm(
+    mergeSubmissionForm((request.data ?? {}) as Record<string, unknown>),
+  );
+
+  const shapeFault = validateSubmissionForm(form);
+  if (shapeFault) {
+    throw new HttpsError(
+      'invalid-argument',
+      shapeFault.key ? `${shapeFault.problem} on "${shapeFault.key}"` : shapeFault.problem,
+      shapeFault,
+    );
+  }
+  for (const fields of [form.acks, form.fields]) {
+    const fault = validateForm({ fields });
+    if (fault) {
+      throw new HttpsError(
+        'invalid-argument',
+        fault.key ? `${fault.problem} on "${fault.key}"` : fault.problem,
+        fault,
+      );
+    }
+  }
+
+  await db.doc(`cfps/${cfpId}/config/submissionForm`).set(form);
+  logger.info('submission form saved', {
+    byUid,
+    cfpId,
+    acks: form.acks.length,
+    fields: form.fields.length,
+  });
+  return { ok: true, form };
+});
+
+/**
  * Recomputes `aggregate` on every reviewed proposal. Run once when the round
  * closes (§8) — a batch job, not a trigger: a z-score is relative to everything
  * that reviewer scored, so one new review moves the normalised score of every
@@ -882,6 +966,12 @@ export const createCfp = onCall(CALLABLE, async (request) => {
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+    // Seeded rather than left absent, even though `mergeSubmissionForm` would
+    // supply the same values. An absent document means "whatever the code
+    // defaults to today", and the day those defaults change, every call that
+    // never wrote one silently changes the taxonomy under proposals already
+    // submitted against it. Written once, it is this call's own.
+    tx.set(db.doc(`cfps/${input.id}/config/submissionForm`), DEFAULT_SUBMISSION_FORM);
     tx.set(db.doc(`cfps/${input.id}/members/${uid}`), {
       cfpId: input.id,
       uid,

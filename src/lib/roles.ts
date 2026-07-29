@@ -9,6 +9,7 @@ import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
 import type { ConfirmField } from '@shared/confirmForm';
+import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp, CfpMember, Proposal, RoleGrant } from '@shared/types';
 
 /**
@@ -156,6 +157,11 @@ export const setConfirmForm = httpsCallable<
   In<{ fields: ConfirmField[] }>,
   { ok: boolean; fields: ConfirmField[] }
 >(functions, 'setConfirmForm');
+
+export const setSubmissionForm = httpsCallable<
+  In<SubmissionForm>,
+  { ok: boolean; form: SubmissionForm }
+>(functions, 'setSubmissionForm');
 
 export const sendSpeakerMessage = httpsCallable<
   In<{ proposalId: string; subject: string; body: string }>,

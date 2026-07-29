@@ -143,10 +143,16 @@ service cloud.firestore {
       // logistics that are not public yet. `email` stays shut: it holds the key
       // hint and the templates, which reach an admin through a callable.
       //
+      // `submissionForm` is the form itself — its categories, its formats, the
+      // consents it asks for. Readable by anyone, signed in or not, because the
+      // public page of a call describes what it is asking for and a stranger
+      // deciding whether to submit is exactly who that is for.
+      //
       // The submission window is not here. It lives on the CFP document, which
       // is public — the form has to render its own state before anyone signs in.
       match /config/{docId} {
-        allow read: if docId == 'confirmForm' && signedIn();
+        allow read: if docId == 'submissionForm'
+          || (docId == 'confirmForm' && signedIn());
         allow write: if false;
       }
 

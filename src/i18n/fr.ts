@@ -124,6 +124,7 @@ export const fr: Dictionary = {
     speaker: 'À propos de vous',
     speakerHelp:
       'Rattaché à votre compte, pas à une conférence — le modifier ici le change partout, et il reste modifiable après une soumission.',
+    extra: 'Quelques questions de plus',
     acks: 'Avant de soumettre',
     attendance: 'Venir à Montréal',
   },
@@ -378,6 +379,7 @@ export const fr: Dictionary = {
       proposals: 'Propositions',
       committee: 'Comité',
       settings: 'Paramètres',
+      submission: 'Formulaire',
       confirmation: 'Confirmation',
       email: 'Courriel',
     },
@@ -660,6 +662,54 @@ export const fr: Dictionary = {
       needsOptions: 'Une question à choix unique doit avoir au moins une option.',
       duplicateOption: 'Les options de « {key} » se répètent. Chacune doit être distincte.',
     } as Record<string, string>,
+    submission: 'Le formulaire de proposition',
+    submissionHelp:
+      'Ce qu’on demande aux conférenciers et conférencières au moment de proposer. Les libellés se reformulent en tout temps ; un choix déjà utilisé par une proposition conserve son code, alors le retirer est la façon de le mettre hors service.',
+    submissionSave: 'Enregistrer le formulaire',
+    submissionSaved: 'Formulaire de proposition enregistré.',
+    taxonomy: {
+      category: 'Catégories',
+      format: 'Formats',
+      level: 'Niveaux',
+      deliveryLanguage: 'Langues',
+    },
+    languagesHelp:
+      'Les langues dans lesquelles vous acceptez une conférence. Les quatre sont fixes — l’horaire et la gestion du bilinguisme reposent dessus — mais vous choisissez lesquelles offrir et comment les nommer.',
+    optionLabelEn: 'Libellé (anglais)',
+    optionLabelFr: 'Libellé (français)',
+    optionCode: 'Enregistré sous « {code} ».',
+    optionAdd: 'Ajouter un choix',
+    optionsEmpty: 'Aucun choix. Personne ne peut soumettre tant qu’il n’y en a pas au moins un.',
+    optionRemoveConfirm:
+      'Retirer « {label} » ? Les conférences déjà classées ainsi le conservent, mais plus personne ne pourra le choisir.',
+    acksTitle: 'Ce que les conférenciers acceptent',
+    acksHelp:
+      'Chacun est une case à cocher obligatoire. Si c’est facultatif, c’est une question — ajoutez-la plus bas.',
+    acksEmpty: 'Rien à accepter.',
+    ackUntitled: 'Nouvel engagement',
+    ackLabelEn: 'Formulation (anglais)',
+    ackLabelFr: 'Formulation (français)',
+    ackAdd: 'Ajouter un engagement',
+    ackRemoveConfirm:
+      'Retirer « {label} » ? Les propositions déjà soumises conservent la réponse donnée.',
+    extraTitle: 'Vos propres questions',
+    extraHelp:
+      'Tout ce que vous voulez demander d’autre sur la conférence. Les photos ne sont pas offertes ici : la plupart de ces personnes seront refusées, et leur photo n’est pas quelque chose à conserver. Demandez-la plutôt sur le formulaire de confirmation.',
+    extraEmpty: 'Aucune question supplémentaire.',
+    extraAdd: 'Ajouter une question',
+    submissionErrors: {
+      noOptions:
+        '{key} n’a aucun choix. Personne ne peut soumettre tant qu’il n’y en a pas au moins un.',
+      tooManyOptions: '{key} contient plus de choix que le formulaire ne peut en accueillir.',
+      badValue: 'Un des choix sous {key} a un code que le formulaire ne peut pas enregistrer.',
+      duplicateValue:
+        'Deux choix sous {key} seraient enregistrés de la même façon. Reformulez-en un.',
+      emptyLabel: 'Chaque choix sous {key} a besoin d’un libellé anglais.',
+      unknownLanguage: 'Ce n’est pas une des quatre langues que l’horaire comprend.',
+      ackNotRequired: '« {key} » doit être une case à cocher obligatoire.',
+      noImages:
+        '« {key} » demande une photo. Demandez-la sur le formulaire de confirmation, une fois la personne retenue.',
+    } as Record<string, string>,
     results: 'Conférenciers retenus',
     tally: (live: number, accepted: number, waitlisted: number, decided: number) =>
       `${live} devant le comité · ${accepted} acceptées · ${waitlisted} en liste d’attente · ${live - decided} à décider`,
@@ -757,6 +807,7 @@ export const fr: Dictionary = {
         'La préférence linguistique ne s’applique que si vous pouvez présenter dans les deux langues.',
       dateFormat: 'Utilisez le sélecteur de date.',
       sessionizeUrl: 'Ce n’est pas un lien de profil Sessionize.',
+      notAnOption: 'Choisissez l’une des options proposées.',
     },
   },
 };

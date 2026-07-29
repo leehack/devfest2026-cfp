@@ -87,7 +87,7 @@ Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
 a response — the client sees `keyHint`, the last four characters. Resend's domain
 API is proxied by `emailDomain` so the DNS records can be shown and re-checked.
 `functions/.env*` is only a fallback. `config` is *not* world-readable as a
-collection — the rule names `confirmForm`.
+collection — the rule names the two readable documents one at a time.
 
 ## Style
 
@@ -221,12 +221,27 @@ collection — the rule names `confirmForm`.
   `requestSignInLink` renders it and hands it to `sendViaResend` in the one
   request — no queue row, no retry, nothing to read back. That is also why it
   cannot reuse the `queueEmail` path everything else goes through.
-- **The confirmation questions are data, and `config/confirmForm` is the only
-  readable config document besides `cfp`.** A speaker's browser renders the form
-  it is about to answer, so the rule names that document explicitly; `email`
-  stays shut. `confirmAnswers` is in `protectedKeys`, so `respondToDecision` is
-  the only writer — the browser's copy of the form is a convenience and
-  `validateAnswers` in the callable is what counts.
+- **Both forms are data.** `config/confirmForm` is what a speaker is asked once
+  they accept, readable signed in; `config/submissionForm` is what the call
+  itself asks — its categories, formats, levels, languages, consents and any
+  questions of its own — readable by anyone, because that is the substance of
+  the call's public page. Everything else under `config` stays shut, and the
+  rule names each readable document rather than opening the collection.
+  Both are written only by their callable. The browser's copy of either is a
+  convenience; `validateAnswers` and `submissionSchema(shape)` inside the
+  callable are what count.
+- **An absent `submissionForm` is a working one.** Every CFP created before the
+  form was configurable has no document, and `mergeSubmissionForm` reads that as
+  today's DevFest values, key by key. `createCfp` seeds the document anyway, so
+  a later change to the defaults cannot move the taxonomy under proposals
+  already submitted.
+- **`deliveryLanguage`'s values are not the organiser's to change.** `either` is
+  what `languagePreference` exists for and what the scheduling dashboard counts,
+  so a call picks which of the four to offer and what to call them — not what
+  they are. `validateSubmissionForm` refuses anything else.
+- **No photographs on the submission form.** ~70% of applicants are turned down
+  and we should not be holding their picture, so `image` is refused there (§3)
+  and offered on the confirmation form, where the speaker is already in.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.

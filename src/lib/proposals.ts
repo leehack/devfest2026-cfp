@@ -22,6 +22,7 @@ import type { EditScope } from './lifecycle';
 import { LIMITS, type ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
 import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
+import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
 import type { CfpProfile, Visibility } from '@shared/cfp';
 import type { Cfp } from '@shared/types';
 
@@ -251,6 +252,20 @@ export async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
   const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
   const fields = snap.exists() ? snap.data().fields : null;
   return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
+}
+
+/**
+ * The form this call actually asks — its categories, formats, levels, the
+ * languages it offers, its consents and any questions of its own.
+ *
+ * A missing document is not an error: every call that existed before the form
+ * became configurable has none, and the defaults are what they were already
+ * using. Merged key by key so a config that sets only `fields` still gets the
+ * standard taxonomy rather than four empty dropdowns.
+ */
+export async function loadSubmissionForm(cfpId: string): Promise<SubmissionForm> {
+  const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'submissionForm'));
+  return mergeSubmissionForm(snap.exists() ? snap.data() : undefined);
 }
 
 export const importSessionizeProfile = httpsCallable<

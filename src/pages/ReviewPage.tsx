@@ -22,9 +22,15 @@ import { Checkbox, TextAreaField } from '../components/fields';
 import { formatDate, useI18n } from '../i18n';
 import { toDate } from '../lib/dates';
 import { friendlyError } from '../lib/errors';
+import { loadSubmissionForm } from '../lib/proposals';
 import { loadCfp, loadReviewQueue, type ProposalRow } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
 import { LIMITS, SCORES, type Score } from '@shared/enums';
+import {
+  DEFAULT_SUBMISSION_FORM,
+  labelOf,
+  type SubmissionForm,
+} from '@shared/submissionForm';
 import type { Review, SpeakerSnapshot } from '@shared/types';
 
 interface Draft {
@@ -41,6 +47,7 @@ const draftOf = (review?: Review): Draft => ({
 
 export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const { t } = useI18n();
+  const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [order, setOrder] = useState<ProposalRow[]>([]);
   const [own, setOwn] = useState(0);
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
@@ -57,7 +64,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     setLoading(true);
     setError('');
     try {
-      const [loaded, cfp] = await Promise.all([loadReviewQueue(cfpId, user.uid), loadCfp(cfpId)]);
+      const [loaded, cfp, form] = await Promise.all([
+        loadReviewQueue(cfpId, user.uid),
+        loadCfp(cfpId),
+        // The card's chips read their labels off this call's own form — a
+        // category this committee invented has no entry in any dictionary.
+        loadSubmissionForm(cfpId),
+      ]);
       const reviews = await loadMyReviews(
         cfpId,
         user.uid,
@@ -79,6 +92,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setMine(reviews);
       setDrafts(new Map(sorted.map((p) => [p.id, draftOf(reviews.get(p.id))])));
       setReviewsVisible(visible);
+      setShape(form);
       setIndex(0);
     } catch (e) {
       setError(friendlyError(e, t));
@@ -291,6 +305,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       </p>
 
       <ReviewCard
+        shape={shape}
         key={current.id}
         cfpId={cfpId}
         proposal={current}
@@ -315,6 +330,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 
 interface CardProps {
   cfpId: string;
+  shape: SubmissionForm;
   proposal: ProposalRow;
   draft: Draft;
   existing?: Review;
@@ -328,6 +344,7 @@ interface CardProps {
 
 function ReviewCard({
   cfpId,
+  shape,
   proposal,
   draft,
   existing,
@@ -338,7 +355,7 @@ function ReviewCard({
   onScore,
   onSave,
 }: CardProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const top = useRef<HTMLElement>(null);
 
   // A new proposal starts at its title, not wherever the last one was scrolled
@@ -367,10 +384,10 @@ function ReviewCard({
    * it and reported the category and format as missing from the card.
    */
   const facets = [
-    t.enums.category[proposal.category],
-    t.enums.format[proposal.format],
-    t.enums.level[proposal.level],
-    t.enums.deliveryLanguage[proposal.deliveryLanguage],
+    labelOf(shape.category, proposal.category, locale),
+    labelOf(shape.format, proposal.format, locale),
+    labelOf(shape.level, proposal.level, locale),
+    labelOf(shape.deliveryLanguage, proposal.deliveryLanguage, locale),
   ].filter(Boolean);
 
   return (

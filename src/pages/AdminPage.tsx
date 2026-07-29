@@ -4,6 +4,7 @@ import { useI18n } from '../i18n';
 import { ADMIN_TABS, navigate, type AdminTab } from '../lib/router';
 import { Committee } from './admin/Committee';
 import { Confirmation } from './admin/Confirmation';
+import { Submission } from './admin/Submission';
 import { Email } from './admin/Email';
 import { Proposals } from './admin/Proposals';
 import { Settings } from './admin/Settings';
@@ -52,6 +53,7 @@ export function AdminPage({
       {tab === 'proposals' && <Proposals cfpId={cfpId} />}
       {tab === 'committee' && <Committee user={user} cfpId={cfpId} />}
       {tab === 'settings' && <Settings cfpId={cfpId} role={role} />}
+      {tab === 'submission' && <Submission cfpId={cfpId} />}
       {tab === 'confirmation' && <Confirmation cfpId={cfpId} />}
       {tab === 'email' && <Email cfpId={cfpId} cfpName={cfpName} />}
     </>

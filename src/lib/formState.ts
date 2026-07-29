@@ -1,11 +1,6 @@
 import { LIMITS } from '@shared/enums';
-import type {
-  AttendanceStatus,
-  Category,
-  DeliveryLanguage,
-  Format,
-  Level,
-} from '@shared/enums';
+import type { AttendanceStatus } from '@shared/enums';
+import type { Answers } from '@shared/confirmForm';
 import type { Social } from '@shared/types';
 import type { SubmissionInput } from '@shared/schema';
 import type { SessionizeProfile, SessionizeSession } from '@shared/sessionize';
@@ -20,10 +15,13 @@ export interface FormState {
   title: string;
   abstract: string;
   pitch: string;
-  category: Category | '';
-  format: Format | '';
-  level: Level | '';
-  deliveryLanguage: DeliveryLanguage | '';
+  /* Plain strings, not the old literal unions: which values a call offers is
+     its own config now (`shared/submissionForm.ts`), so the type cannot know
+     them. What is offered is checked against that config, in both passes. */
+  category: string;
+  format: string;
+  level: string;
+  deliveryLanguage: string;
   languagePreference: string;
 
   // Speaker
@@ -38,10 +36,10 @@ export interface FormState {
   email: string;
   sessionizeUrl: string;
 
-  // Acknowledgements
-  ackNoTravelSupport: boolean;
-  ackCoc: boolean;
-  ackRecording: boolean;
+  /** The consents this call asks for, by key. Configurable, hence a map. */
+  acks: Record<string, boolean>;
+  /** Answers to this call's own questions about the talk. */
+  answers: Answers;
 
   // Attendance
   attendanceStatus: AttendanceStatus | '';
@@ -67,9 +65,8 @@ const TALK_KEYS = [
   'level',
   'deliveryLanguage',
   'languagePreference',
-  'ackNoTravelSupport',
-  'ackCoc',
-  'ackRecording',
+  'acks',
+  'answers',
 ] as const;
 
 /** A blank talk that keeps the speaker's profile — retyping a bio to submit a
@@ -101,9 +98,8 @@ export const emptyForm: FormState = {
   pastTalks: '',
   email: '',
   sessionizeUrl: '',
-  ackNoTravelSupport: false,
-  ackCoc: false,
-  ackRecording: false,
+  acks: {},
+  answers: {},
   attendanceStatus: '',
   fundingSource: '',
   decisionBy: '',
@@ -132,11 +128,8 @@ export function toDocuments(form: FormState) {
     // value left behind by a changed dropdown has to be cleared, not hidden.
     languagePreference:
       form.deliveryLanguage === 'either' ? form.languagePreference.trim() : '',
-    acks: {
-      noTravelSupport: form.ackNoTravelSupport,
-      coc: form.ackCoc,
-      recording: form.ackRecording,
-    },
+    acks: form.acks,
+    answers: form.answers,
     attendance: {
       status: form.attendanceStatus,
       fundingSource: funded ? form.fundingSource.trim() : '',
@@ -363,9 +356,8 @@ export function fromDocuments(
     pastTalks: s.pastTalks ?? '',
     email: s.email ?? '',
     sessionizeUrl: s.sessionizeUrl ?? '',
-    ackNoTravelSupport: p.acks?.noTravelSupport ?? false,
-    ackCoc: p.acks?.coc ?? false,
-    ackRecording: p.acks?.recording ?? false,
+    acks: (p.acks ?? {}) as Record<string, boolean>,
+    answers: (p.answers ?? {}) as Answers,
     attendanceStatus: p.attendance?.status ?? '',
     fundingSource: p.attendance?.fundingSource ?? '',
     decisionBy: p.attendance?.decisionBy ?? '',
@@ -388,10 +380,10 @@ export function toSubmission(form: FormState): SubmissionInput {
       title: p.title ?? '',
       abstract: p.abstract ?? '',
       pitch: p.pitch,
-      category: p.category as Category,
-      format: p.format as Format,
-      level: p.level as Level,
-      deliveryLanguage: p.deliveryLanguage as DeliveryLanguage,
+      category: p.category ?? '',
+      format: p.format ?? '',
+      level: p.level ?? '',
+      deliveryLanguage: p.deliveryLanguage ?? '',
       languagePreference: p.languagePreference,
     },
     speaker: {

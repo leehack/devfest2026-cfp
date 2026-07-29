@@ -22,7 +22,14 @@ export type Route = 'home' | 'new' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
  * survives a reload and can be linked to — "the email queue is stuck" is worth
  * being able to answer with a URL.
  */
-export const ADMIN_TABS = ['proposals', 'committee', 'settings', 'confirmation', 'email'] as const;
+export const ADMIN_TABS = [
+  'proposals',
+  'committee',
+  'settings',
+  'submission',
+  'confirmation',
+  'email',
+] as const;
 export type AdminTab = (typeof ADMIN_TABS)[number];
 
 export interface Place {

@@ -869,6 +869,33 @@ describe('config', () => {
     // anything from a page carrying our name.
     await assertFails(setDoc(doc(asApplicant(), `${CFP}/config/confirmForm`), { fields: [] }));
   });
+
+  /*
+   * The submission form goes one further than the confirmation form: it is
+   * readable signed out. What a call is asking for is the substance of its
+   * public page, and a stranger deciding whether to write a proposal is the
+   * person that page exists for.
+   */
+  it('lets anyone at all read the submission form', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `${CFP}/config/submissionForm`), { category: [] });
+    });
+    await assertSucceeds(
+      getDoc(doc(env.unauthenticatedContext().firestore(), `${CFP}/config/submissionForm`)),
+    );
+    await assertSucceeds(getDoc(doc(asApplicant(), `${CFP}/config/submissionForm`)));
+  });
+
+  it('lets nobody write the submission form', async () => {
+    // A speaker who could edit it could delete the consents they are refusing
+    // to give, or add a category their own talk happens to be in.
+    await assertFails(
+      setDoc(doc(asApplicant(), `${CFP}/config/submissionForm`), { category: [] }),
+    );
+    await assertFails(
+      setDoc(doc(asReviewer(), `${CFP}/config/submissionForm`), { category: [] }),
+    );
+  });
 });
 
 /**

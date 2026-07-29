@@ -128,6 +128,8 @@ export const en = {
     speaker: 'About you',
     speakerHelp:
       'Part of your account, not of any one talk — editing it here changes it everywhere, and it stays editable after a talk is submitted.',
+    /** Only rendered when the call has questions of its own. */
+    extra: 'A few more questions',
     acks: 'Before you submit',
     attendance: 'Getting to Montréal',
   },
@@ -381,6 +383,7 @@ export const en = {
       proposals: 'Proposals',
       committee: 'Committee',
       settings: 'Settings',
+      submission: 'Submission form',
       confirmation: 'Confirmation',
       email: 'Email',
     },
@@ -660,6 +663,51 @@ export const en = {
       needsOptions: 'A “pick one” question needs at least one option.',
       duplicateOption: 'The options for “{key}” repeat. Each has to be distinct.',
     } as Record<string, string>,
+    submission: 'The submission form',
+    submissionHelp:
+      'What speakers are asked when they propose a talk. Labels can be reworded at any time; a choice already used by a proposal keeps its stored code, so removing it is how you retire it.',
+    submissionSave: 'Save the form',
+    submissionSaved: 'Submission form saved.',
+    taxonomy: {
+      category: 'Categories',
+      format: 'Formats',
+      level: 'Audience levels',
+      deliveryLanguage: 'Languages',
+    },
+    languagesHelp:
+      'Which languages you will take a talk in. The four are fixed — the schedule and the bilingual handling are built on them — but you choose which to offer and what to call them.',
+    optionLabelEn: 'Label (English)',
+    optionLabelFr: 'Label (French)',
+    optionCode: 'Stored as “{code}”.',
+    optionAdd: 'Add a choice',
+    optionsEmpty: 'No choices yet. Speakers cannot submit until there is at least one.',
+    optionRemoveConfirm:
+      'Remove “{label}”? Talks already filed under it keep it, but nobody can pick it again.',
+    acksTitle: 'What speakers agree to',
+    acksHelp:
+      'Each one is a tick box that has to be ticked. If it is optional, it is a question — add it below instead.',
+    acksEmpty: 'Nothing to agree to.',
+    ackUntitled: 'New agreement',
+    ackLabelEn: 'Wording (English)',
+    ackLabelFr: 'Wording (French)',
+    ackAdd: 'Add an agreement',
+    ackRemoveConfirm: 'Remove “{label}”? Talks already submitted keep the answer they gave.',
+    extraTitle: 'Your own questions',
+    extraHelp:
+      'Anything else you want to ask about the talk. Photos are not offered here — most of these speakers will be turned down, and their picture is not something to be holding. Ask for it on the confirmation form instead.',
+    extraEmpty: 'No extra questions.',
+    extraAdd: 'Add a question',
+    submissionErrors: {
+      noOptions: '{key} has no choices. Speakers cannot submit until there is at least one.',
+      tooManyOptions: '{key} has more choices than the form can hold.',
+      badValue: 'One of the choices under {key} has a code the form cannot store.',
+      duplicateValue: 'Two choices under {key} would be stored the same way. Reword one of them.',
+      emptyLabel: 'Every choice under {key} needs an English label.',
+      unknownLanguage: 'That is not one of the four languages the schedule understands.',
+      ackNotRequired: '“{key}” has to be a tick box that must be ticked.',
+      noImages:
+        '“{key}” asks for a photo. Ask for that on the confirmation form, once the speaker is in.',
+    } as Record<string, string>,
     results: 'Selected speakers',
     tally: (live: number, accepted: number, waitlisted: number, decided: number) =>
       `${live} in front of the committee · ${accepted} accepted · ${waitlisted} waitlisted · ${live - decided} still to decide`,
@@ -755,6 +803,7 @@ export const en = {
         'Language preference only applies when you can present in either language.',
       dateFormat: 'Use the date picker.',
       sessionizeUrl: 'That is not a Sessionize profile link.',
+      notAnOption: 'Choose one of the options offered.',
     } as Record<string, string>,
   },
 };

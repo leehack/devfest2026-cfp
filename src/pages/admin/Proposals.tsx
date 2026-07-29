@@ -10,9 +10,15 @@ import {
   type ProposalRow,
 } from '../../lib/roles';
 import { BarChart, ScoreHistogram, StackedBar } from '../../components/charts';
-import { CATEGORIES, DELIVERY_LANGUAGES, STATUS_SETS, inStatusSet } from '@shared/enums';
+import { STATUS_SETS, inStatusSet } from '@shared/enums';
 import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
-import { loadConfirmForm } from '../../lib/proposals';
+import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
+import {
+  DEFAULT_SUBMISSION_FORM,
+  labelOf,
+  optionValues,
+  type SubmissionForm,
+} from '@shared/submissionForm';
 import { Result } from './Result';
 
 /**
@@ -116,15 +122,21 @@ function Answered({
  * fell, and which tracks are thin. Drafts are excluded throughout — an
  * unsubmitted talk is not part of the programme yet.
  */
-function Dashboard({ rows }: { rows: ProposalRow[] }) {
-  const { t } = useI18n();
+function Dashboard({ rows, shape }: { rows: ProposalRow[]; shape: SubmissionForm }) {
+  const { t, locale } = useI18n();
   const live = rows.filter((r) => r.status !== 'draft' && r.status !== 'withdrawn');
   if (live.length === 0) return null;
 
-  const countBy = <T extends string>(keys: readonly T[], of: (row: ProposalRow) => T) => {
-    const tally = new Map<T, number>(keys.map((k) => [k, 0]));
+  /*
+   * The buckets come from this call's own form, so a category nobody offered is
+   * not charted as a zero. A stored value the form no longer lists still has to
+   * appear somewhere — those talks were submitted in good faith — so anything
+   * unaccounted for is appended after the configured order.
+   */
+  const countBy = (keys: readonly string[], of: (row: ProposalRow) => string) => {
+    const tally = new Map<string, number>(keys.map((k) => [k, 0]));
     for (const row of live) tally.set(of(row), (tally.get(of(row)) ?? 0) + 1);
-    return keys.map((k) => ({ key: k, value: tally.get(k) ?? 0 }));
+    return [...tally].map(([key, value]) => ({ key, value }));
   };
 
   const decisions = [
@@ -164,10 +176,12 @@ function Dashboard({ rows }: { rows: ProposalRow[] }) {
         <div className="card card--stat">
           <h3>{t.admin.chartLanguages}</h3>
           <BarChart
-            data={countBy(DELIVERY_LANGUAGES, (r) => r.deliveryLanguage).map((d) => ({
-              label: t.enums.deliveryLanguage[d.key],
-              value: d.value,
-            }))}
+            data={countBy(optionValues(shape.deliveryLanguage), (r) => r.deliveryLanguage).map(
+              (d) => ({
+                label: labelOf(shape.deliveryLanguage, d.key, locale),
+                value: d.value,
+              }),
+            )}
           />
         </div>
       </div>
@@ -175,8 +189,8 @@ function Dashboard({ rows }: { rows: ProposalRow[] }) {
       <div className="card card--stat">
         <h3>{t.admin.chartCategories}</h3>
         <BarChart
-          data={countBy(CATEGORIES, (r) => r.category).map((d) => ({
-            label: t.enums.category[d.key],
+          data={countBy(optionValues(shape.category), (r) => r.category).map((d) => ({
+            label: labelOf(shape.category, d.key, locale),
             value: d.value,
           }))}
         />
@@ -189,15 +203,21 @@ export function Proposals({ cfpId }: { cfpId: string }) {
   const { t } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [questions, setQuestions] = useState<ConfirmField[]>([]);
+  const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
     try {
-      const [all, form] = await Promise.all([loadAllProposals(cfpId), loadConfirmForm(cfpId)]);
+      const [all, form, submission] = await Promise.all([
+        loadAllProposals(cfpId),
+        loadConfirmForm(cfpId),
+        loadSubmissionForm(cfpId),
+      ]);
       setRows(all);
       setQuestions(form.fields);
+      setShape(submission);
     } catch (e) {
       setError(adminError(e, t));
     }
@@ -320,7 +340,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
         <Result ok={note} error={error} />
       </section>
 
-      <Dashboard rows={rows} />
+      <Dashboard rows={rows} shape={shape} />
 
       <section className="section">
         <h2>{t.admin.results}</h2>

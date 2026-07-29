@@ -8,10 +8,7 @@
 
 import type {
   AttendanceStatus,
-  Category,
   DeliveryLanguage,
-  Format,
-  Level,
   ProposalStatus,
   ResolvedLanguage,
   Score,
@@ -126,11 +123,12 @@ export interface SpeakerSnapshot {
   sessionizeUrl?: string;
 }
 
-export interface Acks {
-  noTravelSupport: boolean;
-  coc: boolean;
-  recording: boolean;
-}
+/**
+ * The consents this call asked for, keyed by the `acks` keys in its
+ * `config/submissionForm`. Every one of them is `true` — the schema will not
+ * accept a submission otherwise — but the keys belong to the call, not to us.
+ */
+export type Acks = Record<string, boolean>;
 
 export interface Attendance {
   status: AttendanceStatus;
@@ -170,15 +168,28 @@ export interface Proposal {
   /** Committee-only. Never rendered in the public programme. */
   pitch?: string;
 
-  category: Category;
-  format: Format;
-  level: Level;
+  /**
+   * Codes from this call's `config/submissionForm`, not a fixed set. They are
+   * validated against that document on submit and rendered through it, so a
+   * call that never heard of `ai_ml` cannot store it and one that renamed the
+   * label still reads back correctly.
+   */
+  category: string;
+  format: string;
+  level: string;
 
+  /**
+   * The one taxonomy whose *values* stay ours: `either` and `bilingual` mean
+   * something to the scheduling code. A call chooses which of them to offer and
+   * what to call them, not what they are.
+   */
   deliveryLanguage: DeliveryLanguage;
   /** Only meaningful when deliveryLanguage is `either`. */
   languagePreference?: string;
 
   acks: Acks;
+  /** Answers to this call's own questions, if it asks any. */
+  answers?: Answers;
   attendance: Attendance;
 
   /** Function-writable only — see firestore.rules. */

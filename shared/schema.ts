@@ -5,16 +5,10 @@
  */
 
 import { z } from 'zod';
-import {
-  ATTENDANCE_STATUSES,
-  CATEGORIES,
-  DELIVERY_LANGUAGES,
-  FORMATS,
-  LEVELS,
-  LIMITS,
-  SOCIAL_PLATFORMS,
-} from './enums';
+import { ATTENDANCE_STATUSES, LIMITS, SOCIAL_PLATFORMS } from './enums';
 import { parseSessionizeUrl } from './sessionize';
+import type { FieldOption } from './confirmForm';
+import { DEFAULT_SUBMISSION_FORM, type SubmissionForm } from './submissionForm';
 
 const trimmed = (max: number) => z.string().trim().max(max);
 
@@ -49,13 +43,6 @@ export const speakerSchema = z.object({
       params: { key: 'sessionizeUrl' },
       message: 'not a Sessionize profile link',
     }),
-});
-
-/** All three are required — they are acknowledgements, not preferences (§3). */
-export const acksSchema = z.object({
-  noTravelSupport: z.literal(true),
-  coc: z.literal(true),
-  recording: z.literal(true),
 });
 
 export const attendanceSchema = z
@@ -113,43 +100,100 @@ export const attendanceSchema = z
     }
   });
 
-export const proposalCoreSchema = z
-  .object({
-    title: trimmed(LIMITS.title).min(1),
-    // Published verbatim in the public programme, hence the floor as well as the cap.
-    abstract: trimmed(LIMITS.abstractMax).min(LIMITS.abstractMin),
-    // Optional, committee-only. Without it, borderline proposals are hard to judge.
-    pitch: trimmed(LIMITS.pitchMax).optional(),
-    category: z.enum(CATEGORIES),
-    format: z.enum(FORMATS),
-    level: z.enum(LEVELS),
-    deliveryLanguage: z.enum(DELIVERY_LANGUAGES),
-    languagePreference: trimmed(LIMITS.languagePreferenceMax).optional(),
-  })
-  .superRefine((val, ctx) => {
-    // §4: the preference line only exists for `either`. Rejecting it elsewhere
-    // keeps stray values out of the scheduling dashboard.
-    if (val.deliveryLanguage !== 'either' && val.languagePreference) {
+/**
+ * One of the four choice fields, checked against whatever this call offers.
+ *
+ * `z.enum` would need the values at module load, and they now arrive from
+ * Firestore — so this is a string with the membership test written out. The
+ * issue carries the same `key` shape as every other rule, so the message is
+ * translated rather than zod's English reaching an applicant.
+ */
+const oneOf = (options: FieldOption[], key: string) =>
+  z.string().superRefine((value, ctx) => {
+    if (!options.some((option) => option.value === value)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['languagePreference'],
-        params: { key: 'languagePreferenceNotApplicable' },
-        message: 'Language preference only applies when you can present in either language.',
+        params: { key },
+        message: `not one of the options this call offers`,
       });
     }
   });
 
+/**
+ * The talk, as this call defines it.
+ *
+ * A factory rather than a constant because the four dropdowns are per-CFP now
+ * (`shared/submissionForm.ts`). `submitProposal` builds one from the stored
+ * config; the browser builds one from its own copy for inline errors. As
+ * everywhere else here, the server's pass is the one that counts.
+ */
+export function proposalCoreSchema(form: SubmissionForm = DEFAULT_SUBMISSION_FORM) {
+  return z
+    .object({
+      title: trimmed(LIMITS.title).min(1),
+      // Published verbatim in the public programme, hence the floor as well as the cap.
+      abstract: trimmed(LIMITS.abstractMax).min(LIMITS.abstractMin),
+      // Optional, committee-only. Without it, borderline proposals are hard to judge.
+      pitch: trimmed(LIMITS.pitchMax).optional(),
+      category: oneOf(form.category, 'notAnOption'),
+      format: oneOf(form.format, 'notAnOption'),
+      level: oneOf(form.level, 'notAnOption'),
+      deliveryLanguage: oneOf(form.deliveryLanguage, 'notAnOption'),
+      languagePreference: trimmed(LIMITS.languagePreferenceMax).optional(),
+    })
+    .superRefine((val, ctx) => {
+      // §4: the preference line only exists for `either`. Rejecting it elsewhere
+      // keeps stray values out of the scheduling dashboard. `either` is a fixed
+      // value for exactly this reason — see `shared/submissionForm.ts`.
+      if (val.deliveryLanguage !== 'either' && val.languagePreference) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['languagePreference'],
+          params: { key: 'languagePreferenceNotApplicable' },
+          message: 'Language preference only applies when you can present in either language.',
+        });
+      }
+    });
+}
+
+/**
+ * The acknowledgements, which are also per-CFP now.
+ *
+ * Every one of them must be `true`: they are consents, and an unticked consent
+ * is a no rather than a blank. A call that asks none of them validates an empty
+ * object, which is the correct answer to "no consents required".
+ */
+export function acksSchemaFor(form: SubmissionForm = DEFAULT_SUBMISSION_FORM) {
+  return z.object(
+    Object.fromEntries(form.acks.map((ack) => [ack.key, z.literal(true)])) as Record<
+      string,
+      z.ZodLiteral<true>
+    >,
+  );
+}
+
 /** The full payload the submission form sends to `submitProposal`. */
-export const submissionSchema = z.object({
-  proposal: proposalCoreSchema,
-  speaker: speakerSchema,
-  acks: acksSchema,
-  attendance: attendanceSchema,
-});
+export function submissionSchema(form: SubmissionForm = DEFAULT_SUBMISSION_FORM) {
+  return z.object({
+    proposal: proposalCoreSchema(form),
+    speaker: speakerSchema,
+    acks: acksSchemaFor(form),
+    attendance: attendanceSchema,
+  });
+}
 
-export type SubmissionInput = z.input<typeof submissionSchema>;
-export type SubmissionOutput = z.output<typeof submissionSchema>;
-
-/** Drafts autosave half-filled, so everything is optional until submit time. */
-export const draftSchema = submissionSchema.deepPartial();
-export type DraftInput = z.input<typeof draftSchema>;
+export interface SubmissionInput {
+  proposal: {
+    title: string;
+    abstract: string;
+    pitch?: string;
+    category: string;
+    format: string;
+    level: string;
+    deliveryLanguage: string;
+    languagePreference?: string;
+  };
+  speaker: z.input<typeof speakerSchema>;
+  acks: Record<string, boolean>;
+  attendance: z.input<typeof attendanceSchema>;
+}

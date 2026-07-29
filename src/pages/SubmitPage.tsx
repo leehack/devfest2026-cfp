@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import {
-  ATTENDANCE_STATUSES,
-  CATEGORIES,
-  DELIVERY_LANGUAGES,
-  FORMATS,
-  LEVELS,
-  LIMITS,
-  inStatusSet,
-} from '@shared/enums';
+import { ATTENDANCE_STATUSES, LIMITS, inStatusSet } from '@shared/enums';
 import { submissionSchema } from '@shared/schema';
+import {
+  DEFAULT_SUBMISSION_FORM,
+  asOptions,
+  type SubmissionForm,
+} from '@shared/submissionForm';
 
 import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../components/fields';
 import { Reveal } from '../components/Reveal';
@@ -29,6 +26,7 @@ import {
 } from '../lib/formState';
 import {
   loadConfirmForm,
+  loadSubmissionForm,
   loadMyProposals,
   saveDraft,
   submitProposal,
@@ -44,6 +42,7 @@ import {
   FORM_LIMITS,
   headshotPath,
   localised,
+  validateAnswers,
   type AnswerFaults,
   type AnswerValue,
   type Answers,
@@ -108,6 +107,29 @@ function TalkPicker({
       )}
       {atCap && <span className="talks__status">{t.form.talkCap(LIMITS.maxTalksPerSpeaker)}</span>}
     </nav>
+  );
+}
+
+/**
+ * An acknowledgement's text, plus the Code of Conduct link when there is one.
+ *
+ * The URL is a deployment setting (`VITE_COC_URL`) rather than part of the
+ * form, so it attaches to the seeded `coc` acknowledgement by key. An organiser
+ * writing their own puts the address in the label; that is one unclickable URL
+ * against a build-time variable every tenant would otherwise share.
+ */
+function AckLabel({ ack }: { ack: ConfirmField }) {
+  const { t, locale } = useI18n();
+  const text = localised(ack.label, locale);
+  const url = import.meta.env.VITE_COC_URL;
+  if (ack.key !== 'coc' || !url) return <>{text}</>;
+  return (
+    <>
+      {text}{' '}
+      <a href={url} target="_blank" rel="noreferrer">
+        {t.acks.cocLink}
+      </a>
+    </>
   );
 }
 
@@ -332,8 +354,8 @@ function StatusBanner({
 }
 
 /** Flattens zod issue paths into the dotted keys the fields look themselves up by. */
-function validate(form: FormState, t: Dictionary): Errors {
-  const result = submissionSchema.safeParse(toSubmission(form));
+function validate(form: FormState, shape: SubmissionForm, t: Dictionary): Errors {
+  const result = submissionSchema(shape).safeParse(toSubmission(form));
   if (result.success) return {};
   const errors: Errors = {};
   for (const issue of result.error.issues) {
@@ -364,8 +386,18 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [confirmForm, setConfirmForm] = useState<ConfirmForm>(EMPTY_FORM);
+  /** What this call asks for. Defaults until the config comes back, so the
+      dropdowns are never momentarily empty. */
+  const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [answers, setAnswers] = useState<Answers>({});
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
+  /**
+   * Faults on *this call's own* questions, kept apart from `answerFaults`.
+   * Those belong to the acceptance form and are filled in by the callable at
+   * confirmation time; sharing one map would let a stale confirmation fault
+   * mark a submission field red, and vice versa.
+   */
+  const [extraFaults, setExtraFaults] = useState<AnswerFaults>({});
   const [asking, setAsking] = useState(false);
 
   const dirty = useRef(false);
@@ -384,14 +416,16 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions] = await Promise.all([
+        const [{ talks: found, speaker: profile }, questions, asked] = await Promise.all([
           loadMyProposals(cfpId, user),
           loadConfirmForm(cfpId),
+          loadSubmissionForm(cfpId),
         ]);
         if (cancelled) return;
         setTalks(found);
         setSpeaker(profile);
         setConfirmForm(questions);
+        setShape(asked);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
@@ -459,8 +493,8 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   // Re-validate live once the applicant has seen errors, so fixes clear as they
   // type — and so switching language re-renders the messages in it.
   useEffect(() => {
-    if (showErrors) setErrors(validate(form, t));
-  }, [form, showErrors, t]);
+    if (showErrors) setErrors(validate(form, shape, t));
+  }, [form, shape, showErrors, t]);
 
   function markTalk(id: string, next: ProposalStatus, title?: string) {
     setTalks((prev) => {
@@ -517,10 +551,15 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const found = validate(form, t);
+    const found = validate(form, shape, t);
+    // The custom questions are not part of the zod schema — they are the
+    // confirmation form's field engine, so they get its validator. Same call
+    // the callable makes, so the browser refuses what the server would.
+    const { faults } = validateAnswers({ fields: shape.fields }, form.answers);
     setErrors(found);
+    setExtraFaults(faults);
     setShowErrors(true);
-    if (Object.keys(found).length > 0) {
+    if (Object.keys(found).length > 0 || Object.keys(faults).length > 0) {
       document.querySelector('.field--error, .checkbox.field--error')?.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
@@ -596,18 +635,20 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   // -------------------------------------------------------------- option sets
 
+  // The four taxonomy lists come from this call's own config; attendance does
+  // not, because it feeds `§5`'s funding logic rather than being a label set.
   const options = useMemo(
     () => ({
-      category: CATEGORIES.map((v) => ({ value: v, label: t.enums.category[v] })),
-      format: FORMATS.map((v) => ({ value: v, label: t.enums.format[v] })),
-      level: LEVELS.map((v) => ({ value: v, label: t.enums.level[v] })),
-      delivery: DELIVERY_LANGUAGES.map((v) => ({ value: v, label: t.enums.deliveryLanguage[v] })),
+      category: asOptions(shape.category, locale),
+      format: asOptions(shape.format, locale),
+      level: asOptions(shape.level, locale),
+      delivery: asOptions(shape.deliveryLanguage, locale),
       attendance: ATTENDANCE_STATUSES.map((v) => ({
         value: v,
         label: t.attendance[v],
       })),
     }),
-    [t],
+    [shape, locale, t],
   );
 
   const err = (key: string) => (showErrors ? errors[key] : undefined);
@@ -814,43 +855,38 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <SpeakerFields form={form} set={set} err={err} />
       </section>
 
-      {/* ---------------------------------------------------------- acks */}
-      <section className="section">
-        <h2>{t.sections.acks}</h2>
+      {/* --------------------------------------------- this call's own questions */}
+      {shape.fields.length > 0 && (
+        <section className="section">
+          <h2>{t.sections.extra}</h2>
+          <Questions
+            cfpId={cfpId}
+            uid={user.uid}
+            fields={shape.fields}
+            answers={form.answers}
+            faults={extraFaults}
+            busy={readOnly}
+            onAnswer={(key, value) => set('answers', { ...form.answers, [key]: value })}
+          />
+        </section>
+      )}
 
-        <Checkbox
-          label={t.acks.noTravelSupport}
-          checked={form.ackNoTravelSupport}
-          onChange={(v) => set('ackNoTravelSupport', v)}
-          error={err('acks.noTravelSupport')}
-          disabled={readOnly}
-        />
-        <Checkbox
-          label={
-            import.meta.env.VITE_COC_URL ? (
-              <>
-                {t.acks.coc}{' '}
-                <a href={import.meta.env.VITE_COC_URL} target="_blank" rel="noreferrer">
-                  {t.acks.cocLink}
-                </a>
-              </>
-            ) : (
-              t.acks.coc
-            )
-          }
-          checked={form.ackCoc}
-          onChange={(v) => set('ackCoc', v)}
-          error={err('acks.coc')}
-          disabled={readOnly}
-        />
-        <Checkbox
-          label={t.acks.recording}
-          checked={form.ackRecording}
-          onChange={(v) => set('ackRecording', v)}
-          error={err('acks.recording')}
-          disabled={readOnly}
-        />
-      </section>
+      {/* ---------------------------------------------------------- acks */}
+      {shape.acks.length > 0 && (
+        <section className="section">
+          <h2>{t.sections.acks}</h2>
+          {shape.acks.map((ack) => (
+            <Checkbox
+              key={ack.key}
+              label={<AckLabel ack={ack} />}
+              checked={form.acks[ack.key] === true}
+              onChange={(v) => set('acks', { ...form.acks, [ack.key]: v })}
+              error={err(`acks.${ack.key}`)}
+              disabled={readOnly}
+            />
+          ))}
+        </section>
+      )}
 
       {/*
         §3: attendance follows immediately after the acknowledgements. The

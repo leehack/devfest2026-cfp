@@ -451,6 +451,32 @@ export async function setConfirmFormDirect(fields: unknown[], cfpId = CFP_ID) {
   );
 }
 
+/**
+ * The whole submission-form config, written straight in. Only the keys given
+ * are sent; `mergeSubmissionForm` fills the rest from the defaults, which is
+ * exactly what a call with no document at all gets.
+ */
+export async function setSubmissionFormDirect(
+  form: Record<string, unknown[]>,
+  cfpId = CFP_ID,
+) {
+  await expectOk(
+    await fetch(`${DOCS}/cfps/${cfpId}/config/submissionForm`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+      body: JSON.stringify({
+        fields: Object.fromEntries(
+          Object.entries(form).map(([key, list]) => [
+            key,
+            { arrayValue: { values: list.map(encode) } },
+          ]),
+        ),
+      }),
+    }),
+    'setSubmissionFormDirect',
+  );
+}
+
 /** The inverse of `unwrap`: enough of it for a form definition. */
 function encode(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') return { stringValue: value };

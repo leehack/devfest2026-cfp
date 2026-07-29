@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { ZodIssue } from 'zod';
 import { submissionSchema } from '@shared/schema';
 import { LIMITS } from '@shared/enums';
 import { en } from '../src/i18n/en';
@@ -12,7 +13,9 @@ import { fr } from '../src/i18n/fr';
 import { validationMessage } from '../src/i18n/validation';
 
 function issuesFrom(input: unknown) {
-  const result = submissionSchema.safeParse(input);
+  // The default form — the DevFest taxonomy — is what these messages were
+  // written against, and it is what a call created today still starts with.
+  const result = submissionSchema().safeParse(input);
   if (result.success) throw new Error('expected this input to fail validation');
   return result.error.issues;
 }
@@ -93,7 +96,7 @@ describe.each(Object.entries(cases))('%s', (_label, input) => {
 
 describe('mapping choices', () => {
   const messageFor = (input: unknown, path: string) => {
-    const issue = issuesFrom(input).find((i) => i.path.join('.') === path);
+    const issue = issuesFrom(input).find((i: ZodIssue) => i.path.join('.') === path);
     if (!issue) throw new Error(`no issue at ${path}`);
     return validationMessage(issue, en);
   };
