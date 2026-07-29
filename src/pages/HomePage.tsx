@@ -126,7 +126,7 @@ function CfpCard({ cfp }: { cfp: CfpSummary }) {
 
   return (
     <li className="cfp-list__item">
-      <Link className="cfp-list__link" to={href({ route: 'form', cfpId: cfp.id })}>
+      <Link className="cfp-list__link" to={href({ route: 'cfp', cfpId: cfp.id })}>
         {cfp.name}
       </Link>
       <span className="cfp-list__meta">

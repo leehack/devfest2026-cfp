@@ -373,6 +373,43 @@ p {
   font-size: var(--text-md);
 }
 
+/* ------------------------------------------------- a call's public front page */
+
+/* Set a step up from body copy: this is the one page somebody reads before
+   deciding to submit, rather than a form they are working through. */
+.cfp-page__blurb {
+  margin: 0 0 var(--s-4);
+  font-size: var(--text-lg);
+  line-height: 1.65;
+}
+
+.facts {
+  display: grid;
+  gap: var(--s-3) var(--s-5);
+  margin: var(--s-5) 0 0;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Label beside value once there is room — a date and a city are short, and
+   stacking them wastes a screen on four words. */
+@media (min-width: 34rem) {
+  .facts > div {
+    display: grid;
+    grid-template-columns: minmax(0, 8rem) minmax(0, 1fr);
+    gap: var(--s-4);
+    align-items: baseline;
+  }
+}
+
 /* Marks the speaker profile as belonging to the account rather than the talk. */
 .section--account {
   padding: var(--s-5);
@@ -865,6 +902,9 @@ p {
   line-height: 1.4;
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease, transform 0.06s ease;
+  /* The front page's call to action is a link, because it goes somewhere. It
+     still has to look like the buttons beside it. */
+  text-decoration: none;
 }
 
 .btn:hover:not(:disabled) {

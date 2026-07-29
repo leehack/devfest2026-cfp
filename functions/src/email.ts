@@ -76,8 +76,14 @@ export async function loadPlatform(db: Firestore): Promise<Platform> {
   };
 }
 
-/** Where one CFP lives, which is what a speaker's mail should point at. */
-export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/c/${cfpId}`;
+/**
+ * Where a speaker's own proposal lives, which is what their mail points at.
+ *
+ * The submission page rather than the CFP's front page: every message that
+ * carries this link is about a talk — confirm it, revise it, read the decision —
+ * and a marketing page is not an answer to any of those.
+ */
+export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/c/${cfpId}/submit`;
 
 const configDoc = (db: Firestore, cfpId: string) => db.doc(`cfps/${cfpId}/config/email`);
 

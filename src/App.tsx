@@ -16,6 +16,7 @@ import { SubmitPage } from './pages/SubmitPage';
 import { AdminPage } from './pages/AdminPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { HomePage } from './pages/HomePage';
+import { CfpPage } from './pages/CfpPage';
 import { NewCfpPage } from './pages/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
@@ -119,7 +120,7 @@ export function App() {
             and review are tables you scan, and 46rem on a wide screen wasted
             it. Left-aligned rather than centred, so the column starts under the
             title instead of floating away from it. */}
-        <main className={`main${route === 'form' || route === 'new' ? ' main--narrow' : ''}`}>
+        <main className={`main${route === 'form' || route === 'new' || route === 'cfp' ? ' main--narrow' : ''}`}>
           {!authReady || !cfpReady ? (
             <p className="muted">{t.app.loading}</p>
           ) : (
@@ -189,6 +190,11 @@ function Routed({ place, user, cfp, role, roleReady }: RoutedProps) {
       </div>
     );
   }
+
+  // The front page is public on purpose: it is the one screen whose audience
+  // has not signed in, and being asked to before reading what the event is
+  // would be asking in the wrong order.
+  if (route === 'cfp') return <CfpPage cfp={cfp} cfpId={cfpId} />;
 
   if (route === 'form') return <FormRoute user={user} cfp={cfp} cfpId={cfpId} />;
 

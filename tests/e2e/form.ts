@@ -20,8 +20,11 @@ export const check = (page: Page, label: string) =>
  * A path inside the CFP these specs work on. Every page but the home listing
  * and the create form lives under `/c/{cfpId}`, so writing that out in each
  * spec would be the same string forty times.
+ *
+ * The submission page by default, because that is what almost every spec here
+ * is about. `at('')` is the public front page.
  */
-export const at = (sub = '') => `/c/${CFP_ID}${sub}`;
+export const at = (sub = '/submit') => `/c/${CFP_ID}${sub}`;
 
 export async function signIn(page: Page) {
   await page.goto(at());

@@ -18,7 +18,7 @@ import type {
   SocialPlatform,
 } from './enums';
 import type { Answers } from './confirmForm';
-import type { CfpRole, GrantableRole, Visibility } from './cfp';
+import type { CfpProfile, CfpRole, GrantableRole, Visibility } from './cfp';
 
 export interface Social {
   platform: SocialPlatform;
@@ -55,7 +55,7 @@ export interface Speaker {
  * `cfps/{cfpId}` — one call for proposals, and the tenant everything else
  * hangs under. The document id is the slug; see `shared/cfp.ts`.
  */
-export interface Cfp {
+export interface Cfp extends CfpProfile {
   name: string;
   /** Denormalised from `members`, so "the CFPs I own" is one query. */
   ownerUids: string[];

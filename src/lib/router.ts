@@ -14,7 +14,7 @@ import { validateCfpId } from '@shared/cfp';
  *
  * `adoptLegacyHash` handles the links that were mailed before the move.
  */
-export type Route = 'home' | 'new' | 'form' | 'admin' | 'review';
+export type Route = 'home' | 'new' | 'cfp' | 'form' | 'admin' | 'review';
 
 /**
  * The admin screen is five unrelated jobs, so it is five tabs rather than one
@@ -55,7 +55,16 @@ export function placeOf(path: string): Place {
   const [prefix, cfpId = '', section = '', tab = ''] = trimmed.split('/');
   if (prefix !== 'c' || validateCfpId(cfpId) !== null) return HOME;
 
-  const route: Route = section === 'admin' ? 'admin' : section === 'review' ? 'review' : 'form';
+  // Anything unrecognised under a CFP is its front page, for the same reason
+  // the root is: a stale link should land somewhere, not nowhere.
+  const route: Route =
+    section === 'admin'
+      ? 'admin'
+      : section === 'review'
+        ? 'review'
+        : section === 'submit'
+          ? 'form'
+          : 'cfp';
   return { route, cfpId, tab: isTab(tab) ? tab : ADMIN_TABS[0] };
 }
 
@@ -68,7 +77,8 @@ export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTa
   if (place.route === 'home') return '/';
   if (place.route === 'new') return '/new';
   const base = `/c/${place.cfpId}`;
-  if (place.route === 'form') return base;
+  if (place.route === 'cfp') return base;
+  if (place.route === 'form') return `${base}/submit`;
   if (place.route === 'admin') return place.tab ? `${base}/admin/${place.tab}` : `${base}/admin`;
   return `${base}/review`;
 }
@@ -86,7 +96,13 @@ export function adoptLegacyHash(): void {
   if (!hash.startsWith('#/')) return;
   // Only from the root: a path that already says where it is going wins over a
   // fragment, which by then is a leftover rather than an instruction.
-  const path = pathname === '/' ? href(placeOf(hash.slice(1))) : pathname;
+  //
+  // `#/c/{id}` is read as the form, not as the front page. That is what it
+  // meant when those links were written — the front page did not exist — and an
+  // acceptance saying "confirm your talk here" should still land on the talk.
+  const was = placeOf(hash.slice(1));
+  const meant = was.route === 'cfp' ? { ...was, route: 'form' as const } : was;
+  const path = pathname === '/' ? href(meant) : pathname;
   window.history.replaceState(null, '', `${path}${search}`);
 }
 

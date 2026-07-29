@@ -10,6 +10,8 @@
  * and in the callable that actually enforces it.
  */
 
+import type { Localised } from './confirmForm';
+
 export const VISIBILITIES = ['public', 'private'] as const;
 export type Visibility = (typeof VISIBILITIES)[number];
 
@@ -36,9 +38,32 @@ export const CFP_LIMITS = {
   idMin: 3,
   idMax: 60,
   nameMax: 120,
+  descriptionMax: 2000,
+  venueMax: 160,
+  locationMax: 120,
+  websiteMax: 200,
   /** Per account. A platform anyone can create on needs a ceiling somewhere. */
   perOwner: 10,
 } as const;
+
+/**
+ * What the call is and where the event is — the half of a CFP that is for the
+ * people reading it rather than for the machinery.
+ *
+ * Every field is optional. A call with nothing filled in is a working call, and
+ * an organiser who has not decided on a venue yet should not be blocked from
+ * opening submissions.
+ */
+export interface CfpProfile {
+  /** The pitch. Also what a link preview and a search result quote. */
+  description?: Localised;
+  /** The event itself, not the deadline. `YYYY-MM-DD`: a day, not an instant. */
+  eventDate?: string;
+  venue?: string;
+  /** City and region — "Montréal, QC". Speakers plan travel from this. */
+  location?: string;
+  website?: string;
+}
 
 /**
  * Lower case, digits and single hyphens. Deliberately narrow: this string ends
@@ -48,7 +73,18 @@ export const CFP_LIMITS = {
  */
 const ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-export type CfpProblem = 'idFormat' | 'idLength' | 'nameEmpty' | 'nameLong' | 'visibility';
+export type CfpProblem =
+  | 'idFormat'
+  | 'idLength'
+  | 'nameEmpty'
+  | 'nameLong'
+  | 'visibility'
+  | 'descriptionLong'
+  | 'venueLong'
+  | 'locationLong'
+  | 'websiteLong'
+  | 'websiteScheme'
+  | 'eventDate';
 
 export function validateCfpId(id: string): CfpProblem | null {
   if (id.length < CFP_LIMITS.idMin || id.length > CFP_LIMITS.idMax) return 'idLength';
@@ -64,6 +100,36 @@ export function validateCfp(input: { id: string; name: string; visibility: strin
   if (name.length > CFP_LIMITS.nameMax) return 'nameLong';
 
   return (VISIBILITIES as readonly string[]).includes(input.visibility) ? null : 'visibility';
+}
+
+/**
+ * The event details, which are all optional and all free text.
+ *
+ * The one that is not merely a length check is the website: it is rendered as a
+ * link, and `javascript:` in an href is a script the organiser did not write
+ * running on a page speakers trust. Only http and https are allowed through.
+ */
+export function validateProfile(profile: CfpProfile): CfpProblem | null {
+  const description = profile.description;
+  const longest = Math.max((description?.en ?? '').length, (description?.fr ?? '').length);
+  if (longest > CFP_LIMITS.descriptionMax) return 'descriptionLong';
+
+  if ((profile.venue ?? '').length > CFP_LIMITS.venueMax) return 'venueLong';
+  if ((profile.location ?? '').length > CFP_LIMITS.locationMax) return 'locationLong';
+
+  const website = (profile.website ?? '').trim();
+  if (website) {
+    if (website.length > CFP_LIMITS.websiteMax) return 'websiteLong';
+    if (!/^https?:\/\/[^\s]+$/i.test(website)) return 'websiteScheme';
+  }
+
+  const eventDate = (profile.eventDate ?? '').trim();
+  // The date input already produces this shape; the check is for everything
+  // that does not come from the date input.
+  if (eventDate && !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) return 'eventDate';
+  if (eventDate && Number.isNaN(Date.parse(`${eventDate}T00:00:00Z`))) return 'eventDate';
+
+  return null;
 }
 
 /**

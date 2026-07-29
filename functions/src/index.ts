@@ -41,7 +41,14 @@ import {
   type Answers,
   type ConfirmForm,
 } from '../../shared/confirmForm';
-import { CFP_LIMITS, validateCfp, validateCfpId, type CfpRole } from '../../shared/cfp';
+import {
+  CFP_LIMITS,
+  validateCfp,
+  validateCfpId,
+  validateProfile,
+  type CfpProfile,
+  type CfpRole,
+} from '../../shared/cfp';
 import type { SpeakerSnapshot } from '../../shared/types';
 import { claim, grant, revoke, RoleError } from './roles';
 import {
@@ -65,6 +72,7 @@ import {
 } from './domains';
 
 export { sendQueuedEmail } from './email';
+export { cfpPage } from './cfpPage';
 
 initializeApp();
 const db = getFirestore();
@@ -888,7 +896,42 @@ export const createCfp = onCall(CALLABLE, async (request) => {
   return { ok: true, cfpId: input.id };
 });
 
-/** The name and who can find it. Admin, because neither is destructive. */
+/** Trims what arrived and keeps only the shape `validateProfile` knows about. */
+function readProfile(data: Record<string, unknown>): CfpProfile {
+  const text = (value: unknown) => String(value ?? '').trim();
+  const description = (data.description ?? {}) as Record<string, unknown>;
+  return {
+    description: { en: text(description.en), fr: text(description.fr) },
+    eventDate: text(data.eventDate),
+    venue: text(data.venue),
+    location: text(data.location),
+    website: text(data.website),
+  };
+}
+
+/**
+ * The same profile as something to write, with the empty fields deleted rather
+ * than stored blank.
+ *
+ * Absent has to mean absent: the landing page decides whether to render a venue
+ * line by whether there is a venue, and an empty string is not the same answer
+ * as no answer — it is a heading over nothing.
+ */
+function writableProfile(profile: CfpProfile): Record<string, unknown> {
+  const description = profile.description;
+  const anyDescription = Boolean(description?.en || description?.fr);
+  return {
+    description: anyDescription
+      ? { en: description!.en, ...(description!.fr ? { fr: description!.fr } : {}) }
+      : FieldValue.delete(),
+    eventDate: profile.eventDate || FieldValue.delete(),
+    venue: profile.venue || FieldValue.delete(),
+    location: profile.location || FieldValue.delete(),
+    website: profile.website || FieldValue.delete(),
+  };
+}
+
+/** The name, who can find it, and what it says about the event. */
 export const updateCfp = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'change this call for proposals');
@@ -899,9 +942,14 @@ export const updateCfp = onCall(CALLABLE, async (request) => {
   const fault = validateCfp({ id: cfpId, name, visibility });
   if (fault) throw new HttpsError('invalid-argument', fault);
 
+  const profile = readProfile(data);
+  const profileFault = validateProfile(profile);
+  if (profileFault) throw new HttpsError('invalid-argument', profileFault);
+
   await db.doc(`cfps/${cfpId}`).update({
     name,
     visibility,
+    ...writableProfile(profile),
     updatedAt: FieldValue.serverTimestamp(),
   });
   logger.info('cfp updated', { cfpId, byUid });

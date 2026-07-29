@@ -27,8 +27,11 @@ account, not to any one talk), `signInLinks` (a platform-wide throttle) and
 `config/platform` sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
-and then `/c/{cfpId}` is the submission form, `/review` is for anyone holding a
-role on it and `/admin/{tab}` is for its admins. Everyone may submit a talk,
+and then `/c/{cfpId}` is that call's public page, `/submit` the form, `/review`
+for anyone holding a role on it and `/admin/{tab}` for its admins. The public
+page is served by `cfpPage`, a Hosting rewrite that puts the call's own title
+and description into the HTML — a crawler and a link preview never run the
+script, so `document.title` alone buys nothing. Everyone may submit a talk,
 reviewers and admins included — they simply never get their own in the queue.
 
 A call is **public** (listed on the home page) or **private** (unlisted, but

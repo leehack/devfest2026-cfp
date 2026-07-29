@@ -22,6 +22,8 @@ import type { EditScope } from './lifecycle';
 import { LIMITS, type ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
 import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
+import type { CfpProfile, Visibility } from '@shared/cfp';
+import type { Cfp } from '@shared/types';
 
 export interface CfpWindow {
   name: string;
@@ -30,6 +32,13 @@ export interface CfpWindow {
   paused: boolean;
   /** Archived reads as closed, and is checked first — see `assertCfpOpen`. */
   state: 'before' | 'open' | 'paused' | 'closed' | 'archived';
+  /**
+   * What the front page says about the event. Carried here rather than fetched
+   * again because this already reads the whole document — the window and the
+   * description live in the same one.
+   */
+  profile: CfpProfile;
+  visibility: Visibility;
 }
 
 /**
@@ -40,13 +49,7 @@ export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
   const snap = await getDoc(doc(db, 'cfps', cfpId));
   if (!snap.exists()) return null;
 
-  const data = snap.data() as {
-    opensAt: Timestamp;
-    closesAt: Timestamp;
-    paused: boolean;
-    archived?: boolean;
-    name?: string;
-  };
+  const data = snap.data() as Cfp & { opensAt: Timestamp; closesAt: Timestamp };
   const opensAt = data.opensAt.toDate();
   const closesAt = data.closesAt.toDate();
   const now = Date.now();
@@ -59,7 +62,21 @@ export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
   else if (now < opensAt.getTime()) state = 'before';
   else if (now >= closesAt.getTime()) state = 'closed';
 
-  return { name: data.name ?? cfpId, opensAt, closesAt, paused: data.paused, state };
+  return {
+    name: data.name ?? cfpId,
+    opensAt,
+    closesAt,
+    paused: data.paused,
+    state,
+    visibility: data.visibility ?? 'public',
+    profile: {
+      description: data.description,
+      eventDate: data.eventDate,
+      venue: data.venue,
+      location: data.location,
+      website: data.website,
+    },
+  };
 }
 
 export interface LoadedProposal {

@@ -43,8 +43,10 @@ the account), `signInLinks` (a platform-wide throttle) and `config/platform` sit
 outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
 
 Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
-to start one, then `/c/{cfpId}` the form, `/review` for any role-holder and
-`/admin/{tab}` for admins. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
+to start one, then `/c/{cfpId}` the call's public page, `/c/{cfpId}/submit` the
+form, `/review` for any role-holder and `/admin/{tab}` for admins. Only
+`/c/{cfpId}` — one segment — is rewritten to the `cfpPage` function for its meta
+tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
 `owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
 until its holder first visits. Only an owner archives, deletes or is written by
 `createCfp`; `owner` is deliberately not grantable through `grantRole`.
@@ -165,6 +167,14 @@ collection — the rule names `confirmForm`.
   Local-only values go in `.env.local`, which the emulator reads and deploy
   ignores. The link's default is now derived from `GCLOUD_PROJECT`, and an
   organiser overrides it in `/admin` for a custom domain.
+- **`/robots.txt` cannot be tested against the emulator.** The functions
+  emulator runtime swallows `/favicon.ico` and `/robots.txt` before any handler
+  sees them (`app.all("/favicon.ico|/robots.txt", … 404)` in
+  `firebase-tools/lib/emulator/functionsEmulatorRuntime.js`). Nothing in the
+  deployed runtime does that, so `cfpPage` serves it fine in production and
+  404s locally. `/sitemap.xml` goes through the same rewrite and *does* work
+  locally, which is what makes the difference confusing rather than obvious —
+  check robots against the deployed site.
 - **`#/c/{id}` links are still out there.** The router moved from the hash to the
   path so a call for proposals could have a public page a crawler and a link
   preview can read. Every acceptance and sign-in link mailed before that carries

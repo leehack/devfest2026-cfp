@@ -48,7 +48,7 @@ test.describe('addresses', () => {
    */
   test('an old link to a call that is gone keeps its address', async ({ page }) => {
     await page.goto('/#/c/no-such-call-here');
-    await expect(page).toHaveURL('/c/no-such-call-here');
+    await expect(page).toHaveURL('/c/no-such-call-here/submit');
     await expect(
       page.getByText('There is no call for proposals at this address.'),
     ).toBeVisible();
@@ -61,7 +61,7 @@ test.describe('addresses', () => {
     await page.evaluate(() => ((window as Window & { kept?: boolean }).kept = true));
 
     await page.getByRole('link', { name: 'DevFest Montréal 2026' }).click();
-    await expect(page).toHaveURL(at());
+    await expect(page).toHaveURL(at(''));
     expect(await page.evaluate(() => (window as Window & { kept?: boolean }).kept)).toBe(true);
 
     await page.goBack();

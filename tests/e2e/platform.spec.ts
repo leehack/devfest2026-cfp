@@ -54,8 +54,12 @@ test.describe('the front door', () => {
   test('a private call is unlisted, not secret — its link still opens', async ({ page }) => {
     await seedCfp(OTHER, { name: 'Someone Else’s Conf', visibility: 'private' });
 
+    // Its front page opens for anyone holding the link...
     await page.goto(`/c/${OTHER}`);
     await expect(page.getByRole('heading', { name: 'Someone Else’s Conf' })).toBeVisible();
+
+    // ...and so does the form behind it, which is what the link is for.
+    await page.goto(`/c/${OTHER}/submit`);
     await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
   });
 

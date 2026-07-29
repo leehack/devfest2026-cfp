@@ -14,7 +14,22 @@
   "hosting": {
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [{ "source": "**", "destination": "/index.html" }],
+    "rewrites": [
+      {
+        "//": "A single segment on purpose. `/c/{id}` is the public front page and the only address whose HTML has to carry its own meta tags; `/c/{id}/submit` and the admin tabs stay static files off the CDN, because nobody should pay a function invocation to open a form. Ordered before the catch-all: the first matching rewrite wins.",
+        "source": "/c/*",
+        "function": { "functionId": "cfpPage", "region": "northamerica-northeast1" }
+      },
+      {
+        "source": "/robots.txt",
+        "function": { "functionId": "cfpPage", "region": "northamerica-northeast1" }
+      },
+      {
+        "source": "/sitemap.xml",
+        "function": { "functionId": "cfpPage", "region": "northamerica-northeast1" }
+      },
+      { "source": "**", "destination": "/index.html" }
+    ],
     "headers": [
       {
         "//": "Hosting defaults HTML to max-age=3600. A deploy replaces the hashed assets, so for the next hour a returning visitor can hold an index.html naming files that no longer exist — which renders as a blank page, not an error. Assets keep the default: their names change with their contents. Every address the shell is served at needs its own entry, because headers match the request path and a rewritten one no longer ends in .html — that is why the list grew when routing moved off the hash.",
@@ -26,7 +41,16 @@
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       },
       {
-        "source": "/c/**",
+        "//": "Not `/c/**`: that would cover `/c/{id}`, which `cfpPage` serves with a Cache-Control of its own, and a header set here wins over one set by the function.",
+        "source": "/c/*/submit",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/c/*/review",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      },
+      {
+        "source": "/c/*/admin/**",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       },
       {

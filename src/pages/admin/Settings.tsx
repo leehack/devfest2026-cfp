@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { Checkbox, RadioGroup, TextField } from '../../components/fields';
+import { Checkbox, RadioGroup, TextAreaField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n';
 import { toDate, toDateTimeInput } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
@@ -14,6 +14,12 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
   const { t } = useI18n();
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('public');
+  const [descriptionEn, setDescriptionEn] = useState('');
+  const [descriptionFr, setDescriptionFr] = useState('');
+  const [eventDate, setEventDate] = useState('');
+  const [venue, setVenue] = useState('');
+  const [place, setPlace] = useState('');
+  const [website, setWebsite] = useState('');
   const [archived, setArchived] = useState(false);
   const [opensAt, setOpensAt] = useState('');
   const [closesAt, setClosesAt] = useState('');
@@ -29,6 +35,12 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
       if (!cfp) return;
       setName(cfp.name ?? '');
       setVisibility((cfp.visibility ?? 'public') as Visibility);
+      setDescriptionEn(cfp.description?.en ?? '');
+      setDescriptionFr(cfp.description?.fr ?? '');
+      setEventDate(cfp.eventDate ?? '');
+      setVenue(cfp.venue ?? '');
+      setPlace(cfp.location ?? '');
+      setWebsite(cfp.website ?? '');
       setArchived(cfp.archived === true);
       setOpensAt(toDateTimeInput(toDate(cfp.opensAt)));
       setClosesAt(toDateTimeInput(toDate(cfp.closesAt)));
@@ -91,13 +103,81 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
           {t.admin.identityAddress.replace('{url}', `${location.origin}/c/${cfpId}`)}
         </p>
 
+        {/* Everything below is the public page rather than the machinery, but it
+            saves with the name above: two Save buttons on one form is two ways
+            to lose the half you did not press. */}
+        <h3 className="card__subtitle">{t.admin.about}</h3>
+        <p className="field__help">{t.admin.aboutHelp}</p>
+
+        <TextAreaField
+          label={t.admin.descriptionEn}
+          value={descriptionEn}
+          onChange={setDescriptionEn}
+          maxLength={CFP_LIMITS.descriptionMax}
+          rows={5}
+          disabled={busy}
+        />
+        <TextAreaField
+          label={t.admin.descriptionFr}
+          help={t.admin.descriptionFrHelp}
+          value={descriptionFr}
+          onChange={setDescriptionFr}
+          maxLength={CFP_LIMITS.descriptionMax}
+          rows={5}
+          disabled={busy}
+        />
+
+        <div className="grid grid--2">
+          <TextField
+            label={t.admin.eventDate}
+            type="date"
+            value={eventDate}
+            onChange={setEventDate}
+            disabled={busy}
+          />
+          <TextField
+            label={t.admin.eventWebsite}
+            type="url"
+            value={website}
+            onChange={setWebsite}
+            maxLength={CFP_LIMITS.websiteMax}
+            placeholder="https://"
+            disabled={busy}
+          />
+          <TextField
+            label={t.admin.eventVenue}
+            value={venue}
+            onChange={setVenue}
+            maxLength={CFP_LIMITS.venueMax}
+            disabled={busy}
+          />
+          <TextField
+            label={t.admin.eventLocation}
+            help={t.admin.eventLocationHelp}
+            value={place}
+            onChange={setPlace}
+            maxLength={CFP_LIMITS.locationMax}
+            disabled={busy}
+          />
+        </div>
+
         <button
           type="button"
           className="btn btn--primary"
           disabled={busy || !name.trim()}
           onClick={() =>
             run(
-              async () => void (await updateCfp({ cfpId, name: name.trim(), visibility })),
+              async () =>
+                void (await updateCfp({
+                  cfpId,
+                  name: name.trim(),
+                  visibility,
+                  description: { en: descriptionEn.trim(), fr: descriptionFr.trim() },
+                  eventDate: eventDate.trim(),
+                  venue: venue.trim(),
+                  location: place.trim(),
+                  website: website.trim(),
+                })),
               t.admin.identitySaved,
             )
           }

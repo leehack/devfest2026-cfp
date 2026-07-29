@@ -89,6 +89,17 @@ export const en = {
     } as Record<string, string>,
   },
 
+  cfpPage: {
+    when: 'When',
+    where: 'Where',
+    website: 'Website',
+    noDescription: 'The organisers have not described this event yet.',
+    submitting: 'Submitting a talk',
+    submitAction: 'Submit a talk',
+    /** Closed, but a speaker who already submitted still has something to see. */
+    submitClosedAction: 'Go to the submission page',
+  },
+
   window: {
     notOpen: 'The call for proposals is not open yet.',
     opensAt: 'It opens on',
@@ -384,6 +395,18 @@ export const en = {
     identitySave: 'Save',
     identitySaved: 'Saved.',
     identityAddress: 'Its address is {url} — that part cannot be changed.',
+
+    about: 'About the event',
+    aboutHelp:
+      'This is the public page at that address, and what a link to it shows when somebody shares it.',
+    descriptionEn: 'Description (English)',
+    descriptionFr: 'Description (French)',
+    descriptionFrHelp: 'Left empty, French readers see the English.',
+    eventDate: 'Date of the event',
+    eventVenue: 'Venue',
+    eventLocation: 'City',
+    eventLocationHelp: 'Speakers plan travel from this.',
+    eventWebsite: 'Event website',
 
     archive: 'Archiving',
     archiveHelp:

@@ -5,7 +5,7 @@ import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
 import type { ProposalStatus } from '@shared/enums';
-import type { CfpRole, Visibility } from '@shared/cfp';
+import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
 import type { ConfirmField } from '@shared/confirmForm';
@@ -51,7 +51,7 @@ export const createCfp = httpsCallable<
 >(functions, 'createCfp');
 
 export const updateCfp = httpsCallable<
-  In<{ name: string; visibility: Visibility }>,
+  In<{ name: string; visibility: Visibility } & CfpProfile>,
   { ok: boolean }
 >(functions, 'updateCfp');
 

@@ -87,6 +87,16 @@ export const fr: Dictionary = {
     } as Record<string, string>,
   },
 
+  cfpPage: {
+    when: 'Quand',
+    where: 'Où',
+    website: 'Site web',
+    noDescription: 'Les organisateurs n’ont pas encore décrit cet événement.',
+    submitting: 'Proposer une conférence',
+    submitAction: 'Proposer une conférence',
+    submitClosedAction: 'Aller à la page de soumission',
+  },
+
   window: {
     notOpen: "L'appel à conférences n'est pas encore ouvert.",
     opensAt: 'Il ouvre le',
@@ -383,6 +393,18 @@ export const fr: Dictionary = {
     identitySave: 'Enregistrer',
     identitySaved: 'Enregistré.',
     identityAddress: 'Son adresse est {url} — cette partie ne peut pas changer.',
+
+    about: 'À propos de l’événement',
+    aboutHelp:
+      'Voici la page publique à cette adresse, et ce qu’un lien vers elle affiche lorsqu’on la partage.',
+    descriptionEn: 'Description (anglais)',
+    descriptionFr: 'Description (français)',
+    descriptionFrHelp: 'Laissée vide, les lecteurs francophones voient l’anglais.',
+    eventDate: 'Date de l’événement',
+    eventVenue: 'Lieu',
+    eventLocation: 'Ville',
+    eventLocationHelp: 'Les conférenciers planifient leur voyage à partir de cette information.',
+    eventWebsite: 'Site web de l’événement',
 
     archive: 'Archivage',
     archiveHelp:
