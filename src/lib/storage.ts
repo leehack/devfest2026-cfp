@@ -16,6 +16,7 @@
 import type { FirebaseStorage } from 'firebase/storage';
 
 import { app } from '../firebase';
+import { USE_EMULATORS } from './env';
 
 let cached: Promise<FirebaseStorage> | null = null;
 
@@ -28,7 +29,7 @@ export function storage(): Promise<FirebaseStorage> {
   cached ??= (async () => {
     const { connectStorageEmulator, getStorage } = await import('firebase/storage');
     const instance = getStorage(app);
-    if (import.meta.env.VITE_USE_EMULATORS === 'true') {
+    if (USE_EMULATORS) {
       connectStorageEmulator(instance, '127.0.0.1', 9199);
     }
     return instance;

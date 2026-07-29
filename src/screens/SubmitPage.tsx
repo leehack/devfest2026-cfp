@@ -15,6 +15,7 @@ import { SessionizeImport } from '../components/SessionizeImport';
 import { SpeakerFields } from '../components/SpeakerFields';
 import { formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
+import { COC_URL } from '../lib/env';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
@@ -115,7 +116,7 @@ function TalkPicker({
 /**
  * An acknowledgement's text, plus the Code of Conduct link when there is one.
  *
- * The URL is a deployment setting (`VITE_COC_URL`) rather than part of the
+ * The URL is a deployment setting (`NEXT_PUBLIC_COC_URL`) rather than part of the
  * form, so it attaches to the seeded `coc` acknowledgement by key. An organiser
  * writing their own puts the address in the label; that is one unclickable URL
  * against a build-time variable every tenant would otherwise share.
@@ -123,7 +124,7 @@ function TalkPicker({
 function AckLabel({ ack }: { ack: ConfirmField }) {
   const { t, locale } = useI18n();
   const text = localised(ack.label, locale);
-  const url = import.meta.env.VITE_COC_URL;
+  const url = COC_URL;
   if (ack.key !== 'coc' || !url) return <>{text}</>;
   return (
     <>

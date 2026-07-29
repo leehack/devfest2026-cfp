@@ -9,7 +9,7 @@
 import { expect, test } from '@playwright/test';
 
 import { createAccount, readSpeaker, reset, seedSpeaker } from './backend';
-import { at, field, signInAs, type Identity } from './form';
+import { at, field, signInAs, type Identity, alerts } from './form';
 
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 
@@ -45,7 +45,7 @@ test.describe('the speaker profile', () => {
     // No bio, which the schema requires with a floor.
     await page.getByRole('button', { name: 'Save profile' }).click();
 
-    await expect(page.getByRole('alert').first()).toBeVisible();
+    await expect(alerts(page).first()).toBeVisible();
     await expect(page.getByText('Saved.')).toHaveCount(0);
     expect(await readSpeaker((await createAccount(SPEAKER)).uid)).toBeUndefined();
   });

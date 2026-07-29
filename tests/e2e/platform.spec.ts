@@ -30,7 +30,7 @@ import {
   seedSpeaker,
   storeObjectDirect,
 } from './backend';
-import { at, signInAs } from './form';
+import { at, signInAs, alerts } from './form';
 
 const OTHER = 'someone-elses-conf';
 
@@ -110,7 +110,7 @@ test.describe('the front door', () => {
     await page.getByRole('textbox', { name: /^Address/ }).fill(CFP_ID);
     await page.getByRole('button', { name: 'Create it' }).click();
 
-    await expect(page.getByRole('alert')).toContainText('That address is taken.');
+    await expect(alerts(page)).toContainText('That address is taken.');
   });
 });
 

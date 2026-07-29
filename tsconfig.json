@@ -1,28 +1,12 @@
 {
+  "//": "Next's. It rewrites this file to suit itself, so every flag it must not own lives in tsconfig.base.json and the tests use tsconfig.test.json.",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "jsx": "react-jsx",
-
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": false,
-
-    "baseUrl": ".",
-    "paths": {
-      "@shared/*": ["shared/*"]
-    }
+    "jsx": "preserve",
+    "allowJs": true,
+    "incremental": true,
+    "plugins": [{ "name": "next" }]
   },
-  "include": ["src", "shared", "tests", "vite.config.ts"]
+  "include": ["next-env.d.ts", "src", "shared", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", ".next", "functions", "tests", "scripts"]
 }

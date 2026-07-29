@@ -116,7 +116,7 @@ async function waitForEmulators() {
  * anything else is reported and left alone, because port 8080 is popular.
  */
 function reclaimPorts() {
-  const ours = /cloud-firestore-emulator|firebase|emulator|[/\\]vite$|[/\\]vite\s/i;
+  const ours = /cloud-firestore-emulator|firebase|emulator|[/\\]vite$|[/\\]vite\s|next-server|[/\\]next\s|next dev/i;
 
   for (const [name, host] of Object.entries({ firestore: FIRESTORE, auth: AUTH, functions: FUNCTIONS })) {
     const port = host.split(':')[1];
@@ -242,4 +242,4 @@ await runToCompletion(
 );
 
 console.log(`\n▸ dev server on http://localhost:5173/c/${DEV_CFP}\n`);
-run('npx', ['vite'], { env }).on('exit', (code) => void shutdown(code ?? 0));
+run('npx', ['next', 'dev', '-p', '5173'], { env }).on('exit', (code) => void shutdown(code ?? 0));

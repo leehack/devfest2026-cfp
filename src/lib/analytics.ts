@@ -16,7 +16,7 @@
  * send it to a third party. `track()` takes `Record<string, string | number>`
  * rather than `unknown` so a whole object cannot be passed in by accident.
  *
- * With no `VITE_FIREBASE_MEASUREMENT_ID` this is inert — every call returns
+ * With no `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` this is inert — every call returns
  * without doing anything. That is the state of the emulator, of anyone else
  * deploying the platform, and of production until GA4 is linked in the console.
  */
@@ -26,8 +26,9 @@ import type { Analytics } from 'firebase/analytics';
 import { app } from '../firebase';
 import { pageShape } from './router';
 import { granted } from './consent';
+import { MEASUREMENT_ID } from './env';
 
-const MEASUREMENT_ID = import.meta.env.VITE_FIREBASE_MEASUREMENT_ID as string | undefined;
+
 
 /**
  * Configured at all? Everything else is a no-op when this is false, and the

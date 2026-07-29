@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readProposal, reset, setCfpWindow } from './backend';
-import { COMPLETE, field, fillRequired, signIn, waitForSave } from './form';
+import { COMPLETE, field, fillRequired, signIn, waitForSave, alerts } from './form';
 
 test.beforeEach(async () => {
   await reset();
@@ -107,7 +107,7 @@ test.describe('submitting', () => {
     await setCfpWindow({ closesAt: new Date(Date.now() - 1000) });
     await page.getByRole('button', { name: 'Submit proposal' }).click();
 
-    const banner = page.getByRole('alert').last();
+    const banner = alerts(page).last();
     await expect(banner).toBeVisible();
     // Whatever it says, it must not be raw rule text — that used to read
     // "PERMISSION_DENIED: evaluation error at L103:24 …".

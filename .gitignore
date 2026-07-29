@@ -25,3 +25,7 @@ playwright-report/
 
 # The Resend key for the emulator; production reads it from Secret Manager.
 functions/.secret.local
+
+# Next build output
+.next
+next-env.d.ts

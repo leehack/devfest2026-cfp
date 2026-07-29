@@ -27,9 +27,23 @@ export function useI18n() {
   return useContext(I18nContext);
 }
 
-/** Montréal defaults to French unless the browser says otherwise. */
+/**
+ * Montréal defaults to French unless the browser says otherwise.
+ *
+ * Returns `en` where there is no browser to ask. A client component is still
+ * rendered on the server, so this is reached with no `localStorage` and no
+ * `navigator` — and `en` is what the server-rendered `<html lang>` says, so the
+ * two agree until the real answer is known after mount.
+ */
+export const SERVER_LOCALE: Locale = 'en';
+
 export function detectLocale(): Locale {
-  const stored = localStorage.getItem('cfp.locale');
-  if (stored === 'en' || stored === 'fr') return stored;
+  if (typeof window === 'undefined') return SERVER_LOCALE;
+  try {
+    const stored = window.localStorage.getItem('cfp.locale');
+    if (stored === 'en' || stored === 'fr') return stored;
+  } catch {
+    // Storage blocked. The browser's own preference is still worth reading.
+  }
   return navigator.language?.toLowerCase().startsWith('en') ? 'en' : 'fr';
 }

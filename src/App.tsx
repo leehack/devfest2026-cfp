@@ -3,16 +3,16 @@ import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebas
 
 import { auth, googleProvider } from './firebase';
 import { dictionaries, formatDate, type Locale } from './i18n';
-import { detectLocale, I18nContext, useI18n } from './i18n/context';
+import { detectLocale, I18nContext, SERVER_LOCALE, useI18n } from './i18n/context';
 import { GoogleButton } from './components/GoogleButton';
 import { Link } from './components/Link';
-import { SubmitPage } from './pages/SubmitPage';
-import { AdminPage } from './pages/AdminPage';
-import { ReviewPage } from './pages/ReviewPage';
-import { HomePage } from './pages/HomePage';
-import { CfpPage } from './pages/CfpPage';
-import { ProfilePage } from './pages/ProfilePage';
-import { NewCfpPage } from './pages/NewCfpPage';
+import { SubmitPage } from './screens/SubmitPage';
+import { AdminPage } from './screens/AdminPage';
+import { ReviewPage } from './screens/ReviewPage';
+import { HomePage } from './screens/HomePage';
+import { CfpPage } from './screens/CfpPage';
+import { ProfilePage } from './screens/ProfilePage';
+import { NewCfpPage } from './screens/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
 import { href, navigate, usePlace, type Place, type Route } from './lib/router';
@@ -31,13 +31,18 @@ import {
 import { TextField } from './components/fields';
 import type { CfpRole } from '@shared/cfp';
 
-export function App() {
-  const [locale, setLocale] = useState<Locale>(detectLocale);
+export function App({ initialPath }: { initialPath?: string } = {}) {
+  /*
+   * Starts at the locale the server rendered, then settles to the real one after
+   * mount. Calling `detectLocale` in the initialiser read `localStorage` during a
+   * server render, which is a crash rather than a wrong answer.
+   */
+  const [locale, setLocale] = useState<Locale>(SERVER_LOCALE);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
-  const place = usePlace();
+  const place = usePlace(initialPath);
   /*
    * Owned here rather than inside the banner, so the footer control can put the
    * question back on screen. Withdrawing has to be as easy as agreeing.
@@ -53,10 +58,18 @@ export function App() {
 
   const t = dictionaries[locale];
 
+  const [localeSettled, setLocaleSettled] = useState(false);
+  useEffect(() => {
+    setLocale(detectLocale());
+    setLocaleSettled(true);
+  }, []);
+
   useEffect(() => {
     document.documentElement.lang = locale;
-    localStorage.setItem('cfp.locale', locale);
-  }, [locale]);
+    // Not before the detected locale has been read, or this would write the
+    // server's placeholder over what the visitor actually chose last time.
+    if (localeSettled) localStorage.setItem('cfp.locale', locale);
+  }, [locale, localeSettled]);
 
   // The tab is how someone finds this among twenty others, so it names the CFP
   // they are actually on rather than whichever one the HTML was written for.

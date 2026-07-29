@@ -24,6 +24,18 @@ export const check = (page: Page, label: string) =>
  * The submission page by default, because that is what almost every spec here
  * is about. `at('')` is the public front page.
  */
+/**
+ * The app's own alerts.
+ *
+ * The framework renders `<div role="alert" id="__next-route-announcer__">` on
+ * every page — it announces navigations to screen readers, and it is deliberately
+ * empty the rest of the time. A bare `getByRole('alert')` therefore matches two
+ * elements and fails strict mode, so every assertion about a message the app
+ * raised goes through here.
+ */
+export const alerts = (page: Page) =>
+  page.locator('[role="alert"]:not(#__next-route-announcer__)');
+
 export const at = (sub = '/submit') => `/c/${CFP_ID}${sub}`;
 
 export async function signIn(page: Page) {

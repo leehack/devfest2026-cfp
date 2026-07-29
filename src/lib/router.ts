@@ -15,11 +15,14 @@ export { pageShape } from './pageShape';
  * It used to be the hash, so that nothing depended on the server rewriting
  * unknown URLs. That reason expired: a call for proposals is a public page now,
  * and everything that reads a URL from the outside — a crawler, a link preview
- * in Slack, a canonical tag — is blind to what comes after the `#`. Hosting
- * already rewrites `**` to the shell, and Vite's dev server does the same, so
- * the difference between what is tested and what ships stays where it was.
+ * in Slack, a canonical tag — is blind to what comes after the `#`.
  *
- * `adoptLegacyHash` handles the links that were mailed before the move.
+ * This still owns navigation inside the app. The framework routes to a single
+ * catch-all and hands the matched path in, so what changed is where the first
+ * path comes from, not who decides what it means.
+ *
+ * The links mailed before the move are handled by the inline script in
+ * `shared/legacyHash.ts`, which has to run before the first paint.
  */
 export type Route = 'home' | 'new' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
 
@@ -64,7 +67,13 @@ export function placeOf(path: string): Place {
   return { route, cfpId, tab: isAdminTab(tab) ? tab : ADMIN_TABS[0] };
 }
 
+/**
+ * Where we are, or `home` when asked somewhere with no address bar. A server
+ * render has no `window`; `usePlace` is given the path it rendered instead, so
+ * nothing has to guess.
+ */
 export function currentPlace(): Place {
+  if (typeof window === 'undefined') return HOME;
   return placeOf(window.location.pathname);
 }
 
@@ -78,29 +87,6 @@ export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTa
   if (place.route === 'form') return paths.submit(cfpId);
   if (place.route === 'admin') return paths.admin(cfpId, place.tab);
   return paths.review(cfpId);
-}
-
-/**
- * Turns a `#/c/{id}` URL into its path equivalent, before anything renders.
- *
- * Those links are in people's mailboxes — every acceptance, every sign-in link
- * sent before this — and a mailed link is not something we get to reissue. The
- * query string survives the rewrite because a sign-in link carries its one-time
- * code there.
- */
-export function adoptLegacyHash(): void {
-  const { hash, search, pathname } = window.location;
-  if (!hash.startsWith('#/')) return;
-  // Only from the root: a path that already says where it is going wins over a
-  // fragment, which by then is a leftover rather than an instruction.
-  //
-  // `#/c/{id}` is read as the form, not as the front page. That is what it
-  // meant when those links were written — the front page did not exist — and an
-  // acceptance saying "confirm your talk here" should still land on the talk.
-  const was = placeOf(hash.slice(1));
-  const meant = was.route === 'cfp' ? { ...was, route: 'form' as const } : was;
-  const path = pathname === '/' ? href(meant) : pathname;
-  window.history.replaceState(null, '', `${path}${search}`);
 }
 
 /** The one place that moves the address bar. `Link` and `navigate` both land here. */
@@ -124,9 +110,27 @@ export function goInCfp(cfpId: string, route: Route, tab?: AdminTab): void {
   navigate(route, { cfpId, tab });
 }
 
-export function usePlace(): Place {
-  const [place, setPlace] = useState(currentPlace);
+/**
+ * `initialPath` comes from the server, which knows the URL it rendered. Without
+ * it the first client render would read `window` and disagree with HTML built
+ * from nothing — a hydration mismatch on every page but the listing.
+ */
+export function usePlace(initialPath?: string): Place {
+  const [place, setPlace] = useState(() => (initialPath ? placeOf(initialPath) : currentPlace()));
   useEffect(() => {
+    /*
+     * Sync once, because the address bar can already disagree with what the
+     * server rendered: a `#/c/{id}` link sends no fragment, so the server sees
+     * `/` and the inline legacy-hash script has rewritten the path by the time
+     * this runs. A no-op on every ordinary visit.
+     */
+    const now = currentPlace();
+    // Only when it genuinely differs. Setting an equal-but-new object would
+    // re-render the whole tree for nothing, and a re-render mid-edit is how a
+    // form loses what somebody just typed.
+    setPlace((was) =>
+      was.route === now.route && was.cfpId === now.cfpId && was.tab === now.tab ? was : now,
+    );
     const onChange = () => setPlace(currentPlace());
     window.addEventListener('popstate', onChange);
     return () => window.removeEventListener('popstate', onChange);

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { reset } from './backend';
-import { field, signIn, waitForSave } from './form';
+import { field, signIn, waitForSave, alerts } from './form';
 
 /**
  * These hit the real sessionize.com through the functions emulator, so they are
@@ -135,14 +135,14 @@ test('a talk link preselects that talk', async ({ page }) => {
 test('a link that is not Sessionize is refused', async ({ page }) => {
   await importBox(page).fill('https://evil.example/x');
   await page.getByRole('button', { name: 'Import', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText(/That does not look like a Sessionize link/);
+  await expect(alerts(page)).toContainText(/That does not look like a Sessionize link/);
 });
 
 test('an unknown handle says so rather than failing silently', async ({ page }) => {
   await importBox(page)
     .fill('https://sessionize.com/no-such-speaker-xyzzy-9876');
   await page.getByRole('button', { name: 'Import', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText(/could not find a Sessionize profile/, {
+  await expect(alerts(page)).toContainText(/could not find a Sessionize profile/, {
     timeout: 30_000,
   });
 });

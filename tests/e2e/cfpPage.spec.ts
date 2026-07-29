@@ -9,7 +9,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { inviteRole, reset } from './backend';
-import { at, signInAs, type Identity } from './form';
+import { at, signInAs, type Identity, alerts } from './form';
 
 const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'Ada' };
 
@@ -84,7 +84,7 @@ test.describe('a call’s front page', () => {
       .fill('javascript:alert(document.domain)');
     await page.getByRole('button', { name: 'Save' }).first().click();
 
-    await expect(page.getByRole('alert')).toBeVisible();
+    await expect(alerts(page)).toBeVisible();
     await page.goto(at(''));
     await expect(page.getByRole('link', { name: /alert/ })).toHaveCount(0);
   });
