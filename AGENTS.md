@@ -6,7 +6,7 @@ Conventions and hard-won facts for this repo. `SPEC.md` is the product spec;
 ## Commands
 
 ```bash
-npm start            # the whole local stack: emulators, seeded config, Vite
+npm start            # the whole local stack: emulators, seeded config, next dev on 5173
 npm run verify       # lint, build, unit, rules, e2e — what CI runs
 ```
 
@@ -107,7 +107,45 @@ collection — the rule names the two readable documents one at a time.
 
 ## Facts worth knowing
 
-- **`shared/` is compiled twice.** Vite resolves `@shared`; functions use
+- **A client component is still rendered on the server.** `'use client'` decides
+  where it hydrates, not whether it runs server-side. Anything reading `window`,
+  `localStorage` or `navigator` during render crashes the request — `detectLocale`
+  and `usePlace` both did. Read them after mount, or take the value as a prop from
+  the server.
+- **The locale settles one tick after mount, on every page load.** The server
+  cannot know it (a cookie read in the root layout would make every route
+  per-request, and buys nothing for a crawler, which sends no cookies), so the
+  first render uses `SERVER_LOCALE` and the real one arrives in an effect. The
+  consequence bites: **never put the dictionary in a data loader's dependency
+  list.** Seven loaders keyed their effect on a `useCallback` that closed over
+  `t`, so it re-ran on every load and the refetch overwrote whatever was on screen
+  unsaved. Key them on `cfpId`.
+- **`src/pages/` is a reserved directory** — Next reads it as the Pages Router and
+  refuses to build. The screens live in `src/screens/`.
+- **Next renders `<div role="alert" id="__next-route-announcer__">`** on every
+  page, to announce navigations to screen readers. A bare `getByRole('alert')`
+  therefore matches two elements and fails strict mode; use the `alerts` helper in
+  `tests/e2e/form.ts`.
+- **`npm run check:bundle` asserts what Vite used to give for free:** no emulator
+  placeholder config in a client chunk, and no live call to the emulator sign-in.
+  A dynamic `import()` is discovered statically, so `devAuth` is *emitted* as a
+  chunk no matter what guard surrounds it — what must hold is that the guard folds
+  and nothing calls it. That is why the guard at its call site spells out
+  `process.env.NEXT_PUBLIC_USE_EMULATORS === 'true'` instead of reading the shared
+  constant.
+- **`src/server/` is the only server-side data access, and only for documents the
+  rules already publish** (`cfps/{id}`, the public listing, the sitemap). The admin
+  SDK bypasses rules, so the discipline is the boundary: nothing exported from
+  there takes a uid. `server-only` makes the mistake a build error.
+- **`/c/{id}` is `force-dynamic` and pinned to `private, no-store`.** Whether a
+  call is private is data; a route's cache config is module-level. Unlisting a call
+  is a Firestore write with no cache-invalidation hook, so a shared cache would go
+  on serving a page that is no longer meant to be found. The cost of that choice is
+  `minInstances: 1` in `apphosting.yaml` — every link preview is a real render.
+
+- **`shared/` is compiled twice.** Next resolves `@shared` from `tsconfig.base.json`
+  (and `vitest.config.ts` repeats the alias, because vitest does not read
+  tsconfig `paths`); functions use
   `rootDir: ".."`, which is why `functions/package.json` points `main` at
   `lib/functions/src/index.js`. Nothing in `shared/` may import Firestore.
 - **Rules are evaluated per returned document.** A scoped `array-contains` query
@@ -173,17 +211,16 @@ collection — the rule names the two readable documents one at a time.
   one document belonging to the account. A form opened at a CFP the speaker has
   never submitted to seeds from that profile, not from blank — it is global, so
   they have usually written it already.
-- **`/robots.txt` can never come from a function.** The runtime answers it, and
-  `/favicon.ico`, with an empty 404 before any handler is called
-  (`app.all("/favicon.ico|/robots.txt", … 404)` in
-  `firebase-tools/lib/emulator/functionsEmulatorRuntime.js`, and the deployed
-  runtime does the same — an empty `text/html` with no charset is the tell).
-  `/sitemap.xml` goes through the identical rewrite and works, which is what
-  made this look like an emulator quirk. So Hosting serves `robots.txt` as a
-  file, emitted into `dist/` by a Vite plugin from `robotsTxt()` in
-  `shared/seo.ts` — one definition, still under test. It names no origin: this
-  is a platform, whoever deploys it picks the origin, and the sitemap is at the
-  root where a crawler looks anyway.
+- **`/robots.txt` and `/sitemap.xml` come from `src/app/robots.ts` and
+  `src/app/sitemap.ts`.** Both are `MetadataRoute` objects, not strings — feeding
+  hand-escaped text into the metadata layer double-encodes it. `robots.txt` still
+  names no origin: this is a platform, whoever deploys it picks the origin, and
+  the sitemap is at the root where a crawler looks anyway.
+  The old warning that a *Cloud Functions* runtime answers `/robots.txt` and
+  `/favicon.ico` itself with an empty 404, before any handler
+  (`app.all("/favicon.ico|/robots.txt", … 404)`), was real and is now irrelevant:
+  nothing here is served by a function. Do not generalise it to Cloud Run — App
+  Hosting serves both paths from the app.
 - **`firebase/storage` is loaded on demand, from `lib/storage.ts`.** It is ~34 KB
   and the only thing that uses it is the image answer on the *confirmation*
   form — an accepted speaker, once, and only if asked for a photo. `firebase.ts`
@@ -235,8 +272,10 @@ collection — the rule names the two readable documents one at a time.
   panel seeds its inputs from an async call; without an `editing` ref the field
   empties under the cursor. It only reproduces under load, so the test holds the
   response open with `page.route` rather than hoping for the race.
-- **Charts are hand-rolled SVG/CSS in `src/components/charts.tsx`.** The deployed
-  CSP blocks CDN scripts, and a chart library would outweigh the page it draws.
+- **Charts are hand-rolled SVG/CSS in `src/components/charts.tsx`.** A chart
+  library would outweigh the page it draws. (The old reason given here — "the
+  deployed CSP blocks CDN scripts" — was never true: the live site sends only
+  `strict-transport-security`, and nothing in this repo sets a CSP.)
 - **Test a guard through `callAs`, not the UI.** "The button is not rendered" is
   not the claim worth proving; `tests/e2e/backend.ts` calls the callable directly
   with a real ID token. Always pair refusals with one call that succeeds, or a
@@ -328,12 +367,28 @@ collection — the rule names the two readable documents one at a time.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.
-- **Real Firebase config is in `.env.production.local`, not `.env.local`.** Vite
-  loads it for `vite build` only, so `npm run dev` stays on the emulators.
+- **Real Firebase config is in `.env.production.local`, not `.env.local`.** Next
+  loads it for a production build only, so `npm start` stays on the emulators. In
+  the cloud it comes from Secret Manager via `apphosting.yaml`; the six secrets
+  are named `next-public-firebase-*`. `next.config.ts` fails the build if the
+  projectId starts with `demo-`, because the tracked `.env` holds exactly that and
+  Next reads `.env` in every mode.
+- **Env is read in one place: `src/lib/env.ts`,** spelled out literally. Next
+  substitutes `process.env.NEXT_PUBLIC_X` only where it is written in full — a
+  destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
-- Project `devfest-mtl-2026-cfp`; Firestore and functions both in
+- Project `devfest-mtl-2026-cfp`; Firestore and the 27 functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
+- **App Hosting runs in `us-east4`, and there was no choice.** The API offers six
+  regions and no Canadian one. Firestore and every callable stay in Montréal, so
+  no personal data leaves the country — a proposal goes browser → Firestore
+  directly and never touches the backend's region. What renders in Virginia is the
+  public page, which holds only what a call has published. Worth stating because
+  the rest of this stack was put in Canada on purpose.
+- **Deploy with `npx firebase deploy --only apphosting`** — local source, no
+  GitHub connection. `next dev` renders the public pages too, so it needs
+  `FIRESTORE_EMULATOR_HOST` and `GCLOUD_PROJECT`; `scripts/dev.mjs` passes both.
 
 ## Keeping this file
 
