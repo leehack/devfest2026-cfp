@@ -15,7 +15,7 @@ import { submissionSchema } from '@shared/schema';
 import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../components/fields';
 import { Reveal } from '../components/Reveal';
 import { SessionizeImport } from '../components/SessionizeImport';
-import { SocialsInput } from '../components/SocialsInput';
+import { SpeakerFields } from '../components/SpeakerFields';
 import { formatDate, useI18n, type Dictionary } from '../i18n';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
@@ -402,10 +402,12 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           setStatus(open.status);
           setAnswers((open.proposal.confirmAnswers ?? {}) as Answers);
         } else {
-          // Prefill from the Google account rather than making people retype it.
+          // No talk here yet — but `speakers/{uid}` is global, so anyone who has
+          // submitted to another call or filled in `/me` has already written all
+          // of this. Starting them from blank was asking for it twice.
           setForm({
-            ...emptyForm,
-            name: user.displayName ?? '',
+            ...fromDocuments(undefined, profile),
+            name: profile?.name || user.displayName || '',
             email: user.email ?? '',
           });
         }
@@ -809,102 +811,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <h2>{t.sections.speaker}</h2>
         <p className="section__help">{t.sections.speakerHelp}</p>
 
-        <TextField
-          label={t.speaker.name}
-          value={form.name}
-          onChange={(v) => set('name', v)}
-          maxLength={LIMITS.nameMax}
-          error={err('speaker.name')}
-          disabled={false}
-          required
-        />
-
-        <TextField
-          label={t.speaker.email}
-          help={t.speaker.emailHelp}
-          value={form.email}
-          onChange={(v) => set('email', v)}
-          type="email"
-          error={err('speaker.email')}
-          disabled
-          required
-        />
-
-        <TextAreaField
-          label={t.speaker.bio}
-          help={t.speaker.bioHelp}
-          value={form.bio}
-          onChange={(v) => set('bio', v)}
-          minLength={LIMITS.bioMin}
-          maxLength={LIMITS.bioMax}
-          rows={4}
-          error={err('speaker.bio')}
-          disabled={false}
-          required
-        />
-
-        <div className="grid grid--2">
-          {/* Not required — independents and between-jobs applicants exist (§3).
-              Said by the Optional chip on both fields rather than by help text
-              under one of them, which pushed its input out of line with the
-              other's and read as a broken row. */}
-          <TextField
-            label={t.speaker.company}
-            value={form.company}
-            onChange={(v) => set('company', v)}
-            maxLength={LIMITS.companyMax}
-            error={err('speaker.company')}
-            disabled={false}
-          />
-          <TextField
-            label={t.speaker.jobTitle}
-            value={form.jobTitle}
-            onChange={(v) => set('jobTitle', v)}
-            maxLength={LIMITS.jobTitleMax}
-            error={err('speaker.jobTitle')}
-            disabled={false}
-          />
-        </div>
-
-        <TextField
-          label={t.speaker.basedIn}
-          help={t.speaker.basedInHelp}
-          value={form.basedIn}
-          onChange={(v) => set('basedIn', v)}
-          maxLength={LIMITS.basedInMax}
-          error={err('speaker.basedIn')}
-          disabled={false}
-          required
-        />
-
-        <SocialsInput
-          value={form.socials}
-          onChange={(v) => set('socials', v)}
-          disabled={false}
-        />
-
-        <TextAreaField
-          label={t.speaker.pastTalks}
-          help={t.speaker.pastTalksHelp}
-          value={form.pastTalks}
-          onChange={(v) => set('pastTalks', v)}
-          maxLength={LIMITS.pastTalksMax}
-          rows={3}
-          error={err('speaker.pastTalks')}
-          disabled={false}
-        />
-
-        <Checkbox
-          label={t.speaker.isGde}
-          checked={form.isGde}
-          onChange={(v) => set('isGde', v)}
-          disabled={false}
-        />
-
-        {/* Conditional 1 of 3 — shown only to GDEs, per §5. */}
-        <Reveal when={form.isGde} variant="note">
-          {t.speaker.gdeGuidance}
-        </Reveal>
+        <SpeakerFields form={form} set={set} err={err} />
       </section>
 
       {/* ---------------------------------------------------------- acks */}

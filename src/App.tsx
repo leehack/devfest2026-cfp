@@ -17,6 +17,7 @@ import { AdminPage } from './pages/AdminPage';
 import { ReviewPage } from './pages/ReviewPage';
 import { HomePage } from './pages/HomePage';
 import { CfpPage } from './pages/CfpPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { NewCfpPage } from './pages/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
@@ -106,6 +107,11 @@ export function App() {
             >
               {t.switchTo}
             </button>
+            {user && route !== 'me' && (
+              <Link className="btn btn--ghost" to={href({ route: 'me' })}>
+                {t.profile.link}
+              </Link>
+            )}
             {user && (
               <button type="button" className="btn btn--ghost" onClick={() => signOut(auth)}>
                 {t.app.signOut}
@@ -120,7 +126,7 @@ export function App() {
             and review are tables you scan, and 46rem on a wide screen wasted
             it. Left-aligned rather than centred, so the column starts under the
             title instead of floating away from it. */}
-        <main className={`main${route === 'form' || route === 'new' || route === 'cfp' ? ' main--narrow' : ''}`}>
+        <main className={`main${route === 'form' || route === 'new' || route === 'cfp' || route === 'me' ? ' main--narrow' : ''}`}>
           {!authReady || !cfpReady ? (
             <p className="muted">{t.app.loading}</p>
           ) : (
@@ -172,6 +178,9 @@ function Routed({ place, user, cfp, role, roleReady }: RoutedProps) {
   if (route === 'home') return <HomePage user={user} />;
   if (route === 'new') {
     return user ? <NewCfpPage user={user} /> : <SignIn cfp={null} cfpId={null} organising />;
+  }
+  if (route === 'me') {
+    return user ? <ProfilePage user={user} /> : <SignIn cfp={null} cfpId={null} />;
   }
 
   // Every route below is inside a CFP, and `currentPlace` will not produce one

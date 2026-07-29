@@ -633,6 +633,17 @@ async function patch(path: string, fields: Record<string, unknown>) {
   );
 }
 
+/** One speaker profile, or undefined when it was never written. */
+export async function readSpeaker(uid: string): Promise<Record<string, any> | undefined> {
+  const response = await fetch(`${DOCS}/speakers/${uid}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return undefined;
+  await expectOk(response, 'readSpeaker');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
 /** Every proposal, for asserting what actually reached Firestore. */
 export async function readProposals(cfpId = CFP_ID): Promise<Record<string, any>[]> {
   const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals`, {

@@ -100,6 +100,18 @@ export const en = {
     submitClosedAction: 'Go to the submission page',
   },
 
+  profile: {
+    /** In the header, beside Sign out — where an account's own settings belong. */
+    link: 'Your profile',
+    title: 'Your profile',
+    help:
+      'This belongs to your account, not to any one call for proposals. Editing it here changes it everywhere, including talks you have already submitted but that nobody has started reading.',
+    save: 'Save profile',
+    saving: 'Saving…',
+    saved: 'Saved.',
+    incomplete: 'Some of this still needs filling in.',
+  },
+
   window: {
     notOpen: 'The call for proposals is not open yet.',
     opensAt: 'It opens on',
@@ -193,6 +205,9 @@ export const en = {
     basedInHelp: 'City and region — for example, Montréal, QC.',
     socials: 'Links',
     socialsHelp: 'Optional. Where people can find you.',
+    sessionizeUrl: 'Sessionize profile',
+    sessionizeUrlHelp:
+      'Optional. Saved with your profile, so the import at the top of a submission form is offered without asking again.',
     addSocial: 'Add a link',
     removeSocial: 'Remove',
     platform: 'Platform',
@@ -739,6 +754,7 @@ export const en = {
       languagePreferenceNotApplicable:
         'Language preference only applies when you can present in either language.',
       dateFormat: 'Use the date picker.',
+      sessionizeUrl: 'That is not a Sessionize profile link.',
     } as Record<string, string>,
   },
 };

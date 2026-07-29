@@ -267,6 +267,7 @@ function snapshotOf(uid: string, speaker: FirebaseFirestore.DocumentData): Speak
     socials: (speaker.socials as SpeakerSnapshot['socials']) ?? [],
     isGde: speaker.isGde === true,
     ...(speaker.pastTalks ? { pastTalks: speaker.pastTalks as string } : {}),
+    ...(speaker.sessionizeUrl ? { sessionizeUrl: speaker.sessionizeUrl as string } : {}),
   };
 }
 

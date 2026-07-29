@@ -36,6 +36,7 @@ export interface FormState {
   isGde: boolean;
   pastTalks: string;
   email: string;
+  sessionizeUrl: string;
 
   // Acknowledgements
   ackNoTravelSupport: boolean;
@@ -99,6 +100,7 @@ export const emptyForm: FormState = {
   isGde: false,
   pastTalks: '',
   email: '',
+  sessionizeUrl: '',
   ackNoTravelSupport: false,
   ackCoc: false,
   ackRecording: false,
@@ -153,6 +155,7 @@ export function toDocuments(form: FormState) {
     email: form.email.trim(),
     socials: form.socials.filter((s) => s.handle.trim() !== ''),
     isGde: form.isGde,
+    sessionizeUrl: form.sessionizeUrl.trim(),
   };
 
   return { proposalDoc, speakerDoc };
@@ -359,6 +362,7 @@ export function fromDocuments(
     isGde: s.isGde ?? false,
     pastTalks: s.pastTalks ?? '',
     email: s.email ?? '',
+    sessionizeUrl: s.sessionizeUrl ?? '',
     ackNoTravelSupport: p.acks?.noTravelSupport ?? false,
     ackCoc: p.acks?.coc ?? false,
     ackRecording: p.acks?.recording ?? false,
@@ -400,6 +404,7 @@ export function toSubmission(form: FormState): SubmissionInput {
       isGde: s.isGde ?? false,
       pastTalks: s.pastTalks,
       email: s.email ?? '',
+      sessionizeUrl: s.sessionizeUrl,
     },
     acks: (p.acks ?? {}) as SubmissionInput['acks'],
     attendance: (p.attendance ?? {}) as SubmissionInput['attendance'],

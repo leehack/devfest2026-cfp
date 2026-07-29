@@ -14,7 +14,7 @@ import { validateCfpId } from '@shared/cfp';
  *
  * `adoptLegacyHash` handles the links that were mailed before the move.
  */
-export type Route = 'home' | 'new' | 'cfp' | 'form' | 'admin' | 'review';
+export type Route = 'home' | 'new' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
 
 /**
  * The admin screen is five unrelated jobs, so it is five tabs rather than one
@@ -51,6 +51,7 @@ export function placeOf(path: string): Place {
   const trimmed = path.replace(/^\/+/, '').replace(/\/+$/, '');
   if (!trimmed) return HOME;
   if (trimmed === 'new') return { ...HOME, route: 'new' };
+  if (trimmed === 'me') return { ...HOME, route: 'me' };
 
   const [prefix, cfpId = '', section = '', tab = ''] = trimmed.split('/');
   if (prefix !== 'c' || validateCfpId(cfpId) !== null) return HOME;
@@ -76,6 +77,7 @@ export function currentPlace(): Place {
 export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTab }): string {
   if (place.route === 'home') return '/';
   if (place.route === 'new') return '/new';
+  if (place.route === 'me') return '/me';
   const base = `/c/${place.cfpId}`;
   if (place.route === 'cfp') return base;
   if (place.route === 'form') return `${base}/submit`;

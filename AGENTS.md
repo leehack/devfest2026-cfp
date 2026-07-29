@@ -43,8 +43,9 @@ the account), `signInLinks` (a platform-wide throttle) and `config/platform` sit
 outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
 
 Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
-to start one, then `/c/{cfpId}` the call's public page, `/c/{cfpId}/submit` the
-form, `/review` for any role-holder and `/admin/{tab}` for admins. Only
+to start one, `/me` the speaker's own profile, then `/c/{cfpId}` the call's
+public page, `/c/{cfpId}/submit` the form, `/review` for any role-holder and
+`/admin/{tab}` for admins. Only
 `/c/{cfpId}` — one segment — is rewritten to the `cfpPage` function for its meta
 tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
 `owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
@@ -167,6 +168,11 @@ collection — the rule names `confirmForm`.
   Local-only values go in `.env.local`, which the emulator reads and deploy
   ignores. The link's default is now derived from `GCLOUD_PROJECT`, and an
   organiser overrides it in `/admin` for a custom domain.
+- **The speaker fields have one definition.** `src/components/SpeakerFields.tsx`
+  is rendered by both the submission form and `/me`, because `speakers/{uid}` is
+  one document belonging to the account. A form opened at a CFP the speaker has
+  never submitted to seeds from that profile, not from blank — it is global, so
+  they have usually written it already.
 - **`/robots.txt` cannot be tested against the emulator.** The functions
   emulator runtime swallows `/favicon.ico` and `/robots.txt` before any handler
   sees them (`app.all("/favicon.ico|/robots.txt", … 404)` in

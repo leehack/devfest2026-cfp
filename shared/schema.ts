@@ -14,6 +14,7 @@ import {
   LIMITS,
   SOCIAL_PLATFORMS,
 } from './enums';
+import { parseSessionizeUrl } from './sessionize';
 
 const trimmed = (max: number) => z.string().trim().max(max);
 
@@ -35,6 +36,19 @@ export const speakerSchema = z.object({
   isGde: z.boolean(),
   pastTalks: trimmed(LIMITS.pastTalksMax).optional(),
   email: z.string().trim().email(),
+  /**
+   * Where the import reads from, kept on the profile so it is asked for once.
+   *
+   * Validated by the same parser the import uses, so a link this accepts is a
+   * link that will actually fetch — storing one that cannot is storing a button
+   * that does nothing.
+   */
+  sessionizeUrl: trimmed(LIMITS.handleMax)
+    .optional()
+    .refine((value) => !value || parseSessionizeUrl(value) !== null, {
+      params: { key: 'sessionizeUrl' },
+      message: 'not a Sessionize profile link',
+    }),
 });
 
 /** All three are required — they are acknowledgements, not preferences (§3). */

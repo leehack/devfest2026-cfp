@@ -41,6 +41,8 @@ export interface Speaker {
   isGde: boolean;
   pastTalks?: string;
   email: string;
+  /** Their Sessionize profile, so the import can be offered without asking again. */
+  sessionizeUrl?: string;
 
   // Post-acceptance only — absent at submission time.
   photoUrl?: string;
@@ -121,6 +123,7 @@ export interface SpeakerSnapshot {
   socials: Social[];
   isGde: boolean;
   pastTalks?: string;
+  sessionizeUrl?: string;
 }
 
 export interface Acks {

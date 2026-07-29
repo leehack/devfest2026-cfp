@@ -97,6 +97,17 @@ export const fr: Dictionary = {
     submitClosedAction: 'Aller à la page de soumission',
   },
 
+  profile: {
+    link: 'Votre profil',
+    title: 'Votre profil',
+    help:
+      'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Le modifier ici le change partout, y compris sur les conférences déjà soumises que personne n’a encore commencé à lire.',
+    save: 'Enregistrer le profil',
+    saving: 'Enregistrement…',
+    saved: 'Enregistré.',
+    incomplete: 'Certains champs restent à remplir.',
+  },
+
   window: {
     notOpen: "L'appel à conférences n'est pas encore ouvert.",
     opensAt: 'Il ouvre le',
@@ -192,6 +203,9 @@ export const fr: Dictionary = {
     basedInHelp: 'Ville et région — par exemple, Montréal, QC.',
     socials: 'Liens',
     socialsHelp: 'Facultatif. Où l’on peut vous trouver.',
+    sessionizeUrl: 'Profil Sessionize',
+    sessionizeUrlHelp:
+      'Facultatif. Enregistré avec votre profil, afin que l’importation en haut d’un formulaire vous soit proposée sans redemander.',
     addSocial: 'Ajouter un lien',
     removeSocial: 'Retirer',
     platform: 'Plateforme',
@@ -742,6 +756,7 @@ export const fr: Dictionary = {
       languagePreferenceNotApplicable:
         'La préférence linguistique ne s’applique que si vous pouvez présenter dans les deux langues.',
       dateFormat: 'Utilisez le sélecteur de date.',
+      sessionizeUrl: 'Ce n’est pas un lien de profil Sessionize.',
     },
   },
 };

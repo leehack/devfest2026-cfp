@@ -189,6 +189,38 @@ export async function saveDraft(
   return created.id;
 }
 
+/**
+ * The speaker's own profile, on its own — no CFP involved.
+ *
+ * `speakers/{uid}` is global, so the profile page reads and writes it directly
+ * rather than through a call for proposals. Same document the submission form
+ * saves; the only difference is that nothing else is being written with it.
+ */
+export async function loadProfile(user: User): Promise<Record<string, any> | undefined> {
+  const snap = await getDoc(doc(db, 'speakers', user.uid));
+  return snap.exists() ? snap.data() : undefined;
+}
+
+export async function saveProfile(user: User, form: FormState, locale: Locale): Promise<void> {
+  const { speakerDoc } = toDocuments(form);
+  const existing = (await getDoc(doc(db, 'speakers', user.uid))).exists();
+
+  await setDoc(
+    doc(db, 'speakers', user.uid),
+    {
+      // As in `saveDraft`: an empty optional is absent on create and an explicit
+      // deletion on update, because `{merge: true}` ignores keys that are not there.
+      ...(existing ? mapEmpty(speakerDoc, deleteField()) : mapEmpty(speakerDoc, undefined)),
+      // Never from the form — the rules require it to match the auth token.
+      email: user.email ?? '',
+      locale,
+      updatedAt: serverTimestamp(),
+      ...(existing ? {} : { createdAt: serverTimestamp() }),
+    },
+    { merge: true },
+  );
+}
+
 interface CallableResult {
   ok: boolean;
   proposalId?: string;

@@ -29,10 +29,15 @@ interface SessionizeImportProps {
  * that silently fills nothing looks exactly like one that had nothing to fill.
  */
 /**
- * A Sessionize link the speaker has already given us, under Links. Saves them
- * fetching their own profile URL to paste it back in.
+ * A Sessionize link the speaker has already given us. Saves them fetching their
+ * own profile URL to paste it back in — at this CFP and at the next one.
+ *
+ * The profile field first, since that is the one they were asked for. The scan
+ * through Links is the fallback for everybody who put it there before the field
+ * existed, and for anybody who lists it there instead.
  */
 export function knownSessionizeUrl(form: FormState): string {
+  if (form.sessionizeUrl.trim()) return form.sessionizeUrl.trim();
   const link = form.socials.find((s) => /(^|\/\/|\.)sessionize\.com\//i.test(s.handle.trim()));
   return link?.handle.trim() ?? '';
 }
@@ -112,6 +117,10 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
     try {
       const { data } = await importSessionizeProfile({ url: url.trim() });
       const lines = applyProfile(data.profile, Boolean(data.requestedSessionMissing));
+      // A link that just fetched is a link worth keeping: it saves with the
+      // profile, so the next call for proposals offers the import already
+      // filled in rather than asking for it again.
+      if (!form.sessionizeUrl.trim()) onApply({ sessionizeUrl: url.trim() });
       setSessions(data.profile.sessions ?? []);
 
       // A pasted talk link already says which one they meant. Its report is

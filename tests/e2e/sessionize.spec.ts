@@ -10,8 +10,16 @@ test.skip(!!process.env.E2E_SKIP_NETWORK, 'needs sessionize.com');
 
 const PROFILE = 'https://sessionize.com/leehack';
 
+/**
+ * The import panel's own box. Scoped, because the profile section further down
+ * the form now has a Sessionize field of its own — this one is the panel that
+ * does the fetching.
+ */
+const importBox = (page: import('@playwright/test').Page) =>
+  page.locator('.import').getByRole('textbox');
+
 async function importProfile(page: import('@playwright/test').Page, url = PROFILE) {
-  await page.getByRole('textbox', { name: /Sessionize profile/ }).fill(url);
+  await importBox(page).fill(url);
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.locator('.import__report')).toBeVisible({ timeout: 30_000 });
 }
@@ -125,13 +133,13 @@ test('a talk link preselects that talk', async ({ page }) => {
 });
 
 test('a link that is not Sessionize is refused', async ({ page }) => {
-  await page.getByRole('textbox', { name: /Sessionize profile/ }).fill('https://evil.example/x');
+  await importBox(page).fill('https://evil.example/x');
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText(/That does not look like a Sessionize link/);
 });
 
 test('an unknown handle says so rather than failing silently', async ({ page }) => {
-  await page.getByRole('textbox', { name: /Sessionize profile/ })
+  await importBox(page)
     .fill('https://sessionize.com/no-such-speaker-xyzzy-9876');
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText(/could not find a Sessionize profile/, {
