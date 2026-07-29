@@ -293,14 +293,23 @@ service cloud.firestore {
           // proposal: `recomputeAggregates` reaches these through a
           // collection-group query, which cannot be filtered by ancestor, so a
           // review claiming another CFP would land in that CFP's totals.
+          // `hasOnly` is what makes the comment cap below mean anything. Without
+          // it the same text goes in under any other key — nothing would read it,
+          // but nothing would bound it either, and a document nobody polices is
+          // not a document anybody can reason about. These five are exactly what
+          // `saveReview` writes.
           allow create, update: if ownReview()
             && scorable()
             && !archived(cfpId)
+            && request.resource.data.keys()
+                 .hasOnly(['cfpId', 'score', 'conflictOfInterest', 'comment', 'updatedAt'])
             && request.resource.data.get('cfpId', '') == cfpId
             && request.resource.data.score is int
             && request.resource.data.score >= 1
             && request.resource.data.score <= 4
             && request.resource.data.conflictOfInterest is bool
+            // 2000 is LIMITS.reviewCommentMax. Rules cannot import it, so the two
+            // are pinned together by tests/reviewComment.test.ts.
             && (!('comment' in request.resource.data)
                 || (request.resource.data.comment is string
                     && request.resource.data.comment.size() <= 2000));

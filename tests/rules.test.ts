@@ -23,6 +23,8 @@ import {
   where,
 } from 'firebase/firestore';
 
+import { LIMITS } from '../shared/enums';
+
 const PROJECT_ID = 'demo-devfest-cfp';
 
 const APPLICANT = 'applicant-anna';
@@ -450,8 +452,47 @@ describe('reviewers write only their own review', () => {
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
         cfpId: CFP_ID,
         score: 2,
-        note: 'Overlaps with another submission.',
+        // `comment`, which is the field that exists. This said `note` until the
+        // key list below was added, so it proved the write succeeded without ever
+        // touching the field it appeared to be about.
+        comment: 'Overlaps with another submission.',
         conflictOfInterest: false,
+      }),
+    );
+  });
+
+  it('accepts a comment right up to the cap', async () => {
+    await assertSucceeds(
+      setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
+        cfpId: CFP_ID,
+        score: 2,
+        comment: 'x'.repeat(LIMITS.reviewCommentMax),
+        conflictOfInterest: false,
+      }),
+    );
+  });
+
+  it('refuses one character more', async () => {
+    // The textarea's maxLength stops a person typing past it; this is what stops
+    // everything that is not a person typing.
+    await assertFails(
+      setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
+        cfpId: CFP_ID,
+        score: 2,
+        comment: 'x'.repeat(LIMITS.reviewCommentMax + 1),
+        conflictOfInterest: false,
+      }),
+    );
+  });
+
+  it('refuses a key the review model does not have', async () => {
+    // Otherwise the cap above is decorative: the same text lands under any name.
+    await assertFails(
+      setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
+        cfpId: CFP_ID,
+        score: 2,
+        conflictOfInterest: false,
+        note: 'x'.repeat(LIMITS.reviewCommentMax + 1),
       }),
     );
   });
