@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { knownSessionizeUrl } from '../src/components/SessionizeImport';
+import { knownSessionizeUrl } from '../src/lib/sessionizeLink';
 import { emptyForm } from '../src/lib/formState';
 import type { SocialPlatform } from '../shared/enums';
 

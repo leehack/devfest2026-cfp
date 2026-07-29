@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SessionizeProfile, SessionizeSession } from '@shared/sessionize';
+import { knownSessionizeUrl } from '../lib/sessionizeLink';
 import { useI18n } from '../i18n/context';
 import {
   applySessionizeProfile,
@@ -28,20 +29,6 @@ interface SessionizeImportProps {
  * over-limit. Sessionize can change their markup at any time, and an import
  * that silently fills nothing looks exactly like one that had nothing to fill.
  */
-/**
- * A Sessionize link the speaker has already given us. Saves them fetching their
- * own profile URL to paste it back in — at this CFP and at the next one.
- *
- * The profile field first, since that is the one they were asked for. The scan
- * through Links is the fallback for everybody who put it there before the field
- * existed, and for anybody who lists it there instead.
- */
-export function knownSessionizeUrl(form: FormState): string {
-  if (form.sessionizeUrl.trim()) return form.sessionizeUrl.trim();
-  const link = form.socials.find((s) => /(^|\/\/|\.)sessionize\.com\//i.test(s.handle.trim()));
-  return link?.handle.trim() ?? '';
-}
-
 export function SessionizeImport({ form, onApply, disabled }: SessionizeImportProps) {
   const { t } = useI18n();
   const [url, setUrl] = useState(() => knownSessionizeUrl(form));
