@@ -1,3 +1,0 @@
-# This host only redirects. The app lives at https://cfp.gdgmontreal.com
-User-agent: *
-Disallow: /

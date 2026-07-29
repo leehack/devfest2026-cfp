@@ -1,13 +1,21 @@
 {
   "//": "A Hosting release whose only job is to stop serving the old app. See ./README.md — in particular, do not deploy it while cfp.gdgmontreal.com is still served by Hosting.",
   "hosting": {
-    "public": "hosting-redirect/public",
+    "//public": "Relative to this file, not to the directory deploy is run from — --config makes the config's own directory the project root. Nothing in it is ever served: the catch-all below is evaluated before static files, so a file here would be shadowed. It exists because the CLI requires the key.",
+    "public": "public",
     "ignore": ["**/.*"],
     "redirects": [
       {
+        "//": "The root, separately. A capture of /:rest* does not match / — deployed without this, the bare .web.app address 404s, which is the one address most people have.",
+        "source": "/",
+        "destination": "https://cfp.gdgmontreal.com/",
+        "type": 301
+      },
+      {
         "//": "301, not 302: this is permanent, and a search engine holding the .web.app copy should transfer it to the canonical origin rather than keep both.",
-        "source": "/**",
-        "destination": "https://cfp.gdgmontreal.com/:splat*",
+        "//2": "Firebase glob captures are named — :rest* is the multi-segment one. :splat is Netlify's and would be emitted literally, sending every visitor to a path called ':splat*'.",
+        "source": "/:rest*",
+        "destination": "https://cfp.gdgmontreal.com/:rest*",
         "type": 301
       }
     ]
