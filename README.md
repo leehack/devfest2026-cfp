@@ -13,7 +13,7 @@ drift apart.
 
 ```
 shared/       enums, types, schema, pure parsers — compiled into both bundles
-src/          pages/ the form, the admin screen, the review screen
+src/          screens/ the form, the admin screen, the review screen
 functions/    submit, withdraw, roles, window, aggregates, sessionize import
 firestore.rules   the enforcement boundary (§6)
 ```
@@ -29,10 +29,11 @@ account, not to any one talk), `signInLinks` (a platform-wide throttle) and
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
 and then `/c/{cfpId}` is that call's public page, `/submit` the form, `/review`
 for anyone holding a role on it and `/admin/{tab}` for its admins. The public
-page is served by `cfpPage`, a Hosting rewrite that puts the call's own title
-and description into the HTML — a crawler and a link preview never run the
-script, so `document.title` alone buys nothing. Everyone may submit a talk,
-reviewers and admins included — they simply never get their own in the queue.
+page is server-rendered by its Next App Router segment, which puts the call's
+own title and description into the HTML — a crawler and a link preview never
+run the script, so `document.title` alone buys nothing. Everyone may submit a
+talk, reviewers and admins included — they simply never get their own in the
+queue.
 
 A call is **public** (listed on the home page) or **private** (unlisted, but
 readable by anyone with the link — private means unlisted, not secret). Its owner
@@ -209,9 +210,10 @@ no need of it.
 
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept
-themselves. `setProposalStatus` takes only the four outcomes a committee decides
-and refuses `draft` (not theirs to touch) and `withdrawn` (the speaker's call,
-which outranks the committee's).
+themselves. `setProposalStatus` accepts the committee workflow states in
+`STATUS_SETS.decidable`, plus `submitted` so an accidental decision can be
+undone. It refuses `draft` (not theirs to touch) and `withdrawn` (the speaker's
+call, which outranks the committee's).
 
 ## The deployed project
 
@@ -230,18 +232,29 @@ site is not the same thing.
 
 ```bash
 npm run verify                                  # lint, types, build, bundle gates, 3 suites
-npx firebase deploy --only apphosting           # the app, from local source
-npx firebase deploy --only functions,firestore  # the callables and the rules
+npm run deploy:app                              # the app, from local source
+npm run deploy:backend                          # callables and both rule sets
+npm run smoke:production                        # edge headers, public routes and Auth handler
 ```
 
 The six public Firebase values reach a cloud build from Secret Manager, named
-`next-public-firebase-*`, wired up in `apphosting.yaml`.
+`next-public-firebase-*`, wired up in `apphosting.yaml`. Production builds also
+require credential-free HTTPS values for `NEXT_PUBLIC_COC_URL` and `SITE_ORIGIN`;
+the checked-in hosting config pins both for the Montréal deployment.
 
 Real config lives in `.env.production.local` (gitignored) rather than
 `.env.local`, so `npm start` stays on the emulators; the tracked `.env` holds
 only `demo-` placeholders. `next.config.ts` refuses to build if the projectId
 still starts with `demo-`, because Next reads `.env` in every mode and a build
 that picked those up would deploy a site that cannot sign anybody in.
+
+Before the next App Hosting rollout, set the backend runtime to `nodejs22` in
+its Settings tab and leave automatic base-image updates enabled. The root and
+Functions packages both require Node 22; keeping the backend versioned makes
+that choice explicit and allows Firebase to apply runtime security patches.
+Next 16 is currently in App Hosting's preview support tier, so a successful
+rollout is followed by `npm run smoke:production`, not treated as proof by
+itself.
 
 Every callable sets `maxInstances: 10`. Blaze bills per invocation, and a CFP
 peaking at a few hundred submissions in the final hour has no legitimate reason
@@ -254,10 +267,11 @@ own sending domain and `setEmailSettings` refuses a `from` that is not on it.
 the app — it is where every mailed link points, sign-in links included, and those
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
 
-Google sign-in is enabled, `config/cfp` is seeded (open 2026-07-27 →
-2026-09-15), and `leehack@gmail.com` holds the first admin role. The window is
-editable from `/admin` now; `scripts/seed-config.mjs` is only for a fresh
-project.
+Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
+window and organisers are managed from `/admin`. The ordinary `createCfp` flow
+writes the CFP and its owner in one transaction; `scripts/seed-cfp.mjs` is the
+outside-the-app option for a fresh environment. `scripts/set-platform.mjs` sets
+the platform-wide public origin.
 
 ## Email
 
@@ -328,13 +342,13 @@ The threat model is small and specific: applicants must not read each other's
 work or their own reviews, reviewers must not anchor on each other, and nobody
 must be able to grant themselves a role. `firestore.rules` is the boundary — the
 SDK queries straight from the browser, so anything the UI merely hides is still
-readable. 71 rules tests, each mutation-checked.
+readable. The rules suite exercises every boundary and is mutation-checked.
 
-- **Roles cannot be self-served.** `reviewers/{uid}` is `allow write: if false`;
-  only the callables touch it, and each checks `reviewers/{uid}.role == 'admin'`
-  server-side. The first admin comes from a script holding application-default
-  credentials. `claimRole` trusts only the verified auth token's email, and
-  requires `email_verified === true` rather than merely "not false".
+- **Roles cannot be self-served.** `cfps/{cfpId}/members/{uid}` is
+  `allow write: if false`; only the callables touch it, and each checks the
+  caller's role for that CFP server-side. `createCfp` writes its owner in the
+  creation transaction. `claimRole` trusts only the verified auth token's email,
+  and requires `email_verified === true` rather than merely "not false".
 - **Every callable authorises before it acts** — `requireUid`, `requireAdmin`, or
   ownership via `readOwnProposal`, which reports `not-found` for someone else's
   proposal so a prober learns nothing either way.
@@ -342,20 +356,22 @@ readable. 71 rules tests, each mutation-checked.
   segment, so no caller-supplied host is ever fetched, and re-checks the host
   after redirects. Tested against `sessionize.com.evil.example`, `localhost` and
   `169.254.169.254`.
-- **PII**: speaker emails are readable by the committee (§7 is not a blind
-  review) and by nobody else; `roleGrants` is admin-only because it is a list of
-  addresses; `emailLog` is closed to every client including admins, who reach it
-  through the `emailQueue` callable. A client that could write there could mail
-  anyone from our verified domain, so the deny covers writes as well as reads.
-- **`config` exposes one document, not a collection.** The read rule names `cfp`
-  — the window, which the landing page needs before anyone signs in. Anything
-  added to `config` later is therefore shut by default; `config/email` holds the
-  organisers' addresses and reaches the admin page through a callable.
+- **PII**: review cards use the CFP-scoped `speakerSnapshot`, which deliberately
+  omits email; only the speaker may read the global profile. `roleGrants` is
+  admin-only because it is a list of addresses; `emailLog` is closed to every
+  client including admins, who reach its recipient data through the
+  `emailQueue` callable. A client that could write there could mail anyone from
+  our verified domain, so the deny covers writes as well as reads.
+- **`config` is closed by default.** `submissionForm` is public because it
+  defines what the call asks, and `confirmForm` is readable only after sign-in.
+  The window lives on the public CFP document. `config/email` remains private
+  and reaches the admin page only through a callable.
 - **The bundle carries no secrets.** The Firebase web config is public by design;
   the emulator sign-in hook is behind a build-time flag and is absent from the
-  production build (checked, not assumed). Production dependencies report zero
-  advisories — the `npm audit` findings are all dev tooling (vitest, eslint,
-  firebase-tools) that never ships.
+  production build (checked, not assumed). Direct dependencies are current and
+  production audits report no critical advisory; the remaining findings are
+  transitive in the current Next and Firebase/Google dependency trees rather
+  than ignored behind a claim of zero.
 - **Cost is a security property here.** Every callable sets `maxInstances: 10`,
   and no view uses `onSnapshot`.
 

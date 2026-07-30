@@ -23,7 +23,7 @@ const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'A
 const REVIEWER: Identity = { sub: 'reviewer-sub', email: 'reviewer@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 
-const tab = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+const tab = (page: Page, name: string) => page.getByRole('link', { name, exact: true });
 
 /** One person's line on the committee list, found by whatever it calls them. */
 const row = (page: Page, who: string) => page.locator('.people__row', { hasText: who });
@@ -70,7 +70,7 @@ test.describe('roles', () => {
 
   test('the bootstrap grant becomes a role on first sign-in', async ({ page }) => {
     await asAdmin(page);
-    await expect(page.getByText('Ada')).toBeVisible();
+    await expect(row(page, ADMIN.name)).toBeVisible();
     await expect(tab(page, 'Admin')).toBeVisible();
   });
 
@@ -99,7 +99,7 @@ test.describe('roles', () => {
     await page.getByRole('button', { name: 'Revoke' }).click();
 
     await expect(page.getByText(/only admin left/)).toBeVisible();
-    await expect(page.getByText('Ada')).toBeVisible();
+    await expect(row(page, ADMIN.name)).toBeVisible();
   });
 
   test('an admin changes a member’s role from the list', async ({ page }) => {
@@ -188,14 +188,42 @@ test.describe('roles', () => {
     }
   });
 
+  test('an admin can restore a decision to submitted', async ({ page }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
+    await asAdmin(page, 'proposals');
+
+    const status = () => page.getByLabel('Status: Sam on shipping');
+    await status().selectOption('accepted');
+    await expect
+      .poll(
+        async () =>
+          (await readProposals()).find((proposal) => proposal.title === 'Sam on shipping')?.status,
+      )
+      .toBe('accepted');
+
+    // Immediate Undo is still available, but recovery cannot depend on the
+    // current render surviving: an organiser notices mistakes after reloads
+    // and on another device too.
+    await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+    await page.reload();
+    await status().selectOption('submitted');
+    await expect
+      .poll(
+        async () =>
+          (await readProposals()).find((proposal) => proposal.title === 'Sam on shipping')?.status,
+      )
+      .toBe('submitted');
+  });
+
   test('a status outside the committee’s vocabulary is refused', async ({ page }) => {
     await asAdmin(page);
     const admin = await createAccount(ADMIN);
     const speaker = await createAccount(SPEAKER);
     await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
 
-    // `submitted` and `withdrawn` belong to the applicant's flow, not this one.
-    for (const status of ['submitted', 'withdrawn', 'nonsense']) {
+    // `withdrawn` belongs to the applicant's flow, and arbitrary values never do.
+    for (const status of ['withdrawn', 'nonsense']) {
       expect(
         await callAs(admin.idToken, 'setProposalStatus', { proposalId: 'p-sam', status }),
       ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
@@ -252,6 +280,7 @@ test.describe('roles', () => {
     await setProposalStatusDirect('p-sam', 'under_review');
     await page.reload();
     await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await expect(page.getByRole('textbox', { name: /^Bio/ })).toBeEnabled();
     await expect(page.getByRole('radio', { name: /no travel required/ })).toBeEnabled();
     await expect(page.getByText(/talk itself is locked now/)).toBeVisible();
@@ -268,12 +297,14 @@ test.describe('roles', () => {
     await signInAs(page, SPEAKER);
     await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
 
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await page.getByRole('textbox', { name: /^Company/ }).fill('New Employer');
     await page.getByRole('checkbox', { name: /visa or eTA/ }).check();
     await page.getByRole('button', { name: 'Save changes' }).click();
     await expect(page.locator('.actions__status')).toHaveText(/Draft saved/);
 
     await page.reload();
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await expect(page.getByRole('textbox', { name: /^Company/ })).toHaveValue('New Employer');
     await expect(page.getByRole('checkbox', { name: /visa or eTA/ })).toBeChecked();
   });
@@ -281,6 +312,7 @@ test.describe('roles', () => {
   test('the window controls reach the form', async ({ page }) => {
     await asAdmin(page, 'settings');
 
+    await expect(page.getByText(/^Your device time zone:/)).toBeVisible();
     await page.getByRole('checkbox', { name: /Pause submissions/ }).check();
     await page.getByRole('button', { name: 'Save window' }).click();
     await expect(page.getByText('Saved.')).toBeVisible();
@@ -288,6 +320,25 @@ test.describe('roles', () => {
     await page.goto(at());
     await expect(page.getByText(/paused/)).toBeVisible();
   });
+
+  test('changing admin tabs does not discard unsaved settings', async ({ page }) => {
+    await asAdmin(page, 'settings');
+    const settings = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'This call for proposals' }),
+    });
+    const name = settings.getByRole('textbox', { name: /^Name/ });
+    await name.fill('A renamed conference');
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'All calls', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/settings$'));
+    await expect(name).toHaveValue('A renamed conference');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await tab(page, 'Committee').click();
+    await expect(page).toHaveURL(new RegExp('/admin/committee$'));
+  });
+
 });
 
 test.describe('reviewing', () => {

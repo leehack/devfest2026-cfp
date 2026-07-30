@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
@@ -10,7 +10,12 @@ import {
   type ProposalRow,
 } from '../../lib/roles';
 import { BarChart, ScoreHistogram, StackedBar } from '../../components/charts';
-import { STATUS_SETS, inStatusSet } from '@shared/enums';
+import {
+  PROPOSAL_STATUSES,
+  STATUS_SETS,
+  inStatusSet,
+  type ProposalStatus,
+} from '@shared/enums';
 import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
 import {
@@ -19,7 +24,11 @@ import {
   optionValues,
   type SubmissionForm,
 } from '@shared/submissionForm';
+import { downloadSelectedSpeakersCsv } from './proposalExport';
 import { Result } from './Result';
+
+const HIGH_DISAGREEMENT = 1;
+const ADMIN_PROPOSAL_STATUSES = ['submitted', ...STATUS_SETS.decidable] as const;
 
 /**
  * One headshot, fetched only when an organiser asks for it.
@@ -71,46 +80,131 @@ function Headshot({
   );
 }
 
-/** What one speaker answered, labelled by the questions as they stand now. */
+/** What one speaker answered, including questions retired after they answered. */
 function Answered({
   cfpId,
   fields,
   answers,
   speakerUid,
+  title,
 }: {
   cfpId: string;
   fields: ConfirmField[];
   answers?: Answers;
   speakerUid?: string;
+  title: string;
 }) {
   const { t, locale } = useI18n();
-  if (!answers || fields.length === 0) return null;
+  if (!answers) return null;
 
   // A field added after someone confirmed has no answer from them, and showing
   // an empty row for it reads as "they skipped it" rather than "we never asked".
-  const given = fields.filter((field) => answers[field.key] !== undefined);
+  // A removed field is different: the answer is still operational data, so keep
+  // it under its stable key instead of making it disappear with today's form.
+  const byKey = new Map(fields.map((field) => [field.key, field]));
+  const given = Object.keys(answers)
+    .filter((key) => answers[key] !== undefined)
+    .map((key) => ({ key, field: byKey.get(key), value: answers[key] }));
   if (given.length === 0) return null;
 
   return (
-    <dl className="answers">
-      {given.map((field) => (
-        <div key={field.key}>
-          <dt>{localised(field.label, locale)}</dt>
+    <>
+      <h4 className="card__subtitle">{title}</h4>
+      <dl className="answers">
+      {given.map(({ key, field, value }) => {
+        const storedImage =
+          typeof value === 'string' && value.startsWith(`cfps/${cfpId}/headshots/`);
+        return (
+        <div key={key}>
+          <dt>{field ? localised(field.label, locale) : <code className="mono">{key}</code>}</dt>
           <dd>
-            {field.type === 'image' ? (
+            {field?.type === 'image' || storedImage ? (
               speakerUid ? (
-                <Headshot cfpId={cfpId} speakerUid={speakerUid} fieldKey={field.key} />
+                <Headshot cfpId={cfpId} speakerUid={speakerUid} fieldKey={key} />
               ) : null
-            ) : typeof answers[field.key] === 'boolean' ? (
-              answers[field.key] ? (
+            ) : typeof value === 'boolean' ? (
+              value ? (
                 t.admin.formYes
               ) : (
                 t.admin.formNo
               )
             ) : (
-              String(answers[field.key])
+              String(value)
             )}
           </dd>
+        </div>
+        );
+      })}
+      </dl>
+    </>
+  );
+}
+
+/** The facts an organiser needs after a decision, while building the programme. */
+function OperationalDetails({ row, shape }: { row: ProposalRow; shape: SubmissionForm }) {
+  const { t, locale } = useI18n();
+  const speakers = row.speakerSnapshot ?? [];
+  const delivery = labelOf(shape.deliveryLanguage, row.deliveryLanguage, locale);
+  const scheduledDelivery = row.assignedLanguage
+    ? `${delivery} → ${labelOf(shape.deliveryLanguage, row.assignedLanguage, locale)}`
+    : delivery;
+  const socials = speakers
+    .flatMap((speaker) =>
+      (speaker.socials ?? []).map((social) => `${social.platform}: ${social.handle}`),
+    )
+    .join(' · ');
+  const sessionize = speakers
+    .map((speaker) => speaker.sessionizeUrl)
+    .filter(Boolean)
+    .join('; ');
+  const pastTalks = speakers
+    .map((speaker) => speaker.pastTalks)
+    .filter(Boolean)
+    .join('\n\n');
+  const values = ([
+    [t.proposal.abstract, row.abstract],
+    row.pitch ? [t.proposal.pitch, row.pitch] : null,
+    [t.proposal.category, labelOf(shape.category, row.category, locale)],
+    [t.proposal.format, labelOf(shape.format, row.format, locale)],
+    [t.proposal.level, labelOf(shape.level, row.level, locale)],
+    [t.language.delivery, scheduledDelivery],
+    row.languagePreference ? [t.review.languagePreference, row.languagePreference] : null,
+    row.attendance?.status
+      ? [t.review.travel, t.review.attendance[row.attendance.status] ?? row.attendance.status]
+      : null,
+    row.attendance?.fundingSource ? [t.review.funding, row.attendance.fundingSource] : null,
+    row.attendance?.decisionBy ? [t.review.decisionBy, row.attendance.decisionBy] : null,
+    row.attendance
+      ? [t.review.visa, row.attendance.needsVisa ? t.admin.formYes : t.admin.formNo]
+      : null,
+    speakers.some((speaker) => speaker.company)
+      ? [t.speaker.company, speakers.map((speaker) => speaker.company).filter(Boolean).join('; ')]
+      : null,
+    speakers.some((speaker) => speaker.jobTitle)
+      ? [t.speaker.jobTitle, speakers.map((speaker) => speaker.jobTitle).filter(Boolean).join('; ')]
+      : null,
+    speakers.some((speaker) => speaker.basedIn)
+      ? [t.speaker.basedIn, speakers.map((speaker) => speaker.basedIn).filter(Boolean).join('; ')]
+      : null,
+    speakers.some((speaker) => speaker.bio)
+      ? [t.speaker.bio, speakers.map((speaker) => speaker.bio).filter(Boolean).join('\n\n')]
+      : null,
+    speakers.some((speaker) => speaker.isGde)
+      ? [t.speaker.isGde, t.admin.formYes]
+      : null,
+    pastTalks ? [t.speaker.pastTalks, pastTalks] : null,
+    sessionize ? [t.speaker.sessionizeUrl, sessionize] : null,
+    socials ? [t.speaker.socials, socials] : null,
+  ] as Array<[string, string] | null>).filter(
+    (value): value is [string, string] => value !== null && Boolean(value[1]),
+  );
+
+  return (
+    <dl className="answers">
+      {values.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
         </div>
       ))}
     </dl>
@@ -149,15 +243,43 @@ function Dashboard({ rows, shape }: { rows: ProposalRow[]; shape: SubmissionForm
   // Rounded to the nearest whole score: the histogram answers "what did the
   // committee think", and 2.5 buckets would answer nothing.
   const scored = live.filter((r) => r.aggregate && r.aggregate.reviewCount > 0);
+  const decided = live.filter((r) => inStatusSet('decided', r.status));
+  const disagreement = scored.filter(
+    (row) => (row.aggregate?.stdDev ?? 0) >= HIGH_DISAGREEMENT,
+  );
   const histogram = [1, 2, 3, 4].map(
     (score) => scored.filter((r) => Math.round(r.aggregate!.avgScore) === score).length,
   );
 
   return (
-    <section className="section">
-      <h2>{t.admin.overview}</h2>
+    <section className="section proposal-dashboard">
+      <div className="proposal-dashboard__heading">
+        <div>
+          <h2>{t.admin.overview}</h2>
+          <p className="section__help">{t.admin.overviewHelp}</p>
+        </div>
+      </div>
 
-      <div className="grid grid--3 cards">
+      <div className="selection-metrics" aria-label={t.admin.overview}>
+        <div className="selection-metric">
+          <span>{t.admin.metricInRound}</span>
+          <strong>{live.length}</strong>
+        </div>
+        <div className="selection-metric">
+          <span>{t.admin.metricScored}</span>
+          <strong>{scored.length}</strong>
+        </div>
+        <div className="selection-metric">
+          <span>{t.admin.metricUndecided}</span>
+          <strong>{live.length - decided.length}</strong>
+        </div>
+        <div className="selection-metric">
+          <span>{t.admin.metricDisagreement}</span>
+          <strong>{disagreement.length}</strong>
+        </div>
+      </div>
+
+      <div className="grid grid--3 cards proposal-dashboard__charts">
         <div className="card card--stat">
           <h3>{t.admin.chartDecisions}</h3>
           <StackedBar data={decisions} />
@@ -199,27 +321,87 @@ function Dashboard({ rows, shape }: { rows: ProposalRow[]; shape: SubmissionForm
   );
 }
 
+type ScoreFilter = 'all' | 'scored' | 'unscored' | 'disagreement';
+type ProposalSort = 'score' | 'spread' | 'reviews' | 'title' | 'status';
+
+interface UndoDecision {
+  action: number;
+  proposalId: string;
+  title: string;
+  previous: ProposalStatus;
+  next: ProposalStatus;
+}
+
 export function Proposals({ cfpId }: { cfpId: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [questions, setQuestions] = useState<ConfirmField[]>([]);
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
-  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadedFor, setLoadedFor] = useState('');
+  const [recomputing, setRecomputing] = useState(false);
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [rowErrors, setRowErrors] = useState<Map<string, string>>(new Map());
+  const [undo, setUndo] = useState<UndoDecision | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
+  const [sort, setSort] = useState<ProposalSort>('score');
+  const loadGeneration = useRef(0);
+  const activeCfp = useRef(cfpId);
+  const decisionSequence = useRef(0);
+  const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
+  activeCfp.current = cfpId;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (reset = false) => {
+    const request = ++loadGeneration.current;
+    if (reset) {
+      setLoading(true);
+      setLoadFailed(false);
+      setLoadedFor('');
+      setRows([]);
+      setQuestions([]);
+      setShape(DEFAULT_SUBMISSION_FORM);
+      setRecomputing(false);
+      setPending(new Set());
+      setRowErrors(new Map());
+      setUndo(null);
+      setNote('');
+      setError('');
+      setSearch('');
+      setStatusFilter('all');
+      setCategoryFilter('all');
+      setScoreFilter('all');
+      setSort('score');
+      committedDecisions.current.clear();
+      decisionSequence.current = 0;
+    }
     try {
       const [all, form, submission] = await Promise.all([
         loadAllProposals(cfpId),
         loadConfirmForm(cfpId),
         loadSubmissionForm(cfpId),
       ]);
+      if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setRows(all);
       setQuestions(form.fields);
       setShape(submission);
+      setLoadedFor(cfpId);
+      setLoadFailed(false);
+      setError('');
     } catch (e) {
+      if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setError(adminError(e, t));
+      setLoadFailed(true);
+      setLoadedFor(cfpId);
+    } finally {
+      if (request === loadGeneration.current && activeCfp.current === cfpId) {
+        setLoading(false);
+      }
     }
   }, [cfpId, t]);
 
@@ -230,33 +412,29 @@ export function Proposals({ cfpId }: { cfpId: string }) {
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh();
+    void refresh(true);
+    return () => {
+      loadGeneration.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfpId]);
 
   async function recompute() {
-    setBusy(true);
+    if (pending.size > 0) return;
+    const scope = cfpId;
+    setRecomputing(true);
     setNote('');
     setError('');
     try {
       const { data } = await recomputeAggregates({ cfpId });
+      if (activeCfp.current !== scope) return;
       setNote(t.admin.recomputed(data.proposalCount, data.reviewCount));
       await refresh();
     } catch (e) {
+      if (activeCfp.current !== scope) return;
       setError(adminError(e, t));
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function decide(proposalId: string, status: string) {
-    setNote('');
-    setError('');
-    try {
-      await setProposalStatus({ cfpId, proposalId, status });
-      await refresh();
-    } catch (e) {
-      setError(adminError(e, t));
+      if (activeCfp.current === scope) setRecomputing(false);
     }
   }
 
@@ -267,31 +445,357 @@ export function Proposals({ cfpId }: { cfpId: string }) {
    * profiles here would hand every committee on the platform the whole speaker
    * directory, so submission freezes what the committee is entitled to see.
    */
-  const names = (row: ProposalRow) =>
-    (row.speakerSnapshot ?? [])
-      .map((s) => s.name)
-      .filter(Boolean)
-      .join(', ');
+  const names = useCallback(
+    (row: ProposalRow) =>
+      (row.speakerSnapshot ?? [])
+        .map((speaker) => speaker.name)
+        .filter(Boolean)
+        .join(', '),
+    [],
+  );
 
-  // Best first — the decision is made top-down, and an unscored proposal has
-  // no claim on the top of the list.
-  const ranked = [...rows].sort(
+  async function decide(row: ProposalRow, next: ProposalStatus) {
+    const previous = row.status;
+    if (recomputing || previous === next || pending.has(row.id)) return;
+    const scope = cfpId;
+    const action = ++decisionSequence.current;
+
+    setNote('');
+    setPending((current) => new Set(current).add(row.id));
+    setRowErrors((current) => {
+      const updated = new Map(current);
+      updated.delete(row.id);
+      return updated;
+    });
+    setRows((current) =>
+      current.map((proposal) =>
+        proposal.id === row.id ? { ...proposal, status: next } : proposal,
+      ),
+    );
+
+    try {
+      await setProposalStatus({ cfpId, proposalId: row.id, status: next });
+      if (activeCfp.current !== scope) return;
+      const decision = {
+        action,
+        proposalId: row.id,
+        title: row.title || t.admin.untitled,
+        previous,
+        next,
+      };
+      committedDecisions.current.set(action, decision);
+      const latest = Math.max(...committedDecisions.current.keys());
+      setUndo(committedDecisions.current.get(latest) ?? null);
+    } catch (e) {
+      if (activeCfp.current !== scope) return;
+      setRows((current) =>
+        current.map((proposal) =>
+          proposal.id === row.id ? { ...proposal, status: previous } : proposal,
+        ),
+      );
+      setRowErrors((current) =>
+        new Map(current).set(row.id, adminError(e, t)),
+      );
+    } finally {
+      if (activeCfp.current === scope) {
+        setPending((current) => {
+          const updated = new Set(current);
+          updated.delete(row.id);
+          return updated;
+        });
+      }
+    }
+  }
+
+  async function undoDecision() {
+    if (recomputing || !undo || pending.has(undo.proposalId)) return;
+    const snapshot = undo;
+    const scope = cfpId;
+    setUndo(null);
+    setPending((current) => new Set(current).add(snapshot.proposalId));
+    setRows((current) =>
+      current.map((proposal) =>
+        proposal.id === snapshot.proposalId
+          ? { ...proposal, status: snapshot.previous }
+          : proposal,
+      ),
+    );
+
+    try {
+      await setProposalStatus({
+        cfpId,
+        proposalId: snapshot.proposalId,
+        status: snapshot.previous,
+      });
+      if (activeCfp.current !== scope) return;
+      committedDecisions.current.delete(snapshot.action);
+      const remaining = [...committedDecisions.current.keys()];
+      const latest = remaining.length > 0 ? Math.max(...remaining) : null;
+      setUndo(latest === null ? null : committedDecisions.current.get(latest) ?? null);
+      setNote(t.admin.decisionUndone(snapshot.title));
+    } catch (e) {
+      if (activeCfp.current !== scope) return;
+      setRows((current) =>
+        current.map((proposal) =>
+          proposal.id === snapshot.proposalId ? { ...proposal, status: snapshot.next } : proposal,
+        ),
+      );
+      const latest = Math.max(...committedDecisions.current.keys());
+      setUndo(committedDecisions.current.get(latest) ?? snapshot);
+      setRowErrors((current) =>
+        new Map(current).set(snapshot.proposalId, adminError(e, t)),
+      );
+    } finally {
+      if (activeCfp.current === scope) {
+        setPending((current) => {
+          const updated = new Set(current);
+          updated.delete(snapshot.proposalId);
+          return updated;
+        });
+      }
+    }
+  }
+
+  const inCurrentScope = loadedFor === cfpId;
+  const scopedRows = useMemo(() => (inCurrentScope ? rows : []), [inCurrentScope, rows]);
+  const scopedShape = inCurrentScope ? shape : DEFAULT_SUBMISSION_FORM;
+
+  const categories = useMemo(() => {
+    const configured = scopedShape.category.map((option) => option.value);
+    return [...new Set([...configured, ...scopedRows.map((row) => row.category).filter(Boolean)])];
+  }, [scopedRows, scopedShape.category]);
+
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase(locale);
+    const result = scopedRows.filter((row) => {
+      if (
+        needle &&
+        !`${row.title ?? ''} ${names(row)}`.toLocaleLowerCase(locale).includes(needle)
+      ) {
+        return false;
+      }
+      if (statusFilter === 'undecided' && inStatusSet('decided', row.status)) return false;
+      if (statusFilter !== 'all' && statusFilter !== 'undecided' && row.status !== statusFilter) {
+        return false;
+      }
+      if (categoryFilter !== 'all' && row.category !== categoryFilter) return false;
+
+      const reviewCount = row.aggregate?.reviewCount ?? 0;
+      if (scoreFilter === 'scored' && reviewCount === 0) return false;
+      if (scoreFilter === 'unscored' && reviewCount > 0) return false;
+      if (
+        scoreFilter === 'disagreement' &&
+        (row.aggregate?.stdDev ?? 0) < HIGH_DISAGREEMENT
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    return result.sort((a, b) => {
+      if (sort === 'spread') {
+        return (b.aggregate?.stdDev ?? -1) - (a.aggregate?.stdDev ?? -1);
+      }
+      if (sort === 'reviews') {
+        return (b.aggregate?.reviewCount ?? 0) - (a.aggregate?.reviewCount ?? 0);
+      }
+      if (sort === 'title') return (a.title ?? '').localeCompare(b.title ?? '', locale);
+      if (sort === 'status') {
+        return t.enums.status[a.status].localeCompare(t.enums.status[b.status], locale);
+      }
+      return (b.aggregate?.avgScore ?? -1) - (a.aggregate?.avgScore ?? -1);
+    });
+  }, [
+    categoryFilter,
+    locale,
+    names,
+    scopedRows,
+    scoreFilter,
+    search,
+    sort,
+    statusFilter,
+    t.enums.status,
+  ]);
+
+  const filtersActive =
+    search !== '' ||
+    statusFilter !== 'all' ||
+    categoryFilter !== 'all' ||
+    scoreFilter !== 'all' ||
+    sort !== 'score';
+
+  // Best first for the accepted-speaker summary, regardless of how the table is
+  // currently filtered or sorted.
+  const ranked = [...scopedRows].sort(
     (a, b) => (b.aggregate?.avgScore ?? -1) - (a.aggregate?.avgScore ?? -1),
   );
   const accepted = ranked.filter((row) => row.status === 'accepted' || row.status === 'confirmed');
   const decidable = ranked.filter((row) => row.status !== 'draft' && row.status !== 'withdrawn');
 
+  if (!inCurrentScope || loading) {
+    return (
+      <section className="section decision-panel">
+        <h2>{t.admin.proposals}</h2>
+        <p className="muted">{t.app.loading}</p>
+      </section>
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <section className="section decision-panel">
+        <h2>{t.admin.proposals}</h2>
+        <Result ok="" error={error || t.errors.unavailable} />
+        <button type="button" className="btn" onClick={() => void refresh(true)}>
+          {t.errors.reload}
+        </button>
+      </section>
+    );
+  }
+
   return (
     <>
-      <section className="section">
-        <h2>{t.admin.proposals}</h2>
-        <p className="section__help">{t.admin.proposalsHelp}</p>
+      <Dashboard rows={scopedRows} shape={scopedShape} />
 
-        {rows.length === 0 ? (
+      <section className="section decision-panel">
+        <div className="decision-panel__heading">
+          <div>
+            <h2>{t.admin.proposals}</h2>
+            <p className="section__help">{t.admin.proposalsHelp}</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={recomputing || pending.size > 0}
+            onClick={recompute}
+          >
+            {recomputing ? t.admin.recomputing : t.admin.recompute}
+          </button>
+        </div>
+
+        {inCurrentScope && undo && (
+          <div className="decision-undo" role="status">
+            <span>
+              {t.admin.decisionChanged(
+                undo.title,
+                t.enums.status[undo.previous],
+                t.enums.status[undo.next],
+              )}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={recomputing || pending.has(undo.proposalId)}
+              onClick={undoDecision}
+            >
+              {t.admin.undo}
+            </button>
+          </div>
+        )}
+
+        <div className="decision-toolbar" aria-label={t.admin.filters}>
+          <label className="decision-filter decision-filter--search">
+            <span>{t.admin.search}</span>
+            <input
+              className="field__input"
+              type="search"
+              value={search}
+              placeholder={t.admin.searchPlaceholder}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+
+          <label className="decision-filter">
+            <span>{t.admin.filterStatus}</span>
+            <select
+              className="field__input field__input--select"
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+            >
+              <option value="all">{t.admin.filterAllStatuses}</option>
+              <option value="undecided">{t.admin.undecided}</option>
+              {PROPOSAL_STATUSES.filter((status) => status !== 'draft').map((status) => (
+                <option key={status} value={status}>
+                  {t.enums.status[status]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="decision-filter">
+            <span>{t.admin.filterCategory}</span>
+            <select
+              className="field__input field__input--select"
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+            >
+              <option value="all">{t.admin.filterAllCategories}</option>
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {labelOf(scopedShape.category, category, locale)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="decision-filter">
+            <span>{t.admin.filterCoverage}</span>
+            <select
+              className="field__input field__input--select"
+              value={scoreFilter}
+              onChange={(event) => setScoreFilter(event.target.value as ScoreFilter)}
+            >
+              <option value="all">{t.admin.filterAllScores}</option>
+              <option value="scored">{t.admin.filterScored}</option>
+              <option value="unscored">{t.admin.filterUnscored}</option>
+              <option value="disagreement">{t.admin.filterDisagreement}</option>
+            </select>
+          </label>
+
+          <label className="decision-filter">
+            <span>{t.admin.sortBy}</span>
+            <select
+              className="field__input field__input--select"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as ProposalSort)}
+            >
+              <option value="score">{t.admin.sortScore}</option>
+              <option value="spread">{t.admin.sortSpread}</option>
+              <option value="reviews">{t.admin.sortReviews}</option>
+              <option value="title">{t.admin.sortTitle}</option>
+              <option value="status">{t.admin.sortStatus}</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="decision-panel__count">
+          <p className="muted" aria-live="polite">
+            {t.admin.showingProposals(filtered.length, scopedRows.length)}
+          </p>
+          {filtersActive && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => {
+                setSearch('');
+                setStatusFilter('all');
+                setCategoryFilter('all');
+                setScoreFilter('all');
+                setSort('score');
+              }}
+            >
+              {t.admin.clearFilters}
+            </button>
+          )}
+        </div>
+
+        {scopedRows.length === 0 ? (
           <p className="muted">{t.admin.noProposals}</p>
+        ) : filtered.length === 0 ? (
+          <p className="empty-filter">{t.admin.noMatchingProposals}</p>
         ) : (
           <div className="table__scroll">
-            <table className="table">
+            <table className="table decision-table">
               <thead>
                 <tr>
                   <th>{t.admin.colTitle}</th>
@@ -303,60 +807,95 @@ export function Proposals({ cfpId }: { cfpId: string }) {
                 </tr>
               </thead>
               <tbody>
-                {ranked.map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.title || '—'}</td>
-                    <td>{names(row) || '—'}</td>
-                    <td>{row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}</td>
-                    <td>{row.aggregate?.reviewCount ?? 0}</td>
-                    <td>{row.aggregate ? row.aggregate.stdDev.toFixed(2) : '—'}</td>
-                    <td>
-                      {row.status === 'draft' || row.status === 'withdrawn' ? (
-                        <span className="muted">{t.enums.status[row.status]}</span>
-                      ) : (
-                        <select
-                          className="field__input field__input--select"
-                          aria-label={`${t.admin.colStatus}: ${row.title}`}
-                          value={row.status}
-                          onChange={(e) => decide(row.id, e.target.value)}
-                        >
-                          {STATUS_SETS.decidable.map((s) => (
-                            <option key={s} value={s}>
-                              {t.enums.status[s]}
-                            </option>
-                          ))}
-                          {!inStatusSet('decidable', row.status) && (
-                            <option value={row.status} disabled>
-                              {t.enums.status[row.status]}
-                            </option>
-                          )}
-                        </select>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {filtered.map((row) => {
+                  const saving = pending.has(row.id);
+                  const rowError = rowErrors.get(row.id);
+                  return (
+                    <tr key={row.id} className={saving ? 'decision-table__row--saving' : undefined}>
+                      <td>
+                        <strong>{row.title || '—'}</strong>
+                        <span className="decision-table__category">
+                          {labelOf(scopedShape.category, row.category, locale)}
+                        </span>
+                      </td>
+                      <td>{names(row) || '—'}</td>
+                      <td>{row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}</td>
+                      <td>{row.aggregate?.reviewCount ?? 0}</td>
+                      <td>{row.aggregate ? row.aggregate.stdDev.toFixed(2) : '—'}</td>
+                      <td>
+                        {row.status === 'draft' || row.status === 'withdrawn' ? (
+                          <span className={`status-chip status-chip--${row.status}`}>
+                            {t.enums.status[row.status]}
+                          </span>
+                        ) : (
+                          <div className="decision-control">
+                            <select
+                              className="field__input field__input--select"
+                              aria-label={`${t.admin.colStatus}: ${row.title}`}
+                              value={row.status}
+                              disabled={recomputing || saving}
+                              onChange={(event) =>
+                                void decide(row, event.target.value as ProposalStatus)
+                              }
+                            >
+                              {ADMIN_PROPOSAL_STATUSES.map((status) => (
+                                <option key={status} value={status}>
+                                  {t.enums.status[status]}
+                                </option>
+                              ))}
+                              {!(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(
+                                row.status,
+                              ) && (
+                                <option value={row.status} disabled>
+                                  {t.enums.status[row.status]}
+                                </option>
+                              )}
+                            </select>
+                            {saving && (
+                              <span className="decision-control__saving" role="status">
+                                {t.admin.savingDecision}
+                              </span>
+                            )}
+                            {rowError && (
+                              <span className="field__error decision-control__error" role="alert">
+                                {rowError}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
 
-        <button type="button" className="btn btn--ghost" disabled={busy} onClick={recompute}>
-          {busy ? t.admin.recomputing : t.admin.recompute}
-        </button>
-
-        <Result ok={note} error={error} />
+        <Result ok={inCurrentScope ? note : ''} error={inCurrentScope ? error : ''} />
       </section>
 
-      <Dashboard rows={rows} shape={shape} />
-
       <section className="section">
-        <h2>{t.admin.results}</h2>
+        <div className="decision-panel__heading">
+          <h2>{t.admin.results}</h2>
+          {accepted.length > 0 && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() =>
+                downloadSelectedSpeakersCsv(cfpId, accepted, scopedShape, questions, locale)
+              }
+            >
+              CSV · {t.admin.results}
+            </button>
+          )}
+        </div>
         <p className="section__help">
           {t.admin.tally(
             decidable.length,
             accepted.length,
-            ranked.filter((r) => r.status === 'waitlisted').length,
-            ranked.filter((r) => inStatusSet('decided', r.status)).length,
+            ranked.filter((row) => row.status === 'waitlisted').length,
+            ranked.filter((row) => inStatusSet('decided', row.status)).length,
           )}
         </p>
 
@@ -375,7 +914,14 @@ export function Proposals({ cfpId }: { cfpId: string }) {
                     </span>
                   </span>
                   <span className="muted">{t.enums.status[row.status]}</span>
-                </span>
+                  </span>
+                <OperationalDetails row={row} shape={scopedShape} />
+                <Answered
+                  cfpId={cfpId}
+                  fields={scopedShape.fields}
+                  answers={row.answers}
+                  title={t.admin.extraTitle}
+                />
                 {/* The whole reason for asking. Without it an organiser reads
                     shirt sizes out of the Firestore console. */}
                 <Answered
@@ -383,6 +929,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
                   fields={questions}
                   answers={row.confirmAnswers}
                   speakerUid={(row.speakerIds ?? [])[0]}
+                  title={t.admin.form}
                 />
               </li>
             ))}

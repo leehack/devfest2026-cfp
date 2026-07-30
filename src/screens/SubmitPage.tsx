@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { ATTENDANCE_STATUSES, LIMITS, inStatusSet } from '@shared/enums';
@@ -9,10 +9,16 @@ import {
   type SubmissionForm,
 } from '@shared/submissionForm';
 
+import { useToast } from '../components/Toast';
 import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../components/fields';
+import { FormProgress, type FormProgressItem } from '../components/FormProgress';
 import { Reveal } from '../components/Reveal';
 import { SessionizeImport } from '../components/SessionizeImport';
-import { SpeakerFields } from '../components/SpeakerFields';
+import {
+  SpeakerFields,
+  SpeakerProfileSummary,
+  speakerProfileComplete,
+} from '../components/SpeakerFields';
 import { formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { COC_URL } from '../lib/env';
@@ -20,10 +26,12 @@ import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
 import { editScope, type EditScope } from '../lib/lifecycle';
+import { goTo } from '../lib/router';
 import {
   clearTalk,
   emptyForm,
   fromDocuments,
+  toDocuments,
   toSubmission,
   type FormState,
 } from '../lib/formState';
@@ -54,12 +62,14 @@ import {
 } from '@shared/confirmForm';
 
 type Errors = Record<string, string>;
+type SaveSource = 'background' | 'manual' | 'transition';
 
 interface TalkPickerProps {
   talks: LoadedProposal[];
   currentId: string | null;
   /** Live from the form, so the tab renames itself as the title is typed. */
   currentTitle: string;
+  busy: boolean;
   canAdd: boolean;
   atCap: boolean;
   onOpen: (id: string) => void;
@@ -71,6 +81,7 @@ function TalkPicker({
   talks,
   currentId,
   currentTitle,
+  busy,
   canAdd,
   atCap,
   onOpen,
@@ -93,6 +104,7 @@ function TalkPicker({
             type="button"
             className={`talks__tab${current ? ' talks__tab--on' : ''}`}
             aria-current={current ? 'true' : undefined}
+            disabled={busy}
             onClick={() => onOpen(talk.id)}
           >
             {title}
@@ -104,7 +116,7 @@ function TalkPicker({
       })}
       {isNew && <span className="talks__tab talks__tab--on">{currentTitle || t.form.newTalk}</span>}
       {canAdd && !isNew && (
-        <button type="button" className="talks__add" onClick={onAdd}>
+        <button type="button" className="talks__add" disabled={busy} onClick={onAdd}>
           {t.form.addTalk}
         </button>
       )}
@@ -144,6 +156,7 @@ interface QuestionsProps {
   faults: AnswerFaults;
   busy: boolean;
   onAnswer: (key: string, value: AnswerValue) => void;
+  onUploadBusyChange?: (key: string, busy: boolean) => void;
 }
 
 /**
@@ -154,7 +167,16 @@ interface QuestionsProps {
  * "do you need a power outlet" without a deploy ends up chasing forty people
  * by email instead.
  */
-function Questions({ cfpId, uid, fields, answers, faults, busy, onAnswer }: QuestionsProps) {
+function Questions({
+  cfpId,
+  uid,
+  fields,
+  answers,
+  faults,
+  busy,
+  onAnswer,
+  onUploadBusyChange,
+}: QuestionsProps) {
   const { t, locale } = useI18n();
   const message = (key: string) => {
     const fault = faults[key];
@@ -185,6 +207,7 @@ function Questions({ cfpId, uid, fields, answers, faults, busy, onAnswer }: Ques
               // updates — the callable re-derives it from the bucket regardless.
               uploaded={typeof value === 'string' && value !== ''}
               onUploaded={() => onAnswer(field.key, headshotPath(cfpId, uid, field.key))}
+              onBusyChange={(next) => onUploadBusyChange?.(field.key, next)}
             />
           );
         }
@@ -208,7 +231,6 @@ function Questions({ cfpId, uid, fields, answers, faults, busy, onAnswer }: Ques
 
         const text = typeof value === 'string' ? value : '';
         const common = {
-          key: field.key,
           label,
           help,
           required: field.required,
@@ -221,6 +243,7 @@ function Questions({ cfpId, uid, fields, answers, faults, busy, onAnswer }: Ques
         if (field.type === 'select') {
           return (
             <SelectField
+              key={field.key}
               {...common}
               options={[
                 { value: '', label: t.form.answerPick },
@@ -233,9 +256,16 @@ function Questions({ cfpId, uid, fields, answers, faults, busy, onAnswer }: Ques
           );
         }
         if (field.type === 'textarea') {
-          return <TextAreaField {...common} maxLength={FORM_LIMITS.answerTextarea} rows={3} />;
+          return (
+            <TextAreaField
+              key={field.key}
+              {...common}
+              maxLength={FORM_LIMITS.answerTextarea}
+              rows={3}
+            />
+          );
         }
-        return <TextField {...common} maxLength={FORM_LIMITS.answerText} />;
+        return <TextField key={field.key} {...common} maxLength={FORM_LIMITS.answerText} />;
       })}
     </>
   );
@@ -247,7 +277,7 @@ interface StatusBannerProps {
   busy: boolean;
   /** Absent once withdrawing is no longer something they can do. */
   onWithdraw?: () => void;
-  /** Present only while an acceptance is unanswered. */
+  /** Present while the speaker can set or change their acceptance response. */
   onRespond?: (response: 'confirm' | 'decline') => void;
   questions: QuestionsProps;
   /** Open once they have said yes and there is something left to ask. */
@@ -274,6 +304,8 @@ function StatusBanner({
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
   const hasQuestions = questions.fields.length > 0;
+  const canConfirm = status !== 'confirmed';
+  const canDecline = status !== 'declined';
 
   return (
     <div className={`panel${good ? ' panel--good' : ''}`}>
@@ -291,22 +323,26 @@ function StatusBanner({
       */}
       {onRespond && !asking && (
         <div className="card__actions">
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={busy}
-            onClick={() => (hasQuestions ? onAsk() : onRespond('confirm'))}
-          >
-            {t.form.confirmAccept}
-          </button>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={busy}
-            onClick={() => onRespond('decline')}
-          >
-            {t.form.confirmDecline}
-          </button>
+          {canConfirm && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy}
+              onClick={() => (hasQuestions ? onAsk() : onRespond('confirm'))}
+            >
+              {t.form.confirmAccept}
+            </button>
+          )}
+          {canDecline && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={busy}
+              onClick={() => onRespond('decline')}
+            >
+              {t.form.confirmDecline}
+            </button>
+          )}
         </div>
       )}
 
@@ -330,19 +366,23 @@ function StatusBanner({
         </>
       )}
 
-      {/* Answered already, but a size guessed in a hurry should not be final. */}
-      {onSaveAnswers && hasQuestions && (
+      {/* Answered already, but a size guessed in a hurry should not be final.
+          An archived round keeps the answers readable while omitting the save
+          action; `questions.busy` freezes every control in that case. */}
+      {status === 'confirmed' && hasQuestions && (
         <>
           <h3 className="card__subtitle">{t.form.answersTitle}</h3>
           <Questions {...questions} />
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={onSaveAnswers}
-          >
-            {t.form.answersSave}
-          </button>
+          {onSaveAnswers && (
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={onSaveAnswers}
+            >
+              {t.form.answersSave}
+            </button>
+          )}
         </>
       )}
 
@@ -368,6 +408,17 @@ function validate(form: FormState, shape: SubmissionForm, t: Dictionary): Errors
   return errors;
 }
 
+function focusFirstInvalidField() {
+  const control = document.querySelector<HTMLElement>(
+    'input[aria-invalid="true"]:not(:disabled), textarea[aria-invalid="true"]:not(:disabled), select[aria-invalid="true"]:not(:disabled)',
+  );
+  const field =
+    control?.closest<HTMLElement>('.field--error') ??
+    document.querySelector<HTMLElement>('.field--error');
+  field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  control?.focus({ preventScroll: true });
+}
+
 interface SubmitPageProps {
   user: User;
   cfp: CfpWindow;
@@ -383,9 +434,12 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [status, setStatus] = useState<ProposalStatus>('draft');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [errors, setErrors] = useState<Errors>({});
   const [showErrors, setShowErrors] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [saveError, setSaveError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [confirmForm, setConfirmForm] = useState<ConfirmForm>(EMPTY_FORM);
@@ -394,6 +448,9 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [answers, setAnswers] = useState<Answers>({});
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
+  const [answerSaveState, setAnswerSaveState] =
+    useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [uploadingAnswer, setUploadingAnswer] = useState(false);
   /**
    * Faults on *this call's own* questions, kept apart from `answerFaults`.
    * Those belong to the acceptance form and are filled in by the callable at
@@ -402,18 +459,76 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
    */
   const [extraFaults, setExtraFaults] = useState<AnswerFaults>({});
   const [asking, setAsking] = useState(false);
+  const [speakerEditing, setSpeakerEditing] = useState(true);
 
   const dirty = useRef(false);
-  const scope = editScope(status, cfp.state === 'open');
+  const revision = useRef(0);
+  const activeSave = useRef<Promise<string> | null>(null);
+  const answerDirty = useRef(false);
+  const answerRevision = useRef(0);
+  const activeAnswerSave = useRef<Promise<boolean> | null>(null);
+  const uploadingFields = useRef(new Set<string>());
+  const historyGuard = useRef(false);
+  const historyTransition = useRef(false);
+  const archived = cfp.state === 'archived';
+  const scope = editScope(status, cfp.state === 'open', archived);
+  const formRef = useRef(form);
+  const proposalIdRef = useRef(proposalId);
+  const scopeRef = useRef(scope);
+  const talksRef = useRef(talks);
+  const speakerRef = useRef(speaker);
+  const statusRef = useRef(status);
+  const answersRef = useRef(answers);
+  const savedAnswersRef = useRef<Answers>({});
+  const tRef = useRef(t);
+  const localeRef = useRef(locale);
+  formRef.current = form;
+  proposalIdRef.current = proposalId;
+  scopeRef.current = scope;
+  talksRef.current = talks;
+  speakerRef.current = speaker;
+  statusRef.current = status;
+  answersRef.current = answers;
+  tRef.current = t;
+  localeRef.current = locale;
   /** The talk itself: what the committee scores. */
   const readOnly = scope !== 'all';
   /** Travel answers: no bearing on the score, so they outlive the freeze. */
   const travelReadOnly = scope === 'none';
+  const talkDisabled = readOnly || submitting;
+  const travelDisabled = travelReadOnly || submitting;
+
+  /*
+   * Next owns browser Back before this client screen sees `popstate`. A guard
+   * entry on the same URL makes the first Back stay on this mounted form, so we
+   * can finish its write and only then continue to the entry underneath.
+   */
+  const armHistoryGuard = useCallback(() => {
+    if (historyGuard.current) return;
+    const state =
+      history.state && typeof history.state === 'object'
+        ? history.state
+        : {};
+    history.pushState(
+      { ...state, __cfpFormGuard: `${cfpId}:${user.uid}` },
+      '',
+      `${location.pathname}${location.search}${location.hash}`,
+    );
+    historyGuard.current = true;
+  }, [cfpId, user.uid]);
+
+  const collapseHistoryGuard = useCallback(() => {
+    if (!historyGuard.current || historyTransition.current) return;
+    historyGuard.current = false;
+    history.back();
+  }, []);
 
   // ------------------------------------------------------------------ loading
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError('');
     (async () => {
       try {
         // Both at once: the questions are organiser config, and waiting for the
@@ -426,28 +541,48 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         ]);
         if (cancelled) return;
         setTalks(found);
+        talksRef.current = found;
         setSpeaker(profile);
+        speakerRef.current = profile;
         setConfirmForm(questions);
         setShape(asked);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
-        const open = found.find((talk) => talk.status === 'draft') ?? found[0];
+        const open =
+          cfp.state === 'open'
+            ? (found.find((talk) => talk.status === 'draft') ?? found[0])
+            : (found.find((talk) => talk.status === 'accepted') ??
+              found.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
+              found[0]);
         if (open) {
-          setForm(fromDocuments(open.proposal, profile));
+          const next = fromDocuments(open.proposal, profile);
+          setForm(next);
+          setSpeakerEditing(!speakerProfileComplete(next));
           setProposalId(open.id);
+          proposalIdRef.current = open.id;
           setStatus(open.status);
-          setAnswers((open.proposal.confirmAnswers ?? {}) as Answers);
+          const loadedAnswers = (open.proposal.confirmAnswers ?? {}) as Answers;
+          setAnswers(loadedAnswers);
+          savedAnswersRef.current = loadedAnswers;
+          answerDirty.current = false;
         } else {
           // No talk here yet — but `speakers/{uid}` is global, so anyone who has
           // submitted to another call or filled in `/me` has already written all
           // of this. Starting them from blank was asking for it twice.
-          setForm({
+          const next = {
             ...fromDocuments(undefined, profile),
             name: profile?.name || user.displayName || '',
             email: user.email ?? '',
-          });
+          };
+          setForm(next);
+          setSpeakerEditing(!speakerProfileComplete(next));
+          setAnswers({});
+          savedAnswersRef.current = {};
+          answerDirty.current = false;
         }
+      } catch (error) {
+        if (!cancelled) setLoadError(friendlyError(error, tRef.current));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -455,61 +590,393 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [cfpId, user]);
+  }, [cfp.state, cfpId, loadAttempt, user]);
 
   // ----------------------------------------------------------------- autosave
 
-  const persist = useCallback(async () => {
-    if (scope === 'none') return;
-    setSaveState('saving');
-    try {
-      const id = await saveDraft(cfpId, user, form, proposalId, scope, locale);
-      if (!proposalId) {
-        setProposalId(id);
-        setTalks((prev) => [...prev, { id, status: 'draft', proposal: {}, speaker: undefined }]);
+  const { showToast } = useToast();
+
+  const setConfirmationAnswer = useCallback((key: string, value: AnswerValue) => {
+    armHistoryGuard();
+    answerDirty.current = true;
+    answerRevision.current += 1;
+    setAnswerSaveState('idle');
+    setAnswers((previous) => ({ ...previous, [key]: value }));
+  }, [armHistoryGuard]);
+
+  const setAnswerUploadBusy = useCallback((key: string, busy: boolean) => {
+    if (busy) uploadingFields.current.add(key);
+    else uploadingFields.current.delete(key);
+    setUploadingAnswer(uploadingFields.current.size > 0);
+  }, []);
+
+  /**
+   * Once a speaker has confirmed, changing a logistical answer is idempotent:
+   * the same callable writes the new answers while leaving the status confirmed.
+   * An unanswered acceptance is never autosaved, because that would accept a
+   * slot before the speaker presses the explicit confirmation button.
+   */
+  const saveConfirmationAnswers = useCallback(
+    async (source: SaveSource = 'background'): Promise<boolean> => {
+      if (activeAnswerSave.current) {
+        const saved = await activeAnswerSave.current;
+        if (!saved) return false;
       }
-      // Keeps the picker's label in step with the title being typed.
-      setTalks((prev) =>
-        prev.map((talk) =>
-          talk.id === id ? { ...talk, proposal: { ...talk.proposal, title: form.title } } : talk,
-        ),
-      );
-      dirty.current = false;
-      setSaveState('saved');
-    } catch {
-      setSaveState('failed');
-    }
-  }, [cfpId, form, locale, proposalId, scope, user]);
+      if (!answerDirty.current) return true;
+      if (
+        archived ||
+        statusRef.current !== 'confirmed' ||
+        uploadingFields.current.size > 0 ||
+        proposalIdRef.current === null
+      ) {
+        return false;
+      }
+
+      const savedRevision = answerRevision.current;
+      const snapshot = answersRef.current;
+      const id = proposalIdRef.current;
+      setAnswerSaveState('saving');
+
+      const request = (async () => {
+        try {
+          await respondToDecision({
+            cfpId,
+            proposalId: id,
+            response: 'confirm',
+            answers: snapshot,
+          });
+          if (answerRevision.current === savedRevision) {
+            answerDirty.current = false;
+            savedAnswersRef.current = snapshot;
+            setAnswerSaveState('saved');
+            if (source !== 'transition' && !dirty.current) collapseHistoryGuard();
+          } else {
+            setAnswerSaveState('idle');
+          }
+          setBanner(null);
+          return true;
+        } catch (error) {
+          setAnswerSaveState('failed');
+          setBanner(friendlyError(error, tRef.current));
+          return false;
+        } finally {
+          activeAnswerSave.current = null;
+        }
+      })();
+      activeAnswerSave.current = request;
+      const saved = await request;
+      if (!saved) return false;
+      return source !== 'background' && answerDirty.current
+        ? saveConfirmationAnswers(source)
+        : true;
+    },
+    [archived, cfpId, collapseHistoryGuard],
+  );
 
   useEffect(() => {
-    if (loading || scope === 'none' || !dirty.current) return;
-    const handle = setTimeout(persist, 1500);
+    if (archived || status !== 'confirmed' || uploadingAnswer || !answerDirty.current) return;
+    const handle = window.setTimeout(() => void saveConfirmationAnswers('background'), 1500);
     return () => clearTimeout(handle);
-  }, [form, loading, scope, persist]);
+  }, [answers, archived, saveConfirmationAnswers, status, uploadingAnswer]);
+
+  const persist = useCallback(async (source: SaveSource = 'background'): Promise<boolean> => {
+    if (scopeRef.current === 'none' && proposalIdRef.current === null) return false;
+
+    // A visibility flush and the debounce can meet. Let the first write finish,
+    // then decide whether a newer revision still needs its own write.
+    if (activeSave.current) {
+      try {
+        await activeSave.current;
+      } catch {
+        return false;
+      }
+    }
+
+    if (!dirty.current) {
+      if (source === 'manual') showToast(tRef.current.form.saved, 'success');
+      return true;
+    }
+
+    const savedRevision = revision.current;
+    const snapshot = formRef.current;
+    const currentId = proposalIdRef.current;
+    const currentScope = scopeRef.current;
+    setSaveState('saving');
+    setSaveError('');
+
+    const request = saveDraft(cfpId, user, snapshot, currentId, currentScope, localeRef.current);
+    activeSave.current = request;
+    let shouldFlushAgain = false;
+
+    try {
+      const id = await request;
+      const { proposalDoc, speakerDoc } = toDocuments(snapshot);
+      const cachedSpeaker = {
+        ...speakerRef.current,
+        ...speakerDoc,
+        email: user.email ?? '',
+      };
+      speakerRef.current = cachedSpeaker;
+      setSpeaker(cachedSpeaker);
+
+      if (!currentId) {
+        proposalIdRef.current = id;
+        setProposalId(id);
+      }
+      // Switching is entirely local after the save. Cache every field that was
+      // written, not only the picker title, or returning to this talk restores
+      // the page-load copy and the next save overwrites the fresh one.
+      const previousTalks = talksRef.current;
+      const cachedTalks: LoadedProposal[] = previousTalks.some((talk) => talk.id === id)
+        ? previousTalks.map((talk) =>
+            talk.id === id
+              ? {
+                  ...talk,
+                  proposal: { ...talk.proposal, ...proposalDoc },
+                  speaker: cachedSpeaker,
+                }
+              : talk,
+          )
+        : [
+            ...previousTalks,
+            {
+              id,
+              status: 'draft',
+              proposal: proposalDoc,
+              speaker: cachedSpeaker,
+            },
+          ];
+      talksRef.current = cachedTalks;
+      setTalks(cachedTalks);
+
+      if (revision.current === savedRevision) {
+        dirty.current = false;
+        setSaveState('saved');
+        if (source === 'manual') showToast(tRef.current.form.saved, 'success');
+        if (source !== 'transition' && !answerDirty.current) collapseHistoryGuard();
+      } else {
+        shouldFlushAgain = source !== 'background';
+        setSaveState('idle');
+      }
+    } catch (error) {
+      setSaveState('failed');
+      setSaveError(friendlyError(error, tRef.current));
+      return false;
+    } finally {
+      if (activeSave.current === request) activeSave.current = null;
+    }
+
+    return shouldFlushAgain ? persist(source) : true;
+  }, [cfpId, collapseHistoryGuard, showToast, user]);
+
+  useEffect(() => {
+    if (loading || (scope === 'none' && proposalId === null) || !dirty.current) return;
+    const handle = window.setTimeout(() => void persist('background'), 1500);
+    return () => clearTimeout(handle);
+  }, [form, loading, persist, proposalId, scope]);
+
+  useLayoutEffect(() => {
+    const hasPendingChanges = () => dirty.current || answerDirty.current;
+    const saveForTransition = async () => {
+      if (dirty.current && !(await persist('transition'))) return false;
+      if (answerDirty.current && !(await saveConfirmationAnswers('transition'))) {
+        showToast(t.form.unsaved, 'warning');
+        return false;
+      }
+      return true;
+    };
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      if (!hasPendingChanges()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const saveWhenHidden = () => {
+      if (document.visibilityState === 'hidden' && dirty.current) void persist('background');
+      if (document.visibilityState === 'hidden' && answerDirty.current) {
+        void saveConfirmationAnswers('background');
+      }
+    };
+    const formPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const saveBeforeHistoryMove = () => {
+      if (!historyGuard.current || !hasPendingChanges()) return;
+
+      const arrivedAt =
+        `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (arrivedAt !== formPath) {
+        /*
+         * `goTo` pushes its destination before emitting popstate. That is not
+         * the Back button consuming our same-URL guard entry, even though both
+         * arrive through this handler. Keep the current history slot, restore
+         * the form in it while its write finishes, then replace it with the
+         * intended destination and let the router observe that settled path.
+         */
+        const destinationState = history.state;
+        history.replaceState(destinationState, '', formPath);
+        if (historyTransition.current) return;
+
+        historyTransition.current = true;
+        void saveForTransition()
+          .then((saved) => {
+            if (!saved) return;
+            historyGuard.current = false;
+            history.replaceState(destinationState, '', arrivedAt);
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          })
+          .finally(() => {
+            historyTransition.current = false;
+          });
+        return;
+      }
+
+      // We are now on the same-URL base entry. Re-arm while the write is in
+      // flight so repeated Back presses cannot outrun the one save.
+      const state =
+        history.state && typeof history.state === 'object'
+          ? history.state
+          : {};
+      history.pushState(
+        { ...state, __cfpFormGuard: `${cfpId}:${user.uid}` },
+        '',
+        formPath,
+      );
+
+      // A second Back while the first save is pending is restored above, but it
+      // must not launch another write or replace the original destination.
+      if (historyTransition.current) return;
+      historyTransition.current = true;
+      void saveForTransition()
+        .then((saved) => {
+          if (saved) {
+            historyGuard.current = false;
+            // Skip both the re-armed guard and this form's base entry. That is
+            // the Back the person originally asked for.
+            history.go(-2);
+          }
+        })
+        .finally(() => {
+          historyTransition.current = false;
+        });
+    };
+    const leaveAfterCollapsingGuard = (leave: () => void) => {
+      if (!historyGuard.current) {
+        leave();
+        return;
+      }
+      historyGuard.current = false;
+      window.addEventListener('popstate', leave, { once: true });
+      history.back();
+    };
+    const saveThenLeave = (leave: () => void) => {
+      if (historyTransition.current) return;
+      historyTransition.current = true;
+      void saveForTransition()
+        .then((saved) => {
+          if (!saved) {
+            historyTransition.current = false;
+            return;
+          }
+          leaveAfterCollapsingGuard(() => {
+            historyTransition.current = false;
+            leave();
+          });
+        })
+        .catch(() => {
+          historyTransition.current = false;
+        });
+    };
+    const saveBeforeInternalLink = (event: MouseEvent) => {
+      if (
+        !hasPendingChanges() ||
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      const signOut =
+        target instanceof Element
+          ? target.closest<HTMLButtonElement>('.account-menu__action--button')
+          : null;
+      if (signOut) {
+        event.preventDefault();
+        event.stopPropagation();
+        saveThenLeave(() => signOut.click());
+        return;
+      }
+
+      const link = target instanceof Element ? target.closest<HTMLAnchorElement>('a[href]') : null;
+      if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+
+      const destination = new URL(link.href, window.location.href);
+      if (destination.origin !== window.location.origin) return;
+      if (
+        destination.pathname === window.location.pathname &&
+        destination.search === window.location.search
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      saveThenLeave(() =>
+        goTo(`${destination.pathname}${destination.search}${destination.hash}`),
+      );
+    };
+
+    window.addEventListener('beforeunload', warnBeforeLeaving);
+    window.addEventListener('popstate', saveBeforeHistoryMove);
+    document.addEventListener('visibilitychange', saveWhenHidden);
+    document.addEventListener('click', saveBeforeInternalLink, true);
+    return () => {
+      window.removeEventListener('beforeunload', warnBeforeLeaving);
+      window.removeEventListener('popstate', saveBeforeHistoryMove);
+      document.removeEventListener('visibilitychange', saveWhenHidden);
+      document.removeEventListener('click', saveBeforeInternalLink, true);
+      if (dirty.current) void persist('background');
+      if (answerDirty.current) void saveConfirmationAnswers('background');
+    };
+  }, [cfpId, persist, saveConfirmationAnswers, showToast, t.form.unsaved, user.uid]);
 
   const set = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
+    armHistoryGuard();
     dirty.current = true;
-    setSaveState('idle');
+    revision.current += 1;
+    setSaveState((current) => (current === 'failed' ? current : 'idle'));
     setForm((prev) => ({ ...prev, [key]: value }));
-  }, []);
+  }, [armHistoryGuard]);
+
+  const liveErrors = useMemo(() => validate(form, shape, t), [form, shape, t]);
+  const liveExtraFaults = useMemo(
+    () => validateAnswers({ fields: shape.fields }, form.answers).faults,
+    [form.answers, shape.fields],
+  );
 
   // Re-validate live once the applicant has seen errors, so fixes clear as they
   // type — and so switching language re-renders the messages in it.
   useEffect(() => {
-    if (showErrors) setErrors(validate(form, shape, t));
-  }, [form, shape, showErrors, t]);
+    if (!showErrors) return;
+    setErrors(liveErrors);
+    setExtraFaults(liveExtraFaults);
+  }, [liveErrors, liveExtraFaults, showErrors]);
 
   function markTalk(id: string, next: ProposalStatus, title?: string) {
-    setTalks((prev) => {
-      const known = prev.some((talk) => talk.id === id);
-      const patch = (talk: LoadedProposal) => ({
-        ...talk,
-        status: next,
-        proposal: title === undefined ? talk.proposal : { ...talk.proposal, title },
-      });
-      if (known) return prev.map((talk) => (talk.id === id ? patch(talk) : talk));
-      return [...prev, patch({ id, status: next, proposal: { title }, speaker: undefined })];
+    const previousTalks = talksRef.current;
+    const known = previousTalks.some((talk) => talk.id === id);
+    const patch = (talk: LoadedProposal) => ({
+      ...talk,
+      status: next,
+      proposal: title === undefined ? talk.proposal : { ...talk.proposal, title },
     });
+    const updated = known
+      ? previousTalks.map((talk) => (talk.id === id ? patch(talk) : talk))
+      : [...previousTalks, patch({ id, status: next, proposal: { title }, speaker: undefined })];
+    talksRef.current = updated;
+    setTalks(updated);
   }
 
   // -------------------------------------------------------------- switching
@@ -520,14 +987,20 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
    */
   async function openTalk(id: string) {
     if (id === proposalId) return;
-    if (dirty.current && scope !== 'none') await persist();
+    if (dirty.current && !(await persist('transition'))) return;
 
-    const talk = talks.find((candidate) => candidate.id === id);
+    const talk = talksRef.current.find((candidate) => candidate.id === id);
     if (!talk) return;
-    setForm(fromDocuments(talk.proposal, speaker));
+    revision.current += 1;
+    setForm(fromDocuments(talk.proposal, speakerRef.current));
     setProposalId(id);
+    proposalIdRef.current = id;
     setStatus(talk.status);
-    setAnswers((talk.proposal.confirmAnswers ?? {}) as Answers);
+    const loadedAnswers = (talk.proposal.confirmAnswers ?? {}) as Answers;
+    setAnswers(loadedAnswers);
+    savedAnswersRef.current = loadedAnswers;
+    answerDirty.current = false;
+    setAnswerSaveState('idle');
     setAnswerFaults({});
     setAsking(false);
     setShowErrors(false);
@@ -537,13 +1010,19 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   }
 
   async function startNewTalk() {
-    if (dirty.current && scope !== 'none') await persist();
+    if (dirty.current && !(await persist('transition'))) return;
 
     // From the form rather than the loaded profile: right after a first save
     // the loaded copy is a page-load old and would blank the bio just typed.
+    revision.current += 1;
     setForm((prev) => clearTalk(prev));
     setProposalId(null);
+    proposalIdRef.current = null;
     setStatus('draft');
+    setAnswers({});
+    savedAnswersRef.current = {};
+    answerDirty.current = false;
+    setAnswerSaveState('idle');
     setShowErrors(false);
     setBanner(null);
     setSaveState('idle');
@@ -554,39 +1033,63 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const found = validate(form, shape, t);
-    // The custom questions are not part of the zod schema — they are the
-    // confirmation form's field engine, so they get its validator. Same call
-    // the callable makes, so the browser refuses what the server would.
-    const { faults } = validateAnswers({ fields: shape.fields }, form.answers);
+    const found = liveErrors;
+    const faults = liveExtraFaults;
     setErrors(found);
     setExtraFaults(faults);
     setShowErrors(true);
     if (Object.keys(found).length > 0 || Object.keys(faults).length > 0) {
-      document.querySelector('.field--error, .checkbox.field--error')?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
+      if (Object.keys(found).some((key) => key.startsWith('speaker.'))) {
+        setSpeakerEditing(true);
+      }
+      requestAnimationFrame(focusFirstInvalidField);
       return;
     }
 
     setSubmitting(true);
     setBanner(null);
     try {
-      const id = await saveDraft(cfpId, user, form, proposalId, 'all', locale);
-      setProposalId(id);
+      // Join any debounce already in flight before submitting. Without this, a
+      // first autosave and the submit click can both create a draft while the
+      // proposal id is still null.
+      if (dirty.current && !(await persist('transition'))) return;
+
+      // The flush may have waited for an autosave that was already in flight.
+      // Validate the revision that actually won that race, not the render that
+      // supplied the original click handler.
+      const latest = formRef.current;
+      const latestErrors = validate(latest, shape, t);
+      const latestFaults = validateAnswers({ fields: shape.fields }, latest.answers).faults;
+      if (Object.keys(latestErrors).length > 0 || Object.keys(latestFaults).length > 0) {
+        setErrors(latestErrors);
+        setExtraFaults(latestFaults);
+        if (Object.keys(latestErrors).some((key) => key.startsWith('speaker.'))) {
+          setSpeakerEditing(true);
+        }
+        requestAnimationFrame(focusFirstInvalidField);
+        return;
+      }
+
+      let id = proposalIdRef.current;
+      if (!id) {
+        id = await saveDraft(cfpId, user, latest, null, 'all', locale);
+        setProposalId(id);
+        proposalIdRef.current = id;
+        dirty.current = false;
+        setSaveState('saved');
+      }
       await submitProposal({ cfpId, proposalId: id });
       // Codes only — never the title, the abstract or anything about the
       // person. This answers "which tracks are people proposing to", which is
       // the one thing page views cannot tell an organiser.
       track('proposal_submitted', {
         cfp_id: cfpId,
-        category: form.category,
-        format: form.format,
-        delivery_language: form.deliveryLanguage,
+        category: latest.category,
+        format: latest.format,
+        delivery_language: latest.deliveryLanguage,
       });
       setStatus('submitted');
-      markTalk(id, 'submitted', form.title);
+      markTalk(id, 'submitted', latest.title);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error: any) {
       setBanner(friendlyError(error, t));
@@ -596,7 +1099,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   }
 
   async function onWithdraw() {
-    if (!proposalId || !window.confirm(t.form.withdrawConfirm)) return;
+    if (archived || !proposalId || !window.confirm(t.form.withdrawConfirm)) return;
     setSubmitting(true);
     try {
       await withdrawProposal({ cfpId, proposalId });
@@ -610,21 +1113,39 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   }
 
   async function onRespond(response: 'confirm' | 'decline') {
-    if (!proposalId) return;
+    if (archived || !proposalId || uploadingFields.current.size > 0) return;
     // Only the decline is confirmed: saying yes is reversible by declining
     // afterwards, but a decline given by accident gives the slot away.
     if (response === 'decline' && !window.confirm(t.form.confirmDeclineConfirm)) return;
     setSubmitting(true);
     setAnswerFaults({});
     try {
+      // Preserve any corrected details before changing a confirmed response to
+      // declined. Otherwise a quick edit followed by decline races the debounce
+      // and the old answers win if the speaker later confirms again.
+      if (
+        response === 'decline' &&
+        statusRef.current === 'confirmed' &&
+        answerDirty.current &&
+        !(await saveConfirmationAnswers('transition'))
+      ) {
+        return;
+      }
+      if (activeAnswerSave.current && !(await activeAnswerSave.current)) return;
+
+      const responseAnswers = answersRef.current;
       const { data } = await respondToDecision({
         cfpId,
         proposalId,
         response,
-        ...(response === 'confirm' ? { answers } : {}),
+        ...(response === 'confirm' ? { answers: responseAnswers } : {}),
       });
       setStatus(data.status);
+      statusRef.current = data.status;
       markTalk(proposalId, data.status);
+      if (response === 'confirm') savedAnswersRef.current = responseAnswers;
+      answerDirty.current = false;
+      setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
       setAsking(false);
       setBanner(null);
     } catch (error: any) {
@@ -643,6 +1164,15 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function cancelConfirmationAnswers() {
+    setAnswers(savedAnswersRef.current);
+    answersRef.current = savedAnswersRef.current;
+    answerDirty.current = false;
+    setAnswerFaults({});
+    setAnswerSaveState('idle');
+    setAsking(false);
   }
 
   // -------------------------------------------------------------- option sets
@@ -664,9 +1194,33 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   const err = (key: string) => (showErrors ? errors[key] : undefined);
-  const errorCount = Object.keys(errors).length;
+  const errorCount = Object.keys(errors).length + Object.keys(extraFaults).length;
 
   if (loading) return <p className="muted">{t.app.loading}</p>;
+  if (loadError) {
+    return (
+      <div className="panel">
+        <p className="field__error" role="alert">
+          {loadError}
+        </p>
+        <button type="button" className="btn" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+          {t.errors.reload}
+        </button>
+      </div>
+    );
+  }
+  if (cfp.state !== 'open' && talks.length === 0) {
+    return (
+      <div className="panel">
+        <p>{cfp.state === 'paused' ? t.window.paused : t.window.closed}</p>
+        {cfp.state === 'closed' && (
+          <p>
+            {t.window.closedAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
+          </p>
+        )}
+      </div>
+    );
+  }
 
   const submittedCount = talks.filter((talk) =>
     inStatusSet('live', talk.status),
@@ -677,12 +1231,17 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       talks={talks}
       currentId={proposalId}
       currentTitle={form.title}
+      busy={
+        submitting ||
+        saveState === 'saving' ||
+        answerSaveState === 'saving' ||
+        uploadingAnswer
+      }
       // A draft in progress is already the "new" one, so offer another only
       // once this one exists and there is room under the cap.
       canAdd={
         cfp.state === 'open' &&
         proposalId !== null &&
-        talks.length < LIMITS.maxTalksPerSpeaker &&
         submittedCount < LIMITS.maxTalksPerSpeaker
       }
       atCap={submittedCount >= LIMITS.maxTalksPerSpeaker}
@@ -692,43 +1251,133 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   const withdrawable = status !== 'draft' && inStatusSet('withdrawable', status);
+  const liveErrorKeys = Object.keys(liveErrors);
+  const hasAny = (keys: string[]) => keys.some((key) => liveErrorKeys.includes(key));
+  const hasPrefix = (prefix: string) => liveErrorKeys.some((key) => key.startsWith(prefix));
+  const progressItems: FormProgressItem[] = [
+    {
+      id: 'submission-talk',
+      label: t.sections.proposal,
+      complete: !liveErrorKeys.some(
+        (key) =>
+          key.startsWith('proposal.') &&
+          key !== 'proposal.deliveryLanguage' &&
+          key !== 'proposal.languagePreference',
+      ),
+      attention:
+        showErrors &&
+        liveErrorKeys.some(
+          (key) =>
+            key.startsWith('proposal.') &&
+            key !== 'proposal.deliveryLanguage' &&
+            key !== 'proposal.languagePreference',
+        ),
+    },
+    {
+      id: 'submission-language',
+      label: t.sections.language,
+      complete: !hasAny(['proposal.deliveryLanguage', 'proposal.languagePreference']),
+      attention:
+        showErrors && hasAny(['proposal.deliveryLanguage', 'proposal.languagePreference']),
+    },
+    {
+      id: 'submission-speaker',
+      label: t.sections.speaker,
+      complete: !hasPrefix('speaker.'),
+      attention: showErrors && hasPrefix('speaker.'),
+    },
+    ...(shape.fields.length > 0
+      ? [
+          {
+            id: 'submission-extra',
+            label: t.sections.extra,
+            complete: Object.keys(liveExtraFaults).length === 0,
+            attention: showErrors && Object.keys(liveExtraFaults).length > 0,
+          },
+        ]
+      : []),
+    ...(shape.acks.length > 0
+      ? [
+          {
+            id: 'submission-acknowledgements',
+            label: t.sections.acks,
+            complete: !hasPrefix('acks.'),
+            attention: showErrors && hasPrefix('acks.'),
+          },
+        ]
+      : []),
+    {
+      id: 'submission-attendance',
+      label: t.sections.attendance,
+      complete: !hasPrefix('attendance.'),
+      attention: showErrors && hasPrefix('attendance.'),
+    },
+  ];
 
   return (
-    <form className="form" onSubmit={onSubmit} noValidate>
+    <form className="form submission-form" onSubmit={onSubmit} noValidate>
       {picker}
+
+      <section className="submission-context" aria-label={t.form.submissionContext}>
+        <div className="submission-context__identity">
+          <span className="submission-context__event">{cfp.name}</span>
+          <span
+            className={`submission-context__status submission-context__status--${status === 'draft' && cfp.state === 'open' ? 'open' : 'set'}`}
+          >
+            {status === 'draft' && cfp.state === 'open'
+              ? t.form.acceptingNow
+              : t.enums.status[status]}
+          </span>
+        </div>
+        <div className="submission-context__deadline">
+          <span>{t.form.deadline}</span>
+          <strong>
+            <time dateTime={cfp.closesAt.toISOString()}>{formatDate(cfp.closesAt, locale)}</time>
+          </strong>
+          <span className="submission-context__timezone">{t.form.deadlineTimeZone}</span>
+        </div>
+      </section>
 
       {/*
         The talk stays on screen after submitting. A speaker who cannot re-read
         what they sent has no way to check it went in, and the withdraw button
         on its own made the page look like a dead end.
       */}
-      {status === 'draft' ? (
-        <p className="deadline">
-          {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
-        </p>
-      ) : (
+      {status !== 'draft' && (
         <StatusBanner
           status={status}
           scope={scope}
-          busy={submitting}
-          onWithdraw={withdrawable ? onWithdraw : undefined}
-          onRespond={status === 'accepted' ? onRespond : undefined}
+          busy={archived || submitting || answerSaveState === 'saving' || uploadingAnswer}
+          onWithdraw={!archived && withdrawable ? onWithdraw : undefined}
+          onRespond={
+            !archived && (status === 'accepted' || inStatusSet('speakerResponse', status))
+              ? onRespond
+              : undefined
+          }
           questions={{
             cfpId,
             uid: user.uid,
             fields: confirmForm.fields,
             answers,
             faults: answerFaults,
-            busy: submitting,
-            onAnswer: (key, value) => setAnswers((prev) => ({ ...prev, [key]: value })),
+            busy: archived || submitting || answerSaveState === 'saving' || uploadingAnswer,
+            onAnswer: setConfirmationAnswer,
+            onUploadBusyChange: setAnswerUploadBusy,
           }}
           asking={asking}
           onAsk={() => setAsking(true)}
-          onCancelAsk={() => setAsking(false)}
-          onSaveAnswers={status === 'confirmed' ? () => onRespond('confirm') : undefined}
+          onCancelAsk={cancelConfirmationAnswers}
+          onSaveAnswers={
+            !archived && status === 'confirmed'
+              ? () => void saveConfirmationAnswers('manual')
+              : undefined
+          }
         />
       )}
 
+      <div className="submission-workspace">
+        <FormProgress items={progressItems} />
+        <div className="submission-workspace__content">
       {/*
         First, because it fills fields in every section below it — the talk as
         well as the speaker. Buried under "About you" it arrives after the work
@@ -736,16 +1385,18 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       */}
       <SessionizeImport
         form={form}
-        disabled={readOnly}
+        disabled={talkDisabled}
         onApply={(patch) => {
+          armHistoryGuard();
           dirty.current = true;
-          setSaveState('idle');
+          revision.current += 1;
+          setSaveState((current) => (current === 'failed' ? current : 'idle'));
           setForm((prev) => ({ ...prev, ...patch }));
         }}
       />
 
       {/* ------------------------------------------------------- the talk */}
-      <section className="section">
+      <section className="section submission-section" id="submission-talk" tabIndex={-1}>
         <h2>{t.sections.proposal}</h2>
         <p className="section__help">{t.sections.proposalHelp}</p>
 
@@ -756,7 +1407,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           onChange={(v) => set('title', v)}
           maxLength={LIMITS.title}
           error={err('proposal.title')}
-          disabled={readOnly}
+          disabled={talkDisabled}
           required
         />
 
@@ -768,7 +1419,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           minLength={LIMITS.abstractMin}
           maxLength={LIMITS.abstractMax}
           error={err('proposal.abstract')}
-          disabled={readOnly}
+          disabled={talkDisabled}
           required
         />
 
@@ -780,7 +1431,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           maxLength={LIMITS.pitchMax}
           rows={4}
           error={err('proposal.pitch')}
-          disabled={readOnly}
+          disabled={talkDisabled}
         />
 
         <div className="grid grid--3">
@@ -790,7 +1441,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             options={options.category}
             onChange={(v) => set('category', v)}
             error={err('proposal.category')}
-            disabled={readOnly}
+            disabled={talkDisabled}
             required
           />
           <SelectField
@@ -799,7 +1450,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             options={options.format}
             onChange={(v) => set('format', v)}
             error={err('proposal.format')}
-            disabled={readOnly}
+            disabled={talkDisabled}
             required
           />
           <SelectField
@@ -808,14 +1459,14 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             options={options.level}
             onChange={(v) => set('level', v)}
             error={err('proposal.level')}
-            disabled={readOnly}
+            disabled={talkDisabled}
             required
           />
         </div>
       </section>
 
       {/* ------------------------------------------------------- language */}
-      <section className="section">
+      <section className="section submission-section" id="submission-language" tabIndex={-1}>
         <h2>{t.sections.language}</h2>
 
         <SelectField
@@ -824,7 +1475,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           options={options.delivery}
           onChange={(v) => set('deliveryLanguage', v)}
           error={err('proposal.deliveryLanguage')}
-          disabled={readOnly}
+          disabled={talkDisabled}
           required
         />
 
@@ -850,7 +1501,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             onChange={(v) => set('languagePreference', v)}
             maxLength={LIMITS.languagePreferenceMax}
             error={err('proposal.languagePreference')}
-            disabled={readOnly}
+            disabled={talkDisabled}
           />
         </Reveal>
       </section>
@@ -860,16 +1511,38 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         one talk, and is the same document whichever talk is open. Saying so
         matters: otherwise editing it here reads as editing it "for this talk".
       */}
-      <section className="section section--account">
+      <section
+        className="section section--account submission-section submission-section--speaker"
+        id="submission-speaker"
+        tabIndex={-1}
+      >
         <h2>{t.sections.speaker}</h2>
         <p className="section__help">{t.sections.speakerHelp}</p>
 
-        <SpeakerFields form={form} set={set} err={err} />
+        {speakerEditing || !speakerProfileComplete(form) ? (
+          <div className="speaker-editor">
+            <SpeakerFields form={form} set={set} err={err} disabled={submitting} />
+          </div>
+        ) : (
+          <SpeakerProfileSummary
+            form={form}
+            onEdit={() => {
+              setSpeakerEditing(true);
+              requestAnimationFrame(() => {
+                document
+                  .querySelector<HTMLElement>(
+                    '#submission-speaker input:not([disabled]), #submission-speaker textarea:not([disabled])',
+                  )
+                  ?.focus();
+              });
+            }}
+          />
+        )}
       </section>
 
       {/* --------------------------------------------- this call's own questions */}
       {shape.fields.length > 0 && (
-        <section className="section">
+        <section className="section submission-section" id="submission-extra" tabIndex={-1}>
           <h2>{t.sections.extra}</h2>
           <Questions
             cfpId={cfpId}
@@ -877,7 +1550,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             fields={shape.fields}
             answers={form.answers}
             faults={extraFaults}
-            busy={readOnly}
+            busy={talkDisabled}
             onAnswer={(key, value) => set('answers', { ...form.answers, [key]: value })}
           />
         </section>
@@ -885,7 +1558,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
       {/* ---------------------------------------------------------- acks */}
       {shape.acks.length > 0 && (
-        <section className="section">
+        <section
+          className="section submission-section"
+          id="submission-acknowledgements"
+          tabIndex={-1}
+        >
           <h2>{t.sections.acks}</h2>
           {shape.acks.map((ack) => (
             <Checkbox
@@ -894,7 +1571,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               checked={form.acks[ack.key] === true}
               onChange={(v) => set('acks', { ...form.acks, [ack.key]: v })}
               error={err(`acks.${ack.key}`)}
-              disabled={readOnly}
+              disabled={talkDisabled}
             />
           ))}
         </section>
@@ -904,7 +1581,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         §3: attendance follows immediately after the acknowledgements. The
         question only reads naturally once "travel is not covered" is on screen.
       */}
-      <section className="section">
+      <section className="section submission-section" id="submission-attendance" tabIndex={-1}>
         <h2>{t.sections.attendance}</h2>
 
         <RadioGroup
@@ -914,7 +1591,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           options={options.attendance}
           onChange={(v) => set('attendanceStatus', v)}
           error={err('attendance.status')}
-          disabled={travelReadOnly}
+          disabled={travelDisabled}
           required
         />
 
@@ -933,7 +1610,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             onChange={(v) => set('fundingSource', v)}
             maxLength={LIMITS.fundingSourceMax}
             error={err('attendance.fundingSource')}
-            disabled={travelReadOnly}
+            disabled={travelDisabled}
             required
           />
 
@@ -948,7 +1625,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               onChange={(v) => set('decisionBy', v)}
               type="date"
               error={err('attendance.decisionBy')}
-              disabled={travelReadOnly}
+              disabled={travelDisabled}
               required
             />
           </Reveal>
@@ -958,7 +1635,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           label={t.attendance.needsVisa}
           checked={form.needsVisa}
           onChange={(v) => set('needsVisa', v)}
-          disabled={travelReadOnly}
+          disabled={travelDisabled}
         />
 
         {/* At a Montréal event, visas stop more speakers than money does (§5). */}
@@ -972,7 +1649,19 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <div className="actions__status" aria-live="polite">
           {saveState === 'saving' && t.form.saving}
           {saveState === 'saved' && t.form.saved}
-          {saveState === 'failed' && <span className="field__error">{t.form.saveFailed}</span>}
+          {saveState === 'idle' && dirty.current && t.form.unsaved}
+          {saveState === 'failed' && (
+            <div className="actions__save-failure" role="alert">
+              <span className="field__error">{saveError || t.form.saveFailed}</span>
+              <button
+                type="button"
+                className="btn btn--ghost actions__retry"
+                onClick={() => void persist('manual')}
+              >
+                {t.form.retrySave}
+              </button>
+            </div>
+          )}
         </div>
 
         {showErrors && errorCount > 0 && (
@@ -990,16 +1679,22 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={scope === 'none' || saveState === 'saving'}
-            onClick={persist}
+            disabled={
+              (scope === 'none' && proposalId === null) ||
+              saveState === 'saving' ||
+              submitting
+            }
+            onClick={() => void persist('manual')}
           >
             {status === 'draft' ? t.form.save : t.form.saveChanges}
           </button>
           {status === 'draft' && (
-            <button type="submit" className="btn btn--primary" disabled={readOnly || submitting}>
+            <button type="submit" className="btn btn--primary" disabled={talkDisabled}>
               {submitting ? t.form.submitting : t.form.submit}
             </button>
           )}
+        </div>
+      </div>
         </div>
       </div>
     </form>

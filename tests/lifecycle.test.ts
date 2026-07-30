@@ -24,6 +24,11 @@ describe('editScope', () => {
     }
   });
 
+  it('renders archived proposals read-only, matching the rules', () => {
+    expect(editScope('accepted', false, true)).toBe('none');
+    expect(editScope('confirmed', false, true)).toBe('none');
+  });
+
   it('closes a draft once the window shuts', () => {
     expect(editScope('draft', false)).toBe('none');
     expect(editScope('submitted', false)).toBe('none');

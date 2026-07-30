@@ -9,7 +9,7 @@
  * questions — same shape, same validator, so the same editor.
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { FieldRows } from './FieldRows';
 import { useI18n } from '../i18n/context';
@@ -35,15 +35,33 @@ export function withKeys(fields: ConfirmField[]): ConfirmField[] {
 export function ConfirmFormEditor({
   cfpId,
   fields: saved,
+  onDirtyChange,
 }: {
   cfpId: string;
   fields: ConfirmField[];
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
   const [fields, setFields] = useState<ConfirmField[]>(saved);
+  const [stored, setStored] = useState<ConfirmField[]>(saved);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const dirty = useMemo(
+    () => JSON.stringify(fields) !== JSON.stringify(stored),
+    [fields, stored],
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
 
   async function save() {
     setNote('');
@@ -62,6 +80,7 @@ export function ConfirmFormEditor({
       // The server's normalised copy, not ours — it trims and drops, and the
       // editor should show what was actually stored.
       setFields(data.fields);
+      setStored(data.fields);
       setNote(t.admin.formSaved);
     } catch (e) {
       setError(adminError(e, t));
@@ -89,9 +108,15 @@ export function ConfirmFormEditor({
       />
 
       <div className="row row--wrap">
-        <button type="button" className="btn btn--primary" disabled={busy} onClick={save}>
+        <button
+          type="button"
+          className="btn btn--primary"
+          disabled={busy || !dirty}
+          onClick={save}
+        >
           {busy ? t.admin.formSaving : t.admin.formSave}
         </button>
+        {dirty && <span className="muted">{t.admin.unsaved}</span>}
       </div>
 
       {note && <p className="note note--inline">{note}</p>}

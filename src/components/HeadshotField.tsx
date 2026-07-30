@@ -29,6 +29,7 @@ interface Props {
   /** True once the server has told us there is already a file for this key. */
   uploaded: boolean;
   onUploaded: () => void;
+  onBusyChange?: (busy: boolean) => void;
 }
 
 export function HeadshotField({
@@ -42,6 +43,7 @@ export function HeadshotField({
   disabled,
   uploaded,
   onUploaded,
+  onBusyChange,
 }: Props) {
   const { t } = useI18n();
   const input = useRef<HTMLInputElement>(null);
@@ -82,6 +84,7 @@ export function HeadshotField({
 
     setProblem('');
     setBusy(true);
+    onBusyChange?.(true);
     try {
       const { getDownloadURL, ref, uploadBytes } = await import('firebase/storage');
       const target = ref(await storage(), headshotPath(cfpId, uid, fieldKey));
@@ -92,6 +95,7 @@ export function HeadshotField({
       setProblem(t.form.imageFailed);
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
       // Cleared so choosing the same file again still fires a change event.
       if (input.current) input.current.value = '';
     }
@@ -132,6 +136,7 @@ export function HeadshotField({
         className="headshot__input"
         accept={IMAGE_TYPES.join(',')}
         aria-label={label}
+        aria-invalid={Boolean(message)}
         disabled={disabled || busy}
         onChange={(e) => {
           const file = e.target.files?.[0];

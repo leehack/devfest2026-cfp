@@ -11,6 +11,8 @@
  * rather than as the app's generic title.
  */
 
+import type { ReactNode } from 'react';
+
 import { formatCalendarDay, formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { href } from '../lib/router';
@@ -26,12 +28,17 @@ export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
   const blurb = localised(description, locale);
   const day = eventDate ? calendarDate(eventDate) : null;
 
-  const facts: { label: string; value: React.ReactNode }[] = [];
+  const facts: { label: string; value: ReactNode }[] = [];
   // `formatCalendarDay`, not `formatDate`: this is a day, and the deadline below
   // is the only thing here with an hour worth printing. "at 12:00 a.m." beside an
   // event date reads as a bug, because it is one. It also must not be converted
   // between zones — see `calendarDate`.
-  if (day) facts.push({ label: t.cfpPage.when, value: formatCalendarDay(day, locale) });
+  if (day) {
+    facts.push({
+      label: t.cfpPage.when,
+      value: <time dateTime={eventDate}>{formatCalendarDay(day, locale)}</time>,
+    });
+  }
   if (venue || location) {
     facts.push({ label: t.cfpPage.where, value: [venue, location].filter(Boolean).join(', ') });
   }
@@ -49,47 +56,89 @@ export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
   }
 
   const open = cfp.state === 'open';
+  const stateLabel = t.cfpPage.status[cfp.state];
 
   return (
-    <>
-      <section className="section">
-        {blurb ? (
-          // Paragraph breaks survive; nothing else is interpreted. This text is
-          // typed by an organiser into a textarea, not written in markup.
-          blurb
-            .split(/\n{2,}/)
-            .map((para, i) => <p key={i} className="cfp-page__blurb">{para}</p>)
-        ) : (
-          <p className="muted">{t.cfpPage.noDescription}</p>
-        )}
+    <div className="cfp-landing">
+      <div className="cfp-hero">
+        <div className="cfp-hero__accent" aria-hidden="true">
+          <span className="cfp-hero__accent-blue" />
+          <span className="cfp-hero__accent-red" />
+          <span className="cfp-hero__accent-yellow" />
+          <span className="cfp-hero__accent-green" />
+        </div>
+
+        <div className="cfp-hero__topline">
+          <p className="cfp-hero__eyebrow">{t.cfpPage.eyebrow}</p>
+          <span className={`cfp-hero__status cfp-hero__status--${cfp.state}`}>
+            {stateLabel}
+          </span>
+        </div>
+
+        <div className="cfp-hero__body">
+          {blurb ? (
+            // Paragraph breaks survive; nothing else is interpreted. This text is
+            // typed by an organiser into a textarea, not written in markup.
+            blurb
+              .split(/\n{2,}/)
+              .map((para, i) => <p key={i} className="cfp-hero__blurb">{para}</p>)
+          ) : (
+            <div className="cfp-hero__pending">
+              <p className="cfp-hero__pending-title">{t.cfpPage.noDescription}</p>
+              <p className="cfp-hero__pending-help">{t.cfpPage.noDescriptionHelp}</p>
+            </div>
+          )}
+        </div>
 
         {facts.length > 0 && (
-          <dl className="facts">
+          <dl className="cfp-facts">
             {facts.map((fact) => (
-              <div key={fact.label}>
-                <dt>{fact.label}</dt>
-                <dd>{fact.value}</dd>
+              <div key={fact.label} className="cfp-facts__item">
+                <dt className="cfp-facts__label">{fact.label}</dt>
+                <dd className="cfp-facts__value">{fact.value}</dd>
               </div>
             ))}
           </dl>
         )}
-      </section>
+      </div>
 
-      <section className="section">
-        <h2>{t.cfpPage.submitting}</h2>
-        <p>{deadlineLine(cfp, t, locale)}</p>
-        {open ? (
-          <Link className="btn btn--primary" to={href({ route: 'form', cfpId })}>
-            {t.cfpPage.submitAction}
-          </Link>
-        ) : (
-          <Link className="btn" to={href({ route: 'form', cfpId })}>
-            {t.cfpPage.submitClosedAction}
-          </Link>
-        )}
+      <section className="cfp-cta" aria-labelledby="cfp-submit-title">
+        <div className="cfp-cta__copy">
+          <p className="cfp-cta__eyebrow">{t.cfpPage.nextStep}</p>
+          <h2 id="cfp-submit-title" className="cfp-cta__title">
+            {open || cfp.state === 'before'
+              ? t.cfpPage.submitting
+              : t.cfpPage.managing}
+          </h2>
+          <p className="cfp-cta__deadline">{deadlineLine(cfp, t, locale)}</p>
+        </div>
+        <div className="cfp-cta__action">
+          {open && (
+            <Link className="btn btn--primary" to={href({ route: 'form', cfpId })}>
+              {t.cfpPage.submitAction}
+            </Link>
+          )}
+          {!open && cfp.state !== 'before' && (
+            <Link className="btn" to={href({ route: 'form', cfpId })}>
+              {t.cfpPage.manageAction}
+            </Link>
+          )}
+          <p className="cfp-cta__note">{submissionNote(cfp.state, t)}</p>
+        </div>
       </section>
-    </>
+    </div>
   );
+}
+
+function submissionNote(
+  state: CfpWindow['state'],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (state === 'before') return t.cfpPage.submitBeforeNote;
+  if (state === 'paused') return t.cfpPage.submitPausedNote;
+  if (state === 'closed') return t.cfpPage.submitClosedNote;
+  if (state === 'archived') return t.cfpPage.submitArchivedNote;
+  return t.cfpPage.submitNote;
 }
 
 /** One sentence about the window, whichever state it is in. */
@@ -97,14 +146,29 @@ function deadlineLine(
   cfp: CfpWindow,
   t: ReturnType<typeof useI18n>['t'],
   locale: 'en' | 'fr',
-): string {
+): ReactNode {
   if (cfp.state === 'archived') return t.window.closed;
   if (cfp.state === 'paused') return t.window.paused;
   if (cfp.state === 'before') {
-    return `${t.window.notOpen} ${t.window.opensAt} ${formatDate(cfp.opensAt, locale)}`;
+    return (
+      <>
+        {t.window.notOpen} {t.window.opensAt}{' '}
+        <time dateTime={cfp.opensAt.toISOString()}>{formatDate(cfp.opensAt, locale)}</time>
+      </>
+    );
   }
   if (cfp.state === 'closed') {
-    return `${t.window.closed} ${t.window.closedAt} ${formatDate(cfp.closesAt, locale)}`;
+    return (
+      <>
+        {t.window.closed} {t.window.closedAt}{' '}
+        <time dateTime={cfp.closesAt.toISOString()}>{formatDate(cfp.closesAt, locale)}</time>
+      </>
+    );
   }
-  return `${t.window.closesAt} ${formatDate(cfp.closesAt, locale)}`;
+  return (
+    <>
+      {t.window.closesAt}{' '}
+      <time dateTime={cfp.closesAt.toISOString()}>{formatDate(cfp.closesAt, locale)}</time>
+    </>
+  );
 }

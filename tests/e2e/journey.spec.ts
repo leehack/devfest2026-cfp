@@ -85,7 +85,7 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
 
   // ------------------------------------------------------------------ admin
   await inviteRole(ADMIN.email, 'admin');
-  await signInAs(page, ADMIN, at('/admin'));
+  await signInAs(page, ADMIN, at('/admin/proposals'));
 
   await page.getByRole('button', { name: 'Recompute scores' }).click();
   await expect(page.getByText('2 reviews across 2 proposals.')).toBeVisible();
@@ -95,11 +95,20 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   const proposals = page.locator('.section', {
     has: page.getByRole('heading', { name: 'Proposals' }),
   });
-  const titles = await proposals.locator('.table tbody tr td:first-child').allInnerTexts();
+  const titles = await proposals.locator('.table tbody tr td:first-child strong').allInnerTexts();
   expect(titles).toEqual([FIRST, SECOND]);
 
   await page.getByLabel(`Status: ${FIRST}`).selectOption('accepted');
+  await expect(page.getByText(`“${FIRST}” moved from Submitted to Accepted.`)).toBeVisible();
   await page.getByLabel(`Status: ${SECOND}`).selectOption('rejected');
+  await expect(page.getByText(`“${SECOND}” moved from Submitted to Rejected.`)).toBeVisible();
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByText(`Restored the previous status for “${SECOND}”.`)).toBeVisible();
+  expect((await readProposals()).find((proposal) => proposal.title === SECOND)?.status).toBe(
+    'submitted',
+  );
+  await page.getByLabel(`Status: ${SECOND}`).selectOption('rejected');
+  await expect(page.getByText(`“${SECOND}” moved from Submitted to Rejected.`)).toBeVisible();
 
   // ---------------------------------------------------------------- results
   await expect(page.getByRole('heading', { name: 'Selected speakers' })).toBeVisible();

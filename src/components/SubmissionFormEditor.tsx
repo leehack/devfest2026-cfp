@@ -29,7 +29,7 @@
  * ai_ml, cloud" is doing translation work the page should be doing for them.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { FieldRows } from './FieldRows';
 import { withKeys } from './ConfirmFormEditor';
@@ -40,6 +40,7 @@ import { setSubmissionForm } from '../lib/roles';
 import { FORM_LIMITS, localised, validateForm, type FieldOption, type FieldType } from '@shared/confirmForm';
 import { DELIVERY_LANGUAGES } from '@shared/enums';
 import {
+  DEFAULT_SUBMISSION_FORM,
   validateSubmissionForm,
   type SubmissionForm,
   type TaxonomyKey,
@@ -286,7 +287,13 @@ function LanguageList({
                       // so toggling twice does not reshuffle the dropdown.
                       DELIVERY_LANGUAGES.filter(
                         (v) => v === value || options.some((o) => o.value === v),
-                      ).map((v) => at(v) ?? { value: v, label: { en: t.enums.deliveryLanguage[v] } })
+                      ).map(
+                        (v) =>
+                          at(v) ??
+                          DEFAULT_SUBMISSION_FORM.deliveryLanguage.find(
+                            (candidate) => candidate.value === v,
+                          )!,
+                      )
                     : options.filter((o) => o.value !== value),
                 )
               }
@@ -333,9 +340,11 @@ function LanguageList({
 export function SubmissionFormEditor({
   cfpId,
   form: saved,
+  onDirtyChange,
 }: {
   cfpId: string;
   form: SubmissionForm;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
   const [form, setForm] = useState<SubmissionForm>(saved);
@@ -350,6 +359,17 @@ export function SubmissionFormEditor({
   const dirty = useMemo(
     () => JSON.stringify(form) !== JSON.stringify(stored),
     [form, stored],
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
   );
 
   const set = <K extends keyof SubmissionForm>(key: K, value: SubmissionForm[K]) =>

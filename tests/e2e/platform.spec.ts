@@ -78,11 +78,13 @@ test.describe('the front door', () => {
     await expect(page.getByRole('textbox', { name: /^Address/ })).toHaveValue('test-conf-2027');
     await page.getByRole('button', { name: 'Create it' }).click();
 
-    // Straight to the settings tab, which only an admin or owner can open, and
-    // whose archive and delete controls only an owner is shown.
-    await expect(page.getByRole('heading', { name: 'This call for proposals' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Deleting' })).toBeVisible();
-    expect(page.url()).toContain('/c/test-conf-2027/admin/settings');
+    // Straight to the organiser overview, where the new owner can finish the
+    // event details, form, committee, and email setup before sharing it.
+    await expect(
+      page.getByRole('heading', { name: 'Finish the essentials before you share' }),
+    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Setup checklist' })).toBeVisible();
+    expect(page.url()).toContain('/c/test-conf-2027/admin/overview');
   });
 
   /*

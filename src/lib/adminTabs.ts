@@ -1,13 +1,13 @@
 /**
- * The admin screen is six unrelated jobs, so it is six tabs rather than one
- * scroll. The tab lives in the URL rather than in component state so that it
- * survives a reload and can be linked to — "the email queue is stuck" is worth
- * being able to answer with a URL.
+ * The overview routes an organiser into six focused jobs rather than one long
+ * screen. The tab lives in the URL so it survives a reload and can be linked
+ * to — "the email queue is stuck" is worth answering with an exact URL.
  *
  * Its own module because the server needs the list too, and `router.ts` reaches
  * for `window`.
  */
 export const ADMIN_TABS = [
+  'overview',
   'proposals',
   'committee',
   'settings',

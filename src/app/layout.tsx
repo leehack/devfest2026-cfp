@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 
 import { legacyHashScript } from '@shared/legacyHash';
 import { SITE_ORIGIN } from '../server/site';
@@ -21,7 +21,15 @@ export const metadata: Metadata = {
   description: 'Submit a talk proposal. Soumettez une proposition de conférence.',
 };
 
-export const viewport = { width: 'device-width', initialScale: 1 };
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  colorScheme: 'light dark',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f8f9fb' },
+    { media: '(prefers-color-scheme: dark)', color: '#0d1117' },
+  ],
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

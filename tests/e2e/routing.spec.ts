@@ -29,7 +29,7 @@ test.describe('addresses', () => {
     await signInAs(page, ADMIN, `/#/c/${CFP_ID}/admin/email`);
 
     await expect(page).toHaveURL(at('/admin/email'));
-    await expect(page.getByRole('button', { name: 'Email', exact: true })).toHaveAttribute(
+    await expect(page.getByRole('link', { name: 'Email', exact: true })).toHaveAttribute(
       'aria-current',
       'page',
     );

@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from 'react';
+import type { AnchorHTMLAttributes, MouseEvent } from 'react';
 
 import { goTo } from '../lib/router';
 
@@ -13,23 +13,16 @@ import { goTo } from '../lib/router';
  */
 export function Link({
   to,
-  className,
-  children,
-}: {
-  to: string;
-  className?: string;
-  children: ReactNode;
-}) {
-  function onClick(event: MouseEvent<HTMLAnchorElement>) {
+  onClick,
+  ...props
+}: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & { to: string }) {
+  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    onClick?.(event);
     const modified = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
     if (event.defaultPrevented || event.button !== 0 || modified) return;
     event.preventDefault();
     goTo(to);
   }
 
-  return (
-    <a className={className} href={to} onClick={onClick}>
-      {children}
-    </a>
-  );
+  return <a {...props} href={to} onClick={handleClick} />;
 }

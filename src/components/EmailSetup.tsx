@@ -5,12 +5,13 @@
  * nothing, and there was no screen that said why.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { TextField } from './fields';
 import { useI18n } from '../i18n/context';
 import { resendError } from '../lib/errors';
 import { emailDomain, setEmailSecret, type Domain } from '../lib/roles';
+import { useLatest } from '../lib/useLatest';
 
 /** Numbered, because the order is the only part of this that is not obvious. */
 function Steps({ items }: { items: readonly string[] }) {
@@ -42,34 +43,62 @@ export function EmailSetup({
   keyHint,
   domainId,
   onKeySet,
+  onDomainChanged,
+  onDirtyChange,
 }: {
   cfpId: string;
   keyHint: string;
   domainId: string;
   onKeySet: (hint: string) => void;
+  onDomainChanged?: () => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
+  const tRef = useLatest(t);
   const [apiKey, setApiKey] = useState('');
   const [domains, setDomains] = useState<Domain[]>([]);
   const [name, setName] = useState('');
+  const [changing, setChanging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const activeCfp = useRef(cfpId);
+  const refreshGeneration = useRef(0);
+  activeCfp.current = cfpId;
+  const dirty = apiKey !== '' || name !== '';
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
 
   const active = domains.find((d) => d.id === domainId) ?? domains[0];
   const verified = active?.status === 'verified';
 
   const refresh = useCallback(async () => {
-    if (!keyHint) return;
+    const scope = cfpId;
+    const generation = ++refreshGeneration.current;
+    const current = () =>
+      activeCfp.current === scope && refreshGeneration.current === generation;
+    if (!keyHint) {
+      if (current()) setDomains([]);
+      return;
+    }
     try {
       // At most one: `list` returns the domain this CFP registered and nothing
       // else, because the Resend account is shared across the whole platform.
       const { data } = await emailDomain({ cfpId, action: 'list' });
-      setDomains(data.domains ?? []);
+      if (current()) setDomains(data.domains ?? []);
     } catch (e) {
-      setError(resendError(e, t));
+      if (current()) setError(resendError(e, tRef.current));
     }
-  }, [cfpId, keyHint, t]);
+  }, [cfpId, keyHint, tRef]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -78,20 +107,30 @@ export function EmailSetup({
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
+    refreshGeneration.current += 1;
+    setApiKey('');
+    setDomains([]);
+    setName('');
+    setChanging(false);
+    setBusy(false);
+    setNote('');
+    setError('');
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfpId, keyHint]);
+  }, [cfpId, keyHint, refresh]);
 
-  async function run(fn: () => Promise<string>) {
+  async function run(fn: (current: () => boolean) => Promise<string>) {
+    const scope = cfpId;
+    const current = () => activeCfp.current === scope;
     setBusy(true);
     setNote('');
     setError('');
     try {
-      setNote(await fn());
+      const nextNote = await fn(current);
+      if (current()) setNote(nextNote);
     } catch (e) {
-      setError(resendError(e, t));
+      if (current()) setError(resendError(e, tRef.current));
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   }
 
@@ -121,13 +160,14 @@ export function EmailSetup({
           className="btn"
           disabled={busy || !apiKey.trim()}
           onClick={() =>
-            run(async () => {
+            run(async (current) => {
               const { data } = await setEmailSecret({ cfpId, apiKey: apiKey.trim() });
+              if (!current()) return '';
               // Out of the page as soon as it is stored; it is not ours to keep.
               setApiKey('');
               onKeySet(data.keyHint);
               await refresh();
-              return t.admin.emailKeySaved;
+              return current() ? tRef.current.admin.emailKeySaved : '';
             })
           }
         >
@@ -141,7 +181,7 @@ export function EmailSetup({
 
         {!keyHint ? (
           <p className="muted">{t.admin.emailKeyFirst}</p>
-        ) : !active ? (
+        ) : !active || changing ? (
           <>
             <div className="grid grid--2">
               <TextField
@@ -152,20 +192,40 @@ export function EmailSetup({
                 disabled={busy}
               />
             </div>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || !name.trim()}
-              onClick={() =>
-                run(async () => {
-                  await emailDomain({ cfpId, action: 'add', domain: name.trim() });
-                  await refresh();
-                  return t.admin.emailDomainAdded;
-                })
-              }
-            >
-              {t.admin.emailDomainAdd}
-            </button>
+            <div className="row row--wrap">
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || !name.trim()}
+                onClick={() =>
+                  run(async (current) => {
+                    await emailDomain({ cfpId, action: 'add', domain: name.trim() });
+                    if (!current()) return '';
+                    setName('');
+                    setChanging(false);
+                    await refresh();
+                    if (!current()) return '';
+                    await onDomainChanged?.();
+                    return current() ? tRef.current.admin.emailDomainAdded : '';
+                  })
+                }
+              >
+                {t.admin.emailDomainAdd}
+              </button>
+              {active && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    setName('');
+                    setChanging(false);
+                  }}
+                >
+                  {t.form.answersCancel}
+                </button>
+              )}
+            </div>
           </>
         ) : (
           <>
@@ -202,22 +262,37 @@ export function EmailSetup({
               </>
             )}
 
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() =>
-                run(async () => {
-                  const { data } = await emailDomain({ cfpId, action: 'verify' });
-                  await refresh();
-                  return data.domain?.status === 'verified'
-                    ? t.admin.emailDomainVerified
-                    : t.admin.emailDomainChecking;
-                })
-              }
-            >
-              {t.admin.emailDomainVerify}
-            </button>
+            <div className="row row--wrap">
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() =>
+                  run(async (current) => {
+                    const { data } = await emailDomain({ cfpId, action: 'verify' });
+                    if (!current()) return '';
+                    await refresh();
+                    if (!current()) return '';
+                    return data.domain?.status === 'verified'
+                      ? tRef.current.admin.emailDomainVerified
+                      : tRef.current.admin.emailDomainChecking;
+                  })
+                }
+              >
+                {t.admin.emailDomainVerify}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={busy}
+                onClick={() => {
+                  setName('');
+                  setChanging(true);
+                }}
+              >
+                {t.consent.change}
+              </button>
+            </div>
           </>
         )}
       </Step>

@@ -70,6 +70,18 @@ test.describe('signing in by email link', () => {
     await expect(page.getByRole('textbox', { name: /^Email/ })).toHaveValue(ADDRESS);
   });
 
+  test('a mistyped address can be corrected and sent again in place', async ({ page }) => {
+    await ask(page, 'mistyped@example.test');
+
+    const email = page.getByRole('textbox', { name: /^Email/ });
+    await expect(email).toBeVisible();
+    await email.fill(ADDRESS);
+    await page.getByRole('button', { name: 'Email me a link' }).click();
+
+    await expect(page.getByText(new RegExp(`${ADDRESS}.*sign-in link is on its way`))).toBeVisible();
+    expect(await latestLink(ADDRESS)).toContain('oobCode=');
+  });
+
   test('the link never reaches the queue, the response, or the log', async () => {
     const answer = await request(ADDRESS);
     expect(answer.ok).toBe(true);

@@ -4,6 +4,7 @@ import { SelectField, TextAreaField, TextField } from '../../components/fields';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
+import { useLatest } from '../../lib/useLatest';
 import {
   emailQueue,
   loadAllProposals,
@@ -30,11 +31,22 @@ import { Result } from './Result';
  * each decision is made and sits there until someone releases the lot — so the
  * dangerous button is the one that says how many people it is about to write to.
  */
-export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
+export function Email({
+  cfpId,
+  cfpName,
+  onDirtyChange,
+}: {
+  cfpId: string;
+  cfpName: string;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { t, locale } = useI18n();
+  const tRef = useLatest(t);
   const [tally, setTally] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<HeldEmail[]>([]);
+  const [staleHeld, setStaleHeld] = useState(0);
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
+  const [storedSettings, setStoredSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [keyHint, setKeyHint] = useState('');
   const [domainId, setDomainId] = useState('');
   const [domain, setDomain] = useState('');
@@ -47,20 +59,45 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
   const [error, setError] = useState('');
   const [senderNote, setSenderNote] = useState('');
   const [senderError, setSenderError] = useState('');
+  const [ready, setReady] = useState(false);
+  const [setupDirty, setSetupDirty] = useState(false);
+  const [wordingDirty, setWordingDirty] = useState(false);
+  const [messageDirty, setMessageDirty] = useState(false);
   const editing = useRef(false);
+  const activeCfp = useRef(cfpId);
+  activeCfp.current = cfpId;
+  const senderDirty =
+    settings.from !== storedSettings.from || settings.replyTo !== storedSettings.replyTo;
+  const dirty = senderDirty || setupDirty || wordingDirty || messageDirty;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
 
   const run = useCallback(
     async (action: 'preview' | 'release' | 'retry', logId?: string) => {
+      const scope = cfpId;
       setBusy(true);
       setError('');
       if (action !== 'preview') setNote('');
       try {
         const { data } = await emailQueue({ cfpId, action, ...(logId ? { logId } : {}) });
+        if (activeCfp.current !== scope) return;
         setTally(data.tally ?? {});
         // Never over the top of someone mid-sentence: this load is async, and
         // an admin who starts typing before it lands would otherwise watch the
         // field empty itself under the cursor.
-        if (data.settings && !editing.current) setSettings(data.settings);
+        if (data.settings && !editing.current) {
+          setSettings(data.settings);
+          setStoredSettings(data.settings);
+        }
         setKeyHint(data.keyHint ?? '');
         setDomainId(data.domainId ?? '');
         setDomain(data.domain ?? '');
@@ -70,25 +107,54 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
         if (action === 'preview') {
+          setReady(true);
+          setStaleHeld(data.staleHeld ?? 0);
           setHeld(
             [...(data.held ?? [])].sort(
               (a, b) => a.kind.localeCompare(b.kind) || (a.title ?? '').localeCompare(b.title ?? ''),
             ),
           );
         } else {
-          setNote(t.admin.emailSent.replace('{count}', String(data.released ?? 0)));
+          setNote(tRef.current.admin.emailSent.replace('{count}', String(data.released ?? 0)));
           const { data: after } = await emailQueue({ cfpId, action: 'preview' });
+          if (activeCfp.current !== scope) return;
           setTally(after.tally ?? {});
+          setStaleHeld(after.staleHeld ?? 0);
           setHeld(after.held ?? []);
         }
       } catch (e) {
-        setError(adminError(e, t));
+        if (activeCfp.current === scope) setError(adminError(e, tRef.current));
       } finally {
-        setBusy(false);
+        if (activeCfp.current === scope) setBusy(false);
       }
     },
-    [cfpId, t],
+    [cfpId, tRef],
   );
+
+  useEffect(() => {
+    editing.current = false;
+    setBusy(false);
+    setReady(false);
+    setTally({});
+    setHeld([]);
+    setStaleHeld(0);
+    setSettings(EMPTY_SETTINGS);
+    setStoredSettings(EMPTY_SETTINGS);
+    setKeyHint('');
+    setDomainId('');
+    setDomain('');
+    setTemplates({});
+    setRows([]);
+    setTruncated(0);
+    setFilter('');
+    setNote('');
+    setError('');
+    setSenderNote('');
+    setSenderError('');
+    setSetupDirty(false);
+    setWordingDirty(false);
+    setMessageDirty(false);
+  }, [cfpId]);
 
   useEffect(() => {
     void run('preview');
@@ -115,21 +181,24 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
    */
   async function resend(row: EmailRow) {
     if (!window.confirm(t.admin.emailResendConfirm.replace('{to}', row.to))) return;
+    const scope = cfpId;
     setBusy(true);
     setNote('');
     setError('');
     try {
       await emailQueue({ cfpId, action: 'resend', logId: row.logId });
+      if (activeCfp.current !== scope) return;
       setNote(t.admin.emailResent.replace('{to}', row.to));
       await run('preview');
     } catch (e) {
-      setError(adminError(e, t));
+      if (activeCfp.current === scope) setError(adminError(e, t));
     } finally {
-      setBusy(false);
+      if (activeCfp.current === scope) setBusy(false);
     }
   }
 
   async function saveSender() {
+    const scope = cfpId;
     setSenderNote('');
     setSenderError('');
 
@@ -155,22 +224,54 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
     setBusy(true);
     try {
       await setEmailSettings({ cfpId, ...settings });
+      if (activeCfp.current !== scope) return;
       // Stored now, so the server's copy is the one to trust again.
       editing.current = false;
+      setStoredSettings(settings);
       setSenderNote(t.admin.windowSaved);
       await run('preview');
     } catch (e) {
-      setSenderError(adminError(e, t));
+      if (activeCfp.current === scope) setSenderError(adminError(e, t));
     } finally {
-      setBusy(false);
+      if (activeCfp.current === scope) setBusy(false);
     }
+  }
+
+  if (!ready) {
+    return (
+      <section className="section">
+        <h2>{t.admin.email}</h2>
+        {busy ? (
+          <p className="muted">{t.app.loading}</p>
+        ) : (
+          <>
+            <Result ok="" error={error || t.errors.unavailable} />
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => void run('preview')}
+            >
+              {t.errors.reload}
+            </button>
+          </>
+        )}
+      </section>
+    );
   }
 
   return (
     <section className="section">
       <h2>{t.admin.email}</h2>
 
-      <EmailSetup cfpId={cfpId} keyHint={keyHint} domainId={domainId} onKeySet={setKeyHint} />
+      <EmailSetup
+        cfpId={cfpId}
+        keyHint={keyHint}
+        domainId={domainId}
+        onKeySet={setKeyHint}
+        onDomainChanged={() => run('preview')}
+        onDirtyChange={setSetupDirty}
+      />
 
       <h3 className="card__subtitle">{t.admin.emailStepSender}</h3>
       {!settings.from && <p className="note note--inline">{t.admin.emailNoSender}</p>}
@@ -215,6 +316,7 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
         configured={Boolean(keyHint && settings.from)}
         templates={templates}
         onSaved={() => run('preview')}
+        onDirtyChange={setWordingDirty}
       />
 
       <h3 className="card__subtitle">{t.admin.emailQueue}</h3>
@@ -228,6 +330,11 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
           </div>
         ))}
       </dl>
+      {staleHeld > 0 && (
+        <p className="muted">
+          {t.admin.emailStaleHeld.replace('{count}', String(staleHeld))}
+        </p>
+      )}
 
       {held.length > 0 && (
         <table className="table table--held">
@@ -276,7 +383,12 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
       <Result ok={note} error={error} />
 
       <h3 className="card__subtitle">{t.admin.messageTitle}</h3>
-      <WriteToSpeaker cfpId={cfpId} replyTo={settings.replyTo} onSent={() => run('preview')} />
+      <WriteToSpeaker
+        cfpId={cfpId}
+        replyTo={settings.replyTo}
+        onSent={() => run('preview')}
+        onDirtyChange={setMessageDirty}
+      />
 
       {/*
         The record of what was actually sent to whom. Counts alone could not
@@ -328,7 +440,9 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
                         {row.subject && <span className="muted"> — {row.subject}</span>}
                       </td>
                       <td>
-                        {(t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
+                        {row.stale
+                          ? t.admin.emailStaleStatus
+                          : (t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
                         {/* The provider's reason: the only thing on screen that
                             says what to fix. */}
                         {row.error && <span className="muted"> — {row.error}</span>}
@@ -338,7 +452,12 @@ export function Email({ cfpId, cfpName }: { cfpId: string; cfpName: string }) {
                         <button
                           type="button"
                           className="btn btn--ghost"
-                          disabled={busy || row.status === 'queued' || row.status === 'sending'}
+                          disabled={
+                            busy ||
+                            row.stale ||
+                            row.status === 'queued' ||
+                            row.status === 'sending'
+                          }
                           onClick={() => resend(row)}
                         >
                           {t.admin.emailResend}
@@ -376,12 +495,15 @@ function WriteToSpeaker({
   cfpId,
   replyTo,
   onSent,
+  onDirtyChange,
 }: {
   cfpId: string;
   replyTo: string;
   onSent: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
+  const tRef = useLatest(t);
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [proposalId, setProposalId] = useState('');
   const [subject, setSubject] = useState('');
@@ -389,19 +511,43 @@ function WriteToSpeaker({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const activeCfp = useRef(cfpId);
+  activeCfp.current = cfpId;
+  const dirty = subject !== '' || body !== '';
 
   useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows([]);
+    setProposalId('');
+    setSubject('');
+    setBody('');
+    setNote('');
+    setError('');
     void (async () => {
       try {
         // Drafts are excluded: writing to someone about a talk they have not
         // submitted tells them it was read.
         const sendable = (await loadAllProposals(cfpId)).filter((row) => row.status !== 'draft');
-        setRows(sendable);
+        if (!cancelled) setRows(sendable);
       } catch (e) {
-        setError(adminError(e, t));
+        if (!cancelled) setError(adminError(e, tRef.current));
       }
     })();
-  }, [cfpId, t]);
+    return () => {
+      cancelled = true;
+    };
+  }, [cfpId, tRef]);
 
   // From the snapshot frozen onto the proposal — the global speaker profile is
   // not the committee's to read. See `ReviewPage`.
@@ -418,19 +564,21 @@ function WriteToSpeaker({
     if (!target) return;
     if (!confirm(t.admin.messageConfirm.replace('{name}', to))) return;
 
+    const scope = cfpId;
     setBusy(true);
     setNote('');
     setError('');
     try {
       await sendSpeakerMessage({ cfpId, proposalId, subject, body });
+      if (activeCfp.current !== scope) return;
       setSubject('');
       setBody('');
       setNote(t.admin.messageSent.replace('{name}', to));
       onSent();
     } catch (e) {
-      setError(adminError(e, t));
+      if (activeCfp.current === scope) setError(adminError(e, t));
     } finally {
-      setBusy(false);
+      if (activeCfp.current === scope) setBusy(false);
     }
   }
 

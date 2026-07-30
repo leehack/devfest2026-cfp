@@ -17,6 +17,7 @@ import {
   seedProposal,
   inviteRole,
   readStoredObjects,
+  seedCfp,
   seedSpeaker,
   setConfirmFormDirect,
   storeObjectDirect,
@@ -55,6 +56,30 @@ test.describe('answering an acceptance', () => {
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Yes, I can present' })).toHaveCount(0);
+  });
+
+  test('a speaker can change their response in either direction from the proposal page', async ({
+    page,
+  }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
+    await seedProposal('p-change', {
+      speakerUid: speaker.uid,
+      title: 'Plans can change',
+      status: 'confirmed',
+    });
+
+    await signInAs(page, SPEAKER);
+    await expect(page.getByRole('button', { name: 'I have to decline' })).toBeVisible();
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'I have to decline' }).click();
+    await expect(page.getByRole('heading', { name: 'Declined' })).toBeVisible();
+    expect(await statusOf('p-change')).toBe('declined');
+
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+    expect(await statusOf('p-change')).toBe('confirmed');
   });
 
   test('declining asks first, and taking it back changes nothing', async ({ page }) => {
@@ -269,6 +294,106 @@ test.describe('the confirmation questions', () => {
     await expect.poll(async () => (await readProposalById('p-q'))?.confirmAnswers?.shirt).toBe('L');
   });
 
+  test('confirmed details autosave without changing the response', async ({ page }) => {
+    await accepted();
+    await setConfirmFormDirect([SHIRT]);
+
+    await signInAs(page, SPEAKER);
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByLabel(/T-shirt size/).selectOption('M');
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
+    await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+
+    await page.getByLabel(/T-shirt size/).selectOption('L');
+    await expect
+      .poll(async () => (await readProposalById('p-q'))?.confirmAnswers?.shirt)
+      .toBe('L');
+    expect(await statusOf('p-q')).toBe('confirmed');
+
+    await page.reload();
+    await expect(page.getByLabel(/T-shirt size/)).toHaveValue('L');
+  });
+
+  test('an archived confirmation stays readable but cannot be changed', async ({ page }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
+    await setConfirmFormDirect([SHIRT]);
+    await seedProposal('p-archived-confirmed', {
+      speakerUid: speaker.uid,
+      title: 'An archived talk',
+      status: 'confirmed',
+      confirmAnswers: { shirt: 'M' },
+    });
+    await seedCfp(undefined, { archived: true });
+
+    await signInAs(page, SPEAKER);
+    await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+    await expect(page.getByLabel(/T-shirt size/)).toHaveValue('M');
+    await expect(page.getByLabel(/T-shirt size/)).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save details' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'I have to decline' })).toHaveCount(0);
+  });
+
+  test('archiving transactionally freezes response and withdrawal callables', async () => {
+    await reset();
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
+    await seedProposal('p-confirm-archived', {
+      speakerUid: speaker.uid,
+      title: 'Confirm after archive',
+      status: 'accepted',
+    });
+    await seedProposal('p-decline-archived', {
+      speakerUid: speaker.uid,
+      title: 'Decline after archive',
+      status: 'accepted',
+    });
+    await seedProposal('p-withdraw-archived', {
+      speakerUid: speaker.uid,
+      title: 'Withdraw after archive',
+      status: 'submitted',
+    });
+    await seedCfp(undefined, { archived: true });
+
+    for (const [proposalId, response] of [
+      ['p-confirm-archived', 'confirm'],
+      ['p-decline-archived', 'decline'],
+    ] as const) {
+      expect(
+        await callAs(speaker.idToken, 'respondToDecision', { proposalId, response }),
+      ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    }
+    expect(
+      await callAs(speaker.idToken, 'withdrawProposal', {
+        proposalId: 'p-withdraw-archived',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await statusOf('p-confirm-archived')).toBe('accepted');
+    expect(await statusOf('p-decline-archived')).toBe('accepted');
+    expect(await statusOf('p-withdraw-archived')).toBe('submitted');
+
+    // The same identities and statuses work as soon as the CFP is active,
+    // proving the refusal is the archive boundary rather than a broken seed.
+    await seedCfp(undefined, { archived: false });
+    expect(
+      await callAs(speaker.idToken, 'respondToDecision', {
+        proposalId: 'p-confirm-archived',
+        response: 'confirm',
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await callAs(speaker.idToken, 'respondToDecision', {
+        proposalId: 'p-decline-archived',
+        response: 'decline',
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await callAs(speaker.idToken, 'withdrawProposal', {
+        proposalId: 'p-withdraw-archived',
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   test('the callable refuses answers the form did not ask for', async () => {
     const speaker = await accepted();
     await setConfirmFormDirect([SHIRT]);
@@ -358,6 +483,50 @@ test.describe('the confirmation questions', () => {
       which_hotel_are_you_at: 'The one by the station.',
     });
   });
+
+  test('changing admin tabs does not discard unsaved confirmation questions', async ({ page }) => {
+    await accepted();
+    await inviteRole(ADMIN.email, 'admin');
+    await createAccount(ADMIN);
+    await signInAs(page, ADMIN, at('/admin/confirmation'));
+
+    const panel = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'Confirmation questions' }),
+    });
+    await panel.getByRole('button', { name: 'Add a question' }).click();
+    await panel.getByLabel('Question (English)').fill('Which hotel are you at?');
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'Proposals', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/confirmation$'));
+    await expect(panel.getByLabel('Question (English)')).toHaveValue('Which hotel are you at?');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('link', { name: 'Proposals', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/proposals$'));
+  });
+
+  test('an organiser still sees an answer after its question is retired', async ({ page }) => {
+    const speaker = await accepted();
+    await setConfirmFormDirect([DIET]);
+    expect(
+      await callAs(speaker.idToken, 'respondToDecision', {
+        proposalId: 'p-q',
+        response: 'confirm',
+        answers: { diet: 'No shellfish.' },
+      }),
+    ).toMatchObject({ ok: true });
+
+    // Retiring a question changes future forms. It must not erase the answer
+    // already collected for programme operations.
+    await setConfirmFormDirect([]);
+    await inviteRole(ADMIN.email, 'admin');
+    await createAccount(ADMIN);
+    await signInAs(page, ADMIN, at('/admin/proposals'));
+
+    await expect(page.getByText('diet', { exact: true })).toBeVisible();
+    await expect(page.getByText('No shellfish.', { exact: true })).toBeVisible();
+  });
 });
 
 /**
@@ -408,6 +577,33 @@ test.describe('a headshot question', () => {
     const path = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
     expect(await readStoredObjects(`cfps/${CFP_ID}/headshots/`)).toEqual([path]);
     expect((await readProposalById('p-pic'))?.confirmAnswers).toEqual({ headshot: path });
+  });
+
+  test('confirmation waits for a headshot upload already in flight', async ({ page }) => {
+    await accepted();
+    let releaseUpload!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    await page.route('**/v0/b/**', async (route) => {
+      if (route.request().method() === 'POST') await held;
+      await route.continue();
+    });
+
+    await signInAs(page, SPEAKER);
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    const confirm = page.getByRole('button', { name: 'Confirm my talk' });
+
+    try {
+      await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
+      await expect(page.getByRole('button', { name: 'Uploading…' })).toBeVisible();
+      await expect(confirm).toBeDisabled();
+    } finally {
+      releaseUpload();
+    }
+
+    await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
+    await expect(confirm).toBeEnabled();
   });
 
   test('a required photo blocks the confirmation until there is one', async ({ page }) => {

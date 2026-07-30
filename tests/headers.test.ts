@@ -65,6 +65,19 @@ describe('the security headers', () => {
     expect(all['x-frame-options']).toBe('SAMEORIGIN');
   });
 
+  it('does not grant browser hardware capabilities the CFP never uses', async () => {
+    const rules = await headerRules();
+    const policy = headersFor(rules, (source) => source === '/(.*)')['permissions-policy'];
+
+    for (const capability of ['camera', 'geolocation', 'microphone', 'payment', 'usb']) {
+      expect(policy).toContain(`${capability}=()`);
+    }
+  });
+
+  it('does not advertise the framework', () => {
+    expect(nextConfig('phase-development-server').poweredByHeader).toBe(false);
+  });
+
   it('do not claim subdomains this host does not speak for', async () => {
     const rules = await headerRules();
     const hsts = headersFor(rules, (source) => source === '/(.*)')['strict-transport-security'];
@@ -95,4 +108,47 @@ describe("a call's front page", () => {
     expect(rules.some((rule) => rule.source === '/c/:cfpId')).toBe(true);
     expect(rules.some((rule) => rule.source.startsWith('/c/:cfpId/'))).toBe(false);
   });
+});
+
+describe('production metadata configuration', () => {
+  const productionEnv = {
+    NEXT_PUBLIC_FIREBASE_API_KEY: 'public-web-key',
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: 'example.firebaseapp.com',
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID: 'example-project',
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'example.appspot.com',
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123456789',
+    NEXT_PUBLIC_FIREBASE_APP_ID: '1:123456789:web:abcdef',
+    NEXT_PUBLIC_COC_URL: 'https://example.org/code-of-conduct',
+    NEXT_PUBLIC_USE_EMULATORS: 'false',
+    SITE_ORIGIN: 'https://cfp.example.org',
+  } as const;
+
+  function withEnv(values: Record<string, string>, run: () => void) {
+    const previous = new Map<string, string | undefined>();
+    for (const [name, value] of Object.entries(values)) {
+      previous.set(name, process.env[name]);
+      process.env[name] = value;
+    }
+    try {
+      run();
+    } finally {
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  it.each(['/nested', '?campaign=test', '#section'])(
+    'rejects SITE_ORIGIN suffix %s',
+    (suffix) => {
+      withEnv(
+        { ...productionEnv, SITE_ORIGIN: `https://cfp.example.org${suffix}` },
+        () =>
+          expect(() => nextConfig('phase-production-build')).toThrow(
+            /SITE_ORIGIN must be an origin/,
+          ),
+      );
+    },
+  );
 });

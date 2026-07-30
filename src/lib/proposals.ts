@@ -5,7 +5,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit,
   query,
   serverTimestamp,
   setDoc,
@@ -20,7 +19,7 @@ import type { Locale } from '../i18n';
 import { mapEmpty, toDocuments, type FormState } from './formState';
 import type { EditScope } from './lifecycle';
 import { cfpState } from '@shared/cfpWindow';
-import { LIMITS, type ProposalStatus } from '@shared/enums';
+import type { ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
 import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
 import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
@@ -108,7 +107,6 @@ export async function loadMyProposals(
       query(
         collection(db, 'cfps', cfpId, 'proposals'),
         where('speakerIds', 'array-contains', user.uid),
-        limit(LIMITS.maxTalksPerSpeaker + 1),
       ),
     ),
     getDoc(doc(db, 'speakers', user.uid)),

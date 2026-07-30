@@ -16,26 +16,38 @@ runConfig:
   maxInstances: 4
 
 env:
-  # No `availability`, so both BUILD and RUNTIME. BUILD is the one that matters:
-  # Next inlines NEXT_PUBLIC_* into the client bundle at build time, so a
-  # runtime-only value is `undefined` in the browser and initializeApp fails with
-  # auth/invalid-api-key, with nothing in the build log to explain it.
+  # BUILD is the one that matters for NEXT_PUBLIC_*: Next inlines these into the
+  # client bundle, so a runtime-only value is `undefined` in the browser and
+  # initializeApp fails with auth/invalid-api-key. Keeping them build-only also
+  # avoids making every cold start depend on six unnecessary secret reads.
   #
   # These ship to the browser and are not secrets. Secret Manager is here so that
   # nothing is committed to a public repo and so .env.production.local stops
   # being a manual step somebody has to remember.
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     secret: next-public-firebase-api-key
+    availability:
+      - BUILD
   - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
     secret: next-public-firebase-auth-domain
+    availability:
+      - BUILD
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
     secret: next-public-firebase-project-id
+    availability:
+      - BUILD
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
     secret: next-public-firebase-storage-bucket
+    availability:
+      - BUILD
   - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
     secret: next-public-firebase-messaging-sender-id
+    availability:
+      - BUILD
   - variable: NEXT_PUBLIC_FIREBASE_APP_ID
     secret: next-public-firebase-app-id
+    availability:
+      - BUILD
 
   # Deliberately not set: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID. With no id the
   # analytics module is inert and the consent banner does not render, which is
@@ -44,17 +56,15 @@ env:
 
   - variable: NEXT_PUBLIC_USE_EMULATORS
     value: 'false'
+    availability:
+      - BUILD
 
-  # The Code of Conduct link beside the acknowledgement checkbox, commented out
-  # rather than left empty: App Hosting rejects `value: ''` outright with
-  # "either 'value' or 'secret' field is required", so there is no such thing as a
-  # declared-but-blank variable here.
-  #
-  # Production therefore has no CoC link, which is worse than it looks — a speaker
-  # ticks "I agree to the Code of Conduct" with no way to read it. Uncomment with
-  # GDG Montréal's address to fix it; nothing else needs to change.
-  # - variable: NEXT_PUBLIC_COC_URL
-  #   value: https://gdgmontreal.com/code-of-conduct
+  # A required acknowledgement must name the policy being accepted. This is the
+  # stable community-wide page rather than a year-specific DevFest URL.
+  - variable: NEXT_PUBLIC_COC_URL
+    value: https://gdgmontreal.com/code-of-conduct
+    availability:
+      - BUILD
 
   # The second home of the origin, and worth knowing about:
   # config/platform.publicUrl is what the functions build mailed links from (a
@@ -62,5 +72,11 @@ env:
   # canonical tag and the sitemap. They must agree.
   - variable: SITE_ORIGIN
     value: https://cfp.gdgmontreal.com
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: SITE_NAME
     value: DevFest Montréal
+    availability:
+      - BUILD
+      - RUNTIME

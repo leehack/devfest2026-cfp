@@ -13,7 +13,15 @@ import { inStatusSet, type ProposalStatus } from '@shared/enums';
  */
 export type EditScope = 'all' | 'logistics' | 'none';
 
-export function editScope(status: ProposalStatus, windowOpen: boolean): EditScope {
+export function editScope(
+  status: ProposalStatus,
+  windowOpen: boolean,
+  archived = false,
+): EditScope {
+  // Archiving is stronger than closing. The storage lifetime may continue for
+  // records, but Firestore deliberately refuses every applicant update.
+  if (archived) return 'none';
+
   // Submitting is not what closes a proposal — the deadline is. Until then a
   // speaker can keep improving what the committee has not started reading.
   if ((status === 'draft' || status === 'submitted') && windowOpen) return 'all';

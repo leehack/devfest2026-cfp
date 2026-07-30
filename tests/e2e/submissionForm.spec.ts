@@ -227,6 +227,47 @@ test.describe('the admin editor', () => {
     await expect(page.locator('.editorbar__error')).toContainText('Formats has no choices');
   });
 
+  test('changing admin tabs does not discard an unsaved form edit', async ({ page }) => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await signInAs(page, ADMIN, at('/admin/submission'));
+
+    const label = page.getByRole('textbox', { name: 'English label for App Dev' });
+    await label.fill('Building apps');
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('Unsaved');
+      await dialog.dismiss();
+    });
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+
+    await expect(page).toHaveURL(new RegExp('/admin/submission$'));
+    await expect(
+      page.getByRole('textbox', { name: 'English label for Building apps' }),
+    ).toHaveValue('Building apps');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/committee$'));
+  });
+
+  test('re-enabling a language in French keeps its English label English', async ({ page }) => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await signInAs(page, ADMIN, at('/admin/submission'));
+
+    await page.getByRole('button', { name: 'Français' }).click();
+    const english = page.getByRole('checkbox', { name: 'Anglais', exact: true });
+    await english.uncheck();
+    await english.check();
+
+    // The interface language is not form content. Previously both stored
+    // labels became "Anglais" because the re-enable path copied the current UI
+    // dictionary into the English field too.
+    await expect(page.getByLabel('Libellé anglais pour Anglais')).toHaveValue('English');
+    await expect(page.getByLabel('Libellé français pour Anglais')).toHaveValue('Anglais');
+  });
+
   test('a reviewer cannot change the form', async () => {
     const reviewer = await createAccount(REVIEWER);
     await seedMember(reviewer.uid, 'reviewer', CFP_ID, REVIEWER.email);

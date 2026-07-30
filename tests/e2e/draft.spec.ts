@@ -1,6 +1,32 @@
 import { expect, test } from '@playwright/test';
-import { readProposal, reset } from './backend';
-import { check, field, fillRequired, select, signIn, waitForSave, COMPLETE } from './form';
+import {
+  CFP_ID,
+  createAccount,
+  readProposal,
+  readProposals,
+  reset,
+  seedCfp,
+  seedProposal,
+  seedSpeaker,
+} from './backend';
+import {
+  at,
+  check,
+  field,
+  fillRequired,
+  select,
+  signIn,
+  signInAs,
+  waitForSave,
+  COMPLETE,
+  type Identity,
+} from './form';
+
+const RETURNING: Identity = {
+  sub: 'returning-speaker',
+  email: 'returning@example.org',
+  name: 'Returning Speaker',
+};
 
 test.beforeEach(async () => {
   await reset();
@@ -15,6 +41,156 @@ test('a draft survives a reload', async ({ page }) => {
   await page.reload();
   await expect(field(page, 'Title')).toHaveValue(COMPLETE.title);
   await expect(field(page, 'Abstract')).toHaveValue(COMPLETE.abstract);
+});
+
+test('switching CFPs keeps each proposal in its own form instance', async ({ page }) => {
+  const secondCfp = 'second-call';
+  await seedCfp(secondCfp, { name: 'Second Call' });
+  const speaker = await createAccount(RETURNING);
+  await seedSpeaker(speaker.uid, { name: RETURNING.name, email: RETURNING.email });
+
+  await signInAs(page, RETURNING);
+  await field(page, 'Title').fill('A proposal for Montréal');
+  await page.evaluate((cfpId) => {
+    window.history.pushState(null, '', `/c/${cfpId}/submit`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, secondCfp);
+
+  await expect(page).toHaveURL(`/c/${secondCfp}/submit`);
+  await expect(field(page, 'Title')).toHaveValue('');
+  await field(page, 'Title').fill('A proposal for the second call');
+  await waitForSave(page);
+
+  await expect
+    .poll(async () => (await readProposals(CFP_ID)).map((proposal) => proposal.title))
+    .toEqual(['A proposal for Montréal']);
+  expect((await readProposals(secondCfp)).map((proposal) => proposal.title)).toEqual([
+    'A proposal for the second call',
+  ]);
+});
+
+test('browser Back waits for a dirty draft to save before leaving', async ({ page }) => {
+  await signInAs(page, RETURNING);
+  // Put a same-document entry behind the form. That is the route transition
+  // where `popstate` used to unmount the editor while its save ran in the
+  // background; a full-document Back is separately guarded by beforeunload.
+  await page.evaluate((formPath) => {
+    window.history.replaceState(null, '', '/');
+    window.history.pushState(null, '', formPath);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, at());
+
+  let releaseWrite!: () => void;
+  let markWriteStarted!: () => void;
+  const writeHeld = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const writeStarted = new Promise<void>((resolve) => {
+    markWriteStarted = resolve;
+  });
+  let firstWrite = true;
+  await page.route('**/google.firestore.v1.Firestore/Write/channel**', async (route) => {
+    if (firstWrite) {
+      firstWrite = false;
+      markWriteStarted();
+      await writeHeld;
+    }
+    await route.continue();
+  });
+
+  try {
+    await field(page, 'Title').fill('Do not lose this draft');
+    await page.evaluate(() => window.history.back());
+    await writeStarted;
+
+    // The address and the editable state stay put for the whole write, instead
+    // of unmounting the form while a fire-and-forget save runs.
+    await expect(page).toHaveURL(at());
+    await expect(field(page, 'Title')).toHaveValue('Do not lose this draft');
+    expect(await readProposals()).toEqual([]);
+  } finally {
+    releaseWrite();
+  }
+
+  await expect(page).toHaveURL('/');
+  await expect
+    .poll(async () => (await readProposals()).map((proposal) => proposal.title))
+    .toEqual(['Do not lose this draft']);
+});
+
+test('switching talks keeps every saved talk field and the latest speaker profile', async ({
+  page,
+}) => {
+  const secondTitle = 'What broke when we shipped it';
+  const secondAbstract = `${COMPLETE.abstract} This version follows the production rollout.`;
+  const saveState = page.locator('.actions__status');
+
+  await signIn(page);
+  await field(page, 'Title').fill(COMPLETE.title);
+  await field(page, 'Abstract').fill(COMPLETE.abstract);
+  await field(page, 'Company').fill('First employer');
+  await expect(saveState).toContainText('Changes not saved yet');
+  await waitForSave(page);
+
+  await page.getByRole('button', { name: '+ Another talk', exact: true }).click();
+  await field(page, 'Title').fill(secondTitle);
+  await field(page, 'Abstract').fill(secondAbstract);
+  await field(page, 'Company').fill('Current employer');
+  await expect(saveState).toContainText('Changes not saved yet');
+  await waitForSave(page);
+
+  await page.getByRole('button', { name: COMPLETE.title, exact: true }).click();
+  await expect(field(page, 'Title')).toHaveValue(COMPLETE.title);
+  await expect(field(page, 'Abstract')).toHaveValue(COMPLETE.abstract);
+  await expect(field(page, 'Company')).toHaveValue('Current employer');
+
+  await page.getByRole('button', { name: secondTitle, exact: true }).click();
+  await expect(field(page, 'Title')).toHaveValue(secondTitle);
+  await expect(field(page, 'Abstract')).toHaveValue(secondAbstract);
+  await expect(field(page, 'Company')).toHaveValue('Current employer');
+});
+
+test('historical outcomes do not consume the live-talk cap', async ({ page }) => {
+  const speaker = await createAccount(RETURNING);
+  await seedSpeaker(speaker.uid, { name: RETURNING.name, email: RETURNING.email });
+  for (const [id, status] of [
+    ['old-declined', 'declined'],
+    ['old-rejected', 'rejected'],
+    ['old-withdrawn', 'withdrawn'],
+  ] as const) {
+    await seedProposal(id, {
+      speakerUid: speaker.uid,
+      title: id,
+      status,
+    });
+  }
+
+  await signInAs(page, RETURNING);
+  await expect(page.getByRole('button', { name: '+ Another talk', exact: true })).toBeVisible();
+});
+
+test('live talks are counted even when historical outcomes sort before them', async ({ page }) => {
+  const speaker = await createAccount(RETURNING);
+  await seedSpeaker(speaker.uid, { name: RETURNING.name, email: RETURNING.email });
+  for (const [id, status] of [
+    ['a-declined', 'declined'],
+    ['b-rejected', 'rejected'],
+    ['c-withdrawn', 'withdrawn'],
+    ['d-rejected', 'rejected'],
+    ['z-live-1', 'submitted'],
+    ['z-live-2', 'under_review'],
+    ['z-live-3', 'waitlisted'],
+  ] as const) {
+    await seedProposal(id, {
+      speakerUid: speaker.uid,
+      title: id,
+      status,
+    });
+  }
+
+  await signInAs(page, RETURNING);
+  await expect(page.getByText('That is the maximum of 3.')).toBeVisible();
+  await expect(page.getByRole('button', { name: '+ Another talk', exact: true })).toHaveCount(0);
 });
 
 test('clearing an optional field actually clears it', async ({ page }) => {

@@ -13,6 +13,7 @@ test.describe('validation', () => {
 
     await expect(page.getByText(/fields need attention/)).toBeVisible();
     await expect(page.locator('.field__error').first()).toHaveText('This one is required.');
+    await expect(field(page, 'Title')).toBeFocused();
     expect((await readProposal())?.status).not.toBe('submitted');
   });
 

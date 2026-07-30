@@ -10,7 +10,12 @@ import { createHash } from 'node:crypto';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
-import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  getFirestore,
+  Timestamp,
+  type QueryDocumentSnapshot,
+} from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
@@ -138,6 +143,27 @@ async function assertCfpOpen(cfpId: string): Promise<void> {
   }
   if (now >= cfp.closesAt.toMillis()) {
     throw new HttpsError('deadline-exceeded', 'The CFP has closed.');
+  }
+}
+
+/**
+ * Speaker lifecycle writes stay frozen once a round is archived.
+ *
+ * Read inside the same transaction as the proposal so an archive racing a
+ * response or withdrawal retries against the new state instead of slipping one
+ * last write through. These actions remain allowed after the submission window
+ * closes; archiving, not the calendar, is the historical boundary.
+ */
+async function assertCfpNotArchived(
+  tx: FirebaseFirestore.Transaction,
+  cfpId: string,
+): Promise<void> {
+  const snap = await tx.get(db.doc(`cfps/${cfpId}`));
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'No such call for proposals.');
+  }
+  if (snap.get('archived') === true) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
   }
 }
 
@@ -304,6 +330,34 @@ const DECISION_STILL_TRUE: Record<string, readonly string[]> = {
   waitlisted: ['waitlisted'],
   rejected: ['rejected'],
 };
+
+/**
+ * Splits unsent decision rows by whether the proposal still has that decision.
+ *
+ * Preview and release must use the same answer: showing a message as sendable
+ * when release or retry will retain it is worse than no preview at all.
+ */
+async function currentDecisionEmails(
+  cfpId: string,
+  docs: QueryDocumentSnapshot[],
+): Promise<{ sendable: QueryDocumentSnapshot[]; stale: QueryDocumentSnapshot[] }> {
+  if (docs.length === 0) return { sendable: [], stale: [] };
+
+  const proposalIds = [
+    ...new Set(docs.map((doc) => doc.get('proposalId') as string).filter(Boolean)),
+  ];
+  const proposals = await db.getAll(
+    ...proposalIds.map((proposalId) => db.doc(`cfps/${cfpId}/proposals/${proposalId}`)),
+  );
+  const current = new Map(proposals.map((proposal) => [proposal.id, proposal.get('status') as string]));
+  const sendable = docs.filter((doc) => {
+    const holds = DECISION_STILL_TRUE[doc.get('kind') as string];
+    // A kind with no entry is not a decision at all, so nothing to check.
+    return !holds || holds.includes(current.get(doc.get('proposalId') as string) ?? '');
+  });
+  const sendableIds = new Set(sendable.map((doc) => doc.id));
+  return { sendable, stale: docs.filter((doc) => !sendableIds.has(doc.id)) };
+}
 
 /**
  * Keeps the committee's copy of a speaker current until their talk is decided.
@@ -503,6 +557,7 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
 
   await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
     const proposal = await readOwnProposal(tx, proposalRef, uid);
     if (!inStatusSet('withdrawable', proposal.status)) {
       throw new HttpsError(
@@ -605,6 +660,7 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
   }
 
   await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
     const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
     const proposal = await readOwnProposal(tx, proposalRef, uid);
 
@@ -1174,10 +1230,12 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
  * `status` is what every other permission keys off — an applicant who could
  * write it could accept themselves.
  *
- * Only the outcomes an admin actually decides. `draft`, `submitted` and
- * `withdrawn` belong to the applicant's own flow and are not settable here.
+ * Admins may also restore a decision to `submitted`. That is the exact state
+ * the proposals screen's Undo control needs; `draft` and `withdrawn` remain the
+ * applicant's own states and are never settable here.
  */
 const DECIDABLE = STATUS_SETS.decidable;
+const ADMIN_PROPOSAL_STATUSES = ['submitted', ...DECIDABLE] as const;
 
 export const setProposalStatus = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -1186,10 +1244,10 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
 
   const proposalId = requireProposalId(data);
   const status = String(data.status ?? '');
-  if (!(DECIDABLE as readonly string[]).includes(status)) {
+  if (!(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(status)) {
     throw new HttpsError(
       'invalid-argument',
-      `Status must be one of ${DECIDABLE.join(', ')} — got "${status}".`,
+      `Status must be one of ${ADMIN_PROPOSAL_STATUSES.join(', ')} — got "${status}".`,
     );
   }
 
@@ -1265,6 +1323,17 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       if (current === 'queued' || current === 'sending') {
         throw new HttpsError('failed-precondition', `That message is already ${current}.`);
       }
+      const holds = DECISION_STILL_TRUE[snap.get('kind') as string];
+      if (holds) {
+        const proposalId = snap.get('proposalId') as string;
+        const proposal = await tx.get(db.doc(`cfps/${cfpId}/proposals/${proposalId}`));
+        if (!proposal.exists || !holds.includes(proposal.get('status') as string)) {
+          throw new HttpsError(
+            'failed-precondition',
+            'That decision changed, so this message is no longer sendable.',
+          );
+        }
+      }
       tx.update(ref, { status: 'queued' satisfies EmailStatus });
       return current;
     });
@@ -1278,9 +1347,20 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     db.doc(`cfps/${cfpId}/config/email`).get(),
   ]);
   const emailConfig = configSnap.data() ?? {};
+  const pendingDocs = snap.docs.filter((doc) =>
+    ['held', 'failed', 'dry_run'].includes(doc.get('status') as string),
+  );
+  const pendingState =
+    action === 'preview' || action === 'release' || action === 'retry'
+      ? await currentDecisionEmails(cfpId, pendingDocs)
+      : { sendable: pendingDocs, stale: [] };
+  const staleIds = new Set(pendingState.stale.map((doc) => doc.id));
 
   const tally: Record<string, number> = {};
   for (const doc of snap.docs) {
+    // A retained, superseded decision is not waiting for release. It becomes
+    // sendable again only if the committee restores that exact decision.
+    if (staleIds.has(doc.id)) continue;
     const key = `${doc.get('status')}:${doc.get('kind')}`;
     tally[key] = (tally[key] ?? 0) + 1;
   }
@@ -1305,6 +1385,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       // The provider's reason, not ours — shown as-is to an admin, who is the
       // one person who can act on "domain is not verified".
       error: (d.get('error') as string) ?? '',
+      // The database row remains held so restoring the decision can release it.
+      // This flag lets the log describe its effective state truthfully.
+      stale: staleIds.has(d.id),
     }))
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0) || a.to.localeCompare(b.to));
 
@@ -1322,9 +1405,10 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       domain: (emailConfig.domain as string) ?? '',
       templates: emailConfig.templates ?? {},
       // Enough to check the copy and the addresses before committing to a send.
-      held: snap.docs
+      held: pendingState.sendable
         .filter((d) => d.get('status') === 'held')
         .map((d) => ({ kind: d.get('kind'), to: d.get('to'), title: d.get('data')?.title })),
+      staleHeld: pendingState.stale.length,
       /*
        * Who was written to, and what happened. The panel used to show counts by
        * status and nothing else, so "did this person get their acceptance" had
@@ -1343,7 +1427,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   // was rendered while no sender was configured. Retrying picks those up once
   // the domain is, so a receipt written during setup still reaches its speaker.
   const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
-  let due = snap.docs.filter((d) => from.includes(d.get('status')));
+  const due = pendingState.sendable.filter((d) => from.includes(d.get('status')));
 
   /*
    * A decision reversed after it was queued must not go out anyway.
@@ -1356,20 +1440,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
    * Stale rows stay `held` rather than being deleted, so restoring the decision
    * releases them normally on the next pass.
    */
-  let stale = 0;
-  if (action === 'release' && due.length > 0) {
-    const proposals = await db.getAll(
-      ...due.map((d) => db.doc(`cfps/${cfpId}/proposals/${d.get('proposalId')}`)),
-    );
-    const current = new Map(proposals.map((p) => [p.id, p.get('status') as string]));
-    const fresh = due.filter((d) => {
-      const holds = DECISION_STILL_TRUE[d.get('kind') as string];
-      // A kind with no entry is not a decision at all, so nothing to check.
-      return !holds || holds.includes(current.get(d.get('proposalId') as string) ?? '');
-    });
-    stale = due.length - fresh.length;
-    due = fresh;
-  }
+  const stale = pendingState.stale.filter((d) => from.includes(d.get('status'))).length;
 
   const CHUNK = 400;
   for (let i = 0; i < due.length; i += CHUNK) {

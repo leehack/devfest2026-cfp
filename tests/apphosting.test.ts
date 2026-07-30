@@ -18,6 +18,7 @@ interface Entry {
   variable: string;
   hasValue: boolean;
   hasSecret: boolean;
+  availability: string[];
   line: number;
 }
 
@@ -25,13 +26,21 @@ function envEntries(): Entry[] {
   const lines = readFileSync('apphosting.yaml', 'utf8').split('\n');
   const entries: Entry[] = [];
   let current: Entry | null = null;
+  let readingAvailability = false;
 
   lines.forEach((line, i) => {
     if (/^\s*#/.test(line)) return; // A commented-out variable is not declared.
     const start = /^\s*-\s*variable:\s*(\S+)/.exec(line);
     if (start) {
-      current = { variable: start[1], hasValue: false, hasSecret: false, line: i + 1 };
+      current = {
+        variable: start[1],
+        hasValue: false,
+        hasSecret: false,
+        availability: [],
+        line: i + 1,
+      };
       entries.push(current);
+      readingAvailability = false;
       return;
     }
     if (!current) return;
@@ -45,6 +54,14 @@ function envEntries(): Entry[] {
     if (value && value[1].replace(/^['"]|['"]$/g, '').trim() !== '') current.hasValue = true;
     const secret = /^\s+secret:\s*(.*)$/.exec(line);
     if (secret && secret[1].replace(/^['"]|['"]$/g, '').trim() !== '') current.hasSecret = true;
+    if (/^\s+availability:\s*$/.test(line)) {
+      readingAvailability = true;
+      return;
+    }
+    if (readingAvailability) {
+      const scope = /^\s+-\s+(BUILD|RUNTIME)\s*$/.exec(line);
+      if (scope) current.availability.push(scope[1]);
+    }
   });
 
   return entries;
@@ -91,5 +108,28 @@ describe('apphosting.yaml', () => {
     // next.config.ts refuses to build with this on; this catches it a step earlier.
     expect(raw).toMatch(/NEXT_PUBLIC_USE_EMULATORS/);
     expect(raw).not.toMatch(/NEXT_PUBLIC_USE_EMULATORS[\s\S]{0,40}value:\s*'?true'?/);
+  });
+
+  it('links the policy speakers must accept', () => {
+    const entry = envEntries().find((e) => e.variable === 'NEXT_PUBLIC_COC_URL');
+    expect(entry, 'production renders a Code of Conduct checkbox without a link').toBeTruthy();
+    expect(entry!.hasValue).toBe(true);
+  });
+
+  it('does not make build-only browser configuration a runtime dependency', () => {
+    const entries = envEntries();
+    for (const entry of entries.filter((e) => e.variable.startsWith('NEXT_PUBLIC_'))) {
+      expect(entry.availability, entry.variable).toEqual(['BUILD']);
+    }
+  });
+
+  it('keeps server-rendered site metadata available at build and runtime', () => {
+    const entries = envEntries();
+    for (const name of ['SITE_ORIGIN', 'SITE_NAME']) {
+      expect(entries.find((e) => e.variable === name)?.availability, name).toEqual([
+        'BUILD',
+        'RUNTIME',
+      ]);
+    }
   });
 });

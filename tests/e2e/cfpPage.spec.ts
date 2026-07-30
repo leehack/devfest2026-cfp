@@ -8,7 +8,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { CFP_ID, inviteRole, reset, seedCfp } from './backend';
+import { CFP_ID, inviteRole, reset, seedCfp, setCfpWindow } from './backend';
 import { at, signInAs, type Identity, alerts } from './form';
 
 const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'Ada' };
@@ -51,14 +51,45 @@ test.describe('a call’s front page', () => {
     // And the way onwards is a link, so it can be opened in a new tab.
     await visitor.getByRole('link', { name: 'Submit a talk' }).click();
     await expect(visitor).toHaveURL(at());
+    await expect(visitor.locator('#main-content')).toBeFocused();
     await stranger.close();
   });
 
   test('says so plainly when nobody has described it yet', async ({ page }) => {
     await page.goto(at(''));
-    await expect(page.getByText('The organisers have not described this event yet.')).toBeVisible();
+    await expect(page.getByText('More event details are on the way.')).toBeVisible();
     // The deadline is still worth saying — it is the fact with a date on it.
     await expect(page.getByText(/Submissions close on/)).toBeVisible();
+  });
+
+  test('does not offer an impossible submission action outside the open window', async ({
+    page,
+  }) => {
+    const day = 24 * 60 * 60 * 1000;
+    await setCfpWindow({
+      opensAt: new Date(Date.now() + day),
+      closesAt: new Date(Date.now() + 2 * day),
+    });
+
+    await page.goto(at(''));
+    await expect(
+      page.getByText('The submission form will be available here when the call opens.'),
+    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Submit a talk', exact: true })).toHaveCount(0);
+
+    await setCfpWindow({
+      opensAt: new Date(Date.now() - 2 * day),
+      closesAt: new Date(Date.now() - day),
+    });
+    await page.reload();
+    await expect(
+      page.getByText('Organisers will contact speakers about the next steps.'),
+    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Submit a talk', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'View your proposals' })).toHaveAttribute(
+      'href',
+      `/c/${CFP_ID}/submit`,
+    );
   });
 
   test('the details survive a reload of the admin panel', async ({ page }) => {

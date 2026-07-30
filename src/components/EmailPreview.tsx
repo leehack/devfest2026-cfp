@@ -10,7 +10,7 @@
  * applicants will have with the event.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { SelectField, TextField, TextAreaField, Checkbox } from './fields';
 import { useI18n } from '../i18n/context';
@@ -35,12 +35,14 @@ export function EmailPreview({
   configured,
   templates,
   onSaved,
+  onDirtyChange,
 }: {
   cfpId: string;
   cfpName: string;
   configured: boolean;
   templates: TemplateOverrides;
   onSaved: () => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t, locale } = useI18n();
   const [kind, setKind] = useState<EmailKind>('accepted');
@@ -48,19 +50,50 @@ export function EmailPreview({
   const [needsVisa, setNeedsVisa] = useState(true);
   const [plain, setPlain] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Template>(() => activeTemplate(kind, previewLocale, templates));
+  const initial = activeTemplate(kind, previewLocale, templates);
+  const [draft, setDraft] = useState<Template>(initial);
+  const [baseline, setBaseline] = useState<Template>(initial);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const selection = `${kind}:${previewLocale}`;
+  const previousSelection = useRef(selection);
+  const dirty = draft.subject !== baseline.subject || draft.body !== baseline.body;
 
-  // Switching message or language loads that one's wording. Deliberately not
-  // guarded by an unsaved-changes check — the selectors are how you browse, and
-  // Reset is one click away.
+  // A refresh of the queue may carry a new object containing the same templates.
+  // It updates a clean editor, but never writes over a sentence in progress.
+  // Switching to a different message is distinct: its own wording must load.
   useEffect(() => {
-    setDraft(activeTemplate(kind, previewLocale, templates));
-    setNote('');
-    setError('');
-  }, [kind, previewLocale, templates]);
+    const changed = previousSelection.current !== selection;
+    const next = activeTemplate(kind, previewLocale, templates);
+    if (changed || !dirty) setDraft(next);
+    setBaseline(next);
+    previousSelection.current = selection;
+    if (changed) {
+      setNote('');
+      setError('');
+    }
+    // `dirty` describes the draft before this server snapshot. Adding it as a
+    // dependency would immediately run again after `setBaseline` and erase the
+    // protected draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, templates]);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
+
+  function changeSelection(work: () => void) {
+    if (dirty && !window.confirm(t.admin.unsaved)) return;
+    work();
+  }
 
   const custom = Boolean(templates?.[kind]?.[previewLocale]);
   const problem = validateTemplate(draft);
@@ -102,7 +135,7 @@ export function EmailPreview({
           required
           value={kind}
           options={EMAIL_KINDS.map((k) => ({ value: k, label: t.admin.emailKinds[k] ?? k }))}
-          onChange={(v) => setKind(v as EmailKind)}
+          onChange={(v) => changeSelection(() => setKind(v as EmailKind))}
         />
         <SelectField
           label={t.admin.emailPreviewLocale}
@@ -112,7 +145,7 @@ export function EmailPreview({
             { value: 'en', label: 'English' },
             { value: 'fr', label: 'Français' },
           ]}
-          onChange={(v) => setPreviewLocale(v as EmailLocale)}
+          onChange={(v) => changeSelection(() => setPreviewLocale(v as EmailLocale))}
         />
       </div>
 
@@ -167,6 +200,7 @@ export function EmailPreview({
               onClick={() =>
                 run(async () => {
                   await setEmailTemplate({ cfpId, kind, locale: previewLocale, ...draft });
+                  setBaseline(draft);
                   await onSaved();
                   return t.admin.emailTemplateSaved;
                 })
@@ -181,7 +215,9 @@ export function EmailPreview({
               onClick={() =>
                 run(async () => {
                   await setEmailTemplate({ cfpId, kind, locale: previewLocale, reset: true });
-                  setDraft(builtInTemplate(kind, previewLocale));
+                  const restored = builtInTemplate(kind, previewLocale);
+                  setDraft(restored);
+                  setBaseline(restored);
                   await onSaved();
                   return t.admin.emailTemplateReset;
                 })

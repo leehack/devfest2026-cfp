@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { collection, collectionGroup, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
@@ -78,6 +78,8 @@ export const emailQueue = httpsCallable<
     ok: boolean;
     tally: Record<string, number>;
     held?: HeldEmail[];
+    /** Held rows whose proposal no longer has that decision. */
+    staleHeld?: number;
     released?: number;
     settings?: EmailSettings;
     /** Last four characters of the API key — never the key. */
@@ -104,6 +106,8 @@ export interface EmailRow {
   /** Milliseconds, because a Timestamp does not survive the callable's JSON. */
   sentAt: number | null;
   error: string;
+  /** Retained in storage, but not currently eligible for release. */
+  stale?: boolean;
 }
 
 export const setEmailSettings = httpsCallable<In<EmailSettings>, { ok: boolean }>(
@@ -181,18 +185,24 @@ export const sendSpeakerMessage = httpsCallable<
 export function useRole(
   user: User | null,
   cfpId: string | null,
-): { role: CfpRole | null; ready: boolean } {
+): { role: CfpRole | null; ready: boolean; error: boolean; retry: () => void } {
   const [role, setRole] = useState<CfpRole | null>(null);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((current) => current + 1), []);
 
   useEffect(() => {
     let cancelled = false;
     if (!user || !cfpId) {
       setRole(null);
+      setError(false);
       setReady(true);
       return;
     }
 
+    setRole(null);
+    setError(false);
     setReady(false);
     (async () => {
       try {
@@ -205,7 +215,14 @@ export function useRole(
         const { data } = await claimRole({ cfpId });
         if (!cancelled) setRole(data.role);
       } catch {
-        if (!cancelled) setRole(null); // no role is the safe reading
+        // A missing membership is an ordinary speaker and is answered by
+        // `claimRole` with `{role:null}`. Reaching here means neither read nor
+        // claim completed, so calling it "forbidden" would turn an outage into a
+        // false statement about the person's account.
+        if (!cancelled) {
+          setRole(null);
+          setError(true);
+        }
       } finally {
         if (!cancelled) setReady(true);
       }
@@ -214,9 +231,9 @@ export function useRole(
     return () => {
       cancelled = true;
     };
-  }, [user, cfpId]);
+  }, [user, cfpId, attempt]);
 
-  return { role, ready };
+  return { role, ready, error, retry };
 }
 
 export interface Person extends CfpMember {

@@ -14,17 +14,77 @@ import { Checkbox, TextAreaField, TextField } from './fields';
 import { Reveal } from './Reveal';
 import { SocialsInput } from './SocialsInput';
 import { useI18n } from '../i18n/context';
-import type { FormState } from '../lib/formState';
+import { toSubmission, type FormState } from '../lib/formState';
 import { LIMITS } from '@shared/enums';
+import { speakerSchema } from '@shared/schema';
 
 export interface SpeakerFieldsProps {
   form: FormState;
   set: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   /** Errors by schema path, e.g. `speaker.bio`. Undefined until they are shown. */
   err: (path: string) => string | undefined;
+  disabled?: boolean;
 }
 
-export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
+export function speakerProfileComplete(form: FormState): boolean {
+  return speakerSchema.safeParse(toSubmission(form).speaker).success;
+}
+
+function initials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toLocaleUpperCase())
+    .join('');
+}
+
+/**
+ * The reassuring, scannable alternative to asking a returning speaker to read
+ * through the same fields again. Nothing is hidden permanently: Edit opens the
+ * canonical controls immediately below it.
+ */
+export function SpeakerProfileSummary({
+  form,
+  onEdit,
+}: {
+  form: FormState;
+  onEdit: () => void;
+}) {
+  const { t } = useI18n();
+  const role = [form.jobTitle, form.company].filter(Boolean).join(' · ');
+
+  return (
+    <div className="speaker-summary">
+      <div className="speaker-summary__header">
+        <span className="speaker-summary__avatar" aria-hidden="true">
+          {initials(form.name)}
+        </span>
+        <div className="speaker-summary__identity">
+          <span className="speaker-summary__status">{t.form.profileReady}</span>
+          <strong className="speaker-summary__name">{form.name}</strong>
+          {role && <span className="speaker-summary__role">{role}</span>}
+        </div>
+        <button type="button" className="btn btn--ghost speaker-summary__edit" onClick={onEdit}>
+          {t.form.editProfile}
+        </button>
+      </div>
+      <p className="speaker-summary__bio">{form.bio}</p>
+      <dl className="speaker-summary__facts">
+        <div>
+          <dt>{t.speaker.basedIn}</dt>
+          <dd>{form.basedIn}</dd>
+        </div>
+        <div>
+          <dt>{t.speaker.email}</dt>
+          <dd>{form.email}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+export function SpeakerFields({ form, set, err, disabled }: SpeakerFieldsProps) {
   const { t } = useI18n();
 
   return (
@@ -35,6 +95,7 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
         onChange={(v) => set('name', v)}
         maxLength={LIMITS.nameMax}
         error={err('speaker.name')}
+        disabled={disabled}
         required
       />
 
@@ -58,6 +119,7 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
         maxLength={LIMITS.bioMax}
         rows={4}
         error={err('speaker.bio')}
+        disabled={disabled}
         required
       />
 
@@ -72,6 +134,7 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
           onChange={(v) => set('company', v)}
           maxLength={LIMITS.companyMax}
           error={err('speaker.company')}
+          disabled={disabled}
         />
         <TextField
           label={t.speaker.jobTitle}
@@ -79,6 +142,7 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
           onChange={(v) => set('jobTitle', v)}
           maxLength={LIMITS.jobTitleMax}
           error={err('speaker.jobTitle')}
+          disabled={disabled}
         />
       </div>
 
@@ -89,10 +153,11 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
         onChange={(v) => set('basedIn', v)}
         maxLength={LIMITS.basedInMax}
         error={err('speaker.basedIn')}
+        disabled={disabled}
         required
       />
 
-      <SocialsInput value={form.socials} onChange={(v) => set('socials', v)} />
+      <SocialsInput value={form.socials} onChange={(v) => set('socials', v)} disabled={disabled} />
 
       {/* Stored rather than asked for again: the import at the top of the form
           reads from this, and re-pasting your own profile URL at every CFP is
@@ -105,6 +170,7 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
         maxLength={LIMITS.handleMax}
         placeholder="sessionize.com/your-name"
         error={err('speaker.sessionizeUrl')}
+        disabled={disabled}
       />
 
       <TextAreaField
@@ -115,12 +181,14 @@ export function SpeakerFields({ form, set, err }: SpeakerFieldsProps) {
         maxLength={LIMITS.pastTalksMax}
         rows={3}
         error={err('speaker.pastTalks')}
+        disabled={disabled}
       />
 
       <Checkbox
         label={t.speaker.isGde}
         checked={form.isGde}
         onChange={(v) => set('isGde', v)}
+        disabled={disabled}
       />
 
       {/* Conditional 1 of 3 — shown only to GDEs, per §5. */}
