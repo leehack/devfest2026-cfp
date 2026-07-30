@@ -256,6 +256,7 @@ test.describe('nothing crosses between two calls', () => {
     // a CFP you hold nothing on is the whole attack, and it buys nothing.
     for (const [name, data] of [
       ['setProposalStatus', { proposalId: 'theirs', status: 'accepted' }],
+      ['emailQueue', { action: 'summary' }],
       ['emailQueue', { action: 'preview' }],
       ['recomputeAggregates', {}],
       ['setCfpWindow', { paused: true }],

@@ -693,8 +693,28 @@ export const en = {
       unreachable: 'Could not reach Resend. Try again shortly.',
     },
     emailQueue: 'Queue',
+    emailDecisionQueue: 'Decision emails',
     emailHelp:
       'Decisions are held until you release them, so everyone hears on the same day. Check the list below before sending — it cannot be taken back.',
+    emailQueueEmpty:
+      'No decision emails are waiting. New decisions will appear here before anything is sent.',
+    emailQueueSetupNeeded:
+      'These emails are safely held. Finish the delivery setup below before releasing them.',
+    pendingEmailEyebrow: 'Speaker notifications',
+    pendingEmailShort: 'pending',
+    pendingEmailTitle: (count: number) =>
+      count === 1
+        ? '1 decision email is waiting to be sent.'
+        : `${count} decision emails are waiting to be sent.`,
+    pendingEmailHelp:
+      'Saving a decision holds its email for review. Check the full batch, then send everyone’s result together.',
+    pendingEmailReview: 'Review and send',
+    pendingEmailTabOption: (count: number) => `Email (${count} pending)`,
+    pendingEmailTabLabel: (count: number) =>
+      `Email, ${count} decision ${count === 1 ? 'email' : 'emails'} waiting`,
+    pendingEmailUnknownTitle: 'Email queue status unavailable',
+    pendingEmailUnknownHelp:
+      'The decision is saved, but we could not verify its email. Open Email to check the queue before notifying speakers.',
     emailStatus: {
       held: 'Waiting for release',
       queued: 'Queued',
@@ -729,14 +749,15 @@ export const en = {
       'No reply-to address is set, so a speaker who replies will reach nobody. Set one above before writing.',
     messageNoTalks: 'Nothing to write about yet — no proposal has been submitted.',
     emailRefresh: 'Refresh',
-    emailRelease: 'Send {count} decisions',
+    emailRelease: (count: number) =>
+      `Send ${count} decision ${count === 1 ? 'email' : 'emails'}`,
     emailNothing: 'Nothing to send',
     emailStaleHeld:
       'Earlier decision emails retained: {count}. They become sendable only if those decisions are restored.',
     emailStaleStatus: 'Retained — decision changed',
     emailConfirm: 'Send {count} decision emails now? This cannot be undone.',
     emailRetry: 'Retry {count} unsent',
-    emailSent: '{count} messages queued.',
+    emailSent: (count: number) => `${count} ${count === 1 ? 'email' : 'emails'} queued.`,
     emailLog: 'What was sent',
     emailLogEmpty: 'Nothing has been queued yet.',
     emailLogFilter: 'Show',
@@ -789,6 +810,7 @@ export const en = {
     savingDecision: 'Saving…',
     decisionChanged: (title: string, from: string, to: string) =>
       `“${title}” moved from ${from} to ${to}.`,
+    decisionEmailHeld: 'Decision saved. This action does not send an email.',
     decisionUndone: (title: string) => `Restored the previous status for “${title}”.`,
     undo: 'Undo',
     untitled: 'Untitled proposal',

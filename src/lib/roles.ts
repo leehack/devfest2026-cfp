@@ -87,15 +87,22 @@ export const deleteCfp = httpsCallable<In<{ confirm: string }>, { ok: boolean }>
 );
 
 export interface HeldEmail {
+  logId: string;
   kind: string;
   to: string;
   title?: string;
 }
 export const emailQueue = httpsCallable<
-  In<{ action: 'preview' | 'release' | 'retry' | 'resend'; logId?: string }>,
+  In<{
+    action: 'summary' | 'preview' | 'release' | 'retry' | 'resend';
+    logId?: string;
+    logIds?: string[];
+  }>,
   {
     ok: boolean;
-    tally: Record<string, number>;
+    /** Sendable decision emails, without returning their recipient data. */
+    waiting?: number;
+    tally?: Record<string, number>;
     held?: HeldEmail[];
     /** Held rows whose proposal no longer has that decision. */
     staleHeld?: number;

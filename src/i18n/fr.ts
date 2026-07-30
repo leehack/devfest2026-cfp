@@ -689,8 +689,28 @@ export const fr: Dictionary = {
       unreachable: 'Impossible de joindre Resend. Réessayez dans un instant.',
     },
     emailQueue: 'File d’attente',
+    emailDecisionQueue: 'Courriels de décision',
     emailHelp:
       'Les décisions sont retenues jusqu’à ce que vous les libériez, afin que tout le monde soit informé le même jour. Vérifiez la liste ci-dessous avant l’envoi — c’est irréversible.',
+    emailQueueEmpty:
+      'Aucun courriel de décision n’attend. Les nouvelles décisions apparaîtront ici avant tout envoi.',
+    emailQueueSetupNeeded:
+      'Ces courriels sont retenus en toute sécurité. Terminez la configuration de l’envoi ci-dessous avant de les libérer.',
+    pendingEmailEyebrow: 'Notifications aux conférenciers',
+    pendingEmailShort: 'en attente',
+    pendingEmailTitle: (count: number) =>
+      count === 1
+        ? '1 courriel de décision attend d’être envoyé.'
+        : `${count} courriels de décision attendent d’être envoyés.`,
+    pendingEmailHelp:
+      'L’enregistrement d’une décision retient son courriel pour vérification. Vérifiez le lot complet, puis envoyez tous les résultats ensemble.',
+    pendingEmailReview: 'Vérifier et envoyer',
+    pendingEmailTabOption: (count: number) => `Courriel (${count} en attente)`,
+    pendingEmailTabLabel: (count: number) =>
+      `Courriel, ${count} courriel${count === 1 ? '' : 's'} de décision en attente`,
+    pendingEmailUnknownTitle: 'État de la file de courriels indisponible',
+    pendingEmailUnknownHelp:
+      'La décision est enregistrée, mais son courriel n’a pas pu être vérifié. Ouvrez Courriel pour contrôler la file avant d’aviser les conférenciers.',
     emailStatus: {
       held: 'En attente de libération',
       queued: 'En file',
@@ -725,14 +745,16 @@ export const fr: Dictionary = {
       'Aucune adresse de réponse n’est définie : une réponse n’arriverait à personne. Définissez-en une ci-dessus avant d’écrire.',
     messageNoTalks: 'Rien à écrire pour l’instant — aucune proposition n’a été soumise.',
     emailRefresh: 'Actualiser',
-    emailRelease: 'Envoyer {count} décisions',
+    emailRelease: (count: number) =>
+      `Envoyer ${count} courriel${count === 1 ? '' : 's'} de décision`,
     emailNothing: 'Rien à envoyer',
     emailStaleHeld:
       'Courriels de décision antérieurs conservés : {count}. Ils ne redeviendront envoyables que si ces décisions sont rétablies.',
     emailStaleStatus: 'Conservé — décision modifiée',
     emailConfirm: 'Envoyer {count} courriels de décision maintenant ? C’est irréversible.',
     emailRetry: 'Renvoyer {count} non envoyés',
-    emailSent: '{count} messages mis en file.',
+    emailSent: (count: number) =>
+      `${count} courriel${count === 1 ? '' : 's'} mis en file.`,
     emailLog: 'Ce qui a été envoyé',
     emailLogEmpty: 'Rien n’a encore été mis en file.',
     emailLogFilter: 'Afficher',
@@ -787,6 +809,7 @@ export const fr: Dictionary = {
     savingDecision: 'Enregistrement…',
     decisionChanged: (title: string, from: string, to: string) =>
       `« ${title} » est passée de ${from} à ${to}.`,
+    decisionEmailHeld: 'Décision enregistrée. Cette action n’envoie aucun courriel.',
     decisionUndone: (title: string) => `Le statut précédent de « ${title} » est rétabli.`,
     undo: 'Annuler',
     untitled: 'Proposition sans titre',

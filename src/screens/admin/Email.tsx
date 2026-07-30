@@ -35,10 +35,12 @@ export function Email({
   cfpId,
   cfpName,
   onDirtyChange,
+  onPendingChange,
 }: {
   cfpId: string;
   cfpName: string;
   onDirtyChange?: (dirty: boolean) => void;
+  onPendingChange?: (count: number) => void;
 }) {
   const { t, locale } = useI18n();
   const tRef = useLatest(t);
@@ -82,45 +84,70 @@ export function Email({
   );
 
   const run = useCallback(
-    async (action: 'preview' | 'release' | 'retry', logId?: string) => {
+    async (
+      action: 'preview' | 'release' | 'retry',
+      logId?: string,
+      reviewedLogIds?: string[],
+    ) => {
       const scope = cfpId;
       setBusy(true);
       setError('');
       if (action !== 'preview') setNote('');
       try {
-        const { data } = await emailQueue({ cfpId, action, ...(logId ? { logId } : {}) });
+        const { data } = await emailQueue({
+          cfpId,
+          action,
+          ...(logId ? { logId } : {}),
+          ...(reviewedLogIds ? { logIds: reviewedLogIds } : {}),
+        });
         if (activeCfp.current !== scope) return;
-        setTally(data.tally ?? {});
-        // Never over the top of someone mid-sentence: this load is async, and
-        // an admin who starts typing before it lands would otherwise watch the
-        // field empty itself under the cursor.
-        if (data.settings && !editing.current) {
-          setSettings(data.settings);
-          setStoredSettings(data.settings);
-        }
-        setKeyHint(data.keyHint ?? '');
-        setDomainId(data.domainId ?? '');
-        setDomain(data.domain ?? '');
-        setRows(data.rows ?? []);
-        setTruncated(data.truncated ?? 0);
-        setTemplates(data.templates ?? {});
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
         if (action === 'preview') {
-          setReady(true);
-          setStaleHeld(data.staleHeld ?? 0);
-          setHeld(
-            [...(data.held ?? [])].sort(
-              (a, b) => a.kind.localeCompare(b.kind) || (a.title ?? '').localeCompare(b.title ?? ''),
-            ),
+          const nextHeld = [...(data.held ?? [])].sort(
+            (a, b) =>
+              a.kind.localeCompare(b.kind) || (a.title ?? '').localeCompare(b.title ?? ''),
           );
+          setReady(true);
+          setTally(data.tally ?? {});
+          setStaleHeld(data.staleHeld ?? 0);
+          setHeld(nextHeld);
+          onPendingChange?.(nextHeld.length);
+          // Never over the top of someone mid-sentence: this load is async, and
+          // an admin who starts typing before it lands would otherwise watch the
+          // field empty itself under the cursor.
+          if (data.settings && !editing.current) {
+            setSettings(data.settings);
+            setStoredSettings(data.settings);
+          }
+          setKeyHint(data.keyHint ?? '');
+          setDomainId(data.domainId ?? '');
+          setDomain(data.domain ?? '');
+          setRows(data.rows ?? []);
+          setTruncated(data.truncated ?? 0);
+          setTemplates(data.templates ?? {});
         } else {
-          setNote(tRef.current.admin.emailSent.replace('{count}', String(data.released ?? 0)));
+          setNote(tRef.current.admin.emailSent(data.released ?? 0));
           const { data: after } = await emailQueue({ cfpId, action: 'preview' });
           if (activeCfp.current !== scope) return;
+          const nextHeld = [...(after.held ?? [])].sort(
+            (a, b) =>
+              a.kind.localeCompare(b.kind) || (a.title ?? '').localeCompare(b.title ?? ''),
+          );
           setTally(after.tally ?? {});
           setStaleHeld(after.staleHeld ?? 0);
-          setHeld(after.held ?? []);
+          setHeld(nextHeld);
+          onPendingChange?.(nextHeld.length);
+          if (after.settings && !editing.current) {
+            setSettings(after.settings);
+            setStoredSettings(after.settings);
+          }
+          setKeyHint(after.keyHint ?? '');
+          setDomainId(after.domainId ?? '');
+          setDomain(after.domain ?? '');
+          setRows(after.rows ?? []);
+          setTruncated(after.truncated ?? 0);
+          setTemplates(after.templates ?? {});
         }
       } catch (e) {
         if (activeCfp.current === scope) setError(adminError(e, tRef.current));
@@ -128,7 +155,7 @@ export function Email({
         if (activeCfp.current === scope) setBusy(false);
       }
     },
-    [cfpId, tRef],
+    [cfpId, onPendingChange, tRef],
   );
 
   useEffect(() => {
@@ -169,7 +196,7 @@ export function Email({
   // otherwise, by which point the message is a `failed` row.
   const mismatch = senderMismatch(settings.from, domain);
 
-  const waiting = count('held');
+  const waiting = held.length;
   // A `dry_run` row is a message that was never sent, so it belongs with the
   // failures on the retry button rather than looking like a delivery.
   const unsent = count('failed') + count('dry_run');
@@ -264,6 +291,101 @@ export function Email({
     <section className="section">
       <h2>{t.admin.email}</h2>
 
+      <section
+        className={`email-queue-card${waiting > 0 ? ' email-queue-card--pending' : ''}`}
+        aria-labelledby="decision-email-queue-title"
+      >
+        <div className="email-queue-card__heading">
+          <div>
+            <p className="email-queue-card__eyebrow">{t.admin.pendingEmailEyebrow}</p>
+            <h3 id="decision-email-queue-title">{t.admin.emailDecisionQueue}</h3>
+            <p>{t.admin.emailHelp}</p>
+          </div>
+          {waiting > 0 && (
+            <div
+              className="email-queue-card__count"
+              aria-label={t.admin.pendingEmailTitle(waiting)}
+            >
+              <strong>{waiting}</strong>
+              <span>{t.admin.pendingEmailShort}</span>
+            </div>
+          )}
+        </div>
+
+        <dl className="stats">
+          {(['held', 'queued', 'sent', 'dry_run', 'failed'] as const).map((status) => (
+            <div key={status} className="stats__item">
+              <dt>{t.admin.emailStatus[status]}</dt>
+              <dd>{count(status)}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {waiting === 0 && <p className="muted">{t.admin.emailQueueEmpty}</p>}
+        {waiting > 0 && (!keyHint || !settings.from) && (
+          <p className="note note--inline">{t.admin.emailQueueSetupNeeded}</p>
+        )}
+        {staleHeld > 0 && (
+          <p className="muted">
+            {t.admin.emailStaleHeld.replace('{count}', String(staleHeld))}
+          </p>
+        )}
+
+        {held.length > 0 && (
+          <div className="table__scroll">
+            <table className="table table--held">
+              <thead>
+                <tr>
+                  <th>{t.admin.emailKind}</th>
+                  <th>{t.admin.emailTo}</th>
+                  <th>{t.proposal.title}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {held.map((row) => (
+                  <tr key={row.logId}>
+                    <td>{t.admin.emailKinds[row.kind] ?? row.kind}</td>
+                    <td>{row.to}</td>
+                    <td>{row.title}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="row row--wrap">
+          <button type="button" className="btn" disabled={busy} onClick={() => run('preview')}>
+            {t.admin.emailRefresh}
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busy || waiting === 0}
+            onClick={() => {
+              if (confirm(t.admin.emailConfirm.replace('{count}', String(waiting)))) {
+                void run(
+                  'release',
+                  undefined,
+                  held.map((row) => row.logId),
+                );
+              }
+            }}
+          >
+            {waiting === 0
+              ? t.admin.emailNothing
+              : t.admin.emailRelease(waiting)}
+          </button>
+          {unsent > 0 && (
+            <button type="button" className="btn" disabled={busy} onClick={() => run('retry')}>
+              {t.admin.emailRetry.replace('{count}', String(unsent))}
+            </button>
+          )}
+        </div>
+
+        <Result ok={note} error={error} />
+      </section>
+
       <EmailSetup
         cfpId={cfpId}
         keyHint={keyHint}
@@ -318,69 +440,6 @@ export function Email({
         onSaved={() => run('preview')}
         onDirtyChange={setWordingDirty}
       />
-
-      <h3 className="card__subtitle">{t.admin.emailQueue}</h3>
-      <p className="field__help">{t.admin.emailHelp}</p>
-
-      <dl className="stats">
-        {(['held', 'queued', 'sent', 'dry_run', 'failed'] as const).map((status) => (
-          <div key={status} className="stats__item">
-            <dt>{t.admin.emailStatus[status]}</dt>
-            <dd>{count(status)}</dd>
-          </div>
-        ))}
-      </dl>
-      {staleHeld > 0 && (
-        <p className="muted">
-          {t.admin.emailStaleHeld.replace('{count}', String(staleHeld))}
-        </p>
-      )}
-
-      {held.length > 0 && (
-        <table className="table table--held">
-          <thead>
-            <tr>
-              <th>{t.admin.emailKind}</th>
-              <th>{t.admin.emailTo}</th>
-              <th>{t.proposal.title}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {held.map((row, i) => (
-              <tr key={`${row.kind}-${row.to}-${i}`}>
-                <td>{t.admin.emailKinds[row.kind] ?? row.kind}</td>
-                <td>{row.to}</td>
-                <td>{row.title}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <div className="row row--wrap">
-        <button type="button" className="btn" disabled={busy} onClick={() => run('preview')}>
-          {t.admin.emailRefresh}
-        </button>
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={busy || waiting === 0}
-          onClick={() => {
-            if (confirm(t.admin.emailConfirm.replace('{count}', String(waiting)))) void run('release');
-          }}
-        >
-          {waiting === 0
-            ? t.admin.emailNothing
-            : t.admin.emailRelease.replace('{count}', String(waiting))}
-        </button>
-        {unsent > 0 && (
-          <button type="button" className="btn" disabled={busy} onClick={() => run('retry')}>
-            {t.admin.emailRetry.replace('{count}', String(unsent))}
-          </button>
-        )}
-      </div>
-
-      <Result ok={note} error={error} />
 
       <h3 className="card__subtitle">{t.admin.messageTitle}</h3>
       <WriteToSpeaker

@@ -14,6 +14,7 @@ import {
   FieldValue,
   getFirestore,
   Timestamp,
+  type DocumentSnapshot,
   type QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
@@ -357,6 +358,63 @@ async function currentDecisionEmails(
   });
   const sendableIds = new Set(sendable.map((doc) => doc.id));
   return { sendable, stale: docs.filter((doc) => !sendableIds.has(doc.id)) };
+}
+
+/** Prevents concurrent releases from re-queuing a row the sender already claimed. */
+async function advanceEmailQueue(
+  cfpId: string,
+  candidates: DocumentSnapshot[],
+  from: EmailStatus[],
+): Promise<{ released: number; stale: number }> {
+  let released = 0;
+  let stale = 0;
+  const CHUNK = 200;
+
+  for (let i = 0; i < candidates.length; i += CHUNK) {
+    const result = await db.runTransaction(async (tx) => {
+      const rows = await tx.getAll(...candidates.slice(i, i + CHUNK).map((doc) => doc.ref));
+      const proposalIds = [
+        ...new Set(
+          rows
+            .filter((row) => DECISION_STILL_TRUE[row.get('kind') as string])
+            .map((row) => row.get('proposalId') as string)
+            .filter(Boolean),
+        ),
+      ];
+      const proposals =
+        proposalIds.length > 0
+          ? await tx.getAll(
+              ...proposalIds.map((proposalId) =>
+                db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+              ),
+            )
+          : [];
+      const proposalStatuses = new Map(
+        proposals.map((proposal) => [proposal.id, proposal.get('status') as string]),
+      );
+
+      let advanced = 0;
+      let superseded = 0;
+      for (const row of rows) {
+        if (!row.exists || !from.includes(row.get('status') as EmailStatus)) continue;
+        const holds = DECISION_STILL_TRUE[row.get('kind') as string];
+        if (
+          holds &&
+          !holds.includes(proposalStatuses.get(row.get('proposalId') as string) ?? '')
+        ) {
+          superseded += 1;
+          continue;
+        }
+        tx.update(row.ref, { status: 'queued' satisfies EmailStatus });
+        advanced += 1;
+      }
+      return { advanced, superseded };
+    });
+    released += result.advanced;
+    stale += result.superseded;
+  }
+
+  return { released, stale };
 }
 
 /**
@@ -1601,14 +1659,15 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
  *
  * §8 asks for a dry run before the first real batch, so `preview` is the
  * default and nothing leaves without an explicit `release`. Every action is a
- * status flip on `emailLog`; the trigger does the sending.
+ * status flip on `emailLog`; the trigger does the sending. Release names the
+ * reviewed rows so a decision added after preview waits for the next batch.
  */
 export const emailQueue = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'manage the email queue');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const action = String(data.action ?? 'preview');
-  if (!['preview', 'release', 'retry', 'resend'].includes(action)) {
+  if (!['summary', 'preview', 'release', 'retry', 'resend'].includes(action)) {
     throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
   }
 
@@ -1655,11 +1714,14 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     return { ok: true, logId };
   }
 
-  const [snap, configSnap] = await Promise.all([
-    db.collection(`cfps/${cfpId}/emailLog`).get(),
-    db.doc(`cfps/${cfpId}/config/email`).get(),
-  ]);
-  const emailConfig = configSnap.data() ?? {};
+  const log = db.collection(`cfps/${cfpId}/emailLog`);
+  if (action === 'summary') {
+    const held = await log.where('status', '==', 'held').get();
+    const pending = await currentDecisionEmails(cfpId, held.docs);
+    return { ok: true, waiting: pending.sendable.length };
+  }
+
+  const snap = await log.get();
   const pendingDocs = snap.docs.filter((doc) =>
     ['held', 'failed', 'dry_run'].includes(doc.get('status') as string),
   );
@@ -1705,6 +1767,8 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0) || a.to.localeCompare(b.to));
 
   if (action === 'preview') {
+    const configSnap = await db.doc(`cfps/${cfpId}/config/email`).get();
+    const emailConfig = configSnap.data() ?? {};
     return {
       ok: true,
       tally,
@@ -1720,7 +1784,12 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       // Enough to check the copy and the addresses before committing to a send.
       held: pendingState.sendable
         .filter((d) => d.get('status') === 'held')
-        .map((d) => ({ kind: d.get('kind'), to: d.get('to'), title: d.get('data')?.title })),
+        .map((d) => ({
+          logId: d.id,
+          kind: d.get('kind'),
+          to: d.get('to'),
+          title: d.get('data')?.title,
+        })),
       staleHeld: pendingState.stale.length,
       /*
        * Who was written to, and what happened. The panel used to show counts by
@@ -1740,32 +1809,28 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   // was rendered while no sender was configured. Retrying picks those up once
   // the domain is, so a receipt written during setup still reaches its speaker.
   const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
-  const due = pendingState.sendable.filter((d) => from.includes(d.get('status')));
-
-  /*
-   * A decision reversed after it was queued must not go out anyway.
-   *
-   * Holding decisions so they release together buys the committee a window to
-   * change its mind — and the whole point is lost if the row queued during that
-   * window sends regardless. Nothing else re-reads the proposal: `held` was
-   * written when the status changed, and a later change does not revisit it.
-   *
-   * Stale rows stay `held` rather than being deleted, so restoring the decision
-   * releases them normally on the next pass.
-   */
-  const stale = pendingState.stale.filter((d) => from.includes(d.get('status'))).length;
-
-  const CHUNK = 400;
-  for (let i = 0; i < due.length; i += CHUNK) {
-    const batch = db.batch();
-    for (const doc of due.slice(i, i + CHUNK)) {
-      batch.update(doc.ref, { status: 'queued' satisfies EmailStatus });
+  let candidates: DocumentSnapshot[];
+  if (action === 'release') {
+    const rawLogIds = data.logIds;
+    if (
+      !Array.isArray(rawLogIds) ||
+      rawLogIds.length === 0 ||
+      rawLogIds.some((id) => typeof id !== 'string' || !id || id.includes('/')) ||
+      new Set(rawLogIds).size !== rawLogIds.length
+    ) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Release requires the unique message ids from the reviewed preview.',
+      );
     }
-    await batch.commit();
+    candidates = await db.getAll(...rawLogIds.map((id) => log.doc(id as string)));
+  } else {
+    candidates = snap.docs.filter((doc) => from.includes(doc.get('status') as EmailStatus));
   }
+  const { released, stale } = await advanceEmailQueue(cfpId, candidates, from);
 
-  logger.info('email queue advanced', { byUid, action, count: due.length, stale });
-  return { ok: true, tally, released: due.length, stale };
+  logger.info('email queue advanced', { byUid, action, count: released, stale });
+  return { ok: true, tally, released, stale };
 });
 
 /*

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { Link } from '../../components/Link';
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
+import { href } from '../../lib/router';
 import {
   headshotImage,
   loadAllProposals,
@@ -27,6 +29,7 @@ import {
 } from '@shared/submissionForm';
 import { downloadSelectedSpeakersCsv } from './proposalExport';
 import { Result } from './Result';
+import { DECISION_KINDS } from '@shared/emailTemplates';
 
 const HIGH_DISAGREEMENT = 1;
 const ADMIN_PROPOSAL_STATUSES = ['submitted', ...STATUS_SETS.decidable] as const;
@@ -461,7 +464,17 @@ function ReviewCoverage({
   );
 }
 
-export function Proposals({ cfpId }: { cfpId: string }) {
+export function Proposals({
+  cfpId,
+  pendingEmailCount,
+  pendingEmailCheckFailed,
+  onEmailQueueChange,
+}: {
+  cfpId: string;
+  pendingEmailCount?: number | null;
+  pendingEmailCheckFailed?: boolean;
+  onEmailQueueChange?: () => void | Promise<void>;
+}) {
   const { t, locale } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [questions, setQuestions] = useState<ConfirmField[]>([]);
@@ -617,6 +630,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
       committedDecisions.current.set(action, decision);
       const latest = Math.max(...committedDecisions.current.keys());
       setUndo(committedDecisions.current.get(latest) ?? null);
+      void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
       setRows((current) =>
@@ -664,6 +678,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
       const latest = remaining.length > 0 ? Math.max(...remaining) : null;
       setUndo(latest === null ? null : committedDecisions.current.get(latest) ?? null);
       setNote(t.admin.decisionUndone(snapshot.title));
+      void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
       setRows((current) =>
@@ -768,6 +783,8 @@ export function Proposals({ cfpId }: { cfpId: string }) {
   );
   const accepted = ranked.filter((row) => row.status === 'accepted' || row.status === 'confirmed');
   const decidable = ranked.filter((row) => row.status !== 'draft' && row.status !== 'withdrawn');
+  const undoHasDecisionEmail =
+    undo !== null && (DECISION_KINDS as readonly string[]).includes(undo.next);
 
   if (!inCurrentScope || loading) {
     return (
@@ -809,22 +826,42 @@ export function Proposals({ cfpId }: { cfpId: string }) {
         </div>
 
         {inCurrentScope && undo && (
-          <div className="decision-undo" role="status">
-            <span>
-              {t.admin.decisionChanged(
-                undo.title,
-                t.enums.status[undo.previous],
-                t.enums.status[undo.next],
+          <div className="decision-undo" role="status" aria-live="polite" aria-atomic="true">
+            <div className="decision-undo__copy">
+              <span>
+                {t.admin.decisionChanged(
+                  undo.title,
+                  t.enums.status[undo.previous],
+                  t.enums.status[undo.next],
+                )}
+              </span>
+              {undoHasDecisionEmail && (
+                <span className="decision-undo__email">{t.admin.decisionEmailHeld}</span>
               )}
-            </span>
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={pending.has(undo.proposalId)}
-              onClick={undoDecision}
-            >
-              {t.admin.undo}
-            </button>
+              {pendingEmailCheckFailed && undoHasDecisionEmail && (
+                <span className="decision-undo__email">{t.admin.pendingEmailUnknownHelp}</span>
+              )}
+            </div>
+            <div className="decision-undo__actions">
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={pending.has(undo.proposalId)}
+                onClick={undoDecision}
+              >
+                {t.admin.undo}
+              </button>
+              {pendingEmailCount !== null &&
+                pendingEmailCount !== undefined &&
+                pendingEmailCount > 0 && (
+                  <Link
+                    className="btn btn--primary"
+                    to={href({ route: 'admin', cfpId, tab: 'email' })}
+                  >
+                    {t.admin.pendingEmailReview}
+                  </Link>
+                )}
+            </div>
           </div>
         )}
 
