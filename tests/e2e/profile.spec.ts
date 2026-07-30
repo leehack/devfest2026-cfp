@@ -22,6 +22,31 @@ test.describe('the speaker profile', () => {
     await reset();
   });
 
+  test('keeps the editor closed until a failed profile load is retried', async ({ page }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, {
+      name: 'Stored Sam',
+      email: SPEAKER.email,
+      bio: BIO,
+    });
+    let unavailable = true;
+    await page.route('http://127.0.0.1:8080/**', (route) =>
+      unavailable ? route.abort() : route.continue(),
+    );
+
+    await signInAs(page, SPEAKER, '/me');
+    await expect(
+      page.getByText('That service is unavailable right now. Please try again shortly.'),
+    ).toBeVisible();
+    await expect(field(page, 'Name')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save profile' })).toHaveCount(0);
+
+    unavailable = false;
+    await page.getByRole('button', { name: 'Reload' }).click();
+    await expect(field(page, 'Name')).toHaveValue('Stored Sam');
+    await expect(field(page, 'Bio')).toHaveValue(BIO);
+  });
+
   test('saves once and shows up on the submission form', async ({ page }) => {
     await signInAs(page, SPEAKER, '/me');
 
@@ -34,6 +59,13 @@ test.describe('the speaker profile', () => {
 
     // The same `speakers/{uid}` the form writes, not a second copy of it.
     await page.goto(at());
+    await expect(page.getByText('Profile ready')).toBeVisible();
+    await expect(page.getByText('Sam Rivera', { exact: true })).toBeVisible();
+    await expect(field(page, 'Name')).toHaveCount(0);
+
+    // Returning speakers can verify the compact summary without reviewing the
+    // whole form again, and the canonical fields remain one explicit action away.
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await expect(field(page, 'Name')).toHaveValue('Sam Rivera');
     await expect(field(page, 'Company')).toHaveValue('Acme');
   });
@@ -47,7 +79,23 @@ test.describe('the speaker profile', () => {
 
     await expect(alerts(page).first()).toBeVisible();
     await expect(page.getByText('Saved.')).toHaveCount(0);
+    await expect(field(page, 'Bio')).toBeFocused();
     expect(await readSpeaker((await createAccount(SPEAKER)).uid)).toBeUndefined();
+  });
+
+  test('browser Back does not discard profile edits without confirmation', async ({ page }) => {
+    await page.goto('/');
+    await signInAs(page, SPEAKER, '/me');
+    await field(page, 'Name').fill('Sam Rivera');
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.evaluate(() => window.history.back());
+    await expect(page).toHaveURL('/me');
+    await expect(field(page, 'Name')).toHaveValue('Sam Rivera');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.evaluate(() => window.history.back());
+    await expect(page).toHaveURL('/');
   });
 
   test('is reachable from the header, and signs you in first if it has to', async ({ page }) => {
@@ -55,6 +103,7 @@ test.describe('the speaker profile', () => {
     await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
 
     await signInAs(page, SPEAKER, at());
+    await page.getByRole('button', { name: 'Account' }).click();
     await page.getByRole('link', { name: 'Your profile' }).click();
     await expect(page).toHaveURL('/me');
     await expect(page.getByRole('heading', { name: 'Your profile' })).toBeVisible();

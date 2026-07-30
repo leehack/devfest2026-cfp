@@ -7,7 +7,30 @@ const REQUIRED = [
   'NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET',
   'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
   'NEXT_PUBLIC_FIREBASE_APP_ID',
+  'NEXT_PUBLIC_COC_URL',
+  'SITE_ORIGIN',
 ];
+
+function requireHttpsUrl(name: string): void {
+  const raw = process.env[name] ?? '';
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`next build: ${name} must be an absolute URL`);
+  }
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    throw new Error(`next build: ${name} must be a credential-free https URL`);
+  }
+}
+
+function requireHttpsOrigin(name: string): void {
+  requireHttpsUrl(name);
+  const url = new URL(process.env[name]!);
+  if (url.pathname !== '/' || url.search || url.hash) {
+    throw new Error(`next build: ${name} must be an origin without a path, query, or fragment`);
+  }
+}
 
 /**
  * Runs here rather than in a prebuild script because App Hosting invokes
@@ -34,6 +57,8 @@ function assertPublicEnv(): void {
   if (process.env.NEXT_PUBLIC_USE_EMULATORS === 'true') {
     throw new Error('next build: NEXT_PUBLIC_USE_EMULATORS=true would ship the emulator sign-in.');
   }
+  requireHttpsUrl('NEXT_PUBLIC_COC_URL');
+  requireHttpsOrigin('SITE_ORIGIN');
 }
 
 /**
@@ -72,9 +97,14 @@ const SECURITY_HEADERS = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+  {
+    key: 'Permissions-Policy',
+    value: 'camera=(), geolocation=(), microphone=(), payment=(), usb=()',
+  },
 ];
 
 const config: NextConfig = {
+  poweredByHeader: false,
   async headers() {
     return [
       // `/(.*)` rather than `/:path*`: both are path-to-regexp here, but the

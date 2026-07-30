@@ -45,7 +45,7 @@
       ".next",
       "dist"
     ],
-    "//": "false deliberately: left undefined, `firebase deploy` asks whether to ship local source and then writes the answer back into this file.",
+    "//": "This backend intentionally deploys local source; there is no GitHub-connected rollout source.",
     "alwaysDeployFromSource": true
   }
 }

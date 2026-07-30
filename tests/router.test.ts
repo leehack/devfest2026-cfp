@@ -25,7 +25,11 @@ describe('reading a path', () => {
     expect(placeOf('/c/devfest-mtl-2026/review')).toMatchObject({ route: 'review' });
     expect(placeOf('/c/devfest-mtl-2026/admin')).toMatchObject({
       route: 'admin',
-      tab: 'proposals',
+      tab: 'overview',
+    });
+    expect(placeOf('/c/devfest-mtl-2026/admin/overview')).toMatchObject({
+      route: 'admin',
+      tab: 'overview',
     });
     expect(placeOf('/c/devfest-mtl-2026/admin/email')).toMatchObject({
       route: 'admin',
@@ -42,7 +46,7 @@ describe('reading a path', () => {
   });
 
   it('falls back to the first tab rather than an empty admin screen', () => {
-    expect(placeOf('/c/devfest-mtl-2026/admin/nope')).toMatchObject({ tab: 'proposals' });
+    expect(placeOf('/c/devfest-mtl-2026/admin/nope')).toMatchObject({ tab: 'overview' });
   });
 
   /*

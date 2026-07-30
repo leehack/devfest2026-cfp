@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Checkbox, RadioGroup, TextAreaField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
@@ -6,12 +6,22 @@ import { toDate, toDateTimeInput } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { archiveCfp, deleteCfp, loadCfp, setCfpWindow, updateCfp } from '../../lib/roles';
 import { navigate } from '../../lib/router';
+import { useLatest } from '../../lib/useLatest';
 import { Result } from './Result';
 import type { CfpRole, Visibility } from '@shared/cfp';
 import { CFP_LIMITS } from '@shared/cfp';
 
-export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
+export function Settings({
+  cfpId,
+  role,
+  onDirtyChange,
+}: {
+  cfpId: string;
+  role: CfpRole;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { t } = useI18n();
+  const tRef = useLatest(t);
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('public');
   const [descriptionEn, setDescriptionEn] = useState('');
@@ -25,6 +35,11 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
   const [closesAt, setClosesAt] = useState('');
   const [paused, setPaused] = useState(false);
   const [reviewsVisible, setReviewsVisible] = useState(false);
+  const [timeZone, setTimeZone] = useState('');
+  const [loadedCfp, setLoadedCfp] = useState('');
+  const [failedCfp, setFailedCfp] = useState('');
+  const [identityBaseline, setIdentityBaseline] = useState('');
+  const [windowBaseline, setWindowBaseline] = useState('');
   /*
    * Starts true, so the fields are disabled until the call's current settings
    * have arrived. Editable-but-empty is a trap: type into it fast enough and the
@@ -34,28 +49,104 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
   const [busy, setBusy] = useState(true);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const activeCfp = useRef(cfpId);
+  const generation = useRef(0);
+  activeCfp.current = cfpId;
+  const identityState = JSON.stringify([
+    name,
+    visibility,
+    descriptionEn,
+    descriptionFr,
+    eventDate,
+    venue,
+    place,
+    website,
+  ]);
+  const windowState = JSON.stringify([opensAt, closesAt, paused, reviewsVisible]);
+  const dirty =
+    loadedCfp === cfpId &&
+    ((identityBaseline !== '' && identityState !== identityBaseline) ||
+      (windowBaseline !== '' && windowState !== windowBaseline));
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(
+    () => () => {
+      onDirtyChange?.(false);
+    },
+    [onDirtyChange],
+  );
 
   const refresh = useCallback(async () => {
+    const scope = cfpId;
+    const request = ++generation.current;
+    const current = () =>
+      activeCfp.current === scope && generation.current === request;
     try {
       const cfp = await loadCfp(cfpId);
-      if (!cfp) return;
-      setName(cfp.name ?? '');
-      setVisibility((cfp.visibility ?? 'public') as Visibility);
-      setDescriptionEn(cfp.description?.en ?? '');
-      setDescriptionFr(cfp.description?.fr ?? '');
-      setEventDate(cfp.eventDate ?? '');
-      setVenue(cfp.venue ?? '');
-      setPlace(cfp.location ?? '');
-      setWebsite(cfp.website ?? '');
+      if (!current()) return false;
+      if (!cfp) {
+        setError(tRef.current.errors.notFound);
+        setFailedCfp(scope);
+        return false;
+      }
+      const nextName = cfp.name ?? '';
+      const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
+      const nextDescriptionEn = cfp.description?.en ?? '';
+      const nextDescriptionFr = cfp.description?.fr ?? '';
+      const nextEventDate = cfp.eventDate ?? '';
+      const nextVenue = cfp.venue ?? '';
+      const nextPlace = cfp.location ?? '';
+      const nextWebsite = cfp.website ?? '';
+      const nextOpensAt = toDateTimeInput(toDate(cfp.opensAt));
+      const nextClosesAt = toDateTimeInput(toDate(cfp.closesAt));
+
+      setName(nextName);
+      setVisibility(nextVisibility);
+      setDescriptionEn(nextDescriptionEn);
+      setDescriptionFr(nextDescriptionFr);
+      setEventDate(nextEventDate);
+      setVenue(nextVenue);
+      setPlace(nextPlace);
+      setWebsite(nextWebsite);
       setArchived(cfp.archived === true);
-      setOpensAt(toDateTimeInput(toDate(cfp.opensAt)));
-      setClosesAt(toDateTimeInput(toDate(cfp.closesAt)));
+      setOpensAt(nextOpensAt);
+      setClosesAt(nextClosesAt);
       setPaused(cfp.paused === true);
       setReviewsVisible(cfp.reviewsVisible === true);
+      setIdentityBaseline(
+        JSON.stringify([
+          nextName,
+          nextVisibility,
+          nextDescriptionEn,
+          nextDescriptionFr,
+          nextEventDate,
+          nextVenue,
+          nextPlace,
+          nextWebsite,
+        ]),
+      );
+      setWindowBaseline(
+        JSON.stringify([
+          nextOpensAt,
+          nextClosesAt,
+          cfp.paused === true,
+          cfp.reviewsVisible === true,
+        ]),
+      );
+      setLoadedCfp(scope);
+      setFailedCfp('');
+      setError('');
+      return true;
     } catch (e) {
-      setError(adminError(e, t));
+      if (!current()) return false;
+      setError(adminError(e, tRef.current));
+      setFailedCfp(scope);
+      return false;
     }
-  }, [cfpId, t]);
+  }, [cfpId, tRef]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -64,24 +155,139 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh().finally(() => setBusy(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfpId]);
+    generation.current += 1;
+    setLoadedCfp('');
+    setFailedCfp('');
+    setIdentityBaseline('');
+    setWindowBaseline('');
+    setBusy(true);
+    setNote('');
+    setError('');
+    const scope = cfpId;
+    void refresh().finally(() => {
+      if (activeCfp.current === scope) setBusy(false);
+    });
+  }, [cfpId, refresh]);
+
+  useEffect(() => {
+    setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  }, []);
 
   /** One `busy`, one `Result`: two saves running at once is not a state to design for. */
-  async function run(work: () => Promise<void>, ok: string) {
+  async function run(
+    work: (current: () => boolean) => Promise<void>,
+    ok: string,
+    after: (current: () => boolean) => Promise<unknown> | void = () => refresh(),
+  ) {
+    const scope = cfpId;
+    const current = () => activeCfp.current === scope;
     setBusy(true);
     setNote('');
     setError('');
     try {
-      await work();
-      setNote(ok);
-      await refresh();
+      await work(current);
+      if (!current()) return;
+      await after(current);
+      if (current()) setNote(ok);
     } catch (e) {
-      setError(adminError(e, t));
+      if (current()) setError(adminError(e, tRef.current));
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
+  }
+
+  async function retry() {
+    const scope = cfpId;
+    setBusy(true);
+    setError('');
+    try {
+      await refresh();
+    } finally {
+      if (activeCfp.current === scope) setBusy(false);
+    }
+  }
+
+  async function saveIdentity() {
+    const next = {
+      name: name.trim(),
+      visibility,
+      descriptionEn: descriptionEn.trim(),
+      descriptionFr: descriptionFr.trim(),
+      eventDate: eventDate.trim(),
+      venue: venue.trim(),
+      place: place.trim(),
+      website: website.trim(),
+    };
+    await run(
+      async () =>
+        void (await updateCfp({
+          cfpId,
+          name: next.name,
+          visibility: next.visibility,
+          description: { en: next.descriptionEn, fr: next.descriptionFr },
+          eventDate: next.eventDate,
+          venue: next.venue,
+          location: next.place,
+          website: next.website,
+        })),
+      t.admin.identitySaved,
+      () => {
+        setName(next.name);
+        setDescriptionEn(next.descriptionEn);
+        setDescriptionFr(next.descriptionFr);
+        setEventDate(next.eventDate);
+        setVenue(next.venue);
+        setPlace(next.place);
+        setWebsite(next.website);
+        setIdentityBaseline(
+          JSON.stringify([
+            next.name,
+            next.visibility,
+            next.descriptionEn,
+            next.descriptionFr,
+            next.eventDate,
+            next.venue,
+            next.place,
+            next.website,
+          ]),
+        );
+      },
+    );
+  }
+
+  async function saveWindow() {
+    await run(
+      async () =>
+        void (await setCfpWindow({
+          cfpId,
+          // ISO, so the server stores an instant rather than a wall-clock
+          // time in whichever zone the admin happens to be sitting in.
+          opensAt: new Date(opensAt).toISOString(),
+          closesAt: new Date(closesAt).toISOString(),
+          paused,
+          reviewsVisible,
+        })),
+      t.admin.windowSaved,
+      () => setWindowBaseline(JSON.stringify([opensAt, closesAt, paused, reviewsVisible])),
+    );
+  }
+
+  if (loadedCfp !== cfpId) {
+    return (
+      <section className="section">
+        <h2>{t.admin.tabs.settings}</h2>
+        {busy || failedCfp !== cfpId ? (
+          <p className="muted">{t.app.loading}</p>
+        ) : (
+          <>
+            <Result ok="" error={error || t.errors.unavailable} />
+            <button type="button" className="btn" disabled={busy} onClick={() => void retry()}>
+              {t.errors.reload}
+            </button>
+          </>
+        )}
+      </section>
+    );
   }
 
   return (
@@ -178,22 +384,7 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
           type="button"
           className="btn btn--primary"
           disabled={busy || !name.trim()}
-          onClick={() =>
-            run(
-              async () =>
-                void (await updateCfp({
-                  cfpId,
-                  name: name.trim(),
-                  visibility,
-                  description: { en: descriptionEn.trim(), fr: descriptionFr.trim() },
-                  eventDate: eventDate.trim(),
-                  venue: venue.trim(),
-                  location: place.trim(),
-                  website: website.trim(),
-                })),
-              t.admin.identitySaved,
-            )
-          }
+          onClick={() => void saveIdentity()}
         >
           {t.admin.identitySave}
         </button>
@@ -220,6 +411,12 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
             disabled={busy}
           />
         </div>
+        <p className="field__help">
+          {t.platform.timeZone.replace(
+            '{zone}',
+            timeZone || t.platform.timeZoneFallback,
+          )}
+        </p>
 
         <Checkbox label={t.admin.pausedLabel} checked={paused} onChange={setPaused} disabled={busy} />
         <p className="field__help">{t.admin.pausedHelp}</p>
@@ -236,21 +433,7 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
           type="button"
           className="btn btn--primary"
           disabled={busy || !opensAt || !closesAt}
-          onClick={() =>
-            run(
-              // ISO, so the server stores an instant rather than a wall-clock
-              // time in whichever zone the admin happens to be sitting in.
-              async () =>
-                void (await setCfpWindow({
-                  cfpId,
-                  opensAt: new Date(opensAt).toISOString(),
-                  closesAt: new Date(closesAt).toISOString(),
-                  paused,
-                  reviewsVisible,
-                })),
-              t.admin.windowSaved,
-            )
-          }
+          onClick={() => void saveWindow()}
         >
           {t.admin.saveWindow}
         </button>
@@ -264,6 +447,7 @@ export function Settings({ cfpId, role }: { cfpId: string; role: CfpRole }) {
         run={run}
         note={note}
         error={error}
+        dirty={dirty}
       />
     </>
   );
@@ -282,14 +466,20 @@ function Lifecycle({
   run,
   note,
   error,
+  dirty,
 }: {
   cfpId: string;
   role: CfpRole;
   archived: boolean;
   busy: boolean;
-  run: (work: () => Promise<void>, ok: string) => Promise<void>;
+  run: (
+    work: (current: () => boolean) => Promise<void>,
+    ok: string,
+    after?: (current: () => boolean) => Promise<unknown> | void,
+  ) => Promise<void>;
   note: string;
   error: string;
+  dirty: boolean;
 }) {
   const { t } = useI18n();
   const [confirm, setConfirm] = useState('');
@@ -311,7 +501,7 @@ function Lifecycle({
         <button
           type="button"
           className="btn"
-          disabled={busy}
+          disabled={busy || dirty}
           onClick={() => {
             if (!archived && !window.confirm(t.admin.archiveConfirm)) return;
             void run(
@@ -339,17 +529,17 @@ function Lifecycle({
               // beside "type the address to confirm" reads as the opposite of
               // what this control is for.
               required
-              disabled={busy}
+              disabled={busy || dirty}
             />
             <button
               type="button"
               className="btn btn--danger"
-              disabled={busy || confirm !== cfpId}
+              disabled={busy || dirty || confirm !== cfpId}
               onClick={() => {
                 if (!window.confirm(t.admin.dangerConfirm)) return;
-                void run(async () => {
+                void run(async (current) => {
                   await deleteCfp({ cfpId, confirm });
-                  navigate('home');
+                  if (current()) navigate('home');
                 }, t.admin.dangerDeleting);
               }}
             >

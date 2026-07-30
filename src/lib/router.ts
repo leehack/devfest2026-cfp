@@ -131,7 +131,13 @@ export function usePlace(initialPath?: string): Place {
     setPlace((was) =>
       was.route === now.route && was.cfpId === now.cfpId && was.tab === now.tab ? was : now,
     );
-    const onChange = () => setPlace(currentPlace());
+    const onChange = () => {
+      // Navigation guards run on the same event and may synchronously restore
+      // the current URL while they save. Read the final address after every
+      // listener has had that chance; consuming the first Back value here
+      // unmounted a dirty form before its own popstate handler could protect it.
+      queueMicrotask(() => setPlace(currentPlace()));
+    };
     window.addEventListener('popstate', onChange);
     return () => window.removeEventListener('popstate', onChange);
   }, []);

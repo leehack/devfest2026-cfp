@@ -95,7 +95,7 @@ test.describe('email pipeline', () => {
    * proposal, so a decision taken back during the window went out anyway —
    * telling somebody they were accepted after the committee had undone it.
    */
-  test('a decision taken back before release is not sent', async () => {
+  test('a decision taken back before release is not sent', async ({ page }) => {
     const { chair } = await stage();
 
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
@@ -107,6 +107,25 @@ test.describe('email pipeline', () => {
       proposalId: 'talk-1',
       status: 'under_review',
     });
+
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview).toMatchObject({ ok: true, held: [], staleHeld: 1 });
+    expect(preview.tally['held:accepted']).toBeUndefined();
+    expect(preview.rows[0]).toMatchObject({ status: 'held', stale: true });
+
+    await signInAs(page, admin, at('/admin/email'));
+    await expect(page.getByRole('button', { name: 'Nothing to send' })).toBeDisabled();
+    await expect(page.getByText(/Earlier decision emails retained: 1/)).toBeVisible();
+    await expect(page.getByText('Retained — decision changed')).toBeVisible();
+    // The audit row keeps the action in place so the reason it cannot be used
+    // is visible, but the UI calls that action “Send again”.
+    await expect(page.getByRole('button', { name: 'Send again' })).toBeDisabled();
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: 'accepted__talk-1',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 
     const released = await callJson(chair.idToken, 'emailQueue', { action: 'release' });
     expect(released).toMatchObject({ ok: true, released: 0, stale: 1 });
@@ -121,6 +140,19 @@ test.describe('email pipeline', () => {
       released: 1,
       stale: 0,
     });
+    await waitForEmail((rows) => rows[0]?.status === 'dry_run', 'the restored decision attempt');
+
+    // A provider failure or dry run can outlive the decision too. Retry must
+    // apply the same freshness check as the original batch release.
+    await callAs(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'under_review',
+    });
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'retry' })).toMatchObject({
+      released: 0,
+      stale: 1,
+    });
+    expect((await readEmailLog())[0].status).toBe('dry_run');
   });
 
   test('re-deciding after the send does not send again', async () => {
@@ -391,6 +423,102 @@ test.describe('email pipeline', () => {
       reset: true,
     });
     expect(reset.ok).toBe(true);
+  });
+
+  test('changing admin tabs does not discard unsaved email wording', async ({ page }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/email'));
+
+    const panel = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'Email' }),
+    });
+    await panel.getByLabel('Edit the wording').check();
+    const subject = panel.getByLabel('Subject line');
+    await subject.fill('A carefully revised acceptance for {event}');
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/email$'));
+    await expect(subject).toHaveValue('A carefully revised acceptance for {event}');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/committee$'));
+  });
+
+  test('a late email refresh does not overwrite wording being typed', async ({ page }) => {
+    await stage();
+
+    let first = true;
+    await page.route('**/emailQueue', async (route) => {
+      if (first) {
+        first = false;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      await route.continue();
+    });
+
+    await signInAs(page, admin, at('/admin/email'));
+    const panel = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'Email' }),
+    });
+    await panel.getByLabel('Edit the wording').check();
+    const subject = panel.getByLabel('Subject line');
+    await subject.fill('Do not replace this draft for {event}');
+
+    // The first queue snapshot now lands with a fresh templates object. The
+    // draft remains authoritative until the organiser saves or discards it.
+    await page.waitForTimeout(1800);
+    await expect(subject).toHaveValue('Do not replace this draft for {event}');
+    await page.unroute('**/emailQueue');
+  });
+
+  test('sender and one-off message drafts both guard admin navigation', async ({ page }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/email'));
+    const panel = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'Email' }),
+    });
+
+    const from = panel.getByLabel('Send as');
+    await from.fill('typed@example.org');
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/email$'));
+    await expect(from).toHaveValue('typed@example.org');
+
+    // Return the sender to its stored value. The message is now the only dirty
+    // surface, so this proves the parent aggregates the two independently.
+    await from.fill('');
+    const subject = panel.getByRole('textbox', { name: /^Subject/ });
+    const body = panel.getByRole('textbox', { name: /^Message/ });
+    await subject.fill('A schedule question');
+    await body.fill('Would 10:00 work for you?');
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/email$'));
+    await expect(subject).toHaveValue('A schedule question');
+    await expect(body).toHaveValue('Would 10:00 work for you?');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/committee$'));
+  });
+
+  test('email setup stays unavailable until its first preview succeeds', async ({ page }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/committee'));
+    await page.route('**/emailQueue', (route) => route.abort());
+    await page.getByRole('link', { name: 'Email', exact: true }).click();
+
+    await expect(page.getByRole('button', { name: 'Reload' })).toBeVisible();
+    await expect(page.getByLabel('Send as')).toHaveCount(0);
+    await expect(page.getByLabel('Edit the wording')).toHaveCount(0);
+
+    await page.unroute('**/emailQueue');
+    await page.getByRole('button', { name: 'Reload' }).click();
+    await expect(page.getByLabel('Send as')).toBeEnabled();
   });
 
   test('a non-admin cannot rewrite what applicants are told', async () => {

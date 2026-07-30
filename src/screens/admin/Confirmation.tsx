@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { ConfirmFormEditor } from '../../components/ConfirmFormEditor';
 import { loadConfirmForm } from '../../lib/proposals';
+import { useLatest } from '../../lib/useLatest';
 import type { ConfirmField } from '@shared/confirmForm';
 
 /**
@@ -11,18 +12,20 @@ import type { ConfirmField } from '@shared/confirmForm';
  * Proposals: it is set up once at the start of a round and then left alone,
  * while the table above it is worked through every day.
  */
-export function Confirmation({ cfpId }: { cfpId: string }) {
+export function Confirmation({
+  cfpId,
+  onDirtyChange,
+}: {
+  cfpId: string;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { t } = useI18n();
+  const tRef = useLatest(t);
   const [fields, setFields] = useState<ConfirmField[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
-  const refresh = useCallback(async () => {
-    try {
-      setFields((await loadConfirmForm(cfpId)).fields);
-    } catch (e) {
-      setError(adminError(e, t));
-    }
-  }, [cfpId, t]);
+  const [attempt, setAttempt] = useState(0);
+  const generation = useRef(0);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -31,9 +34,24 @@ export function Confirmation({ cfpId }: { cfpId: string }) {
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfpId]);
+    const request = ++generation.current;
+    setFields(null);
+    setLoading(true);
+    setError('');
+    void loadConfirmForm(cfpId)
+      .then((loaded) => {
+        if (request === generation.current) setFields(loaded.fields);
+      })
+      .catch((e) => {
+        if (request === generation.current) setError(adminError(e, tRef.current));
+      })
+      .finally(() => {
+        if (request === generation.current) setLoading(false);
+      });
+    return () => {
+      generation.current += 1;
+    };
+  }, [attempt, cfpId, tRef]);
 
   return (
     <section className="section">
@@ -46,7 +64,15 @@ export function Confirmation({ cfpId }: { cfpId: string }) {
       {/* Mounted only once the stored form has arrived, so the editor seeds
           itself from it. Not re-keyed afterwards: it owns the list from then
           on, and remounting would throw away what is being typed. */}
-      {fields === null ? <p className="muted">{t.app.loading}</p> : <ConfirmFormEditor cfpId={cfpId} fields={fields} />}
+      {loading ? (
+        <p className="muted">{t.app.loading}</p>
+      ) : fields ? (
+        <ConfirmFormEditor cfpId={cfpId} fields={fields} onDirtyChange={onDirtyChange} />
+      ) : (
+        <button type="button" className="btn" onClick={() => setAttempt((current) => current + 1)}>
+          {t.errors.reload}
+        </button>
+      )}
     </section>
   );
 }

@@ -3,15 +3,21 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "typecheck": "tsc -p tsconfig.test.json && tsc -p functions/tsconfig.json --noEmit",
-    "emulators": "firebase emulators:start --only auth,firestore,functions,storage",
-    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes",
+    "emulators": "npx firebase emulators:start --only auth,firestore,functions,storage --project demo-devfest-cfp",
+    "deploy:app": "npx firebase deploy --only apphosting --project devfest-mtl-2026-cfp",
+    "deploy:backend": "npx firebase deploy --only functions,firestore,storage --project devfest-mtl-2026-cfp",
+    "deploy:rules": "npx firebase deploy --only firestore:rules,firestore:indexes,storage --project devfest-mtl-2026-cfp",
     "test": "vitest run --project unit",
     "test:rules": "node scripts/with-java.mjs npx firebase emulators:exec --only firestore,storage --project demo-devfest-cfp \"vitest run --project rules\"",
     "lint": "eslint .",
+    "smoke:production": "node scripts/smoke-production.mjs",
     "verify": "npm run lint && npm run typecheck && npm run build && npm run check:bundle && npm test && npm run test:rules && npm run test:e2e",
     "start": "node scripts/dev.mjs",
     "test:e2e": "playwright test",
@@ -20,7 +26,7 @@
   },
   "dependencies": {
     "firebase": "^11.1.0",
-    "firebase-admin": "^13.10.0",
+    "firebase-admin": "^14.2.0",
     "next": "^16.2.12",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -40,5 +46,10 @@
     "typescript-eslint": "^8.65.0",
     "vite": "^6.0.3",
     "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.25"
+    }
   }
 }

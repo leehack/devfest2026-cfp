@@ -23,7 +23,7 @@ const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'A
 const REVIEWER: Identity = { sub: 'reviewer-sub', email: 'reviewer@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 
-const tab = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+const tab = (page: Page, name: string) => page.getByRole('link', { name, exact: true });
 
 /** One person's line on the committee list, found by whatever it calls them. */
 const row = (page: Page, who: string) => page.locator('.people__row', { hasText: who });
@@ -70,7 +70,7 @@ test.describe('roles', () => {
 
   test('the bootstrap grant becomes a role on first sign-in', async ({ page }) => {
     await asAdmin(page);
-    await expect(page.getByText('Ada')).toBeVisible();
+    await expect(row(page, ADMIN.name)).toBeVisible();
     await expect(tab(page, 'Admin')).toBeVisible();
   });
 
@@ -99,7 +99,7 @@ test.describe('roles', () => {
     await page.getByRole('button', { name: 'Revoke' }).click();
 
     await expect(page.getByText(/only admin left/)).toBeVisible();
-    await expect(page.getByText('Ada')).toBeVisible();
+    await expect(row(page, ADMIN.name)).toBeVisible();
   });
 
   test('an admin changes a member’s role from the list', async ({ page }) => {
@@ -188,14 +188,168 @@ test.describe('roles', () => {
     }
   });
 
+  test('an admin can restore a decision to submitted', async ({ page }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
+    await asAdmin(page, 'proposals');
+
+    const status = () => page.getByLabel('Status: Sam on shipping');
+    await status().selectOption('accepted');
+    await expect
+      .poll(
+        async () =>
+          (await readProposals()).find((proposal) => proposal.title === 'Sam on shipping')?.status,
+      )
+      .toBe('accepted');
+
+    // Immediate Undo is still available, but recovery cannot depend on the
+    // current render surviving: an organiser notices mistakes after reloads
+    // and on another device too.
+    await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+    await page.reload();
+    await status().selectOption('submitted');
+    await expect
+      .poll(
+        async () =>
+          (await readProposals()).find((proposal) => proposal.title === 'Sam on shipping')?.status,
+      )
+      .toBe('submitted');
+  });
+
+  test('withdrawn talks are hidden by default and never keep a score', async ({ page }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-current', {
+      speakerUid: speaker.uid,
+      title: 'Current talk',
+    });
+    await seedProposal('p-withdrawn', {
+      speakerUid: speaker.uid,
+      title: 'Withdrawn talk',
+      status: 'withdrawn',
+      aggregate: {
+        avgScore: 4,
+        normalizedScore: 4,
+        reviewCount: 2,
+        stdDev: 0,
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const withdrawn = (await readProposals()).find((row) => row.title === 'Withdrawn talk');
+        return withdrawn ? 'aggregate' in withdrawn : null;
+      })
+      .toBe(false);
+
+    await asAdmin(page, 'proposals');
+    const proposals = page.locator('.decision-panel', {
+      has: page.getByRole('heading', { name: 'Proposals' }),
+    });
+    await expect(proposals.getByText('Current talk')).toBeVisible();
+    await expect(proposals.getByText('Withdrawn talk')).toHaveCount(0);
+    await expect(proposals.getByText('1 of 2 proposals')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Recompute scores' })).toHaveCount(0);
+
+    await proposals
+      .getByRole('combobox', { name: 'Status', exact: true })
+      .selectOption('withdrawn');
+    await expect(proposals.getByText('Withdrawn talk')).toBeVisible();
+    await expect(proposals.getByText('Current talk')).toHaveCount(0);
+    await expect(proposals.getByRole('cell', { name: '0', exact: true })).toBeVisible();
+  });
+
+  test('the proposal workspace stays usable across screen sizes', async ({ page }) => {
+    const title =
+      'A deliberately long proposal title that still keeps every committee control on screen';
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-responsive', { speakerUid: speaker.uid, title });
+    await asAdmin(page, 'proposals');
+    await expect(page.getByText('1 of 1 proposals')).toBeVisible();
+
+    for (const width of [390, 700, 900, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const toolbar = page.locator('.decision-toolbar');
+      await expect(toolbar.getByRole('searchbox', { name: 'Search', exact: true })).toBeVisible();
+      for (const name of ['Status', 'Category', 'Talk score status', 'Sort by']) {
+        await expect(toolbar.getByRole('combobox', { name, exact: true })).toBeVisible();
+      }
+
+      const layout = await page.evaluate(() => {
+        const rect = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)?.getBoundingClientRect() ?? null;
+        const filters = [...document.querySelectorAll<HTMLElement>('.decision-filter')].map(
+          (filter) => filter.getBoundingClientRect(),
+        );
+        const overlaps = filters.some((current, index) =>
+          filters.slice(index + 1).some(
+            (other) =>
+              current.left < other.right &&
+              current.right > other.left &&
+              current.top < other.bottom &&
+              current.bottom > other.top,
+          ),
+        );
+        const toolbar = document.querySelector<HTMLElement>('.decision-toolbar');
+        const scroller = document.querySelector<HTMLElement>('.decision-panel .table__scroll');
+        const activeTab = document.querySelector<HTMLElement>(
+          '.subnav__tab[aria-current="page"]',
+        );
+        const subnav = document.querySelector<HTMLElement>('.subnav');
+        return {
+          documentOverflow:
+            document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          toolbarOverflow: toolbar ? toolbar.scrollWidth - toolbar.clientWidth : 999,
+          overlaps,
+          scroller: rect('.decision-panel .table__scroll'),
+          panel: rect('.decision-panel'),
+          status: rect('.decision-control select'),
+          activeTab: activeTab?.getBoundingClientRect() ?? null,
+          subnav: subnav?.getBoundingClientRect() ?? null,
+          scrollerOverflow: scroller ? scroller.scrollWidth - scroller.clientWidth : 999,
+          viewportWidth: window.innerWidth,
+          chartWidths: [
+            ...document.querySelectorAll<HTMLElement>('.proposal-dashboard__charts > .card'),
+          ].map((card) => card.getBoundingClientRect().width),
+        };
+      });
+
+      expect(layout.documentOverflow).toBeLessThanOrEqual(1);
+      expect(layout.toolbarOverflow).toBeLessThanOrEqual(1);
+      expect(layout.overlaps).toBe(false);
+      expect(layout.scroller).not.toBeNull();
+      expect(layout.panel).not.toBeNull();
+      expect(layout.scroller!.left).toBeGreaterThanOrEqual(layout.panel!.left);
+      expect(layout.scroller!.right).toBeLessThanOrEqual(layout.panel!.right + 1);
+
+      if (width < 768) {
+        expect(layout.scrollerOverflow).toBeLessThanOrEqual(1);
+        expect(layout.status).not.toBeNull();
+        expect(layout.status!.left).toBeGreaterThanOrEqual(0);
+        expect(layout.status!.right).toBeLessThanOrEqual(layout.viewportWidth);
+      }
+
+      if (width === 390) {
+        expect(layout.activeTab).not.toBeNull();
+        expect(layout.subnav).not.toBeNull();
+        expect(layout.activeTab!.left).toBeGreaterThanOrEqual(layout.subnav!.left);
+        expect(layout.activeTab!.right).toBeLessThanOrEqual(layout.subnav!.right + 1);
+      }
+
+      if (width === 700) {
+        expect(layout.chartWidths).toHaveLength(3);
+        expect(layout.chartWidths[2]).toBeGreaterThan(layout.chartWidths[0] * 1.8);
+      }
+    }
+  });
+
   test('a status outside the committee’s vocabulary is refused', async ({ page }) => {
     await asAdmin(page);
     const admin = await createAccount(ADMIN);
     const speaker = await createAccount(SPEAKER);
     await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
 
-    // `submitted` and `withdrawn` belong to the applicant's flow, not this one.
-    for (const status of ['submitted', 'withdrawn', 'nonsense']) {
+    // `withdrawn` belongs to the applicant's flow, and arbitrary values never do.
+    for (const status of ['withdrawn', 'nonsense']) {
       expect(
         await callAs(admin.idToken, 'setProposalStatus', { proposalId: 'p-sam', status }),
       ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
@@ -252,6 +406,7 @@ test.describe('roles', () => {
     await setProposalStatusDirect('p-sam', 'under_review');
     await page.reload();
     await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await expect(page.getByRole('textbox', { name: /^Bio/ })).toBeEnabled();
     await expect(page.getByRole('radio', { name: /no travel required/ })).toBeEnabled();
     await expect(page.getByText(/talk itself is locked now/)).toBeVisible();
@@ -268,12 +423,14 @@ test.describe('roles', () => {
     await signInAs(page, SPEAKER);
     await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
 
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await page.getByRole('textbox', { name: /^Company/ }).fill('New Employer');
     await page.getByRole('checkbox', { name: /visa or eTA/ }).check();
     await page.getByRole('button', { name: 'Save changes' }).click();
     await expect(page.locator('.actions__status')).toHaveText(/Draft saved/);
 
     await page.reload();
+    await page.getByRole('button', { name: 'Edit profile' }).click();
     await expect(page.getByRole('textbox', { name: /^Company/ })).toHaveValue('New Employer');
     await expect(page.getByRole('checkbox', { name: /visa or eTA/ })).toBeChecked();
   });
@@ -281,6 +438,7 @@ test.describe('roles', () => {
   test('the window controls reach the form', async ({ page }) => {
     await asAdmin(page, 'settings');
 
+    await expect(page.getByText(/^Your device time zone:/)).toBeVisible();
     await page.getByRole('checkbox', { name: /Pause submissions/ }).check();
     await page.getByRole('button', { name: 'Save window' }).click();
     await expect(page.getByText('Saved.')).toBeVisible();
@@ -288,6 +446,25 @@ test.describe('roles', () => {
     await page.goto(at());
     await expect(page.getByText(/paused/)).toBeVisible();
   });
+
+  test('changing admin tabs does not discard unsaved settings', async ({ page }) => {
+    await asAdmin(page, 'settings');
+    const settings = page.locator('.section', {
+      has: page.getByRole('heading', { name: 'This call for proposals' }),
+    });
+    const name = settings.getByRole('textbox', { name: /^Name/ });
+    await name.fill('A renamed conference');
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'All calls', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/settings$'));
+    await expect(name).toHaveValue('A renamed conference');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await tab(page, 'Committee').click();
+    await expect(page).toHaveURL(new RegExp('/admin/committee$'));
+  });
+
 });
 
 test.describe('reviewing', () => {

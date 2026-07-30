@@ -34,7 +34,9 @@ test.beforeEach(async ({ page }) => {
 test('the import leads the form', async ({ page }) => {
   // It fills fields in every section below it, so arriving after the talk has
   // been typed out by hand wastes the work it exists to save.
-  const headings = await page.locator('form.form > section h2').allTextContents();
+  const headings = await page
+    .locator('form.form .submission-workspace__content > section h2')
+    .allTextContents();
   expect(headings[0]).toBe('Have a Sessionize profile?');
 });
 

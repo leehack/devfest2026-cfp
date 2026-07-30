@@ -299,11 +299,12 @@ export async function seedReview(
   reviewerUid: string,
   score: number,
   cfpId = CFP_ID,
+  conflictOfInterest = false,
 ) {
   await patch(`cfps/${cfpId}/proposals/${proposalId}/reviews/${reviewerUid}`, {
     cfpId: { stringValue: cfpId },
     score: { integerValue: String(score) },
-    conflictOfInterest: { booleanValue: false },
+    conflictOfInterest: { booleanValue: conflictOfInterest },
   });
 }
 
@@ -507,6 +508,7 @@ export async function seedProposal(
     status,
     cfpId = CFP_ID,
     speaker = {},
+    includeSpeakerSnapshot = true,
     ...rest
   }: {
     speakerUid: string;
@@ -515,6 +517,8 @@ export async function seedProposal(
     cfpId?: string;
     /** Overrides on the snapshot the committee reads — see `SpeakerSnapshot`. */
     speaker?: Record<string, unknown>;
+    /** Drafts have no frozen committee copy until they are first submitted. */
+    includeSpeakerSnapshot?: boolean;
     /** Anything else on the document, so a spec can seed the awkward cases. */
     [field: string]: unknown;
   },
@@ -526,21 +530,25 @@ export async function seedProposal(
     // What the review card renders. Written by `submitProposal` in the real
     // flow; seeded here because nothing else on the platform may read a global
     // speaker profile.
-    speakerSnapshot: {
-      arrayValue: {
-        values: [
-          encode({
-            uid: speakerUid,
-            name: 'Test Speaker',
-            bio: 'x'.repeat(120),
-            basedIn: 'Montréal, QC',
-            socials: [],
-            isGde: false,
-            ...speaker,
-          }),
-        ],
-      },
-    },
+    ...(includeSpeakerSnapshot
+      ? {
+          speakerSnapshot: {
+            arrayValue: {
+              values: [
+                encode({
+                  uid: speakerUid,
+                  name: 'Test Speaker',
+                  bio: 'x'.repeat(120),
+                  basedIn: 'Montréal, QC',
+                  socials: [],
+                  isGde: false,
+                  ...speaker,
+                }),
+              ],
+            },
+          },
+        }
+      : {}),
     status: { stringValue: status },
     title: { stringValue: title },
     abstract: { stringValue: 'x'.repeat(400) },

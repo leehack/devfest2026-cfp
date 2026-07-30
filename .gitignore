@@ -20,6 +20,7 @@ ui-debug.log
 
 # Emulator state kept between `npm start` runs
 .emulator-data/
+firebase-export-*
 test-results/
 playwright-report/
 

@@ -10,12 +10,17 @@ import { createHash } from 'node:crypto';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
-import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  getFirestore,
+  Timestamp,
+  type QueryDocumentSnapshot,
+} from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
-import { inStatusSet, LIMITS, STATUS_SETS } from '../../shared/enums';
+import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES, STATUS_SETS } from '../../shared/enums';
 import { submissionSchema } from '../../shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -24,7 +29,7 @@ import {
   validateSubmissionForm,
   type SubmissionForm,
 } from '../../shared/submissionForm';
-import { aggregateReviews, type ReviewRecord } from '../../shared/aggregate';
+import { aggregateReviews, type Aggregate, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
 import {
   DECISION_KINDS,
@@ -138,6 +143,27 @@ async function assertCfpOpen(cfpId: string): Promise<void> {
   }
   if (now >= cfp.closesAt.toMillis()) {
     throw new HttpsError('deadline-exceeded', 'The CFP has closed.');
+  }
+}
+
+/**
+ * Speaker lifecycle writes stay frozen once a round is archived.
+ *
+ * Read inside the same transaction as the proposal so an archive racing a
+ * response or withdrawal retries against the new state instead of slipping one
+ * last write through. These actions remain allowed after the submission window
+ * closes; archiving, not the calendar, is the historical boundary.
+ */
+async function assertCfpNotArchived(
+  tx: FirebaseFirestore.Transaction,
+  cfpId: string,
+): Promise<void> {
+  const snap = await tx.get(db.doc(`cfps/${cfpId}`));
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'No such call for proposals.');
+  }
+  if (snap.get('archived') === true) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
   }
 }
 
@@ -304,6 +330,34 @@ const DECISION_STILL_TRUE: Record<string, readonly string[]> = {
   waitlisted: ['waitlisted'],
   rejected: ['rejected'],
 };
+
+/**
+ * Splits unsent decision rows by whether the proposal still has that decision.
+ *
+ * Preview and release must use the same answer: showing a message as sendable
+ * when release or retry will retain it is worse than no preview at all.
+ */
+async function currentDecisionEmails(
+  cfpId: string,
+  docs: QueryDocumentSnapshot[],
+): Promise<{ sendable: QueryDocumentSnapshot[]; stale: QueryDocumentSnapshot[] }> {
+  if (docs.length === 0) return { sendable: [], stale: [] };
+
+  const proposalIds = [
+    ...new Set(docs.map((doc) => doc.get('proposalId') as string).filter(Boolean)),
+  ];
+  const proposals = await db.getAll(
+    ...proposalIds.map((proposalId) => db.doc(`cfps/${cfpId}/proposals/${proposalId}`)),
+  );
+  const current = new Map(proposals.map((proposal) => [proposal.id, proposal.get('status') as string]));
+  const sendable = docs.filter((doc) => {
+    const holds = DECISION_STILL_TRUE[doc.get('kind') as string];
+    // A kind with no entry is not a decision at all, so nothing to check.
+    return !holds || holds.includes(current.get(doc.get('proposalId') as string) ?? '');
+  });
+  const sendableIds = new Set(sendable.map((doc) => doc.id));
+  return { sendable, stale: docs.filter((doc) => !sendableIds.has(doc.id)) };
+}
 
 /**
  * Keeps the committee's copy of a speaker current until their talk is decided.
@@ -503,6 +557,7 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
 
   await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
     const proposal = await readOwnProposal(tx, proposalRef, uid);
     if (!inStatusSet('withdrawable', proposal.status)) {
       throw new HttpsError(
@@ -517,12 +572,70 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
 
     tx.update(proposalRef, {
       status: 'withdrawn',
+      // A withdrawn talk must not keep serving a score while the aggregate
+      // refresh trigger catches up.
+      aggregate: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
 
   logger.info('proposal withdrawn', { proposalId, uid });
   return { ok: true };
+});
+
+/**
+ * Deletes writing that was never submitted to the committee.
+ *
+ * Once a proposal has any submission or review history it is an audit record,
+ * so withdrawal — not deletion — is the only supported operation. Every
+ * precondition is read in the same transaction as the delete so a concurrent
+ * archive, submit, review or email write cannot slip through.
+ */
+export const deleteDraftProposal = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = requireUid(request, 'delete a draft');
+  const proposalId = requireProposalId(request.data);
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
+
+  await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
+    const proposal = await readOwnProposal(tx, proposalRef, uid);
+
+    if (proposal.status !== 'draft') {
+      throw new HttpsError('failed-precondition', 'Only an unsubmitted draft can be deleted.');
+    }
+
+    const hasSubmissionHistory = ['submittedAt', 'speakerSnapshot', 'aggregate'].some((key) =>
+      Object.prototype.hasOwnProperty.call(proposal, key),
+    );
+    if (hasSubmissionHistory) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This draft has submission history and cannot be deleted.',
+      );
+    }
+
+    const [reviews, emailHistory] = await Promise.all([
+      tx.get(proposalRef.collection('reviews').limit(1)),
+      tx.get(
+        db
+          .collection(`cfps/${cfpId}/emailLog`)
+          .where('proposalId', '==', proposalId)
+          .limit(1),
+      ),
+    ]);
+    if (!reviews.empty || !emailHistory.empty) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This draft has committee or email history and cannot be deleted.',
+      );
+    }
+
+    tx.delete(proposalRef);
+  });
+
+  logger.info('draft proposal deleted', { cfpId, proposalId, uid });
+  return { ok: true, proposalId };
 });
 
 /**
@@ -605,6 +718,7 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
   }
 
   await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
     const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
     const proposal = await readOwnProposal(tx, proposalRef, uid);
 
@@ -752,60 +866,315 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
   return { ok: true, form };
 });
 
+const REVIEW_QUEUE_STATUSES = ['submitted', 'under_review'] as const;
+const AGGREGATE_REVISION_FIELD = '_aggregateRevision';
+const AGGREGATE_CHUNK = 400;
+
+const isKnownScore = (score: unknown): score is number =>
+  (SCORES as readonly unknown[]).includes(score);
+
+const aggregateScorable = (status: unknown): boolean =>
+  typeof status === 'string' &&
+  (PROPOSAL_STATUSES as readonly string[]).includes(status) &&
+  status !== 'draft' &&
+  status !== 'withdrawn';
+
 /**
- * Recomputes `aggregate` on every reviewed proposal. Run once when the round
- * closes (§8) — a batch job, not a trigger: a z-score is relative to everything
- * that reviewer scored, so one new review moves the normalised score of every
- * proposal they touched. Per-review triggers would fan out across the whole
- * collection and race each other.
+ * The current review policy is deliberately explicit: every active role-holder
+ * sees every in-round proposal they do not speak on. There is no assignment
+ * document yet, so a report that implied partitioned panels would manufacture
+ * obligations the data model cannot represent.
+ *
+ * Only completion metadata leaves this callable. Scores and comments do not,
+ * and an admin who is also a speaker gets no coverage metadata at all for their
+ * own proposal — the same privacy boundary enforced by Firestore rules.
+ */
+export const reviewCoverage = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const requesterUid = await requireAdmin(request, cfpId, 'view review coverage');
+
+  const [members, proposalSnaps, reviewSnaps] = await Promise.all([
+    db.collection(`cfps/${cfpId}/members`).get(),
+    db
+      .collection(`cfps/${cfpId}/proposals`)
+      .where('status', 'in', [...REVIEW_QUEUE_STATUSES])
+      .get(),
+    db.collectionGroup('reviews').where('cfpId', '==', cfpId).get(),
+  ]);
+
+  const current = proposalSnaps.docs.map((proposal) => ({
+    id: proposal.id,
+    title: String(proposal.get('title') ?? ''),
+    speakerIds: ((proposal.get('speakerIds') as unknown[]) ?? []).filter(
+      (uid): uid is string => typeof uid === 'string',
+    ),
+  }));
+  const hiddenOwnProposalCount = current.filter((proposal) =>
+    proposal.speakerIds.includes(requesterUid),
+  ).length;
+  const visible = current
+    .filter((proposal) => !proposal.speakerIds.includes(requesterUid))
+    .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+  const visibleIds = new Set(visible.map((proposal) => proposal.id));
+  const activeReviewerIds = new Set(members.docs.map((member) => member.id));
+
+  const reviewByPair = new Map<
+    string,
+    { score: unknown; conflictOfInterest: boolean }
+  >();
+  for (const review of reviewSnaps.docs) {
+    const proposalId = review.ref.parent.parent?.id;
+    if (!proposalId || !visibleIds.has(proposalId) || !activeReviewerIds.has(review.id)) continue;
+    reviewByPair.set(`${proposalId}:${review.id}`, {
+      score: review.get('score'),
+      conflictOfInterest: review.get('conflictOfInterest') === true,
+    });
+  }
+
+  const reviewers = members.docs
+    .map((member) => {
+      const data = member.data();
+      const eligible = visible.filter((proposal) => !proposal.speakerIds.includes(member.id));
+      const scoredProposalIds: string[] = [];
+      const conflictProposalIds: string[] = [];
+      const missingProposalIds: string[] = [];
+
+      for (const proposal of eligible) {
+        const review = reviewByPair.get(`${proposal.id}:${member.id}`);
+        if (!review) {
+          missingProposalIds.push(proposal.id);
+        } else if (review.conflictOfInterest) {
+          conflictProposalIds.push(proposal.id);
+        } else if (isKnownScore(review.score)) {
+          scoredProposalIds.push(proposal.id);
+        } else {
+          // A malformed historic row is not evidence that a valid score landed.
+          missingProposalIds.push(proposal.id);
+        }
+      }
+
+      return {
+        uid: member.id,
+        name: String(data.name ?? ''),
+        email: String(data.email ?? ''),
+        role: data.role as CfpRole,
+        eligibleCount: eligible.length,
+        scoredProposalIds,
+        conflictProposalIds,
+        missingProposalIds,
+      };
+    })
+    .sort(
+      (a, b) =>
+        (a.name || a.email).localeCompare(b.name || b.email) || a.uid.localeCompare(b.uid),
+    );
+
+  return {
+    ok: true,
+    hiddenOwnProposalCount,
+    proposals: visible.map(({ id, title }) => ({ id, title })),
+    reviewers,
+  };
+});
+
+interface AggregateRefresh {
+  reviewCount: number;
+  proposalCount: number;
+  writes: number;
+  superseded: boolean;
+}
+
+/** A monotonic fence: an older refresh may never commit after a newer one starts. */
+async function reserveAggregateRevision(cfpId: string): Promise<number | null> {
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  return db.runTransaction(async (tx) => {
+    const cfp = await tx.get(cfpRef);
+    if (!cfp.exists) return null;
+    const stored = cfp.get(AGGREGATE_REVISION_FIELD);
+    const current = typeof stored === 'number' && Number.isSafeInteger(stored) ? stored : 0;
+    const revision = current + 1;
+    tx.update(cfpRef, { [AGGREGATE_REVISION_FIELD]: revision });
+    return revision;
+  });
+}
+
+function sameAggregate(current: unknown, desired: Aggregate): boolean {
+  if (!current || typeof current !== 'object') return false;
+  const value = current as Record<string, unknown>;
+  return (
+    value.avgScore === desired.avgScore &&
+    value.normalizedScore === desired.normalizedScore &&
+    value.reviewCount === desired.reviewCount &&
+    value.stdDev === desired.stdDev &&
+    Object.keys(value).length === 4
+  );
+}
+
+/**
+ * Recomputes the complete CFP because one review changes that reviewer's
+ * calibration, which can move every proposal they scored. Each write chunk
+ * checks the revision fence transactionally. If a newer event starts, the old
+ * run stops; it cannot land stale values after the new run.
+ */
+async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
+  const revision = await reserveAggregateRevision(cfpId);
+  if (revision === null) {
+    return { reviewCount: 0, proposalCount: 0, writes: 0, superseded: false };
+  }
+
+  const [proposalSnaps, reviewSnaps] = await Promise.all([
+    db.collection(`cfps/${cfpId}/proposals`).get(),
+    db.collectionGroup('reviews').where('cfpId', '==', cfpId).get(),
+  ]);
+  const scorableIds = new Set(
+    proposalSnaps.docs
+      .filter((proposal) => aggregateScorable(proposal.get('status')))
+      .map((proposal) => proposal.id),
+  );
+  const reviews = reviewSnaps.docs.flatMap<ReviewRecord>((review) => {
+    const proposalId = review.ref.parent.parent?.id ?? '';
+    const score = review.get('score') as unknown;
+    if (!scorableIds.has(proposalId) || !isKnownScore(score)) return [];
+    return [
+      {
+        proposalId,
+        reviewerUid: review.id,
+        score,
+        conflictOfInterest: review.get('conflictOfInterest') === true,
+      },
+    ];
+  });
+  const aggregates = aggregateReviews(reviews);
+
+  const candidates = proposalSnaps.docs.filter((proposal) => {
+    const desired = aggregates.get(proposal.id);
+    const current = proposal.get('aggregate') as unknown;
+    return desired
+      ? !sameAggregate(current, desired)
+      : Object.prototype.hasOwnProperty.call(proposal.data(), 'aggregate');
+  });
+
+  let writes = 0;
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  for (let i = 0; i < candidates.length; i += AGGREGATE_CHUNK) {
+    const chunk = candidates.slice(i, i + AGGREGATE_CHUNK);
+    const result = await db.runTransaction(async (tx) => {
+      const cfp = await tx.get(cfpRef);
+      if (!cfp.exists || cfp.get(AGGREGATE_REVISION_FIELD) !== revision) {
+        return { applied: false, writes: 0 };
+      }
+
+      const currentProposals = [];
+      for (const proposal of chunk) currentProposals.push(await tx.get(proposal.ref));
+
+      let chunkWrites = 0;
+      for (const proposal of currentProposals) {
+        if (!proposal.exists) continue;
+        const desired = aggregateScorable(proposal.get('status'))
+          ? aggregates.get(proposal.id)
+          : undefined;
+        const current = proposal.get('aggregate') as unknown;
+        if (desired ? sameAggregate(current, desired) : current === undefined) continue;
+
+        tx.update(proposal.ref, {
+          aggregate: desired ?? FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        chunkWrites += 1;
+      }
+      return { applied: true, writes: chunkWrites };
+    });
+
+    if (!result.applied) {
+      return {
+        reviewCount: reviews.length,
+        proposalCount: aggregates.size,
+        writes,
+        superseded: true,
+      };
+    }
+    writes += result.writes;
+  }
+
+  return {
+    reviewCount: reviews.length,
+    proposalCount: aggregates.size,
+    writes,
+    superseded: false,
+  };
+}
+
+/**
+ * Operational fallback for an admin. Automatic triggers normally keep these
+ * current; this remains useful after an outage or a historic data repair.
  */
 export const recomputeAggregates = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
-  const uid = await requireAdmin(request, cfpId, 'close the review round');
+  const uid = await requireAdmin(request, cfpId, 'recompute review scores');
+  const result = await refreshAggregates(cfpId);
 
-  /*
-   * Every review on every proposal in *this* CFP, in one read pass.
-   *
-   * Filtered on the denormalised `cfpId` rather than on the path, because a
-   * collection-group query cannot be constrained by ancestor — without the
-   * filter this would sweep up every review on the platform and write one
-   * organiser's scores onto another's proposals. The rules pin
-   * `request.resource.data.cfpId` to the path on write, so the field cannot lie.
-   */
-  const reviewSnaps = await db.collectionGroup('reviews').where('cfpId', '==', cfpId).get();
-
-  const reviews: ReviewRecord[] = reviewSnaps.docs.map((d) => ({
-    // reviews live at cfps/{cfpId}/proposals/{proposalId}/reviews/{reviewerUid}
-    proposalId: d.ref.parent.parent!.id,
-    reviewerUid: d.id,
-    score: d.data().score,
-    conflictOfInterest: d.data().conflictOfInterest === true,
-  }));
-
-  const aggregates = aggregateReviews(reviews);
-
-  // Firestore caps a batch at 500 writes.
-  const entries = [...aggregates.entries()];
-  const CHUNK = 400;
-  for (let i = 0; i < entries.length; i += CHUNK) {
-    const batch = db.batch();
-    for (const [proposalId, aggregate] of entries.slice(i, i + CHUNK)) {
-      batch.update(db.doc(`cfps/${cfpId}/proposals/${proposalId}`), {
-        aggregate,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }
-    await batch.commit();
-  }
-
-  logger.info('aggregates recomputed', {
-    uid,
-    reviews: reviews.length,
-    proposals: aggregates.size,
-  });
-
-  return { ok: true, reviewCount: reviews.length, proposalCount: aggregates.size };
+  logger.info('aggregates recomputed', { cfpId, uid, ...result });
+  return {
+    ok: true,
+    reviewCount: result.reviewCount,
+    proposalCount: result.proposalCount,
+  };
 });
+
+export const refreshReviewAggregates = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}/reviews/{reviewerUid}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const before = event.data?.before;
+    const after = event.data?.after;
+    if (before?.exists && after?.exists) {
+      const scoreChanged = before.get('score') !== after.get('score');
+      const conflictChanged =
+        (before.get('conflictOfInterest') === true) !==
+        (after.get('conflictOfInterest') === true);
+      if (!scoreChanged && !conflictChanged) return;
+    }
+
+    const result = await refreshAggregates(event.params.cfpId);
+    logger.info('review aggregate refresh completed', {
+      cfpId: event.params.cfpId,
+      proposalId: event.params.proposalId,
+      reviewerUid: event.params.reviewerUid,
+      ...result,
+    });
+  },
+);
+
+export const refreshProposalAggregates = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const beforeScorable =
+      event.data?.before.exists === true &&
+      aggregateScorable(event.data.before.get('status'));
+    const afterScorable =
+      event.data?.after.exists === true &&
+      aggregateScorable(event.data.after.get('status'));
+    if (beforeScorable === afterScorable) return;
+
+    const result = await refreshAggregates(event.params.cfpId);
+    logger.info('proposal aggregate refresh completed', {
+      cfpId: event.params.cfpId,
+      proposalId: event.params.proposalId,
+      beforeScorable,
+      afterScorable,
+      ...result,
+    });
+  },
+);
 
 /**
  * Fetches and parses a public Sessionize profile. Writes nothing.
@@ -1174,10 +1543,12 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
  * `status` is what every other permission keys off — an applicant who could
  * write it could accept themselves.
  *
- * Only the outcomes an admin actually decides. `draft`, `submitted` and
- * `withdrawn` belong to the applicant's own flow and are not settable here.
+ * Admins may also restore a decision to `submitted`. That is the exact state
+ * the proposals screen's Undo control needs; `draft` and `withdrawn` remain the
+ * applicant's own states and are never settable here.
  */
 const DECIDABLE = STATUS_SETS.decidable;
+const ADMIN_PROPOSAL_STATUSES = ['submitted', ...DECIDABLE] as const;
 
 export const setProposalStatus = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -1186,10 +1557,10 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
 
   const proposalId = requireProposalId(data);
   const status = String(data.status ?? '');
-  if (!(DECIDABLE as readonly string[]).includes(status)) {
+  if (!(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(status)) {
     throw new HttpsError(
       'invalid-argument',
-      `Status must be one of ${DECIDABLE.join(', ')} — got "${status}".`,
+      `Status must be one of ${ADMIN_PROPOSAL_STATUSES.join(', ')} — got "${status}".`,
     );
   }
 
@@ -1265,6 +1636,17 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       if (current === 'queued' || current === 'sending') {
         throw new HttpsError('failed-precondition', `That message is already ${current}.`);
       }
+      const holds = DECISION_STILL_TRUE[snap.get('kind') as string];
+      if (holds) {
+        const proposalId = snap.get('proposalId') as string;
+        const proposal = await tx.get(db.doc(`cfps/${cfpId}/proposals/${proposalId}`));
+        if (!proposal.exists || !holds.includes(proposal.get('status') as string)) {
+          throw new HttpsError(
+            'failed-precondition',
+            'That decision changed, so this message is no longer sendable.',
+          );
+        }
+      }
       tx.update(ref, { status: 'queued' satisfies EmailStatus });
       return current;
     });
@@ -1278,9 +1660,20 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     db.doc(`cfps/${cfpId}/config/email`).get(),
   ]);
   const emailConfig = configSnap.data() ?? {};
+  const pendingDocs = snap.docs.filter((doc) =>
+    ['held', 'failed', 'dry_run'].includes(doc.get('status') as string),
+  );
+  const pendingState =
+    action === 'preview' || action === 'release' || action === 'retry'
+      ? await currentDecisionEmails(cfpId, pendingDocs)
+      : { sendable: pendingDocs, stale: [] };
+  const staleIds = new Set(pendingState.stale.map((doc) => doc.id));
 
   const tally: Record<string, number> = {};
   for (const doc of snap.docs) {
+    // A retained, superseded decision is not waiting for release. It becomes
+    // sendable again only if the committee restores that exact decision.
+    if (staleIds.has(doc.id)) continue;
     const key = `${doc.get('status')}:${doc.get('kind')}`;
     tally[key] = (tally[key] ?? 0) + 1;
   }
@@ -1305,6 +1698,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       // The provider's reason, not ours — shown as-is to an admin, who is the
       // one person who can act on "domain is not verified".
       error: (d.get('error') as string) ?? '',
+      // The database row remains held so restoring the decision can release it.
+      // This flag lets the log describe its effective state truthfully.
+      stale: staleIds.has(d.id),
     }))
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0) || a.to.localeCompare(b.to));
 
@@ -1322,9 +1718,10 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       domain: (emailConfig.domain as string) ?? '',
       templates: emailConfig.templates ?? {},
       // Enough to check the copy and the addresses before committing to a send.
-      held: snap.docs
+      held: pendingState.sendable
         .filter((d) => d.get('status') === 'held')
         .map((d) => ({ kind: d.get('kind'), to: d.get('to'), title: d.get('data')?.title })),
+      staleHeld: pendingState.stale.length,
       /*
        * Who was written to, and what happened. The panel used to show counts by
        * status and nothing else, so "did this person get their acceptance" had
@@ -1343,7 +1740,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   // was rendered while no sender was configured. Retrying picks those up once
   // the domain is, so a receipt written during setup still reaches its speaker.
   const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
-  let due = snap.docs.filter((d) => from.includes(d.get('status')));
+  const due = pendingState.sendable.filter((d) => from.includes(d.get('status')));
 
   /*
    * A decision reversed after it was queued must not go out anyway.
@@ -1356,20 +1753,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
    * Stale rows stay `held` rather than being deleted, so restoring the decision
    * releases them normally on the next pass.
    */
-  let stale = 0;
-  if (action === 'release' && due.length > 0) {
-    const proposals = await db.getAll(
-      ...due.map((d) => db.doc(`cfps/${cfpId}/proposals/${d.get('proposalId')}`)),
-    );
-    const current = new Map(proposals.map((p) => [p.id, p.get('status') as string]));
-    const fresh = due.filter((d) => {
-      const holds = DECISION_STILL_TRUE[d.get('kind') as string];
-      // A kind with no entry is not a decision at all, so nothing to check.
-      return !holds || holds.includes(current.get(d.get('proposalId') as string) ?? '');
-    });
-    stale = due.length - fresh.length;
-    due = fresh;
-  }
+  const stale = pendingState.stale.filter((d) => from.includes(d.get('status'))).length;
 
   const CHUNK = 400;
   for (let i = 0; i < due.length; i += CHUNK) {
@@ -1398,6 +1782,17 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/;
 
 const LINK_WINDOW_MS = 60 * 60 * 1000;
 const LINKS_PER_WINDOW = 5;
+const SIGN_IN_DESTINATIONS = new Set([
+  'submit',
+  'review',
+  'admin/overview',
+  'admin/proposals',
+  'admin/committee',
+  'admin/settings',
+  'admin/submission',
+  'admin/confirmation',
+  'admin/email',
+]);
 
 /**
  * Throttles by address, so this callable cannot be turned into a way to mail
@@ -1438,18 +1833,27 @@ async function takeLinkAllowance(email: string): Promise<void> {
  * owner, so it is rendered and handed to Resend in this one request and not
  * written anywhere — no queue row, no retry, nothing to read back later.
  *
- * `cfpId` is optional and only decides who the message comes from and where it
- * lands: signing in at a CFP writes as that CFP, signing in at the home page
- * writes as the platform. The link itself is the same either way — an account
- * is an account, not a membership.
+ * `cfpId` is optional and decides who the message comes from. `destination`
+ * preserves the CFP workspace that asked for the link, but it is an allowlisted
+ * route name rather than a URL: the caller never chooses the origin or an
+ * arbitrary redirect.
  */
 export const requestSignInLink = onCall(CALLABLE, async (request) => {
-  const data = (request.data ?? {}) as { email?: unknown; locale?: unknown; cfpId?: unknown };
+  const data = (request.data ?? {}) as {
+    email?: unknown;
+    locale?: unknown;
+    cfpId?: unknown;
+    destination?: unknown;
+  };
   const email = String(data.email ?? '').trim().toLowerCase();
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
   const cfpId = typeof data.cfpId === 'string' && validateCfpId(data.cfpId) === null
     ? data.cfpId
     : null;
+  const destination =
+    typeof data.destination === 'string' && SIGN_IN_DESTINATIONS.has(data.destination)
+      ? data.destination
+      : 'submit';
 
   if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
     throw new HttpsError('invalid-argument', 'That does not look like an email address.');
@@ -1470,7 +1874,11 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     // Must be one of Auth's authorized domains, or Firebase refuses to mint it.
     // The origin is platform config, never a per-CFP field: an organiser who
     // could edit it could aim other people's sign-in mail at a host they own.
-    url: cfpId ? cfpUrl(platform.publicUrl, cfpId) : `${platform.publicUrl}/`,
+    url: cfpId
+      ? destination === 'submit'
+        ? cfpUrl(platform.publicUrl, cfpId)
+        : `${platform.publicUrl}/c/${cfpId}/${destination}`
+      : `${platform.publicUrl}/`,
     handleCodeInApp: true,
   });
 

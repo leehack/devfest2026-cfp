@@ -14,10 +14,10 @@ function Requirement({ required }: { required?: boolean }) {
   return <span className="field__requirement">{required ? t.form.required : t.form.optional}</span>;
 }
 
-function FieldError({ message }: { message?: string }) {
+function FieldError({ id, message }: { id?: string; message?: string }) {
   if (!message) return null;
   return (
-    <p className="field__error" role="alert">
+    <p className="field__error" id={id}>
       {message}
     </p>
   );
@@ -28,23 +28,45 @@ interface ShellProps extends CommonProps {
   children: ReactNode;
   /** Rendered under the input, e.g. a character counter. */
   meta?: ReactNode;
+  helpId?: string;
+  errorId?: string;
+  metaId?: string;
 }
 
-function Shell({ label, help, error, required, htmlFor, children, meta }: ShellProps) {
+function Shell({
+  label,
+  help,
+  error,
+  required,
+  htmlFor,
+  children,
+  meta,
+  helpId,
+  errorId,
+  metaId,
+}: ShellProps) {
   return (
     <div className={`field${error ? ' field--error' : ''}`}>
       <label className="field__label" htmlFor={htmlFor}>
         {label}
         <Requirement required={required} />
       </label>
-      {help && <p className="field__help">{help}</p>}
+      {help && (
+        <p className="field__help" id={helpId}>
+          {help}
+        </p>
+      )}
       {children}
       {/* Rendered only when occupied — an always-present row reserved ~18px of
           nothing under every field, which is most of why the form scrolled. */}
       {(error || meta) && (
         <div className="field__foot">
-          <FieldError message={error} />
-          {meta && <span className="field__meta">{meta}</span>}
+          <FieldError id={errorId} message={error} />
+          {meta && (
+            <span className="field__meta" id={metaId}>
+              {meta}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -76,8 +98,18 @@ export function TextField({
   min,
 }: TextFieldProps) {
   const id = useId();
+  const helpId = help ? `${id}-help` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
   return (
-    <Shell label={label} help={help} error={error} required={required} htmlFor={id}>
+    <Shell
+      label={label}
+      help={help}
+      error={error}
+      required={required}
+      htmlFor={id}
+      helpId={helpId}
+      errorId={errorId}
+    >
       <input
         id={id}
         className="field__input"
@@ -88,6 +120,9 @@ export function TextField({
         disabled={disabled}
         min={min}
         aria-invalid={Boolean(error)}
+        aria-required={required}
+        aria-describedby={helpId}
+        aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value)}
       />
     </Shell>
@@ -114,6 +149,8 @@ export function TextAreaField({
 }: TextAreaFieldProps) {
   const id = useId();
   const { t } = useI18n();
+  const helpId = help ? `${id}-help` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
 
   // Below the floor, count up to it; above it, count down to the cap. Applicants
   // stall on "200 characters minimum" without a live number.
@@ -123,6 +160,8 @@ export function TextAreaField({
   } else if (maxLength) {
     meta = t.form.charsRemaining(maxLength - value.length);
   }
+  const metaId = meta ? `${id}-meta` : undefined;
+  const describedBy = [helpId, metaId].filter(Boolean).join(' ') || undefined;
 
   return (
     <Shell
@@ -132,6 +171,9 @@ export function TextAreaField({
       required={required}
       htmlFor={id}
       meta={meta}
+      helpId={helpId}
+      errorId={errorId}
+      metaId={metaId}
     >
       <textarea
         id={id}
@@ -142,6 +184,9 @@ export function TextAreaField({
         placeholder={placeholder}
         disabled={disabled}
         aria-invalid={Boolean(error)}
+        aria-required={required}
+        aria-describedby={describedBy}
+        aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value)}
       />
     </Shell>
@@ -174,14 +219,27 @@ export function SelectField<T extends string>({
   disabled,
 }: ChoiceProps<T>) {
   const id = useId();
+  const helpId = help ? `${id}-help` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
   return (
-    <Shell label={label} help={help} error={error} required={required} htmlFor={id}>
+    <Shell
+      label={label}
+      help={help}
+      error={error}
+      required={required}
+      htmlFor={id}
+      helpId={helpId}
+      errorId={errorId}
+    >
       <select
         id={id}
         className="field__input field__input--select"
         value={value}
         disabled={disabled}
         aria-invalid={Boolean(error)}
+        aria-required={required}
+        aria-describedby={helpId}
+        aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value as T)}
       >
         <option value="" disabled />
@@ -206,13 +264,25 @@ export function RadioGroup<T extends string>({
   disabled,
 }: ChoiceProps<T>) {
   const name = useId();
+  const helpId = help ? `${name}-help` : undefined;
+  const errorId = error ? `${name}-error` : undefined;
   return (
-    <fieldset className={`field fieldset${error ? ' field--error' : ''}`}>
+    <fieldset
+      className={`field fieldset${error ? ' field--error' : ''}`}
+      aria-invalid={Boolean(error)}
+      aria-required={required}
+      aria-describedby={helpId}
+      aria-errormessage={errorId}
+    >
       <legend className="field__label">
         {label}
         <Requirement required={required} />
       </legend>
-      {help && <p className="field__help">{help}</p>}
+      {help && (
+        <p className="field__help" id={helpId}>
+          {help}
+        </p>
+      )}
       <div className="radios">
         {options.map((o) => (
           <label key={o.value} className={`radio${value === o.value ? ' radio--on' : ''}`}>
@@ -222,6 +292,10 @@ export function RadioGroup<T extends string>({
               value={o.value}
               checked={value === o.value}
               disabled={disabled}
+              aria-invalid={Boolean(error)}
+              aria-required={required}
+              aria-describedby={helpId}
+              aria-errormessage={errorId}
               onChange={() => onChange(o.value)}
             />
             <span className="radio__body">
@@ -231,31 +305,42 @@ export function RadioGroup<T extends string>({
           </label>
         ))}
       </div>
-      <FieldError message={error} />
+      <FieldError id={errorId} message={error} />
     </fieldset>
   );
 }
 
-interface CheckboxProps extends Omit<CommonProps, 'label' | 'help' | 'required'> {
+interface CheckboxProps extends Omit<CommonProps, 'label' | 'required'> {
   label: ReactNode;
   checked: boolean;
   onChange: (v: boolean) => void;
 }
 
-export function Checkbox({ label, checked, onChange, error, disabled }: CheckboxProps) {
+export function Checkbox({ label, checked, onChange, help, error, disabled }: CheckboxProps) {
+  const id = useId();
+  const helpId = help ? `${id}-help` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
   return (
     <div className={`checkbox${error ? ' field--error' : ''}`}>
-      <label className="checkbox__row">
+      <label className="checkbox__row" htmlFor={id}>
         <input
+          id={id}
           type="checkbox"
           checked={checked}
           disabled={disabled}
           aria-invalid={Boolean(error)}
+          aria-describedby={helpId}
+          aria-errormessage={errorId}
           onChange={(e) => onChange(e.target.checked)}
         />
         <span>{label}</span>
       </label>
-      <FieldError message={error} />
+      {help && (
+        <p className="field__help" id={helpId}>
+          {help}
+        </p>
+      )}
+      <FieldError id={errorId} message={error} />
     </div>
   );
 }

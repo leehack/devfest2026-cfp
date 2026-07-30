@@ -84,22 +84,38 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   await scoreTalk(page, then, scores[then], 2);
 
   // ------------------------------------------------------------------ admin
-  await inviteRole(ADMIN.email, 'admin');
-  await signInAs(page, ADMIN, at('/admin'));
+  await expect
+    .poll(
+      async () =>
+        (await readProposals()).filter((proposal) => proposal.aggregate?.reviewCount === 1).length,
+      { timeout: 15_000 },
+    )
+    .toBe(2);
 
-  await page.getByRole('button', { name: 'Recompute scores' }).click();
-  await expect(page.getByText('2 reviews across 2 proposals.')).toBeVisible();
+  await inviteRole(ADMIN.email, 'admin');
+  await signInAs(page, ADMIN, at('/admin/proposals'));
+  await expect(page.getByRole('button', { name: 'Recompute scores' })).toHaveCount(0);
+  await expect(page.getByText('2 of 2 proposals')).toBeVisible();
 
   // Ranked best first, so the 4 outranks the 2. Scoped to the Proposals
   // section — the admin page has several tables, and the email log is one.
   const proposals = page.locator('.section', {
     has: page.getByRole('heading', { name: 'Proposals' }),
   });
-  const titles = await proposals.locator('.table tbody tr td:first-child').allInnerTexts();
+  const titles = await proposals.locator('.table tbody tr td:first-child strong').allInnerTexts();
   expect(titles).toEqual([FIRST, SECOND]);
 
   await page.getByLabel(`Status: ${FIRST}`).selectOption('accepted');
+  await expect(page.getByText(`“${FIRST}” moved from Submitted to Accepted.`)).toBeVisible();
   await page.getByLabel(`Status: ${SECOND}`).selectOption('rejected');
+  await expect(page.getByText(`“${SECOND}” moved from Submitted to Rejected.`)).toBeVisible();
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByText(`Restored the previous status for “${SECOND}”.`)).toBeVisible();
+  expect((await readProposals()).find((proposal) => proposal.title === SECOND)?.status).toBe(
+    'submitted',
+  );
+  await page.getByLabel(`Status: ${SECOND}`).selectOption('rejected');
+  await expect(page.getByText(`“${SECOND}” moved from Submitted to Rejected.`)).toBeVisible();
 
   // ---------------------------------------------------------------- results
   await expect(page.getByRole('heading', { name: 'Selected speakers' })).toBeVisible();

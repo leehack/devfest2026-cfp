@@ -341,7 +341,7 @@ Reviewers should not see each other's scores until the round closes, to avoid an
 submitted
    ↓  deadline passes
 under_review          ← reviewers score independently
-   ↓  round closes, aggregates computed
+   ↓  aggregates refresh automatically as scores arrive
 committee meeting     ← sorted by disagreement; track & language balance applied
    ↓
 accepted / waitlisted / rejected

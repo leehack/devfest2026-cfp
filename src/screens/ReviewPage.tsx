@@ -15,7 +15,7 @@
  * never attach a score to the wrong talk.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { Checkbox, TextAreaField } from '../components/fields';
@@ -40,14 +40,23 @@ interface Draft {
   comment: string;
 }
 
+interface SaveFailure {
+  id: string;
+  title: string;
+  draft: Draft;
+  message: string;
+}
+
 const draftOf = (review?: Review): Draft => ({
-  score: review?.score ?? null,
+  // The rules keep a score-shaped value on every review document, but a
+  // declared conflict is not a score. Keep the placeholder out of the UI.
+  score: review?.conflictOfInterest ? null : review?.score ?? null,
   conflictOfInterest: review?.conflictOfInterest ?? false,
   comment: review?.comment ?? '',
 });
 
 export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [order, setOrder] = useState<ProposalRow[]>([]);
   const [own, setOwn] = useState(0);
@@ -55,15 +64,30 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
   const [index, setIndex] = useState(0);
-  const [saving, setSaving] = useState(false);
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [savedId, setSavedId] = useState('');
+  const [failures, setFailures] = useState<Map<string, SaveFailure>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [loadedFor, setLoadedFor] = useState('');
   const [error, setError] = useState('');
   const [help, setHelp] = useState(false);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
+  const scopeKey = `${cfpId}:${user.uid}`;
+  const activeScope = useRef(scopeKey);
+  activeScope.current = scopeKey;
 
   const load = useCallback(async () => {
+    const request = ++loadGeneration.current;
     setLoading(true);
+    setLoadedFor('');
     setError('');
+    setSelectedCategory(null);
+    setIndex(0);
+    setSavingIds(new Set());
+    setSavedId('');
+    setFailures(new Map());
     try {
       const [loaded, cfp, form] = await Promise.all([
         loadReviewQueue(cfpId, user.uid),
@@ -72,11 +96,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         // category this committee invented has no entry in any dictionary.
         loadSubmissionForm(cfpId),
       ]);
+      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
       const reviews = await loadMyReviews(
         cfpId,
         user.uid,
         loaded.proposals.map((p) => p.id),
       );
+      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
       const visible = cfp?.reviewsVisible === true;
 
       // Decided once, here. Once the round is open, disagreement is the point of
@@ -95,12 +121,19 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setReviewsVisible(visible);
       setShape(form);
       setIndex(0);
+      setFailures(new Map());
+      setLoadedFor(scopeKey);
     } catch (e) {
+      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+      setOrder([]);
       setError(friendlyError(e, t));
+      setLoadedFor(scopeKey);
     } finally {
-      setLoading(false);
+      if (request === loadGeneration.current && activeScope.current === scopeKey) {
+        setLoading(false);
+      }
     }
-  }, [cfpId, user.uid, t]);
+  }, [cfpId, scopeKey, t, user.uid]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -110,25 +143,47 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
    */
   useEffect(() => {
     void load();
+    return () => {
+      loadGeneration.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfpId, user.uid]);
 
-  const current = order[index];
+  const scopedOrder = useMemo(
+    () => (loadedFor === scopeKey ? order : []),
+    [loadedFor, order, scopeKey],
+  );
+  const categories = Array.from(new Set(scopedOrder.map((p) => p.category).filter(Boolean)));
+  const filteredOrder = selectedCategory
+    ? scopedOrder.filter((p) => p.category === selectedCategory)
+    : scopedOrder;
+  const current = filteredOrder[index] ?? filteredOrder[0];
+  const displayIndex = current ? filteredOrder.indexOf(current) : 0;
+  const filteredScored = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
 
   // Clamped rather than wrapping: the ends are ends, so a held-down arrow does
   // not quietly loop back to the start.
   const go = useCallback(
     (delta: number) => {
-      setIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(order.length - 1, 0)));
+      setIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(filteredOrder.length - 1, 0)));
       setSavedId('');
     },
-    [order.length],
+    [filteredOrder.length],
   );
 
   const patch = useCallback((id: string, part: Partial<Draft>) => {
     setDrafts((prev) => {
       const next = new Map(prev);
       next.set(id, { ...draftOf(), ...prev.get(id), ...part });
+      return next;
+    });
+    // If this proposal already has a failed write, Retry must use the edits the
+    // reviewer makes while recovering it rather than the older failed snapshot.
+    setFailures((prev) => {
+      const failed = prev.get(id);
+      if (!failed) return prev;
+      const next = new Map(prev);
+      next.set(id, { ...failed, draft: { ...failed.draft, ...part } });
       return next;
     });
   }, []);
@@ -139,47 +194,87 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
    * that looked at the screen would write their score onto the wrong talk.
    */
   const persist = useCallback(
-    async (id: string, draft: Draft) => {
-      if (draft.score === null) return;
-      setSaving(true);
-      setError('');
+    async (id: string, draft: Draft, title: string) => {
+      if (draft.score === null && !draft.conflictOfInterest) return;
+      const scope = scopeKey;
+      // Review documents intentionally have one fixed shape. A conflicted
+      // review is excluded from every aggregate, so this required value is only
+      // a storage placeholder and is hidden again by `draftOf`.
+      const storedScore = draft.score ?? 1;
+      setSavingIds((current) => new Set(current).add(id));
       try {
         await saveReview(cfpId, id, user.uid, {
-          score: draft.score,
+          score: storedScore,
           conflictOfInterest: draft.conflictOfInterest,
           comment: draft.comment,
         });
+        if (activeScope.current !== scope) return;
         setMine((prev) =>
           new Map(prev).set(id, {
             cfpId,
-            score: draft.score as Score,
+            score: storedScore,
             conflictOfInterest: draft.conflictOfInterest,
             comment: draft.comment.trim() || undefined,
             updatedAt: null,
           }),
         );
         setSavedId(id);
+        setFailures((current) => {
+          const updated = new Map(current);
+          updated.delete(id);
+          return updated;
+        });
       } catch (e) {
-        setError(friendlyError(e, t));
+        if (activeScope.current !== scope) return;
+        setFailures((current) =>
+          new Map(current).set(id, {
+            id,
+            title,
+            draft,
+            message: friendlyError(e, t),
+          }),
+        );
       } finally {
-        setSaving(false);
+        if (activeScope.current === scope) {
+          setSavingIds((current) => {
+            const updated = new Set(current);
+            updated.delete(id);
+            return updated;
+          });
+        }
       }
     },
-    [cfpId, user.uid, t],
+    [cfpId, scopeKey, t, user.uid],
   );
 
   /** The whole point of the redesign: one key scores and moves on. */
   const scoreAndAdvance = useCallback(
     (score: Score) => {
-      if (!current) return;
-      const draft = { ...draftOf(mine.get(current.id)), ...drafts.get(current.id), score };
-      patch(current.id, { score });
-      void persist(current.id, draft);
+      if (!current || savingIds.has(current.id)) return;
+      const draft = {
+        ...draftOf(mine.get(current.id)),
+        ...drafts.get(current.id),
+        score,
+        conflictOfInterest: false,
+      };
+      patch(current.id, { score, conflictOfInterest: false });
+      void persist(current.id, draft, current.title || t.review.untitled);
       // Navigation does not wait for the write. The save carries its own id, so
       // landing on the next card cannot misattribute it.
       go(1);
     },
-    [current, drafts, mine, patch, persist, go],
+    [current, drafts, mine, patch, persist, go, savingIds, t.review.untitled],
+  );
+
+  const showFailure = useCallback(
+    (id: string) => {
+      const failedIndex = scopedOrder.findIndex((proposal) => proposal.id === id);
+      if (failedIndex < 0) return;
+      setSelectedCategory(null);
+      setIndex(failedIndex);
+      setSavedId('');
+    },
+    [scopedOrder],
   );
 
   useEffect(() => {
@@ -197,6 +292,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       ) {
         return;
       }
+
+      const key = event.key.toLowerCase();
+      setActiveKey(key);
+      setTimeout(() => setActiveKey(null), 250);
 
       if (event.key >= '1' && event.key <= '4') {
         event.preventDefault();
@@ -223,15 +322,18 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [scoreAndAdvance, go]);
 
-  if (loading) return <p className="muted">{t.app.loading}</p>;
+  if (loadedFor !== scopeKey || loading) return <p className="muted">{t.app.loading}</p>;
   if (error && order.length === 0) {
     return (
-      <p className="field__error" role="alert">
-        {error}
-      </p>
+      <div className="load-failure" role="alert">
+        <p className="field__error">{error}</p>
+        <button type="button" className="btn" onClick={() => void load()}>
+          {t.errors.reload}
+        </button>
+      </div>
     );
   }
-  if (order.length === 0) {
+  if (scopedOrder.length === 0) {
     // "Nothing to review" reads as a bug when the one submission on the system
     // is your own. Say which of the two it is.
     return <p className="muted">{own > 0 ? t.review.onlyYours : t.review.empty}</p>;
@@ -244,14 +346,17 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     <div className="deck">
       <div className="deck__bar">
         <p className="deck__progress">
-          <strong>{t.review.position(index + 1, order.length)}</strong>
-          <span className="muted"> · {t.review.progress(mine.size, order.length)}</span>
+          <strong>{t.review.position(displayIndex + 1, filteredOrder.length)}</strong>
+          <span className="muted">
+            {' '}
+            · {t.review.progress(filteredScored, filteredOrder.length)}
+          </span>
         </p>
         <div className="deck__nav">
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={index === 0}
+            disabled={displayIndex === 0}
             onClick={() => go(-1)}
             aria-label={t.review.previous}
           >
@@ -260,7 +365,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={index >= order.length - 1}
+            disabled={displayIndex >= filteredOrder.length - 1}
             onClick={() => go(1)}
             aria-label={t.review.next}
           >
@@ -280,28 +385,59 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       {/* Dots rather than a bar: at forty proposals the shape of what is left
           is more useful than a percentage. */}
       <ol className="deck__dots" aria-hidden="true">
-        {order.map((p, i) => (
+        {filteredOrder.map((p, i) => (
           <li
             key={p.id}
             className={`deck__dot${mine.has(p.id) ? ' deck__dot--done' : ''}${
-              i === index ? ' deck__dot--here' : ''
+              i === displayIndex ? ' deck__dot--here' : ''
             }`}
           />
         ))}
       </ol>
 
+      {categories.length > 1 && (
+        <div className="filter-bar">
+          <button
+            type="button"
+            className={`filter-pill${selectedCategory === null ? ' filter-pill--active' : ''}`}
+            aria-pressed={selectedCategory === null}
+            onClick={() => {
+              setSelectedCategory(null);
+              setIndex(0);
+            }}
+          >
+            {t.review.allCategories} ({scopedOrder.length})
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              className={`filter-pill${selectedCategory === cat ? ' filter-pill--active' : ''}`}
+              aria-pressed={selectedCategory === cat}
+              onClick={() => {
+                setSelectedCategory(cat);
+                setIndex(0);
+              }}
+            >
+              {labelOf(shape.category, cat, locale)} (
+              {scopedOrder.filter((proposal) => proposal.category === cat).length})
+            </button>
+          ))}
+        </div>
+      )}
+
       {help && (
         <dl className="shortcuts">
           <div>
-            <dt>1 – 4</dt>
+            <dt><span className={`kbd-badge${['1', '2', '3', '4'].includes(activeKey ?? '') ? ' kbd-badge--active' : ''}`}>1 – 4</span></dt>
             <dd>{t.review.shortcutScore}</dd>
           </div>
           <div>
-            <dt>← / →</dt>
+            <dt><span className={`kbd-badge${['arrowleft', 'arrowright', 'j', 'k'].includes(activeKey ?? '') ? ' kbd-badge--active' : ''}`}>← / → (J/K)</span></dt>
             <dd>{t.review.shortcutMove}</dd>
           </div>
           <div>
-            <dt>?</dt>
+            <dt><span className={`kbd-badge${activeKey === '?' ? ' kbd-badge--active' : ''}`}>?</span></dt>
             <dd>{t.review.shortcutHelp}</dd>
           </div>
         </dl>
@@ -312,6 +448,47 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         {!reviewsVisible && ` · ${t.review.othersHidden}`}
       </p>
 
+      {failures.size > 0 && (
+        <section className="save-recovery" role="alert" aria-labelledby="save-recovery-title">
+          <div className="save-recovery__heading">
+            <div>
+              <h2 id="save-recovery-title">{t.review.saveFailedTitle}</h2>
+              <p>{t.review.saveFailedHelp}</p>
+            </div>
+            <span className="save-recovery__count">{failures.size}</span>
+          </div>
+          <ul className="save-recovery__list">
+            {[...failures.values()].map((failure) => (
+              <li key={failure.id}>
+                <div>
+                  <strong>{failure.title}</strong>
+                  <span>{failure.message}</span>
+                </div>
+                <span className="save-recovery__actions">
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    disabled={savingIds.has(failure.id)}
+                    onClick={() =>
+                      void persist(failure.id, failure.draft, failure.title)
+                    }
+                  >
+                    {savingIds.has(failure.id) ? t.review.saving : t.review.retrySave}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => showFailure(failure.id)}
+                  >
+                    {t.review.returnToProposal}
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <ReviewCard
         shape={shape}
         key={current.id}
@@ -320,18 +497,12 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         draft={draft}
         existing={mine.get(current.id)}
         reviewsVisible={reviewsVisible}
-        saving={saving}
+        saving={savingIds.has(current.id)}
         saved={savedId === current.id}
         onPatch={(part) => patch(current.id, part)}
         onScore={scoreAndAdvance}
-        onSave={() => persist(current.id, draft)}
+        onSave={() => persist(current.id, draft, current.title || t.review.untitled)}
       />
-
-      {error && (
-        <p className="field__error" role="alert">
-          {error}
-        </p>
-      )}
     </div>
   );
 }
@@ -365,10 +536,14 @@ function ReviewCard({
 }: CardProps) {
   const { t, locale } = useI18n();
   const top = useRef<HTMLElement>(null);
+  const titleId = `proposal-${proposal.id}-title`;
 
   // A new proposal starts at its title, not wherever the last one was scrolled
   // to — otherwise pressing 2 lands you halfway down an abstract you cannot see.
+  // Focus follows it as well, so auto-advance announces the new proposal rather
+  // than silently replacing the control a keyboard reviewer just activated.
   useEffect(() => {
+    top.current?.focus({ preventScroll: true });
     top.current?.scrollIntoView({ block: 'start' });
   }, [proposal.id]);
 
@@ -399,8 +574,13 @@ function ReviewCard({
   ].filter(Boolean);
 
   return (
-    <section className="section card" ref={top}>
-      <h2>{proposal.title || '—'}</h2>
+    <section
+      className="section card"
+      ref={top}
+      tabIndex={-1}
+      aria-labelledby={titleId}
+    >
+      <h2 id={titleId}>{proposal.title || '—'}</h2>
       {names && <p className="card__byline">{names}</p>}
       {facets.length > 0 && (
         <ul className="facets">
@@ -429,9 +609,24 @@ function ReviewCard({
       {/* Buttons, not radios. These both record a choice and move the deck on,
           and a control that navigates away the moment you touch it is not a
           radio — assistive tech and test tooling alike expect a radio to stay
-          put and stay selected. `aria-pressed` carries the state instead.
-          Never disabled while saving: scoring fast is the entire point, and
-          each save already carries its own id. */}
+          put and stay selected. `aria-pressed` carries the state instead. Only
+          this proposal locks while its write is in flight; the next card stays
+          fast, while going back cannot race two writes onto the same review. */}
+      <aside className="review-rubric" aria-labelledby={`rubric-${proposal.id}`}>
+        <div className="review-rubric__heading">
+          <h3 id={`rubric-${proposal.id}`}>{t.review.rubricTitle}</h3>
+          <p>{t.review.rubricHelp}</p>
+        </div>
+        <ol className="review-rubric__scale">
+          {SCORES.map((score) => (
+            <li key={score}>
+              <strong>{t.review.scores[score]}</strong>
+              <span>{t.review.rubric[score]}</span>
+            </li>
+          ))}
+        </ol>
+      </aside>
+
       <p className="scores__label" id={`score-${proposal.id}`}>
         {t.review.scoreLabel}
       </p>
@@ -442,6 +637,7 @@ function ReviewCard({
             type="button"
             className={`btn score${draft.score === s ? ' score--on' : ''}`}
             aria-pressed={draft.score === s}
+            disabled={saving || draft.conflictOfInterest}
             onClick={() => onScore(s)}
           >
             {t.review.scores[s]}
@@ -451,11 +647,16 @@ function ReviewCard({
 
       <Checkbox
         label={t.review.conflict}
+        help={t.review.conflictHelp}
         checked={draft.conflictOfInterest}
-        onChange={(conflictOfInterest) => onPatch({ conflictOfInterest })}
+        onChange={(conflictOfInterest) =>
+          onPatch({
+            conflictOfInterest,
+            ...(conflictOfInterest ? { score: null } : {}),
+          })
+        }
         disabled={saving}
       />
-      <p className="field__help">{t.review.conflictHelp}</p>
 
       <TextAreaField
         label={t.review.comment}
@@ -470,7 +671,7 @@ function ReviewCard({
         <button
           type="button"
           className="btn btn--primary"
-          disabled={saving || draft.score === null}
+          disabled={saving || (draft.score === null && !draft.conflictOfInterest)}
           onClick={onSave}
         >
           {saving ? t.review.saving : t.review.save}
@@ -584,14 +785,43 @@ function Speaker({ speaker }: { speaker: SpeakerSnapshot }) {
 /** Only mounted once an admin opens the round, so nothing anchors before then. */
 function Committee({ cfpId, proposalId }: { cfpId: string; proposalId: string }) {
   const { t } = useI18n();
-  const [rows, setRows] = useState<ReviewRow[]>([]);
+  const [rows, setRows] = useState<ReviewRow[] | null>(null);
+  const [error, setError] = useState('');
+  const tRef = useRef(t);
+  tRef.current = t;
 
-  useEffect(() => {
-    loadReviewsFor(cfpId, proposalId)
-      .then(setRows)
-      .catch(() => setRows([]));
+  const load = useCallback(async () => {
+    setRows(null);
+    setError('');
+    try {
+      setRows(await loadReviewsFor(cfpId, proposalId));
+    } catch (e) {
+      setError(friendlyError(e, tRef.current));
+      setRows([]);
+    }
   }, [cfpId, proposalId]);
 
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (rows === null) {
+    return (
+      <p className="muted" role="status">
+        {t.app.loading}
+      </p>
+    );
+  }
+  if (error) {
+    return (
+      <div className="load-failure" role="alert">
+        <p className="field__error">{error}</p>
+        <button type="button" className="btn btn--ghost" onClick={() => void load()}>
+          {t.errors.reload}
+        </button>
+      </div>
+    );
+  }
   if (rows.length === 0) return null;
 
   return (
@@ -600,8 +830,11 @@ function Committee({ cfpId, proposalId }: { cfpId: string; proposalId: string })
       <ul className="reviews">
         {rows.map((row) => (
           <li key={row.reviewerUid}>
-            <strong>{t.review.scores[row.score]}</strong>
-            {row.conflictOfInterest && <span className="muted"> · {t.review.conflictDeclared}</span>}
+            <strong>
+              {row.conflictOfInterest
+                ? t.review.conflictDeclared
+                : t.review.scores[row.score]}
+            </strong>
             {row.comment && <p className="card__text">{row.comment}</p>}
           </li>
         ))}

@@ -13,6 +13,7 @@ test.describe('validation', () => {
 
     await expect(page.getByText(/fields need attention/)).toBeVisible();
     await expect(page.locator('.field__error').first()).toHaveText('This one is required.');
+    await expect(field(page, 'Title')).toBeFocused();
     expect((await readProposal())?.status).not.toBe('submitted');
   });
 
@@ -94,6 +95,57 @@ test.describe('submitting', () => {
 
     await expect(page.getByRole('heading', { name: 'Withdrawn' })).toBeVisible();
     expect((await readProposal())?.status).toBe('withdrawn');
+    await expect(page.getByRole('button', { name: 'Save changes' })).toHaveCount(0);
+    await expect(page.getByText('Past talks (1)')).toBeVisible();
+
+    for (const width of [390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const status = await page.locator('.submission-status').boundingBox();
+      const workspace = await page.locator('.submission-workspace').boundingBox();
+      expect(status).not.toBeNull();
+      expect(workspace).not.toBeNull();
+      const gap = workspace!.y - (status!.y + status!.height);
+      expect(gap).toBeGreaterThanOrEqual(20);
+      expect(gap).toBeLessThanOrEqual(28);
+    }
+
+    await page.reload();
+    await expect(field(page, 'Title')).toHaveValue('');
+    await page.getByText('Past talks (1)').click();
+    await page.getByRole('button', { name: new RegExp(COMPLETE.title) }).click();
+    await expect(page.getByRole('heading', { name: 'Withdrawn' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save changes' })).toHaveCount(0);
+  });
+
+  test('a persisted draft can be deleted without deleting the speaker profile', async ({ page }) => {
+    await signIn(page);
+    await fillRequired(page);
+    await waitForSave(page);
+
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('button', { name: 'Delete draft' }).click();
+    expect(await readProposal()).not.toBeNull();
+
+    // The delete confirmation promises to keep the global speaker profile.
+    // Exercise the narrow race before its normal autosave has fired.
+    await field(page, 'Company').fill('Just edited before deleting');
+    await expect(page.locator('.actions__status')).toContainText('Changes not saved yet');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Delete draft' }).click();
+    await expect(page.getByText('Draft deleted.')).toBeVisible();
+    await expect.poll(readProposal).toBeNull();
+
+    // A late autosave must not recreate the row, and the account-wide profile
+    // remains available after the proposal itself is gone.
+    await page.waitForTimeout(1_700);
+    await page.reload();
+    await expect.poll(readProposal).toBeNull();
+    await expect(field(page, 'Title')).toHaveValue('');
+    await page.getByRole('button', { name: 'Edit profile' }).click();
+    await expect(field(page, 'Name')).toHaveValue('Test Speaker');
+    await expect(field(page, 'Company')).toHaveValue('Just edited before deleting');
+    await expect(page.getByRole('button', { name: 'Delete draft' })).toHaveCount(0);
   });
 
   test('the deadline is enforced by the server, not the form', async ({ page }) => {

@@ -142,6 +142,29 @@ test.describe('the review deck', () => {
     expect(await readReviews('deck-1')).toHaveLength(0);
   });
 
+  test('a conflict can be saved without choosing a numeric score', async ({ page }) => {
+    await stage(page);
+
+    await page.getByRole('checkbox', { name: 'I have a conflict of interest' }).check();
+    const save = page.getByRole('button', { name: 'Save review', exact: true });
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+
+    const reviews = await readReviews('deck-0');
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({ conflictOfInterest: true });
+    await page.reload();
+    await expect(heading(page, TITLES[1])).toBeVisible();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: 'I have a conflict of interest' })).toBeChecked();
+    for (const name of ['1 — Pass', '2 — Maybe', '3 — Yes', '4 — Strong yes']) {
+      await expect(page.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
+    }
+  });
+
   test('the shortcut list can be opened from the keyboard', async ({ page }) => {
     await stage(page);
 

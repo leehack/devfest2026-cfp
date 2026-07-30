@@ -1,6 +1,7 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 
 import { legacyHashScript } from '@shared/legacyHash';
+import { themeBootstrapScript } from '../lib/theme';
 import { SITE_ORIGIN } from '../server/site';
 import '../styles.css';
 
@@ -21,7 +22,11 @@ export const metadata: Metadata = {
   description: 'Submit a talk proposal. Soumettez une proposition de conférence.',
 };
 
-export const viewport = { width: 'device-width', initialScale: 1 };
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  colorScheme: 'light dark',
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -35,6 +40,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
      */
     <html lang="en" suppressHydrationWarning>
       <head>
+        <meta id="cfp-theme-color" name="theme-color" content="#f8f9fb" />
+        {/* Apply an explicit choice before paint; an effect would flash the OS theme. */}
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript() }} />
         {/* Before anything renders. See shared/legacyHash.ts. */}
         <script dangerouslySetInnerHTML={{ __html: legacyHashScript() }} />
       </head>

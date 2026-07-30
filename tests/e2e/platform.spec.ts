@@ -12,7 +12,7 @@
  * is where that half is tested.
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import {
   CFP_ID,
@@ -37,10 +37,126 @@ const OTHER = 'someone-elses-conf';
 const OWNER = { sub: 'plat-owner', email: 'owner@devfest.test', name: 'Ora Owner' };
 const OUTSIDER = { sub: 'plat-outsider', email: 'outsider@other.test', name: 'Otto Outsider' };
 const SPEAKER = { sub: 'plat-speaker', email: 'speaker@example.test', name: 'Sam Speaker' };
+const THEME_KEY = 'cfp.theme';
+
+const themeToggle = (page: Page) =>
+  page.getByRole('button', { name: 'Dark theme', exact: true });
 
 test.describe('the front door', () => {
   test.beforeEach(async () => {
     await reset();
+  });
+
+  test('anonymous visitors can always find sign in in the global header', async ({ page }) => {
+    for (const path of ['/', at(''), at('/review'), at('/admin/proposals')]) {
+      await page.goto(path);
+      const header = page.locator('header.header');
+      await expect(header.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+      await expect(header.getByRole('button', { name: 'Account' })).toHaveCount(0);
+    }
+
+    await expect(page.getByText(/address your organiser invited/)).toBeVisible();
+    await page
+      .locator('header.header')
+      .getByRole('button', { name: 'Sign in', exact: true })
+      .click();
+    await expect(page.locator('#sign-in')).toBeFocused();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const locale = await page.getByRole('button', { name: 'Français' }).boundingBox();
+    const signIn = await page
+      .locator('header.header')
+      .getByRole('button', { name: 'Sign in', exact: true })
+      .boundingBox();
+    expect(locale).not.toBeNull();
+    expect(signIn).not.toBeNull();
+    expect(signIn!.x).toBeGreaterThan(locale!.x);
+    expect(signIn!.x + signIn!.width).toBeLessThanOrEqual(390);
+  });
+
+  test('uses the system theme until the visitor chooses one', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto(at(''));
+
+    await expect(themeToggle(page)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    expect(await page.evaluate((key) => localStorage.getItem(key), THEME_KEY)).toBeNull();
+  });
+
+  test('an explicit theme survives reload and overrides the system', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(at(''));
+
+    const toggle = themeToggle(page);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    expect(await page.evaluate((key) => localStorage.getItem(key), THEME_KEY)).toBe('dark');
+
+    await page.reload();
+    await expect(themeToggle(page)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  });
+
+  test('an explicit theme remains in effect when browser storage is unavailable', async ({
+    page,
+  }) => {
+    await page.addInitScript((key) => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (name, value) {
+        if (name === key) throw new DOMException('Storage is unavailable', 'SecurityError');
+        setItem.call(this, name, value);
+      };
+    }, THEME_KEY);
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(at(''));
+
+    const toggle = themeToggle(page);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  });
+
+  test('the theme control stays labelled and contained in French on a phone', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(at(''));
+    await themeToggle(page).click();
+
+    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    const frenchToggle = page.getByRole('button', { name: 'Thème sombre', exact: true });
+    await expect(frenchToggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const header = page.locator('header.header');
+    await expect(header.getByRole('button', { name: 'English', exact: true })).toBeVisible();
+    await expect(frenchToggle).toBeVisible();
+    await expect(
+      header.getByRole('button', { name: 'Se connecter', exact: true }),
+    ).toBeVisible();
+
+    const overflow = await page.evaluate(() => {
+      const controls = document.querySelector<HTMLElement>('.header__right');
+      return {
+        document:
+          document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        controls: controls ? controls.scrollWidth - controls.clientWidth : 999,
+      };
+    });
+    expect(overflow.document).toBeLessThanOrEqual(1);
+    expect(overflow.controls).toBeLessThanOrEqual(1);
+
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: 'Thème sombre', exact: true }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
   });
 
   test('lists the public calls and not the private ones', async ({ page }) => {
@@ -78,11 +194,13 @@ test.describe('the front door', () => {
     await expect(page.getByRole('textbox', { name: /^Address/ })).toHaveValue('test-conf-2027');
     await page.getByRole('button', { name: 'Create it' }).click();
 
-    // Straight to the settings tab, which only an admin or owner can open, and
-    // whose archive and delete controls only an owner is shown.
-    await expect(page.getByRole('heading', { name: 'This call for proposals' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Deleting' })).toBeVisible();
-    expect(page.url()).toContain('/c/test-conf-2027/admin/settings');
+    // Straight to the organiser overview, where the new owner can finish the
+    // event details, form, committee, and email setup before sharing it.
+    await expect(
+      page.getByRole('heading', { name: 'Finish the essentials before you share' }),
+    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Setup checklist' })).toBeVisible();
+    expect(page.url()).toContain('/c/test-conf-2027/admin/overview');
   });
 
   /*
@@ -179,6 +297,14 @@ test.describe('nothing crosses between two calls', () => {
     await seedReview('ours', chair.uid, 3, CFP_ID);
     await seedReview('theirs', chair.uid, 1, OTHER);
 
+    // Automatic aggregation should process the other tenant on its own. Capture
+    // that value before manually refreshing this CFP so the isolation assertion
+    // proves one refresh cannot alter the other's result.
+    await expect
+      .poll(async () => (await readProposalById('theirs', OTHER))?.aggregate?.avgScore)
+      .toBe(1);
+    const otherAggregate = (await readProposalById('theirs', OTHER))?.aggregate;
+
     const recomputed = await callJson(chair.idToken, 'recomputeAggregates', { cfpId: CFP_ID });
     expect(recomputed.reviewCount).toBe(1);
     expect(recomputed.proposalCount).toBe(1);
@@ -188,9 +314,8 @@ test.describe('nothing crosses between two calls', () => {
       avgScore: 3,
       reviewCount: 1,
     });
-    // And the other CFP's proposal is untouched — a recompute must not write
-    // across the boundary either.
-    expect((await readProposalById('theirs', OTHER))?.aggregate).toBeUndefined();
+    // And the other CFP's independently computed result is untouched.
+    expect((await readProposalById('theirs', OTHER))?.aggregate).toEqual(otherAggregate);
   });
 
   test('a speaker on both keeps two separate drafts and two separate photos', async ({ page }) => {

@@ -14,15 +14,18 @@ import { isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 
 import { auth, functions } from '../firebase';
+import type { AdminTab } from './adminTabs';
 
 const PENDING = 'cfp.signInEmail';
+
+export type SignInDestination = 'submit' | 'review' | `admin/${AdminTab}`;
 
 /**
  * `cfpId` is optional and decides only who the message comes from and where the
  * link lands. An account is an account; it is not a membership of anything.
  */
 export const requestSignInLink = httpsCallable<
-  { email: string; locale: string; cfpId?: string },
+  { email: string; locale: string; cfpId?: string; destination?: SignInDestination },
   { ok: boolean }
 >(functions, 'requestSignInLink');
 

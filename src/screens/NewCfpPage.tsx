@@ -7,7 +7,7 @@
  * against the address field, which is where the fix is.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { useI18n } from '../i18n/context';
@@ -42,10 +42,24 @@ export function NewCfpPage({ user }: { user: User }) {
   const [closesAt, setClosesAt] = useState(localInput(inWeeks(6)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [origin, setOrigin] = useState('');
+  const [timeZone, setTimeZone] = useState('');
 
   const cfpId = idTouched ? id : idFromName(name);
+  const publicPath = cfpId ? `/c/${cfpId}` : '/c/your-event';
+  const publicUrl = `${origin}${publicPath}`;
+  const ownerName = user.displayName?.trim() || t.platform.ownerFallback;
+
+  // These values only exist in a browser. Keeping the first render independent
+  // of them lets Next render this client component on the server without
+  // crashing or producing different markup at hydration.
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  }, []);
 
   async function create() {
+    if (busy) return;
     setError('');
     const fault = validateCfp({ id: cfpId, name, visibility });
     if (fault) {
@@ -66,7 +80,7 @@ export function NewCfpPage({ user }: { user: User }) {
         opensAt: new Date(opensAt).toISOString(),
         closesAt: new Date(closesAt).toISOString(),
       });
-      navigate('admin', { cfpId, tab: 'settings' });
+      navigate('admin', { cfpId, tab: 'overview' });
     } catch (err: any) {
       const code = String(err?.code ?? '');
       setError(
@@ -76,7 +90,7 @@ export function NewCfpPage({ user }: { user: User }) {
             ? t.platform.errors.limit
             : code === 'functions/failed-precondition'
               ? t.platform.errors.unverified
-              : (t.platform.errors[String(err?.message ?? '')] ?? t.errors.generic),
+              : t.errors.generic,
       );
     } finally {
       setBusy(false);
@@ -84,84 +98,169 @@ export function NewCfpPage({ user }: { user: User }) {
   }
 
   return (
-    <section className="panel">
-      <h2 className="card__title">{t.platform.createTitle}</h2>
-      <p className="muted">{t.platform.createHelp}</p>
+    <div className="new-cfp">
+      <header className="new-cfp__intro">
+        <p className="new-cfp__eyebrow">{t.platform.createEyebrow}</p>
+        <h2 className="new-cfp__title" id="new-cfp-title">
+          {t.platform.createTitle}
+        </h2>
+        <p className="new-cfp__help">{t.platform.createHelp}</p>
+      </header>
 
-      <TextField
-        label={t.platform.nameLabel}
-        help={t.platform.nameHelp}
-        value={name}
-        onChange={setName}
-        required
-        maxLength={CFP_LIMITS.nameMax}
-        disabled={busy}
-      />
-
-      <TextField
-        label={t.platform.addressLabel}
-        help={
-          cfpId
-            ? t.platform.addressPreview.replace('{url}', `${location.origin}/c/${cfpId}`)
-            : t.platform.addressHelp
-        }
-        value={cfpId}
-        onChange={(value) => {
-          setIdTouched(true);
-          setId(value);
+      <form
+        className="create-form"
+        aria-labelledby="new-cfp-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void create();
         }}
-        required
-        maxLength={CFP_LIMITS.idMax}
-        disabled={busy}
-      />
-
-      <RadioGroup
-        label={t.platform.visibilityLabel}
-        help={t.platform.visibilityHelp}
-        value={visibility}
-        onChange={setVisibility}
-        required
-        disabled={busy}
-        options={[
-          { value: 'public', label: t.platform.visibilityPublic },
-          { value: 'private', label: t.platform.visibilityPrivate },
-        ]}
-      />
-
-      <div className="grid grid--2">
-        <TextField
-          label={t.platform.opensLabel}
-          type="datetime-local"
-          value={opensAt}
-          onChange={setOpensAt}
-          required
-          disabled={busy}
-        />
-        <TextField
-          label={t.platform.closesLabel}
-          type="datetime-local"
-          value={closesAt}
-          onChange={setClosesAt}
-          required
-          disabled={busy}
-        />
-      </div>
-
-      {error && (
-        <p className="field__error" role="alert">
-          {error}
-        </p>
-      )}
-
-      <button
-        type="button"
-        className="btn btn--primary"
-        disabled={busy || !name.trim() || !cfpId}
-        onClick={create}
       >
-        {busy ? t.platform.creating : t.platform.submit}
-      </button>
-      <p className="field__help">{user.email}</p>
-    </section>
+        <section className="create-form__section" aria-labelledby="create-identity-title">
+          <header className="create-form__section-header">
+            <p className="create-form__step">{t.platform.createStep.replace('{step}', '1')}</p>
+            <h3 className="create-form__section-title" id="create-identity-title">
+              {t.platform.createIdentity}
+            </h3>
+            <p className="create-form__section-help">{t.platform.createIdentityHelp}</p>
+          </header>
+
+          <TextField
+            label={t.platform.nameLabel}
+            help={t.platform.nameHelp}
+            value={name}
+            onChange={setName}
+            required
+            maxLength={CFP_LIMITS.nameMax}
+            disabled={busy}
+          />
+
+          <TextField
+            label={t.platform.addressLabel}
+            help={t.platform.addressHelp}
+            value={cfpId}
+            onChange={(value) => {
+              setIdTouched(true);
+              setId(value);
+            }}
+            required
+            maxLength={CFP_LIMITS.idMax}
+            disabled={busy}
+          />
+
+          <div className="url-preview">
+            <div className="url-preview__label-row">
+              <span className="url-preview__label">{t.platform.addressPreviewLabel}</span>
+              <span className="url-preview__lock">{t.platform.addressImmutable}</span>
+            </div>
+            <code className="url-preview__value">{publicUrl}</code>
+            <p className="url-preview__help">{t.platform.addressPreviewHelp}</p>
+          </div>
+        </section>
+
+        <section className="create-form__section" aria-labelledby="create-access-title">
+          <header className="create-form__section-header">
+            <p className="create-form__step">{t.platform.createStep.replace('{step}', '2')}</p>
+            <h3 className="create-form__section-title" id="create-access-title">
+              {t.platform.createAccess}
+            </h3>
+          </header>
+
+          <RadioGroup
+            label={t.platform.visibilityLabel}
+            help={t.platform.visibilityHelp}
+            value={visibility}
+            onChange={setVisibility}
+            required
+            disabled={busy}
+            options={[
+              { value: 'public', label: t.platform.visibilityPublic },
+              { value: 'private', label: t.platform.visibilityPrivate },
+            ]}
+          />
+        </section>
+
+        <section className="create-form__section" aria-labelledby="create-window-title">
+          <header className="create-form__section-header create-form__section-header--split">
+            <div>
+              <p className="create-form__step">{t.platform.createStep.replace('{step}', '3')}</p>
+              <h3 className="create-form__section-title" id="create-window-title">
+                {t.platform.createWindow}
+              </h3>
+            </div>
+            <p className="create-form__timezone">
+              {t.platform.timeZone.replace(
+                '{zone}',
+                timeZone || t.platform.timeZoneFallback,
+              )}
+            </p>
+          </header>
+
+          <div className="grid grid--2 create-form__dates">
+            <TextField
+              label={t.platform.opensLabel}
+              type="datetime-local"
+              value={opensAt}
+              onChange={setOpensAt}
+              required
+              disabled={busy}
+            />
+            <TextField
+              label={t.platform.closesLabel}
+              type="datetime-local"
+              value={closesAt}
+              onChange={setClosesAt}
+              required
+              disabled={busy}
+            />
+          </div>
+        </section>
+
+        <aside className="create-owner" aria-labelledby="create-owner-title">
+          <span className="create-owner__avatar" aria-hidden="true">
+            {ownerName.charAt(0).toLocaleUpperCase()}
+          </span>
+          <div className="create-owner__identity">
+            <p className="create-owner__label" id="create-owner-title">
+              {t.platform.ownerLabel}
+            </p>
+            <p className="create-owner__name">{ownerName}</p>
+            {user.email && <p className="create-owner__email">{user.email}</p>}
+          </div>
+          <p className="create-owner__help">{t.platform.ownerHelp}</p>
+        </aside>
+
+        <aside className="after-create" aria-labelledby="after-create-title">
+          <div className="after-create__header">
+            <p className="after-create__eyebrow">{t.platform.afterEyebrow}</p>
+            <h3 className="after-create__title" id="after-create-title">
+              {t.platform.afterTitle}
+            </h3>
+          </div>
+          <ol className="after-create__steps">
+            <li>{t.platform.afterDetails}</li>
+            <li>{t.platform.afterForm}</li>
+            <li>{t.platform.afterTeam}</li>
+          </ol>
+          <p className="after-create__help">{t.platform.afterHelp}</p>
+        </aside>
+
+        {error && (
+          <p className="create-form__error field__error" role="alert">
+            {error}
+          </p>
+        )}
+
+        <div className="create-form__actions">
+          <button
+            type="submit"
+            className="btn btn--primary"
+            disabled={busy || !name.trim() || !cfpId}
+          >
+            {busy ? t.platform.creating : t.platform.submit}
+          </button>
+          <p className="create-form__submit-note">{t.platform.submitHelp}</p>
+        </div>
+      </form>
+    </div>
   );
 }

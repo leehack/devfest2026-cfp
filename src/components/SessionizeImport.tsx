@@ -30,7 +30,7 @@ interface SessionizeImportProps {
  * that silently fills nothing looks exactly like one that had nothing to fill.
  */
 export function SessionizeImport({ form, onApply, disabled }: SessionizeImportProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [url, setUrl] = useState(() => knownSessionizeUrl(form));
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<string[] | null>(null);
@@ -169,7 +169,7 @@ export function SessionizeImport({ form, onApply, disabled }: SessionizeImportPr
                 <div className="import__session-title">{session.title}</div>
                 <div className="import__session-meta">
                   {session.abstract
-                    ? `${session.abstract.length} characters`
+                    ? `${t.proposal.abstract}: ${new Intl.NumberFormat(locale).format(session.abstract.length)}`
                     : t.import.noAbstract}
                 </div>
                 <button
