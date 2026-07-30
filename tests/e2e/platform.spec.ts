@@ -208,6 +208,14 @@ test.describe('nothing crosses between two calls', () => {
     await seedReview('ours', chair.uid, 3, CFP_ID);
     await seedReview('theirs', chair.uid, 1, OTHER);
 
+    // Automatic aggregation should process the other tenant on its own. Capture
+    // that value before manually refreshing this CFP so the isolation assertion
+    // proves one refresh cannot alter the other's result.
+    await expect
+      .poll(async () => (await readProposalById('theirs', OTHER))?.aggregate?.avgScore)
+      .toBe(1);
+    const otherAggregate = (await readProposalById('theirs', OTHER))?.aggregate;
+
     const recomputed = await callJson(chair.idToken, 'recomputeAggregates', { cfpId: CFP_ID });
     expect(recomputed.reviewCount).toBe(1);
     expect(recomputed.proposalCount).toBe(1);
@@ -217,9 +225,8 @@ test.describe('nothing crosses between two calls', () => {
       avgScore: 3,
       reviewCount: 1,
     });
-    // And the other CFP's proposal is untouched — a recompute must not write
-    // across the boundary either.
-    expect((await readProposalById('theirs', OTHER))?.aggregate).toBeUndefined();
+    // And the other CFP's independently computed result is untouched.
+    expect((await readProposalById('theirs', OTHER))?.aggregate).toEqual(otherAggregate);
   });
 
   test('a speaker on both keeps two separate drafts and two separate photos', async ({ page }) => {
