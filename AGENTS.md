@@ -245,10 +245,10 @@ collection — the rule names the two readable documents one at a time.
   must not import it, or the bundler puts it back in the main chunk and every
   visitor pays for it again.
 - **Analytics is off until somebody says yes, and off by default entirely.**
-  `VITE_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the module is
-  inert and the consent banner does not render, which is the state of the
-  emulators and of anyone else deploying this. With one, nothing loads until the
-  banner is answered — `firebase/analytics` is a dynamic import inside
+  `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the
+  module is inert and the consent banner does not render, which is the state of
+  the emulators and of anyone else deploying this. With one, nothing loads until
+  the banner is answered — `firebase/analytics` is a dynamic import inside
   `start()`, because a top-level import writes its cookie on init and would
   defeat the gate whatever the banner said. Law 25 and the GDPR also require
   refusing to be as easy as agreeing, which is why both buttons are the same
@@ -387,7 +387,7 @@ collection — the rule names the two readable documents one at a time.
   unequal review counts incomparable.
 - **Real Firebase config is in `.env.production.local`, not `.env.local`.** Next
   loads it for a production build only, so `npm start` stays on the emulators. In
-  the cloud it comes from Secret Manager via `apphosting.yaml`; the six secrets
+  the cloud it comes from Secret Manager via `apphosting.yaml`; the seven secrets
   are named `next-public-firebase-*`. `next.config.ts` fails the build if the
   projectId starts with `demo-`, because the tracked `.env` holds exactly that and
   Next reads `.env` in every mode.

@@ -19,7 +19,7 @@ import { href, navigate, usePlace, type Place, type Route } from './lib/router';
 import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
-import { consent, forgetConsent } from './lib/consent';
+import { consent, type Consent } from './lib/consent';
 import {
   arrivingFromLink,
   completeSignInFromLink,
@@ -59,6 +59,7 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
    * who already answered — a hydration mismatch that also asks twice.
    */
   const [askConsent, setAskConsent] = useState(false);
+  const [analyticsConsent, setAnalyticsConsent] = useState<Consent>('unasked');
   const { route, cfpId } = place;
   const placeKey = `${route}:${cfpId ?? ''}:${place.tab}`;
   const focusedPlace = useRef(placeKey);
@@ -104,8 +105,10 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
    * answer lives in storage, and storage does not exist until this runs.
    */
   useEffect(() => {
+    const current = consent();
+    setAnalyticsConsent(current);
     applyConsent();
-    if (consent() === 'unasked') setAskConsent(true);
+    if (current === 'unasked') setAskConsent(true);
   }, []);
 
   /*
@@ -284,14 +287,25 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
 
           <footer className="footer">
             <ConsentControl
-              onReopen={() => {
-                forgetConsent();
-                setAskConsent(true);
-              }}
+              answer={analyticsConsent}
+              open={askConsent}
+              onReopen={() => setAskConsent(true)}
             />
           </footer>
         </div>
-        <ConsentBanner open={askConsent} onAnswered={() => setAskConsent(false)} />
+        <ConsentBanner
+          open={askConsent}
+          onAnswered={(choice) => {
+            const wasGranted = analyticsConsent === 'granted';
+            setAnalyticsConsent(choice);
+            setAskConsent(false);
+            // The initial page-view attempt was suppressed while consent was
+            // unanswered. Count this visit now that the visitor opted in.
+            if (choice === 'granted' && !wasGranted) {
+              trackPageView(window.location.pathname, cfpId || null);
+            }
+          }}
+        />
       </ToastProvider>
     </I18nContext.Provider>
   );

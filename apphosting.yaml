@@ -48,11 +48,10 @@ env:
     secret: next-public-firebase-app-id
     availability:
       - BUILD
-
-  # Deliberately not set: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID. With no id the
-  # analytics module is inert and the consent banner does not render, which is
-  # the current production state. Adding it switches GA4 on for the first time —
-  # a decision, not a migration detail.
+  - variable: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
+    secret: next-public-firebase-measurement-id
+    availability:
+      - BUILD
 
   - variable: NEXT_PUBLIC_USE_EMULATORS
     value: 'false'

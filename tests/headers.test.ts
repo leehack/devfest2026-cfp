@@ -118,6 +118,7 @@ describe('production metadata configuration', () => {
     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: 'example.appspot.com',
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123456789',
     NEXT_PUBLIC_FIREBASE_APP_ID: '1:123456789:web:abcdef',
+    NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: 'G-ABC123XYZ9',
     NEXT_PUBLIC_COC_URL: 'https://example.org/code-of-conduct',
     NEXT_PUBLIC_USE_EMULATORS: 'false',
     SITE_ORIGIN: 'https://cfp.example.org',
@@ -151,4 +152,14 @@ describe('production metadata configuration', () => {
       );
     },
   );
+
+  it('rejects a malformed optional GA4 measurement ID', () => {
+    withEnv(
+      { ...productionEnv, NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: 'UA-123456-1' },
+      () =>
+        expect(() => nextConfig('phase-production-build')).toThrow(
+          /NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID is not a GA4 measurement ID/,
+        ),
+    );
+  });
 });

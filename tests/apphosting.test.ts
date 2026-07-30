@@ -82,7 +82,7 @@ describe('apphosting.yaml', () => {
     expect(both).toEqual([]);
   });
 
-  it('carries the six public Firebase values as secrets, not literals', () => {
+  it('carries the seven public Firebase values as secrets, not literals', () => {
     const entries = envEntries();
     /*
      * They are not secrets in the security sense — they ship to the browser. They
@@ -96,6 +96,7 @@ describe('apphosting.yaml', () => {
       'NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET',
       'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
       'NEXT_PUBLIC_FIREBASE_APP_ID',
+      'NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID',
     ]) {
       const entry = entries.find((e) => e.variable === name);
       expect(entry, `${name} is not declared`).toBeTruthy();

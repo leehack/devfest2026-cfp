@@ -15,7 +15,13 @@ import { useI18n } from '../i18n/context';
 import { analyticsAvailable, applyConsent } from '../lib/analytics';
 import { setConsent } from '../lib/consent';
 
-export function ConsentBanner({ open, onAnswered }: { open: boolean; onAnswered: () => void }) {
+export function ConsentBanner({
+  open,
+  onAnswered,
+}: {
+  open: boolean;
+  onAnswered: (choice: 'granted' | 'denied') => void;
+}) {
   const { t } = useI18n();
 
   if (!open || !analyticsAvailable()) return null;
@@ -23,7 +29,7 @@ export function ConsentBanner({ open, onAnswered }: { open: boolean; onAnswered:
   function answer(choice: 'granted' | 'denied') {
     setConsent(choice);
     applyConsent();
-    onAnswered();
+    onAnswered(choice);
   }
 
   return (

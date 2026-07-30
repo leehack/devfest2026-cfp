@@ -237,7 +237,7 @@ npm run deploy:backend                          # callables and both rule sets
 npm run smoke:production                        # edge headers, public routes and Auth handler
 ```
 
-The six public Firebase values reach a cloud build from Secret Manager, named
+The seven public Firebase values reach a cloud build from Secret Manager, named
 `next-public-firebase-*`, wired up in `apphosting.yaml`. Production builds also
 require credential-free HTTPS values for `NEXT_PUBLIC_COC_URL` and `SITE_ORIGIN`;
 the checked-in hosting config pins both for the Montréal deployment.
@@ -247,6 +247,15 @@ Real config lives in `.env.production.local` (gitignored) rather than
 only `demo-` placeholders. `next.config.ts` refuses to build if the projectId
 still starts with `demo-`, because Next reads `.env` in every mode and a build
 that picked those up would deploy a site that cannot sign anybody in.
+
+Google Analytics uses the Firebase web app's GA4 measurement ID. It remains
+consent-gated: the SDK is not downloaded until a visitor opts in, declining does
+not affect the CFP, and the footer lets a visitor change that choice later.
+The linked property keeps automatic page views, Google signals, advertising
+personalization and granular location/device collection off. User and event data
+retention is two months without an activity reset; URL query values are redacted.
+`cfp_id`, `category`, `format` and `delivery_language` are event-scoped custom
+dimensions for the explicit events the app sends.
 
 The App Hosting backend is pinned to `nodejs22` in its Settings tab, matching
 both package manifests and keeping automatic base-image security updates

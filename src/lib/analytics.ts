@@ -24,11 +24,9 @@
 import type { Analytics } from 'firebase/analytics';
 
 import { app } from '../firebase';
-import { pageShape } from './router';
+import { pageShape } from './pageShape';
 import { granted } from './consent';
 import { MEASUREMENT_ID } from './env';
-
-
 
 /**
  * Configured at all? Everything else is a no-op when this is false, and the
@@ -58,41 +56,49 @@ async function start(): Promise<Analytics | null> {
   // that alone puts the whole withdrawal on one third-party switch.
   if (!analyticsAvailable() || !granted()) return null;
   if (instance) return instance;
+  if (starting) return starting;
 
-  starting ??= (async () => {
+  const pending = (async () => {
     // `isSupported` is not ceremony: it is false in a ServiceWorker, in some
-    // WebViews, and wherever cookies are blocked outright — and `getAnalytics`
-    // throws rather than degrading in those.
-    const { getAnalytics, isSupported } = await import('firebase/analytics');
-    if (!(await isSupported())) return null;
-    instance = getAnalytics(app);
+    // WebViews, and wherever cookies are blocked outright — and initialising
+    // Analytics throws rather than degrading in those.
+    const { initializeAnalytics, isSupported } = await import('firebase/analytics');
+    if (!(await isSupported()) || !granted()) return null;
+    instance = initializeAnalytics(app, { config: { send_page_view: false } });
     return instance;
   })();
+  starting = pending;
 
-  return starting;
+  try {
+    return await pending;
+  } finally {
+    // Unsupported browsers, a withdrawn grant and transient failures must not
+    // poison every later attempt with a permanently settled promise.
+    if (starting === pending) starting = null;
+  }
 }
 
 /**
  * Called when the banner is answered, either way.
  *
- * Granting starts the SDK immediately, so the visit that consented is the visit
- * that gets measured. Withdrawing has to do real work: by then the SDK is
- * loaded and `gtag` exists, so it is told to stop collecting rather than merely
- * being left out of the next page load. A withdrawal that only takes effect
- * after a reload is not a withdrawal.
+ * Granting starts the SDK immediately. Withdrawing has to do real work: by then
+ * the SDK may be loaded and `gtag` exists, so it is told to stop collecting
+ * rather than merely being left out of the next page load. Re-granting likewise
+ * turns that same instance back on. A choice that only takes effect after a
+ * reload is not a choice.
  */
 export function applyConsent(): void {
-  if (granted()) {
-    void start();
-    return;
-  }
-  if (!instance) return;
   void (async () => {
     try {
+      const analytics = granted() ? await start() : instance;
+      if (!analytics) return;
       const { setAnalyticsCollectionEnabled } = await import('firebase/analytics');
-      setAnalyticsCollectionEnabled(instance!, false);
+      // Read the answer after every await. The visitor can change it while the
+      // SDK or an ad blocker is taking its time.
+      setAnalyticsCollectionEnabled(analytics, granted());
     } catch {
-      // Nothing useful to do — the next load will not start it at all.
+      // Measurement stays off; `start()` clears failed attempts so a later
+      // explicit grant or event can retry.
     }
   })();
 }
@@ -113,6 +119,7 @@ export function track(event: string, params: Record<string, string | number> = {
       // Already resolved — `start()` imported this module — so this is a cache
       // hit rather than a second fetch.
       const { logEvent } = await import('firebase/analytics');
+      if (!granted()) return;
       logEvent(analytics, event, params);
     } catch {
       // Measurement is never worth an interruption.
@@ -128,5 +135,10 @@ export function track(event: string, params: Record<string, string | number> = {
  * URL, which is why automatic collection is not what this uses.
  */
 export function trackPageView(path: string, cfpId: string | null): void {
-  track('page_view', { page_path: pageShape(path), ...(cfpId ? { cfp_id: cfpId } : {}) });
+  const pathname = path.split(/[?#]/, 1)[0];
+  const pageLocation = `${window.location.origin}${pageShape(pathname)}`;
+  track('page_view', {
+    page_location: pageLocation,
+    ...(cfpId ? { cfp_id: cfpId } : {}),
+  });
 }
