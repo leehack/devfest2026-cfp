@@ -248,10 +248,9 @@ only `demo-` placeholders. `next.config.ts` refuses to build if the projectId
 still starts with `demo-`, because Next reads `.env` in every mode and a build
 that picked those up would deploy a site that cannot sign anybody in.
 
-Before the next App Hosting rollout, set the backend runtime to `nodejs22` in
-its Settings tab and leave automatic base-image updates enabled. The root and
-Functions packages both require Node 22; keeping the backend versioned makes
-that choice explicit and allows Firebase to apply runtime security patches.
+The App Hosting backend is pinned to `nodejs22` in its Settings tab, matching
+both package manifests and keeping automatic base-image security updates
+enabled. Local-source rollouts preserve that backend setting.
 Next 16 is currently in App Hosting's preview support tier, so a successful
 rollout is followed by `npm run smoke:production`, not treated as proof by
 itself.
