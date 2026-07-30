@@ -288,7 +288,7 @@ export function Email({
   }
 
   return (
-    <section className="section">
+    <section className="section email-admin">
       <h2>{t.admin.email}</h2>
 
       <section
@@ -336,17 +336,23 @@ export function Email({
             <table className="table table--held">
               <thead>
                 <tr>
-                  <th>{t.admin.emailKind}</th>
-                  <th>{t.admin.emailTo}</th>
-                  <th>{t.proposal.title}</th>
+                  <th scope="col">{t.admin.emailKind}</th>
+                  <th scope="col">{t.admin.emailTo}</th>
+                  <th scope="col">{t.proposal.title}</th>
                 </tr>
               </thead>
               <tbody>
                 {held.map((row) => (
                   <tr key={row.logId}>
-                    <td>{t.admin.emailKinds[row.kind] ?? row.kind}</td>
-                    <td>{row.to}</td>
-                    <td>{row.title}</td>
+                    <td data-label={t.admin.emailKind}>
+                      {t.admin.emailKinds[row.kind] ?? row.kind}
+                    </td>
+                    <td className="table__wrap" data-label={t.admin.emailTo}>
+                      {row.to}
+                    </td>
+                    <td className="table__wrap" data-label={t.proposal.title}>
+                      {row.title}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -386,6 +392,7 @@ export function Email({
         <Result ok={note} error={error} />
       </section>
 
+      <h3 className="card__subtitle">{t.admin.setupEmail}</h3>
       <EmailSetup
         cfpId={cfpId}
         keyHint={keyHint}
@@ -476,14 +483,16 @@ export function Email({
           </div>
 
           <div className="table__scroll">
-            <table className="table">
+            <table className="table email-log-table">
               <thead>
                 <tr>
-                  <th>{t.admin.emailTo}</th>
-                  <th>{t.admin.emailKind}</th>
-                  <th>{t.admin.emailStatusColumn}</th>
-                  <th>{t.admin.emailSentAt}</th>
-                  <th />
+                  <th scope="col">{t.admin.emailTo}</th>
+                  <th scope="col">{t.admin.emailKind}</th>
+                  <th scope="col">{t.admin.emailStatusColumn}</th>
+                  <th scope="col">{t.admin.emailSentAt}</th>
+                  <th scope="col">
+                    <span className="visually-hidden">{t.admin.emailActions}</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -491,14 +500,16 @@ export function Email({
                   .filter((r) => !filter || r.status === filter)
                   .map((row) => (
                     <tr key={row.logId}>
-                      <td>{row.to}</td>
-                      <td>
+                      <td className="table__wrap" data-label={t.admin.emailTo}>
+                        {row.to}
+                      </td>
+                      <td className="table__wrap" data-label={t.admin.emailKind}>
                         {t.admin.emailKinds[row.kind] ?? row.kind}
                         {/* Two messages to the same speaker are otherwise the
                             same row twice. */}
                         {row.subject && <span className="muted"> — {row.subject}</span>}
                       </td>
-                      <td>
+                      <td className="table__wrap" data-label={t.admin.emailStatusColumn}>
                         {row.stale
                           ? t.admin.emailStaleStatus
                           : (t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
@@ -506,14 +517,17 @@ export function Email({
                             says what to fix. */}
                         {row.error && <span className="muted"> — {row.error}</span>}
                       </td>
-                      <td>{row.sentAt ? formatDate(new Date(row.sentAt), locale) : '—'}</td>
-                      <td>
+                      <td data-label={t.admin.emailSentAt}>
+                        {row.sentAt ? formatDate(new Date(row.sentAt), locale) : '—'}
+                      </td>
+                      <td data-label={t.admin.emailActions}>
                         <button
                           type="button"
                           className="btn btn--ghost"
                           disabled={
                             busy ||
                             row.stale ||
+                            row.status === 'held' ||
                             row.status === 'queued' ||
                             row.status === 'sending'
                           }
@@ -568,6 +582,9 @@ function WriteToSpeaker({
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [attempt, setAttempt] = useState(0);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const activeCfp = useRef(cfpId);
@@ -591,6 +608,9 @@ function WriteToSpeaker({
     setProposalId('');
     setSubject('');
     setBody('');
+    setBusy(false);
+    setLoading(true);
+    setLoadError('');
     setNote('');
     setError('');
     void (async () => {
@@ -600,13 +620,15 @@ function WriteToSpeaker({
         const sendable = (await loadAllProposals(cfpId)).filter((row) => row.status !== 'draft');
         if (!cancelled) setRows(sendable);
       } catch (e) {
-        if (!cancelled) setError(adminError(e, tRef.current));
+        if (!cancelled) setLoadError(adminError(e, tRef.current));
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [cfpId, tRef]);
+  }, [attempt, cfpId, tRef]);
 
   // From the snapshot frozen onto the proposal — the global speaker profile is
   // not the committee's to read. See `ReviewPage`.
@@ -641,10 +663,29 @@ function WriteToSpeaker({
     }
   }
 
+  if (loading) return <p className="muted">{t.app.loading}</p>;
+
+  if (loadError) {
+    return (
+      <div className="load-failure">
+        <p className="field__error" role="alert">
+          {loadError}
+        </p>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          onClick={() => setAttempt((current) => current + 1)}
+        >
+          {t.errors.reload}
+        </button>
+      </div>
+    );
+  }
+
   if (rows.length === 0) return <p className="muted">{t.admin.messageNoTalks}</p>;
 
   return (
-    <>
+    <div className="email-compose">
       <p className="field__help">{t.admin.messageHelp}</p>
       {/* A message inviting a reply, from an address that accepts none, is the
           one failure the speaker cannot work around. */}
@@ -692,6 +733,6 @@ function WriteToSpeaker({
         {busy ? t.admin.messageSending : t.admin.messageSend}
       </button>
       <Result ok={note} error={error} />
-    </>
+    </div>
   );
 }

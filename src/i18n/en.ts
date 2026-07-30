@@ -640,6 +640,7 @@ export const en = {
       temporary_failure: 'Temporarily failed — will retry',
     } as Record<string, string>,
     emailDnsHelp: 'Add these to your DNS, then check again.',
+    emailDnsRecords: 'DNS records to add',
     emailDnsType: 'Type',
     emailDnsName: 'Name',
     emailDnsValue: 'Value',
@@ -764,6 +765,7 @@ export const en = {
     emailLogAll: 'Everything',
     emailStatusColumn: 'Outcome',
     emailSentAt: 'Sent',
+    emailActions: 'Actions',
     emailResend: 'Send again',
     emailResendConfirm:
       'Send this message to {to} again? They will receive a second copy of it.',

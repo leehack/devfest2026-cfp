@@ -192,54 +192,66 @@ function Row({
 
   return (
     <>
-      <input
-        className="field__input"
-        value={option.label.en}
-        aria-label={t.admin.optionLabelEnFor(which)}
-        maxLength={FORM_LIMITS.optionLabel}
-        disabled={busy}
-        onChange={(e) => onPatch({ label: { ...option.label, en: e.target.value } })}
-      />
-      <input
-        className="field__input"
-        value={option.label.fr ?? ''}
-        aria-label={t.admin.optionLabelFrFor(which)}
-        maxLength={FORM_LIMITS.optionLabel}
-        disabled={busy}
-        onChange={(e) => onPatch({ label: { ...option.label, fr: e.target.value } })}
-      />
-      {/* Shown, never editable: every proposal filed under it says this. */}
-      <code className="optionlist__code" title={t.admin.optionCodeHelp}>
-        {option.value || t.admin.optionCodeOnSave}
-      </code>
-      <span className="optionlist__actions">
-        <button
-          type="button"
-          className="iconbtn"
-          disabled={busy || index === 0}
-          aria-label={t.admin.moveUpOf(which)}
-          onClick={() => onMove(-1)}
-        >
-          ↑
-        </button>
-        <button
-          type="button"
-          className="iconbtn"
-          disabled={busy || index === count - 1}
-          aria-label={t.admin.moveDownOf(which)}
-          onClick={() => onMove(1)}
-        >
-          ↓
-        </button>
-        <button
-          type="button"
-          className="iconbtn iconbtn--danger"
+      <span className="optionlist__cell">
+        <span className="optionlist__mobile-label">{t.admin.columnEnglish}</span>
+        <input
+          className="field__input"
+          value={option.label.en}
+          aria-label={t.admin.optionLabelEnFor(which)}
+          maxLength={FORM_LIMITS.optionLabel}
           disabled={busy}
-          aria-label={t.admin.removeOf(which)}
-          onClick={onRemove}
-        >
-          ✕
-        </button>
+          onChange={(e) => onPatch({ label: { ...option.label, en: e.target.value } })}
+        />
+      </span>
+      <span className="optionlist__cell">
+        <span className="optionlist__mobile-label">{t.admin.columnFrench}</span>
+        <input
+          className="field__input"
+          value={option.label.fr ?? ''}
+          aria-label={t.admin.optionLabelFrFor(which)}
+          maxLength={FORM_LIMITS.optionLabel}
+          disabled={busy}
+          onChange={(e) => onPatch({ label: { ...option.label, fr: e.target.value } })}
+        />
+      </span>
+      {/* Shown, never editable: every proposal filed under it says this. */}
+      <span className="optionlist__cell">
+        <span className="optionlist__mobile-label">{t.admin.columnCode}</span>
+        <code className="optionlist__code" title={t.admin.optionCodeHelp}>
+          {option.value || t.admin.optionCodeOnSave}
+        </code>
+      </span>
+      <span className="optionlist__cell optionlist__cell--actions">
+        <span className="optionlist__mobile-label">{t.admin.columnOrder}</span>
+        <span className="optionlist__actions">
+          <button
+            type="button"
+            className="iconbtn"
+            disabled={busy || index === 0}
+            aria-label={t.admin.moveUpOf(which)}
+            onClick={() => onMove(-1)}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            className="iconbtn"
+            disabled={busy || index === count - 1}
+            aria-label={t.admin.moveDownOf(which)}
+            onClick={() => onMove(1)}
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            className="iconbtn iconbtn--danger"
+            disabled={busy}
+            aria-label={t.admin.removeOf(which)}
+            onClick={onRemove}
+          >
+            ✕
+          </button>
+        </span>
       </span>
     </>
   );

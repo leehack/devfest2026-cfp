@@ -264,6 +264,18 @@ p {
   outline-offset: 2px;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -743,6 +755,10 @@ p {
   font-size: var(--text-md);
 }
 
+.section--form {
+  max-width: 58rem;
+}
+
 /* ------------------------------------------------- a call's public front page */
 
 /* Set a step up from body copy: this is the one page somebody reads before
@@ -871,6 +887,7 @@ p {
 .field__help {
   margin: 0 0 var(--s-2);
   max-width: 62ch;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: var(--text-sm);
 }
@@ -1019,13 +1036,10 @@ p {
   margin-bottom: var(--s-3);
 }
 
-/*
- * A checkbox's help text is a sibling, not a child, so by default it sat
- * equidistant between its own control and the next one and read as belonging
- * to the wrong one. Pull it up under its checkbox and indent it to the label.
- */
+/* Keep checkbox help visually attached to its label in either field layout. */
+.checkbox > .field__help,
 .checkbox + .field__help {
-  margin: calc(var(--s-3) * -1) 0 var(--s-4);
+  margin: var(--s-1) 0 var(--s-3);
   padding-left: calc(1.1rem + var(--s-3));
 }
 
@@ -1202,6 +1216,10 @@ p {
   margin-top: 0;
 }
 
+.sign-in-panel > .card__subtitle {
+  margin-top: var(--s-5);
+}
+
 .panel > :last-child {
   margin-bottom: 0;
 }
@@ -1331,27 +1349,6 @@ p {
 
 .btn--danger:hover:not(:disabled) {
   filter: brightness(0.92);
-}
-
-/* Fingers need more than a mouse does; pointer, not width, is the question. */
-@media (pointer: coarse) {
-  .btn,
-  .nav__tab,
-  .subnav__tab,
-  .talks__tab,
-  .talks__add,
-  .talks__past summary,
-  .field__input,
-  .people__role {
-    min-height: 44px;
-  }
-
-  /* Square, so the width has to come up with the height — a 44×32 target is
-     still a miss half the time. */
-  .iconbtn {
-    width: 44px;
-    height: 44px;
-  }
 }
 
 /* ------------------------------------------------------------------ charts */
@@ -1520,7 +1517,11 @@ p {
 }
 
 .talks__tab {
+  display: inline-flex;
+  min-width: 0;
   max-width: 18rem;
+  gap: var(--s-1);
+  align-items: center;
   overflow: hidden;
   padding: 0.4rem 0.8rem;
   border: 1px solid var(--line-strong);
@@ -1530,8 +1531,13 @@ p {
   font: inherit;
   font-size: var(--text-md);
   white-space: nowrap;
-  text-overflow: ellipsis;
   cursor: pointer;
+}
+
+.talks__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .talks__tab:hover {
@@ -1546,10 +1552,15 @@ p {
 }
 
 .talks__status {
-  margin-left: var(--s-1);
+  flex: none;
   color: var(--muted);
   font-size: var(--text-xs);
   font-weight: 400;
+}
+
+.talks__limit {
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
 
 .talks__add {
@@ -1851,13 +1862,23 @@ p {
 
 /* One question in the editor, boxed so the pile of them stays readable. */
 .formfield {
+  min-width: 0;
   margin-bottom: var(--s-5);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
 
 /* ------------------------------------------------------- the option editor */
 
 .optionlist {
+  min-width: 0;
   margin-bottom: var(--s-5);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
 
 .optionlist__preview {
@@ -1903,10 +1924,31 @@ p {
   text-align: center;
 }
 
+.optionlist__cell {
+  display: grid;
+  min-width: 0;
+  gap: var(--s-1);
+}
+
+.optionlist__cell--actions {
+  justify-items: end;
+}
+
+.optionlist__mobile-label {
+  display: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .optionlist__code {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: var(--text-xs);
   color: var(--muted);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .optionlist__actions {
@@ -2017,11 +2059,23 @@ p {
     display: none;
   }
 
-  .optionlist__grid > .optionlist__actions {
-    justify-content: flex-end;
+  .optionlist__cell {
+    padding-top: var(--s-1);
+  }
+
+  .optionlist__cell--actions {
+    justify-items: stretch;
     margin-bottom: var(--s-3);
     padding-bottom: var(--s-3);
     border-bottom: 1px solid var(--line);
+  }
+
+  .optionlist__mobile-label {
+    display: block;
+  }
+
+  .optionlist__cell--actions .optionlist__actions {
+    justify-content: flex-end;
   }
 
   .langrow,
@@ -2030,7 +2084,8 @@ p {
   }
 }
 
-.formfield legend {
+.formfield legend,
+.optionlist legend {
   padding: 0 var(--s-2);
   font-weight: 600;
 }
@@ -2125,11 +2180,17 @@ p {
  * better on one line. With `nowrap` everywhere, one speaker writing an essay in
  * the title field pushed the whole table into horizontal scroll for every row.
  */
-.table td:first-child,
-.table th:first-child {
+.decision-table td:first-child,
+.decision-table th:first-child {
   min-width: 14rem;
   max-width: 34rem;
   white-space: normal;
+}
+
+.table__wrap {
+  max-width: 32rem;
+  overflow-wrap: anywhere;
+  white-space: normal !important;
 }
 
 .table tr:last-child td {
@@ -2486,8 +2547,17 @@ button.deck-queue__item:hover {
 /* Who is giving the talk, under its title. */
 .card__byline {
   margin: 0 0 var(--s-3);
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: var(--text-md);
+}
+
+.card > h2,
+.speaker .card__subtitle,
+.speaker__line,
+.facet {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .reviews {
@@ -2608,6 +2678,7 @@ button.deck-queue__item:hover {
 
 .preview__subject {
   margin: var(--s-4) 0 var(--s-2);
+  overflow-wrap: anywhere;
 }
 
 .preview__frame {
@@ -2628,6 +2699,47 @@ button.deck-queue__item:hover {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   white-space: pre-wrap;
+}
+
+.email-admin > .setup,
+.email-admin > .email-editor,
+.email-admin > .email-compose {
+  max-width: 58rem;
+}
+
+.email-compose {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.email-compose > *,
+.email-queue-card > p,
+.email-queue-card > .row,
+.email-queue-card > .form-result {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.email-compose > .form-result {
+  margin-top: 0;
+}
+
+.form-actions {
+  margin-top: var(--s-4);
+}
+
+.form-result {
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.form-result > * {
+  margin: 0;
+}
+
+.form-result:empty {
+  display: none;
 }
 
 /* ----------------------------------------------------------------- consent */
@@ -2682,6 +2794,17 @@ button.deck-queue__item:hover {
   justify-content: center;
 }
 
+body:has(.consent) .page {
+  padding-bottom: calc(var(--s-8) + var(--consent-height, 0px));
+}
+
+body:has(.consent) .actions,
+body:has(.consent) .profile-actions,
+body:has(.consent) .editorbar {
+  bottom: 0;
+  transform: translateY(calc(0px - var(--consent-height, 0px)));
+}
+
 /*
   Where the measurement answer is stated and can be taken back. Quiet, but on
   every page: a withdrawal buried one page deep is not as easy as the Allow
@@ -2725,7 +2848,7 @@ button.deck-queue__item:hover {
 /* Toast Notifications */
 .toast-container {
   position: fixed;
-  top: 1rem;
+  top: 5rem;
   right: 1rem;
   z-index: 200;
   display: flex;
@@ -2769,6 +2892,11 @@ button.deck-queue__item:hover {
 }
 
 .toast__close {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -2796,6 +2924,7 @@ button.deck-queue__item:hover {
 
 @media (max-width: 34rem) {
   .toast-container {
+    top: 9rem;
     right: 50%;
     transform: translateX(50%);
   }
@@ -3185,6 +3314,7 @@ button.deck-queue__item:hover {
   font-weight: 670;
   letter-spacing: -0.018em;
   line-height: 1.2;
+  overflow-wrap: anywhere;
   text-wrap: balance;
 }
 
@@ -3196,12 +3326,16 @@ button.deck-queue__item:hover {
 }
 
 .cfp-card__context {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--fg);
   font-size: var(--text-sm);
   font-weight: 600;
 }
 
 .cfp-card__event {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: var(--text-sm);
 }
@@ -3400,6 +3534,7 @@ button.deck-queue__item:hover {
 .cfp-hero__blurb {
   max-width: 64ch;
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: var(--text-lg);
   line-height: 1.7;
 }
@@ -3721,12 +3856,15 @@ button.deck-queue__item:hover {
 
 .submission-context__identity {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: var(--s-2);
   align-items: center;
 }
 
 .submission-context__event {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-family: var(--font-display);
   font-size: var(--text-lg);
   font-weight: 650;
@@ -3762,6 +3900,7 @@ button.deck-queue__item:hover {
 
 .submission-workspace {
   display: grid;
+  min-width: 0;
   gap: var(--s-5);
   align-items: start;
 }
@@ -3772,7 +3911,10 @@ button.deck-queue__item:hover {
 }
 
 .form-progress {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: var(--s-4);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
@@ -4241,6 +4383,11 @@ button.deck-queue__item:hover {
   margin: 0;
 }
 
+.email-queue-card > .muted,
+.email-queue-card > .note {
+  margin: 0;
+}
+
 .admin-overview__hero {
   display: grid;
   gap: var(--s-5);
@@ -4364,6 +4511,10 @@ button.deck-queue__item:hover {
   border-radius: var(--r-lg);
   background: var(--surface);
   box-shadow: var(--shadow-1);
+}
+
+.decision-panel {
+  margin-bottom: var(--s-5);
 }
 
 .setup-panel__heading,
@@ -4585,7 +4736,7 @@ button.deck-queue__item:hover {
 .reviewer-progress__missing summary {
   width: fit-content;
   cursor: pointer;
-  color: var(--g-blue);
+  color: var(--accent);
   font-weight: 700;
 }
 
@@ -4683,11 +4834,19 @@ button.deck-queue__item:hover {
 }
 
 .empty-filter {
+  display: grid;
+  gap: var(--s-3);
+  justify-items: center;
+  margin: 0;
   padding: var(--s-6);
   border: 1px dashed var(--line-strong);
   border-radius: var(--r);
   color: var(--muted);
   text-align: center;
+}
+
+.empty-filter > p {
+  margin: 0;
 }
 
 .decision-table__category {
@@ -5028,6 +5187,8 @@ button.deck-queue__item:hover {
 
   .form-progress__list {
     display: flex;
+    width: 100%;
+    max-width: 100%;
     padding-bottom: var(--s-1);
     overflow-x: auto;
     scrollbar-width: thin;
@@ -5154,6 +5315,32 @@ button.deck-queue__item:hover {
 }
 
 @media (max-width: 33.99rem) {
+  .consent__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .consent__actions .btn {
+    min-width: 0;
+  }
+
+  .talks__label {
+    flex-basis: 100%;
+    margin-right: 0;
+  }
+
+  .talks__tab,
+  .talks__add {
+    width: 100%;
+    max-width: none;
+    justify-content: center;
+  }
+
+  .talks__limit {
+    flex-basis: 100%;
+  }
+
   .home-discovery__title {
     font-size: clamp(2rem, 11vw, 3rem);
   }
@@ -5233,7 +5420,78 @@ button.deck-queue__item:hover {
   }
 }
 
-@media (max-width: 47.99rem) {
+.table--dns {
+  min-width: 36rem;
+}
+
+@media (max-width: 48rem) {
+  .table__scroll:has(> .table--held),
+  .table__scroll:has(> .email-log-table) {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .table--held,
+  .table--held tbody,
+  .table--held tr,
+  .email-log-table,
+  .email-log-table tbody,
+  .email-log-table tr {
+    display: block;
+  }
+
+  .table--held thead,
+  .email-log-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table--held tbody,
+  .email-log-table tbody {
+    display: grid;
+    gap: var(--s-3);
+  }
+
+  .table--held tr,
+  .email-log-table tr {
+    padding: var(--s-3);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--surface);
+    box-shadow: var(--shadow-1);
+  }
+
+  .table--held td,
+  .email-log-table td {
+    display: grid;
+    grid-template-columns: minmax(4rem, 0.3fr) minmax(0, 1fr);
+    gap: var(--s-3);
+    min-width: 0;
+    max-width: none;
+    padding: var(--s-2) 0;
+    border: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .table--held td::before,
+  .email-log-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    font-weight: 650;
+  }
+
+  .email-log-table td:last-child .btn {
+    justify-self: start;
+  }
+
   .decision-panel .table__scroll {
     overflow: visible;
     border: 0;
@@ -5310,5 +5568,33 @@ button.deck-queue__item:hover {
   .decision-control select {
     width: 100%;
     min-width: 0;
+  }
+}
+
+/* Component rules below the first touch-target guard set their compact desktop
+   sizes. Repeat the interaction requirement last so those declarations cannot
+   shrink a finger target back down. */
+@media (pointer: coarse) {
+  .btn,
+  .btn--small,
+  .google-btn,
+  .nav__tab,
+  .subnav__tab,
+  .filter-pill,
+  .talks__tab,
+  .talks__add,
+  .talks__past summary,
+  .field__input,
+  .people__role,
+  .account-menu__action,
+  .toast__close {
+    min-height: 44px;
+  }
+
+  .iconbtn,
+  .toast__close {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
   }
 }

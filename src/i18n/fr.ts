@@ -635,6 +635,7 @@ export const fr: Dictionary = {
       temporary_failure: 'Échec temporaire — nouvel essai prévu',
     } as Record<string, string>,
     emailDnsHelp: 'Ajoutez ceci à votre DNS, puis vérifiez de nouveau.',
+    emailDnsRecords: 'Enregistrements DNS à ajouter',
     emailDnsType: 'Type',
     emailDnsName: 'Nom',
     emailDnsValue: 'Valeur',
@@ -761,6 +762,7 @@ export const fr: Dictionary = {
     emailLogAll: 'Tout',
     emailStatusColumn: 'Résultat',
     emailSentAt: 'Envoyé',
+    emailActions: 'Actions',
     emailResend: 'Renvoyer',
     emailResendConfirm:
       'Renvoyer ce message à {to} ? La personne en recevra une seconde copie.',

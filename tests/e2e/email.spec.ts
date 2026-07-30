@@ -83,6 +83,16 @@ test.describe('email pipeline', () => {
     expect(held[0].to).toBe(speaker.email);
     expect(held[0].status).toBe('held');
 
+    // Resend is only for a message that has already left the reviewed batch.
+    // A direct call must not turn one held decision into an early notification.
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: 'accepted__talk-1',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect((await readEmailLog())[0].status).toBe('held');
+
     // Give the trigger a chance to misbehave before asserting that it did not.
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect((await readEmailLog())[0].status).toBe('held');
@@ -358,6 +368,10 @@ test.describe('email pipeline', () => {
       .getByRole('row', { name: new RegExp(speaker.email) });
     await expect(queued).toBeVisible();
     await expect(queued).toContainText('Not selected');
+    const heldLog = panel
+      .locator('.email-log-table')
+      .getByRole('row', { name: new RegExp(speaker.email) });
+    await expect(heldLog.getByRole('button', { name: 'Send again' })).toBeDisabled();
 
     const send = panel.getByRole('button', { name: 'Send 1 decision email' });
     await expect(send).toBeEnabled();
@@ -746,9 +760,9 @@ test.describe('email pipeline', () => {
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
 
     /*
-     * `held` is fair game; an in-flight row belongs to the trigger, and
-     * re-queueing one mid-send is how the same person gets two copies in the
-     * same minute.
+     * A held row belongs to the batch-release path and is covered above. An
+     * in-flight row belongs to the trigger, and re-queueing one mid-send is how
+     * the same person gets two copies in the same minute.
      *
      * Tested at `sending` rather than `queued`: the guard treats them alike,
      * but writing `queued` wakes the very trigger this is trying to out-race,
@@ -781,6 +795,29 @@ test.describe('email pipeline', () => {
  */
 test.describe('a message to one speaker', () => {
   const message = { subject: 'About your room', body: 'Hi {speakerName}, quick question.' };
+
+  test('keeps the composer closed until a failed proposal load is retried', async ({ page }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/committee'));
+    // Finish the role and committee reads before isolating the composer's
+    // proposal query; otherwise the outage would stop the admin page itself.
+    await expect(page.getByRole('combobox', { name: `Role for ${admin.name}` })).toBeVisible();
+
+    await page.context().setOffline(true);
+    await page.getByRole('link', { name: 'Email', exact: true }).click();
+
+    const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
+    await expect(
+      panel.getByText('That service is unavailable right now. Please try again shortly.'),
+    ).toBeVisible();
+    await expect(panel.getByLabel('Talk')).toHaveCount(0);
+
+    await page.context().setOffline(false);
+    await panel.getByRole('button', { name: 'Reload' }).click();
+    await expect(panel.getByLabel('Talk')).toContainText(
+      `Notes on the Analytical Engine — ${speaker.name}`,
+    );
+  });
 
   test('is queued, sent, and carries the copy that was typed', async () => {
     const { chair } = await stage();

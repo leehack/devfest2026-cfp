@@ -984,12 +984,12 @@ export function Proposals({
             <table className="table decision-table">
               <thead>
                 <tr>
-                  <th>{t.admin.colTitle}</th>
-                  <th>{t.admin.colSpeaker}</th>
-                  <th>{t.admin.colScore}</th>
-                  <th>{t.admin.colReviews}</th>
-                  <th>{t.admin.colSpread}</th>
-                  <th>{t.admin.colStatus}</th>
+                  <th scope="col">{t.admin.colTitle}</th>
+                  <th scope="col">{t.admin.colSpeaker}</th>
+                  <th scope="col">{t.admin.colScore}</th>
+                  <th scope="col">{t.admin.colReviews}</th>
+                  <th scope="col">{t.admin.colSpread}</th>
+                  <th scope="col">{t.admin.colStatus}</th>
                 </tr>
               </thead>
               <tbody>

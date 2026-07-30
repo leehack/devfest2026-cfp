@@ -631,9 +631,9 @@ export function SignIn({
         </p>
       )}
 
-      <h3 className="card__subtitle">
+      <h2 className="card__subtitle">
         {askingWhose ? t.app.linkWhose : t.app.signInEmailTitle}
-      </h3>
+      </h2>
       <p className="field__help">{askingWhose ? t.app.linkWhoseHelp : t.app.signInEmailHint}</p>
 
       {sent && (

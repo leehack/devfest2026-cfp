@@ -11,9 +11,13 @@
  * whose answer changes nothing is worse than not asking.
  */
 
+import { useCallback, useRef } from 'react';
+
 import { useI18n } from '../i18n/context';
 import { analyticsAvailable, applyConsent } from '../lib/analytics';
 import { setConsent } from '../lib/consent';
+
+const HEIGHT_PROPERTY = '--consent-height';
 
 export function ConsentBanner({
   open,
@@ -23,6 +27,31 @@ export function ConsentBanner({
   onAnswered: (choice: 'granted' | 'denied') => void;
 }) {
   const { t } = useI18n();
+  const observer = useRef<ResizeObserver | null>(null);
+
+  /*
+   * The copy wraps differently by locale, viewport and user font size. Measure
+   * the banner instead of reserving a guessed phone/desktop height, then let the
+   * sticky save bars and page consume the same value.
+   */
+  const observeHeight = useCallback((element: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+
+    if (!element) {
+      document.documentElement.style.removeProperty(HEIGHT_PROPERTY);
+      return;
+    }
+
+    const update = () => {
+      const height = Math.ceil(element.getBoundingClientRect().height);
+      document.documentElement.style.setProperty(HEIGHT_PROPERTY, `${height}px`);
+    };
+
+    update();
+    observer.current = new ResizeObserver(update);
+    observer.current.observe(element);
+  }, []);
 
   if (!open || !analyticsAvailable()) return null;
 
@@ -36,7 +65,12 @@ export function ConsentBanner({
     // `role="region"` rather than `dialog`: it does not trap focus and it does
     // not block the page. Somebody who came here to write a proposal should be
     // able to get on with it and answer this whenever.
-    <aside className="consent" role="region" aria-label={t.consent.title}>
+    <aside
+      ref={observeHeight}
+      className="consent"
+      role="region"
+      aria-label={t.consent.title}
+    >
       <div className="consent__inner">
         <p className="consent__text">
           <strong>{t.consent.title}</strong> {t.consent.body}

@@ -391,6 +391,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             type="button"
             className="btn btn--ghost"
             aria-expanded={help}
+            aria-controls="review-shortcuts"
             onClick={() => setHelp((open) => !open)}
           >
             {t.review.shortcuts}
@@ -525,7 +526,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       )}
 
       {help && (
-        <dl className="shortcuts">
+        <dl className="shortcuts" id="review-shortcuts">
           <div>
             <dt><span className={`kbd-badge${['1', '2', '3', '4'].includes(activeKey ?? '') ? ' kbd-badge--active' : ''}`}>1 – 4</span></dt>
             <dd>{t.review.shortcutScore}</dd>

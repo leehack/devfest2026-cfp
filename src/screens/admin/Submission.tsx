@@ -54,7 +54,7 @@ export function Submission({
   }, [attempt, cfpId, tRef]);
 
   return (
-    <section className="section">
+    <section className="section section--form">
       <h2>{t.admin.submission}</h2>
       {error && (
         <p className="field__error" role="alert">

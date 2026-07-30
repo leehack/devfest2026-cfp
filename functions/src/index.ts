@@ -1689,9 +1689,15 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       const snap = await tx.get(ref);
       if (!snap.exists) throw new HttpsError('not-found', 'No such message.');
 
-      // In-flight rows are the trigger's, not ours: re-queueing one mid-send is
-      // how the same person gets it twice in the same minute.
+      // Held decisions belong to the reviewed batch, while in-flight rows belong
+      // to the trigger. Neither may be turned into a one-off resend.
       const current = snap.get('status') as EmailStatus;
+      if (current === 'held') {
+        throw new HttpsError(
+          'failed-precondition',
+          'That message is still held for batch review.',
+        );
+      }
       if (current === 'queued' || current === 'sending') {
         throw new HttpsError('failed-precondition', `That message is already ${current}.`);
       }

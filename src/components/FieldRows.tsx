@@ -117,50 +117,63 @@ export function FieldRows({
               const which = field.label.en || labels.untitled;
               return (
                 <Fragment key={index}>
-                  <input
-                    className="field__input"
-                    value={field.label.en}
-                    aria-label={`${labels.labelEn} — ${which}`}
-                    maxLength={FORM_LIMITS.label}
-                    disabled={busy}
-                    onChange={(e) => patch(index, { label: { ...field.label, en: e.target.value } })}
-                  />
-                  <input
-                    className="field__input"
-                    value={field.label.fr ?? ''}
-                    aria-label={`${labels.labelFr} — ${which}`}
-                    maxLength={FORM_LIMITS.label}
-                    disabled={busy}
-                    onChange={(e) => patch(index, { label: { ...field.label, fr: e.target.value } })}
-                  />
-                  <span className="optionlist__actions">
-                    <button
-                      type="button"
-                      className="iconbtn"
-                      disabled={busy || index === 0}
-                      aria-label={t.admin.moveUpOf(which)}
-                      onClick={() => move(index, -1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="iconbtn"
-                      disabled={busy || index === fields.length - 1}
-                      aria-label={t.admin.moveDownOf(which)}
-                      onClick={() => move(index, 1)}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className="iconbtn iconbtn--danger"
+                  <span className="optionlist__cell">
+                    <span className="optionlist__mobile-label">{labels.labelEn}</span>
+                    <input
+                      className="field__input"
+                      value={field.label.en}
+                      aria-label={`${labels.labelEn} — ${which}`}
+                      maxLength={FORM_LIMITS.label}
                       disabled={busy}
-                      aria-label={t.admin.removeOf(which)}
-                      onClick={() => remove(index)}
-                    >
-                      ✕
-                    </button>
+                      onChange={(e) =>
+                        patch(index, { label: { ...field.label, en: e.target.value } })
+                      }
+                    />
+                  </span>
+                  <span className="optionlist__cell">
+                    <span className="optionlist__mobile-label">{labels.labelFr}</span>
+                    <input
+                      className="field__input"
+                      value={field.label.fr ?? ''}
+                      aria-label={`${labels.labelFr} — ${which}`}
+                      maxLength={FORM_LIMITS.label}
+                      disabled={busy}
+                      onChange={(e) =>
+                        patch(index, { label: { ...field.label, fr: e.target.value } })
+                      }
+                    />
+                  </span>
+                  <span className="optionlist__cell optionlist__cell--actions">
+                    <span className="optionlist__mobile-label">{t.admin.columnOrder}</span>
+                    <span className="optionlist__actions">
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        disabled={busy || index === 0}
+                        aria-label={t.admin.moveUpOf(which)}
+                        onClick={() => move(index, -1)}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        disabled={busy || index === fields.length - 1}
+                        aria-label={t.admin.moveDownOf(which)}
+                        onClick={() => move(index, 1)}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="iconbtn iconbtn--danger"
+                        disabled={busy}
+                        aria-label={t.admin.removeOf(which)}
+                        onClick={() => remove(index)}
+                      >
+                        ✕
+                      </button>
+                    </span>
                   </span>
                 </Fragment>
               );
