@@ -1504,6 +1504,8 @@ p {
 
 .talks {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   flex-wrap: wrap;
   gap: var(--s-2);
   align-items: center;
@@ -1580,6 +1582,9 @@ p {
 }
 
 .talks__past {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   flex-basis: 100%;
   margin-top: var(--s-1);
   padding-top: var(--s-2);
@@ -1596,6 +1601,8 @@ p {
 
 .talks__past-list {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   flex-wrap: wrap;
   gap: var(--s-2);
   margin-top: var(--s-2);
@@ -3832,7 +3839,9 @@ body:has(.consent) .editorbar {
 
 .submission-form {
   width: 100%;
+  min-width: 0;
   max-width: 74rem;
+  overflow-x: clip;
 }
 
 .submission-status {

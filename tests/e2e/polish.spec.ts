@@ -41,10 +41,22 @@ test('a long talk title keeps its status visible inside the 320px picker', async
       'Design systems that survive several very large teams and an unusually long conference title',
     status: 'submitted',
   });
+  await seedProposal('withdrawn-long-mobile-title-1', {
+    speakerUid: speaker.uid,
+    title:
+      'A withdrawn proposal with a very long title that must never widen the mobile submission page',
+    status: 'withdrawn',
+  });
+  await seedProposal('withdrawn-long-mobile-title-2', {
+    speakerUid: speaker.uid,
+    title:
+      'Another withdrawn proposal whose title remains readable without creating document overflow',
+    status: 'withdrawn',
+  });
 
   await signInAs(page, SPEAKER);
 
-  const tab = page.locator('.talks__tab').filter({ has: page.locator('.talks__status') });
+  const tab = page.locator('.talks__tab--on');
   await expect(tab).toBeVisible();
   await expect(tab.locator('.talks__status')).toHaveText('Submitted');
 
@@ -72,6 +84,23 @@ test('a long talk title keeps its status visible inside the 320px picker', async
   expect(layout.titleTruncated).toBe(true);
   expect(layout.progressInside).toBe(true);
   expect(layout.progressScrollable).toBe(true);
+
+  const past = page.locator('.talks__past');
+  await past.getByText('Past talks (2)', { exact: true }).click();
+  await expect(past).toHaveAttribute('open', '');
+  const pastLayout = await past.evaluate((element) => {
+    const container = element.getBoundingClientRect();
+    const tabs = [...element.querySelectorAll<HTMLElement>('.talks__tab')];
+    return {
+      containerInside: container.right <= document.documentElement.clientWidth + 1,
+      tabsInside: tabs.every((talk) => talk.getBoundingClientRect().right <= container.right + 1),
+      documentOverflow:
+        document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  });
+  expect(pastLayout.containerInside).toBe(true);
+  expect(pastLayout.tabsInside).toBe(true);
+  expect(pastLayout.documentOverflow).toBe(0);
 });
 
 test('proposal decisions use cards at exactly 768px and keep the results separated', async ({
