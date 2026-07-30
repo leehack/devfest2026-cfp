@@ -236,6 +236,7 @@ test.describe('platform creator access', () => {
     await expect(page.getByRole('heading', { name: 'CFP creator access' })).toBeVisible();
     await expect(page.getByText('Paula Platform')).toBeVisible();
     await expect(page.getByText('Platform admin', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add creator' })).toBeDisabled();
 
     await page.getByRole('textbox', { name: /^Email address/ }).fill('future@example.org');
     await page.getByRole('button', { name: 'Add creator' }).click();

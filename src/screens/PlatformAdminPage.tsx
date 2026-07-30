@@ -201,7 +201,9 @@ export function PlatformAdminPage({ user }: { user: User }) {
               className="btn btn--primary"
               disabled={Boolean(busy) || directory === null || !email.trim()}
             >
-              {busy === email.trim() ? t.platformAdmin.granting : t.platformAdmin.grant}
+              {busy && busy === email.trim()
+                ? t.platformAdmin.granting
+                : t.platformAdmin.grant}
             </button>
           </form>
         </section>
