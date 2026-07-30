@@ -308,7 +308,7 @@ function StatusBanner({
   const canDecline = status !== 'declined';
 
   return (
-    <div className={`panel${good ? ' panel--good' : ''}`}>
+    <div className={`panel submission-status${good ? ' panel--good' : ''}`}>
       <h2>{t.enums.status[status]}</h2>
       <p>{t.form.statusHelp[status] ?? t.form.submittedHelp}</p>
 

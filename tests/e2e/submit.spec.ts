@@ -95,6 +95,17 @@ test.describe('submitting', () => {
 
     await expect(page.getByRole('heading', { name: 'Withdrawn' })).toBeVisible();
     expect((await readProposal())?.status).toBe('withdrawn');
+
+    for (const width of [390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const status = await page.locator('.submission-status').boundingBox();
+      const workspace = await page.locator('.submission-workspace').boundingBox();
+      expect(status).not.toBeNull();
+      expect(workspace).not.toBeNull();
+      const gap = workspace!.y - (status!.y + status!.height);
+      expect(gap).toBeGreaterThanOrEqual(20);
+      expect(gap).toBeLessThanOrEqual(28);
+    }
   });
 
   test('the deadline is enforced by the server, not the form', async ({ page }) => {

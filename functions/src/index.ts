@@ -1469,6 +1469,17 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/;
 
 const LINK_WINDOW_MS = 60 * 60 * 1000;
 const LINKS_PER_WINDOW = 5;
+const SIGN_IN_DESTINATIONS = new Set([
+  'submit',
+  'review',
+  'admin/overview',
+  'admin/proposals',
+  'admin/committee',
+  'admin/settings',
+  'admin/submission',
+  'admin/confirmation',
+  'admin/email',
+]);
 
 /**
  * Throttles by address, so this callable cannot be turned into a way to mail
@@ -1509,18 +1520,27 @@ async function takeLinkAllowance(email: string): Promise<void> {
  * owner, so it is rendered and handed to Resend in this one request and not
  * written anywhere — no queue row, no retry, nothing to read back later.
  *
- * `cfpId` is optional and only decides who the message comes from and where it
- * lands: signing in at a CFP writes as that CFP, signing in at the home page
- * writes as the platform. The link itself is the same either way — an account
- * is an account, not a membership.
+ * `cfpId` is optional and decides who the message comes from. `destination`
+ * preserves the CFP workspace that asked for the link, but it is an allowlisted
+ * route name rather than a URL: the caller never chooses the origin or an
+ * arbitrary redirect.
  */
 export const requestSignInLink = onCall(CALLABLE, async (request) => {
-  const data = (request.data ?? {}) as { email?: unknown; locale?: unknown; cfpId?: unknown };
+  const data = (request.data ?? {}) as {
+    email?: unknown;
+    locale?: unknown;
+    cfpId?: unknown;
+    destination?: unknown;
+  };
   const email = String(data.email ?? '').trim().toLowerCase();
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
   const cfpId = typeof data.cfpId === 'string' && validateCfpId(data.cfpId) === null
     ? data.cfpId
     : null;
+  const destination =
+    typeof data.destination === 'string' && SIGN_IN_DESTINATIONS.has(data.destination)
+      ? data.destination
+      : 'submit';
 
   if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
     throw new HttpsError('invalid-argument', 'That does not look like an email address.');
@@ -1541,7 +1561,11 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     // Must be one of Auth's authorized domains, or Firebase refuses to mint it.
     // The origin is platform config, never a per-CFP field: an organiser who
     // could edit it could aim other people's sign-in mail at a host they own.
-    url: cfpId ? cfpUrl(platform.publicUrl, cfpId) : `${platform.publicUrl}/`,
+    url: cfpId
+      ? destination === 'submit'
+        ? cfpUrl(platform.publicUrl, cfpId)
+        : `${platform.publicUrl}/c/${cfpId}/${destination}`
+      : `${platform.publicUrl}/`,
     handleCodeInApp: true,
   });
 

@@ -35,7 +35,22 @@ export function AdminPage({
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(dirty);
   const restoringHistory = useRef(false);
+  const subnav = useRef<HTMLElement>(null);
   dirtyRef.current = dirty;
+
+  useEffect(() => {
+    const mobile = window.matchMedia('(max-width: 41.99rem)');
+    const revealActiveTab = () => {
+      if (!mobile.matches) return;
+      subnav.current
+        ?.querySelector<HTMLElement>('[aria-current="page"]')
+        ?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    };
+
+    revealActiveTab();
+    mobile.addEventListener('change', revealActiveTab);
+    return () => mobile.removeEventListener('change', revealActiveTab);
+  }, [tab]);
 
   useEffect(() => {
     const pagePath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -119,7 +134,7 @@ export function AdminPage({
         <span className="admin-shell-header__role">{t.enums.role[role]}</span>
       </header>
 
-      <nav className="subnav" aria-label={t.admin.sections}>
+      <nav className="subnav" aria-label={t.admin.sections} ref={subnav}>
         {ADMIN_TABS.map((name) => (
           <Link
             key={name}

@@ -10,8 +10,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import {
+  CFP_ID,
   callPublic,
   clearSignInAllowance,
+  inviteRole,
   readEmailLog,
   readSignInLinks,
   reset,
@@ -20,6 +22,7 @@ import {
 import { at } from './form';
 
 const ADDRESS = 'nogoogle@example.test';
+const COMMITTEE_ADDRESS = 'committee-link@example.test';
 
 /**
  * The server builds the link, so it decides where the link comes back to. Said
@@ -32,8 +35,8 @@ const HERE = 'http://localhost:5173';
 /** Public: no token at all, which is the point of it. */
 const request = (email: string) => callPublic('requestSignInLink', { email, locale: 'en' });
 
-async function ask(page: Page, email: string) {
-  await page.goto(at());
+async function ask(page: Page, email: string, path = at()) {
+  await page.goto(path);
   await page.getByRole('textbox', { name: /^Email/ }).fill(email);
   await page.getByRole('button', { name: 'Email me a link' }).click();
   // The link does not exist until the callable has answered.
@@ -68,6 +71,35 @@ test.describe('signing in by email link', () => {
     await expect(page.getByRole('heading', { name: 'Your talk' })).toBeVisible();
     // Signed in as the address that asked, not merely signed in as somebody.
     await expect(page.getByRole('textbox', { name: /^Email/ })).toHaveValue(ADDRESS);
+  });
+
+  test('a committee link returns to the workspace that requested it', async ({ page }) => {
+    await inviteRole(COMMITTEE_ADDRESS, 'admin');
+    await ask(page, COMMITTEE_ADDRESS, at('/admin/proposals'));
+
+    await page.goto(await latestLink(COMMITTEE_ADDRESS));
+    await expect(page).toHaveURL(at('/admin/proposals'));
+    await expect(page.getByRole('heading', { name: 'Proposals' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+  });
+
+  test('a caller cannot turn the return destination into an open redirect', async ({ page }) => {
+    const email = 'redirect-check@example.test';
+    const answer = await callPublic('requestSignInLink', {
+      email,
+      locale: 'en',
+      cfpId: CFP_ID,
+      destination: 'https://evil.example/collect',
+    });
+    expect(answer.ok).toBe(true);
+
+    await page.goto(await latestLink(email));
+    expect(new URL(page.url()).pathname).toBe(at());
+    await expect(page.getByText('One more thing')).toBeVisible();
+    await page.getByRole('textbox', { name: /^Email/ }).fill(email);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page).toHaveURL(at());
+    await expect(page.getByRole('heading', { name: 'Your talk' })).toBeVisible();
   });
 
   test('a mistyped address can be corrected and sent again in place', async ({ page }) => {

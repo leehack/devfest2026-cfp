@@ -9,8 +9,13 @@ export const en = {
     account: 'Account',
     signedInAs: 'Signed in as',
     closeNotification: 'Close notification',
+    signIn: 'Sign in',
     signInGoogle: 'Sign in with Google',
     signInHint: 'We use your Google account so you can come back and edit your draft.',
+    signInCommitteeHint:
+      'Sign in with the address your organiser invited. You will return to this workspace after signing in.',
+    signInAccountHint:
+      'Sign in to view your profile and the calls where you submit, review, or organise.',
     signInEmailTitle: 'No Google account?',
     signInEmailHint:
       'We will email you a link that signs you in. No password to pick or remember.',

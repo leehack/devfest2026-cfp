@@ -43,6 +43,33 @@ test.describe('the front door', () => {
     await reset();
   });
 
+  test('anonymous visitors can always find sign in in the global header', async ({ page }) => {
+    for (const path of ['/', at(''), at('/review'), at('/admin/proposals')]) {
+      await page.goto(path);
+      const header = page.locator('header.header');
+      await expect(header.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+      await expect(header.getByRole('button', { name: 'Account' })).toHaveCount(0);
+    }
+
+    await expect(page.getByText(/address your organiser invited/)).toBeVisible();
+    await page
+      .locator('header.header')
+      .getByRole('button', { name: 'Sign in', exact: true })
+      .click();
+    await expect(page.locator('#sign-in')).toBeFocused();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const locale = await page.getByRole('button', { name: 'Français' }).boundingBox();
+    const signIn = await page
+      .locator('header.header')
+      .getByRole('button', { name: 'Sign in', exact: true })
+      .boundingBox();
+    expect(locale).not.toBeNull();
+    expect(signIn).not.toBeNull();
+    expect(signIn!.x).toBeGreaterThan(locale!.x);
+    expect(signIn!.x + signIn!.width).toBeLessThanOrEqual(390);
+  });
+
   test('lists the public calls and not the private ones', async ({ page }) => {
     await seedCfp(OTHER, { name: 'Someone Else’s Conf', visibility: 'private' });
 

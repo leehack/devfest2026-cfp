@@ -255,6 +255,10 @@ p {
   min-width: 0;
 }
 
+.header__identity > div {
+  min-width: 0;
+}
+
 .brand-mark {
   display: grid;
   grid-template-columns: repeat(2, 0.55rem);
@@ -296,6 +300,7 @@ p {
 
 .header__title {
   margin: 0.1rem 0 0;
+  overflow-wrap: anywhere;
   font-size: var(--text-2xl);
   font-weight: 650;
   letter-spacing: -0.025em;
@@ -342,6 +347,10 @@ p {
   flex: none;
   gap: var(--s-2);
   align-items: center;
+}
+
+.header__sign-in {
+  white-space: nowrap;
 }
 
 .skip-link {
@@ -3324,6 +3333,10 @@ p {
   max-width: 74rem;
 }
 
+.submission-status {
+  margin-bottom: var(--s-5);
+}
+
 .submission-context {
   display: flex;
   flex-wrap: wrap;
@@ -3681,8 +3694,13 @@ p {
   margin-bottom: var(--s-4);
 }
 
+.admin-shell-header > div {
+  min-width: 0;
+}
+
 .admin-shell-header__title {
   margin: var(--s-1) 0 0;
+  overflow-wrap: anywhere;
   font-size: var(--text-2xl);
 }
 
@@ -3929,6 +3947,7 @@ p {
 }
 
 .proposal-dashboard__charts {
+  grid-template-columns: 1fr;
   max-width: none !important;
   margin-top: var(--s-5);
 }
@@ -4198,6 +4217,14 @@ p {
   .decision-filter--search {
     grid-column: 1 / -1;
   }
+
+  .proposal-dashboard__charts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .proposal-dashboard__charts > :last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (min-width: 54rem) {
@@ -4225,15 +4252,31 @@ p {
   }
 
   .decision-toolbar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .decision-filter--search {
+    grid-column: span 2;
+  }
+}
+
+@media (min-width: 64rem) {
+  .decision-toolbar {
     grid-template-columns: minmax(14rem, 1.6fr) repeat(4, minmax(8rem, 1fr));
   }
 
   .decision-filter--search {
     grid-column: auto;
   }
-}
 
-@media (min-width: 64rem) {
+  .proposal-dashboard__charts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .proposal-dashboard__charts > :last-child {
+    grid-column: auto;
+  }
+
   .submission-workspace {
     grid-template-columns: minmax(12.5rem, 14rem) minmax(0, var(--page-w));
     gap: var(--s-6);
@@ -4246,6 +4289,19 @@ p {
 }
 
 @media (max-width: 41.99rem) {
+  .subnav {
+    flex-wrap: nowrap;
+    padding-bottom: var(--s-2);
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+  }
+
+  .subnav__tab {
+    flex: none;
+    scroll-snap-align: start;
+  }
+
   .cfp-card__footer {
     align-items: flex-start;
   }
@@ -4332,20 +4388,26 @@ p {
     flex: 1 1 100%;
   }
 
-  .admin-metrics,
-  .selection-metrics {
+  .admin-metrics {
     grid-template-columns: 1fr;
   }
 
-  .admin-metric:nth-child(n),
-  .selection-metric:nth-child(n) {
+  .admin-metric:nth-child(n) {
     border-top: 1px solid var(--line);
     border-left: 0;
   }
 
-  .admin-metric:first-child,
-  .selection-metric:first-child {
+  .admin-metric:first-child {
     border-top: 0;
+  }
+
+  .proposal-dashboard,
+  .decision-panel {
+    padding: var(--s-4);
+  }
+
+  .decision-toolbar {
+    padding: var(--s-3);
   }
 
   .setup-panel__heading > .btn,
@@ -4364,5 +4426,85 @@ p {
 
   .deck__nav .btn {
     flex: 1;
+  }
+}
+
+@media (max-width: 47.99rem) {
+  .decision-panel .table__scroll {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .decision-table,
+  .decision-table tbody,
+  .decision-table tr {
+    display: block;
+  }
+
+  .decision-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .decision-table tbody {
+    display: grid;
+    gap: var(--s-3);
+  }
+
+  .decision-table tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: var(--s-4);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--surface);
+    box-shadow: var(--shadow-1);
+  }
+
+  .decision-table td,
+  .decision-table td:first-child {
+    display: grid;
+    min-width: 0;
+    max-width: none;
+    gap: var(--s-1);
+    padding: var(--s-2);
+    border: 0;
+    white-space: normal;
+  }
+
+  .decision-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    font-weight: 650;
+  }
+
+  .decision-table td:first-child,
+  .decision-table td:nth-child(2),
+  .decision-table td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .decision-table td:first-child {
+    padding-top: 0;
+  }
+
+  .decision-table td:last-child {
+    padding-bottom: 0;
+  }
+
+  .decision-control {
+    min-width: 0;
+  }
+
+  .decision-control select {
+    width: 100%;
+    min-width: 0;
   }
 }

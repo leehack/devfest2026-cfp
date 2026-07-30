@@ -9,9 +9,14 @@ export const fr: Dictionary = {
     account: 'Compte',
     signedInAs: 'Connecté comme',
     closeNotification: 'Fermer la notification',
+    signIn: 'Se connecter',
     signInGoogle: 'Se connecter avec Google',
     signInHint:
       'Nous utilisons votre compte Google afin que vous puissiez revenir modifier votre brouillon.',
+    signInCommitteeHint:
+      'Connectez-vous avec l’adresse invitée par l’équipe organisatrice. Vous reviendrez ensuite à cet espace de travail.',
+    signInAccountHint:
+      'Connectez-vous pour voir votre profil et les appels où vous proposez, évaluez ou organisez.',
     signInEmailTitle: 'Pas de compte Google ?',
     signInEmailHint:
       'Nous vous enverrons un lien de connexion par courriel. Aucun mot de passe à choisir ni à retenir.',

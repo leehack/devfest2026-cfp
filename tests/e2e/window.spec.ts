@@ -41,7 +41,9 @@ test.describe('the submission window', () => {
     await expect(
       page.getByText('There is no call for proposals at this address.'),
     ).toBeVisible();
-    await expect(page.getByRole('button', { name: /sign in/i })).toHaveCount(0);
+    await expect(
+      page.locator('#main-content').getByRole('button', { name: 'Sign in with Google' }),
+    ).toHaveCount(0);
   });
 
   test('an archived CFP is shut, whatever its dates say', async ({ page }) => {

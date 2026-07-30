@@ -26,6 +26,7 @@ import {
   pendingEmail,
   rememberPendingEmail,
   requestSignInLink,
+  type SignInDestination,
 } from './lib/signIn';
 import { TextField } from './components/fields';
 import { ToastProvider } from './components/Toast';
@@ -217,13 +218,30 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
               >
                 {t.switchTo}
               </button>
-              {user && (
-                <AccountMenu
-                  user={user}
-                  showProfile={route !== 'me'}
-                  onSignOut={() => signOut(auth)}
-                />
-              )}
+              {authReady &&
+                (user ? (
+                  <AccountMenu
+                    user={user}
+                    showProfile={route !== 'me'}
+                    onSignOut={() => signOut(auth)}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--primary header__sign-in"
+                    onClick={() => {
+                      const signIn = document.getElementById('sign-in');
+                      if (signIn) {
+                        signIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        signIn.focus({ preventScroll: true });
+                      } else {
+                        navigate('me');
+                      }
+                    }}
+                  >
+                    {t.app.signIn}
+                  </button>
+                ))}
             </div>
           </header>
 
@@ -321,10 +339,18 @@ function Routed({
 
   if (route === 'home') return <HomePage user={user} />;
   if (route === 'new') {
-    return user ? <NewCfpPage user={user} /> : <SignIn cfp={null} cfpId={null} organising />;
+    return user ? (
+      <NewCfpPage user={user} />
+    ) : (
+      <SignIn cfp={null} cfpId={null} purpose="organising" />
+    );
   }
   if (route === 'me') {
-    return user ? <ProfilePage user={user} /> : <SignIn cfp={null} cfpId={null} />;
+    return user ? (
+      <ProfilePage user={user} />
+    ) : (
+      <SignIn cfp={null} cfpId={null} purpose="account" />
+    );
   }
 
   // Every route below is inside a CFP, and `currentPlace` will not produce one
@@ -364,7 +390,18 @@ function Routed({
 
   if (route === 'form') return <FormRoute user={user} cfp={cfp} cfpId={cfpId} />;
 
-  if (!user) return <SignIn cfp={cfp} cfpId={cfpId} />;
+  if (!user) {
+    const destination: SignInDestination =
+      route === 'admin' ? `admin/${tab}` : 'review';
+    return (
+      <SignIn
+        cfp={cfp}
+        cfpId={cfpId}
+        purpose="committee"
+        destination={destination}
+      />
+    );
+  }
   if (!roleReady) return <p className="muted">{t.app.loading}</p>;
   if (roleError) {
     return (
@@ -462,12 +499,13 @@ function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cf
 export function SignIn({
   cfp,
   cfpId,
-  organising = false,
+  purpose = 'speaker',
+  destination = 'submit',
 }: {
   cfp: CfpWindow | null;
   cfpId: string | null;
-  /** Signing in to start a CFP rather than to submit to one — different words. */
-  organising?: boolean;
+  purpose?: 'speaker' | 'committee' | 'account' | 'organising';
+  destination?: SignInDestination;
 }) {
   const { t, locale } = useI18n();
   const tRef = useLatest(t);
@@ -512,7 +550,11 @@ export function SignIn({
     setSending(true);
     setLinkError('');
     try {
-      await requestSignInLink({ email: email.trim(), locale, ...(cfpId ? { cfpId } : {}) });
+      await requestSignInLink({
+        email: email.trim(),
+        locale,
+        ...(cfpId ? { cfpId, destination } : {}),
+      });
       // Stored before the confirmation is shown: this is what lets the link
       // complete without asking again when it is opened in this browser.
       rememberPendingEmail(email.trim());
@@ -540,9 +582,24 @@ export function SignIn({
 
   if (finishing) return <p className="muted">{t.app.linkChecking}</p>;
 
+  const hint =
+    purpose === 'organising'
+      ? t.platform.signInFirst
+      : purpose === 'committee'
+        ? t.app.signInCommitteeHint
+        : purpose === 'account'
+          ? t.app.signInAccountHint
+          : t.app.signInHint;
+
   return (
-    <div className="panel">
-      <p>{organising ? t.platform.signInFirst : t.app.signInHint}</p>
+    <div
+      className="panel sign-in-panel"
+      id="sign-in"
+      role="region"
+      aria-label={t.app.signIn}
+      tabIndex={-1}
+    >
+      <p>{hint}</p>
       {cfp?.state === 'open' && (
         <p className="muted">
           {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>

@@ -216,6 +216,90 @@ test.describe('roles', () => {
       .toBe('submitted');
   });
 
+  test('the proposal workspace stays usable across screen sizes', async ({ page }) => {
+    const title =
+      'A deliberately long proposal title that still keeps every committee control on screen';
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-responsive', { speakerUid: speaker.uid, title });
+    await asAdmin(page, 'proposals');
+    await expect(page.getByText('1 of 1 proposals')).toBeVisible();
+
+    for (const width of [390, 700, 900, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const toolbar = page.locator('.decision-toolbar');
+      await expect(toolbar.getByRole('searchbox', { name: 'Search', exact: true })).toBeVisible();
+      for (const name of ['Status', 'Category', 'Review coverage', 'Sort by']) {
+        await expect(toolbar.getByRole('combobox', { name, exact: true })).toBeVisible();
+      }
+
+      const layout = await page.evaluate(() => {
+        const rect = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)?.getBoundingClientRect() ?? null;
+        const filters = [...document.querySelectorAll<HTMLElement>('.decision-filter')].map(
+          (filter) => filter.getBoundingClientRect(),
+        );
+        const overlaps = filters.some((current, index) =>
+          filters.slice(index + 1).some(
+            (other) =>
+              current.left < other.right &&
+              current.right > other.left &&
+              current.top < other.bottom &&
+              current.bottom > other.top,
+          ),
+        );
+        const toolbar = document.querySelector<HTMLElement>('.decision-toolbar');
+        const scroller = document.querySelector<HTMLElement>('.decision-panel .table__scroll');
+        const activeTab = document.querySelector<HTMLElement>(
+          '.subnav__tab[aria-current="page"]',
+        );
+        const subnav = document.querySelector<HTMLElement>('.subnav');
+        return {
+          documentOverflow:
+            document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          toolbarOverflow: toolbar ? toolbar.scrollWidth - toolbar.clientWidth : 999,
+          overlaps,
+          scroller: rect('.decision-panel .table__scroll'),
+          panel: rect('.decision-panel'),
+          status: rect('.decision-control select'),
+          activeTab: activeTab?.getBoundingClientRect() ?? null,
+          subnav: subnav?.getBoundingClientRect() ?? null,
+          scrollerOverflow: scroller ? scroller.scrollWidth - scroller.clientWidth : 999,
+          viewportWidth: window.innerWidth,
+          chartWidths: [
+            ...document.querySelectorAll<HTMLElement>('.proposal-dashboard__charts > .card'),
+          ].map((card) => card.getBoundingClientRect().width),
+        };
+      });
+
+      expect(layout.documentOverflow).toBeLessThanOrEqual(1);
+      expect(layout.toolbarOverflow).toBeLessThanOrEqual(1);
+      expect(layout.overlaps).toBe(false);
+      expect(layout.scroller).not.toBeNull();
+      expect(layout.panel).not.toBeNull();
+      expect(layout.scroller!.left).toBeGreaterThanOrEqual(layout.panel!.left);
+      expect(layout.scroller!.right).toBeLessThanOrEqual(layout.panel!.right + 1);
+
+      if (width < 768) {
+        expect(layout.scrollerOverflow).toBeLessThanOrEqual(1);
+        expect(layout.status).not.toBeNull();
+        expect(layout.status!.left).toBeGreaterThanOrEqual(0);
+        expect(layout.status!.right).toBeLessThanOrEqual(layout.viewportWidth);
+      }
+
+      if (width === 390) {
+        expect(layout.activeTab).not.toBeNull();
+        expect(layout.subnav).not.toBeNull();
+        expect(layout.activeTab!.left).toBeGreaterThanOrEqual(layout.subnav!.left);
+        expect(layout.activeTab!.right).toBeLessThanOrEqual(layout.subnav!.right + 1);
+      }
+
+      if (width === 700) {
+        expect(layout.chartWidths).toHaveLength(3);
+        expect(layout.chartWidths[2]).toBeGreaterThan(layout.chartWidths[0] * 1.8);
+      }
+    }
+  });
+
   test('a status outside the committee’s vocabulary is refused', async ({ page }) => {
     await asAdmin(page);
     const admin = await createAccount(ADMIN);

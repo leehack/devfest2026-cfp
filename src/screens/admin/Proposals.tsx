@@ -812,17 +812,21 @@ export function Proposals({ cfpId }: { cfpId: string }) {
                   const rowError = rowErrors.get(row.id);
                   return (
                     <tr key={row.id} className={saving ? 'decision-table__row--saving' : undefined}>
-                      <td>
+                      <td data-label={t.admin.colTitle}>
                         <strong>{row.title || '—'}</strong>
                         <span className="decision-table__category">
                           {labelOf(scopedShape.category, row.category, locale)}
                         </span>
                       </td>
-                      <td>{names(row) || '—'}</td>
-                      <td>{row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}</td>
-                      <td>{row.aggregate?.reviewCount ?? 0}</td>
-                      <td>{row.aggregate ? row.aggregate.stdDev.toFixed(2) : '—'}</td>
-                      <td>
+                      <td data-label={t.admin.colSpeaker}>{names(row) || '—'}</td>
+                      <td data-label={t.admin.colScore}>
+                        {row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}
+                      </td>
+                      <td data-label={t.admin.colReviews}>{row.aggregate?.reviewCount ?? 0}</td>
+                      <td data-label={t.admin.colSpread}>
+                        {row.aggregate ? row.aggregate.stdDev.toFixed(2) : '—'}
+                      </td>
+                      <td data-label={t.admin.colStatus}>
                         {row.status === 'draft' || row.status === 'withdrawn' ? (
                           <span className={`status-chip status-chip--${row.status}`}>
                             {t.enums.status[row.status]}
