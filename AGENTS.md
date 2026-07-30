@@ -18,39 +18,51 @@ Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules
 ```bash
 node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
 node scripts/set-platform.mjs --url https://cfp.example.org
+GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email admin@example.org
 ```
 
 Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
-and the platform's own settings. Both take the emulator env vars from their own
-headers. There is no bootstrap-admin script any more: whoever creates a CFP is
-written as its owner in the same transaction.
+the platform's own settings, and the first global admin. The seeding scripts
+take emulator env vars from their own headers. There is no CFP-owner bootstrap:
+an approved creator is written as owner in the creation transaction. Platform
+admins are different and deliberately bootstrapped out of band; the app can
+grant only creator access.
 
 ## Layout
 
 ```
 shared/      enums, types, zod schema, email copy, pure parsers — BOTH bundles
 src/         the app: pages/ (submit, admin, review), lib/ (data access), i18n/
-functions/   callables: submit, withdraw, roles, window, aggregates, sessionize,
-             emailQueue — plus the sendQueuedEmail Firestore trigger
-scripts/     dev.mjs (npm start), seed-cfp.mjs, set-platform.mjs, with-java.mjs
+functions/   callables: submit, withdraw, event/platform roles, window,
+             aggregates, sessionize, emailQueue — plus email delivery
+scripts/     dev.mjs, seed-cfp.mjs, set-platform.mjs,
+             set-platform-admin.mjs, with-java.mjs
 tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 ```
 
 **It is a platform: everything hangs under `cfps/{cfpId}`, where the id is the
 slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
-the account), `signInLinks` (a platform-wide throttle) and `config/platform` sit
-outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
+the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
+creator access), `signInLinks` (a platform-wide throttle) and `config/platform`
+sit outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
 
 Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
-to start one, `/me` the speaker's own profile, then `/c/{cfpId}` the call's
-public page, `/c/{cfpId}/submit` the form, `/review` for any role-holder and
-`/admin/{tab}` for admins. Only
+to start one, `/platform` for global creator access, `/me` the speaker's own
+profile, then `/c/{cfpId}` the call's public page, `/c/{cfpId}/submit` the form,
+`/review` for any role-holder and `/admin/{tab}` for admins. Only
 `/c/{cfpId}` — one segment — is rewritten to the `cfpPage` function for its meta
 tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
 `owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
 until its holder first visits. Only an owner archives, deletes or is written by
 `createCfp`; `owner` is deliberately not grantable through `grantRole`.
+
+Platform roles are separate: `admin` and `creator` answer only who may create a
+CFP. They grant no access to event data. Both global collections are
+callable-only; app admins may grant/revoke creators, while
+`scripts/set-platform-admin.mjs` is the only path for platform-admin changes and
+refuses to remove the last active admin. `createCfp` checks the global role
+again inside its creation transaction.
 
 Every callable takes a `cfpId` and checks the caller's role against *that* id.
 It is never inferred from the caller's memberships — somebody on two CFPs would

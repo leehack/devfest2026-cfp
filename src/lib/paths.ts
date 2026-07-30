@@ -10,6 +10,7 @@ import { ADMIN_TABS, type AdminTab } from './adminTabs';
 export const paths = {
   home: () => '/',
   new: () => '/new',
+  platform: () => '/platform',
   me: () => '/me',
   cfp: (cfpId: string) => `/c/${cfpId}`,
   submit: (cfpId: string) => `/c/${cfpId}/submit`,

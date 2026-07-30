@@ -63,7 +63,14 @@ import {
   type CfpRole,
 } from '../../shared/cfp';
 import type { SpeakerSnapshot } from '../../shared/types';
+import type { PlatformRole } from '../../shared/platform';
 import { claim, grant, revoke, RoleError } from './roles';
+import {
+  claimPlatformRole,
+  grantCfpCreator as grantPlatformCreator,
+  listPlatformAccess,
+  revokeCfpCreator as revokePlatformCreator,
+} from './platform';
 import {
   cfpUrl,
   deliver,
@@ -174,6 +181,27 @@ function requireUid(request: { auth?: { uid: string } }, action: string): string
   return uid;
 }
 
+function requireVerifiedPlatformIdentity(
+  request: {
+    auth?: {
+      uid: string;
+      token: { email?: unknown; email_verified?: unknown; name?: unknown };
+    };
+  },
+  action: string,
+): { uid: string; email: string; name?: string } {
+  const uid = requireUid(request, action);
+  const token = request.auth!.token;
+  if (token.email_verified !== true || typeof token.email !== 'string') {
+    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  }
+  return {
+    uid,
+    email: token.email,
+    ...(typeof token.name === 'string' && token.name ? { name: token.name } : {}),
+  };
+}
+
 /** The caller's role on one CFP, or undefined if they hold none. */
 async function roleOn(cfpId: string, uid: string): Promise<CfpRole | undefined> {
   const snap = await db.doc(`cfps/${cfpId}/members/${uid}`).get();
@@ -212,6 +240,28 @@ function asHttpsError(error: unknown): HttpsError {
   if (error instanceof RoleError) return new HttpsError(error.code, error.message);
   logger.error('unexpected role failure', { error: String(error) });
   return new HttpsError('internal', 'Could not complete that change.');
+}
+
+async function requirePlatformAdmin(
+  request: {
+    auth?: {
+      uid: string;
+      token: { email?: unknown; email_verified?: unknown; name?: unknown };
+    };
+  },
+  action: string,
+): Promise<{ uid: string; email: string; name?: string }> {
+  const identity = requireVerifiedPlatformIdentity(request, action);
+  try {
+    const role = await claimPlatformRole(db, identity);
+    if (role !== 'admin') {
+      throw new HttpsError('permission-denied', `Only a platform admin can ${action}.`);
+    }
+    return identity;
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    throw asHttpsError(error);
+  }
 }
 
 /** An ISO date from the request body, or a legible refusal. */
@@ -1327,6 +1377,58 @@ export const importSessionizeProfile = onCall(
 );
 
 
+// ------------------------------------------------------------ platform access
+
+/** Claims any pending platform grant and reports only the caller's own access. */
+export const platformAccess = onCall(CALLABLE, async (request) => {
+  const identity = requireVerifiedPlatformIdentity(request, 'check platform access');
+  try {
+    const role = await claimPlatformRole(db, identity);
+    return {
+      role,
+      canCreateCfp: role === 'admin' || role === 'creator',
+      isPlatformAdmin: role === 'admin',
+    };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Platform admins see creator access, not the Firebase Auth user directory. */
+export const listPlatformUsers = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'list CFP creators');
+  return { ok: true, ...(await listPlatformAccess(db)) };
+});
+
+/** Platform admins grant only creator access; admin bootstrap stays out of band. */
+export const grantCfpCreator = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformAdmin(request, 'grant CFP creator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await grantPlatformCreator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('CFP creator access granted', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Revocation affects future CFP creation, never ownership of existing CFPs. */
+export const revokeCfpCreator = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformAdmin(request, 'revoke CFP creator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await revokePlatformCreator(db, getAuth(), { email: data.email });
+    logger.info('CFP creator access revoked', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
 // ------------------------------------------------------------------- the CFP
 
 /**
@@ -1342,11 +1444,21 @@ export const importSessionizeProfile = onCall(
  * nobody able to administer it.
  */
 export const createCfp = onCall(CALLABLE, async (request) => {
-  const uid = requireUid(request, 'create a call for proposals');
-  const token = request.auth!.token;
-  if (token.email_verified !== true) {
-    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  const identity = requireVerifiedPlatformIdentity(request, 'create a call for proposals');
+  const { uid } = identity;
+  let creatorRole: PlatformRole | null;
+  try {
+    creatorRole = await claimPlatformRole(db, identity);
+  } catch (error) {
+    throw asHttpsError(error);
   }
+  if (creatorRole !== 'admin' && creatorRole !== 'creator') {
+    throw new HttpsError(
+      'permission-denied',
+      'A platform admin must grant creator access first.',
+    );
+  }
+  const token = request.auth!.token;
 
   const data = (request.data ?? {}) as Record<string, unknown>;
   const input = {
@@ -1363,20 +1475,33 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'The window closes before it opens.');
   }
 
-  // A platform anyone can create on needs a ceiling somewhere, and the cheapest
-  // honest one is per account.
-  const mine = await db
+  const mine = db
     .collection('cfps')
     .where('ownerUids', 'array-contains', uid)
-    .count()
-    .get();
-  if (mine.data().count >= CFP_LIMITS.perOwner) {
-    throw new HttpsError('resource-exhausted', 'You have reached the limit on calls for proposals.');
-  }
+    .limit(CFP_LIMITS.perOwner);
 
   const ref = db.doc(`cfps/${input.id}`);
+  const platformMemberRef = db.doc(`platformMembers/${uid}`);
   await db.runTransaction(async (tx) => {
-    if ((await tx.get(ref)).exists) {
+    // Keep the ceiling in this transaction. A count done before it lets two
+    // simultaneous tenth calls both pass and commit.
+    const owned = await tx.get(mine);
+    const member = await tx.get(platformMemberRef);
+    const currentRole = member.get('role');
+    if (currentRole !== 'admin' && currentRole !== 'creator') {
+      throw new HttpsError(
+        'permission-denied',
+        'A platform admin must grant creator access first.',
+      );
+    }
+    if (owned.size >= CFP_LIMITS.perOwner) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'You have reached the limit on calls for proposals.',
+      );
+    }
+    const existing = await tx.get(ref);
+    if (existing.exists) {
       throw new HttpsError('already-exists', 'That address is taken.');
     }
     tx.set(ref, {

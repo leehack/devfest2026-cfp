@@ -147,6 +147,47 @@ export const en = {
     } as Record<string, string>,
   },
 
+  platformAdmin: {
+    title: 'Platform administration',
+    accountLink: 'Platform access',
+    eyebrow: 'Platform controls',
+    intro:
+      'Approve who may create new CFP workspaces. Event roles stay separate: platform access does not reveal proposals, speakers, reviews, or email.',
+    accessTitle: 'CFP creator access',
+    accessHelp:
+      'Platform admins and approved creators can start a call for proposals. Revoking access never removes CFPs the person already owns.',
+    addTitle: 'Approve a creator',
+    addHelp:
+      'Use the address they will verify when signing in. Access waits safely if they do not have an account yet.',
+    emailLabel: 'Email address',
+    grant: 'Add creator',
+    granting: 'Adding…',
+    activeTitle: 'Approved people',
+    activeHelp: 'Platform admins are shown for context and can only be changed with the bootstrap script.',
+    pending: 'Pending verified sign-in',
+    roles: {
+      admin: 'Platform admin',
+      creator: 'CFP creator',
+    },
+    isYou: 'you',
+    revoke: 'Remove creator access',
+    revoking: 'Removing…',
+    revokeConfirm: (email: string) => `Remove CFP creator access from ${email}?`,
+    empty: 'No CFP creators have been approved yet.',
+    grantedActive: (email: string) => `${email} can create CFPs now.`,
+    grantedPending: (email: string) =>
+      `${email} will receive creator access after a verified sign-in.`,
+    revoked: (email: string) => `${email} can no longer create new CFPs.`,
+    loadError: 'Platform access could not be loaded.',
+    badEmail: 'Enter a valid email address.',
+    adminManaged: 'Platform administrators can only be changed with the bootstrap script.',
+    accessRequiredTitle: 'CFP creation is restricted',
+    accessRequiredHelp:
+      'A platform administrator must approve your account before you can start a new call for proposals.',
+    checkAgain: 'Check access again',
+    retry: 'Try again',
+  },
+
   cfpPage: {
     eyebrow: 'Call for proposals',
     status: {
@@ -464,8 +505,7 @@ export const en = {
 
   admin: {
     sections: 'Admin sections',
-    sectionPicker: 'Manage section',
-    sectionGo: 'Go',
+    sectionPicker: 'Section',
     workspace: 'Event management',
     tabs: {
       overview: 'Dashboard',

@@ -148,6 +148,49 @@ export const fr: Dictionary = {
     } as Record<string, string>,
   },
 
+  platformAdmin: {
+    title: 'Administration de la plateforme',
+    accountLink: 'Accès à la plateforme',
+    eyebrow: 'Contrôles de la plateforme',
+    intro:
+      'Approuvez les personnes pouvant créer de nouveaux espaces d’appel à conférences. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations, ni courriels.',
+    accessTitle: 'Accès à la création d’appels',
+    accessHelp:
+      'Les administrateurs de la plateforme et les créateurs approuvés peuvent lancer un appel. Le retrait de cet accès ne supprime jamais les appels que la personne possède déjà.',
+    addTitle: 'Approuver une personne',
+    addHelp:
+      'Utilisez l’adresse qu’elle vérifiera lors de sa connexion. L’accès attend en toute sécurité si son compte n’existe pas encore.',
+    emailLabel: 'Adresse courriel',
+    grant: 'Ajouter',
+    granting: 'Ajout…',
+    activeTitle: 'Personnes approuvées',
+    activeHelp:
+      'Les administrateurs de la plateforme sont affichés à titre informatif et ne peuvent être modifiés qu’avec le script d’amorçage.',
+    pending: 'En attente d’une connexion vérifiée',
+    roles: {
+      admin: 'Administrateur de la plateforme',
+      creator: 'Créateur d’appels',
+    },
+    isYou: 'vous',
+    revoke: 'Retirer l’accès de création',
+    revoking: 'Retrait…',
+    revokeConfirm: (email: string) => `Retirer à ${email} l’accès à la création d’appels?`,
+    empty: 'Aucun créateur d’appels n’a encore été approuvé.',
+    grantedActive: (email: string) => `${email} peut maintenant créer des appels.`,
+    grantedPending: (email: string) =>
+      `${email} recevra l’accès après une connexion vérifiée.`,
+    revoked: (email: string) => `${email} ne peut plus créer de nouveaux appels.`,
+    loadError: 'Impossible de charger les accès à la plateforme.',
+    badEmail: 'Saisissez une adresse courriel valide.',
+    adminManaged:
+      'Les administrateurs de la plateforme ne peuvent être modifiés qu’avec le script d’amorçage.',
+    accessRequiredTitle: 'La création d’appels est restreinte',
+    accessRequiredHelp:
+      'Un administrateur de la plateforme doit approuver votre compte avant que vous puissiez lancer un nouvel appel.',
+    checkAgain: 'Vérifier l’accès de nouveau',
+    retry: 'Réessayer',
+  },
+
   cfpPage: {
     eyebrow: 'Appel à conférences',
     status: {
@@ -456,8 +499,7 @@ export const fr: Dictionary = {
 
   admin: {
     sections: 'Sections d’administration',
-    sectionPicker: 'Section de gestion',
-    sectionGo: 'Ouvrir',
+    sectionPicker: 'Section',
     workspace: 'Gestion de l’événement',
     tabs: {
       overview: 'Tableau de bord',

@@ -296,8 +296,8 @@ test.describe('roles', () => {
           '.subnav__tab[aria-current="page"]',
         );
         const subnav = document.querySelector<HTMLElement>('.subnav');
-        const sectionPicker =
-          document.querySelector<HTMLSelectElement>('.admin-section-picker select');
+        const sectionMenu =
+          document.querySelector<HTMLElement>('.admin-section-menu summary');
         return {
           documentOverflow:
             document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -308,8 +308,8 @@ test.describe('roles', () => {
           status: rect('.decision-control select'),
           activeTab: activeTab?.getBoundingClientRect() ?? null,
           subnav: subnav?.getBoundingClientRect() ?? null,
-          sectionPicker: sectionPicker?.getBoundingClientRect() ?? null,
-          sectionValue: sectionPicker?.value ?? null,
+          sectionMenu: sectionMenu?.getBoundingClientRect() ?? null,
+          sectionText: sectionMenu?.textContent ?? '',
           scrollerOverflow: scroller ? scroller.scrollWidth - scroller.clientWidth : 999,
           viewportWidth: window.innerWidth,
           chartWidths: [
@@ -334,11 +334,11 @@ test.describe('roles', () => {
       }
 
       if (width < 1024) {
-        expect(layout.sectionPicker).not.toBeNull();
-        expect(layout.sectionPicker!.width).toBeGreaterThan(0);
-        expect(layout.sectionPicker!.left).toBeGreaterThanOrEqual(0);
-        expect(layout.sectionPicker!.right).toBeLessThanOrEqual(layout.viewportWidth);
-        expect(layout.sectionValue).toBe('proposals');
+        expect(layout.sectionMenu).not.toBeNull();
+        expect(layout.sectionMenu!.width).toBeGreaterThan(0);
+        expect(layout.sectionMenu!.left).toBeGreaterThanOrEqual(0);
+        expect(layout.sectionMenu!.right).toBeLessThanOrEqual(layout.viewportWidth);
+        expect(layout.sectionText).toContain('Proposals');
       } else {
         expect(layout.activeTab).not.toBeNull();
         expect(layout.subnav).not.toBeNull();

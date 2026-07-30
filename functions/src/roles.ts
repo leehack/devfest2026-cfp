@@ -4,9 +4,9 @@
  * Lives here rather than in `shared/` because it needs the Admin SDK, and
  * separate from `index.ts` so that "what granting means" is written once.
  *
- * Every function below takes a `cfpId` and touches nothing outside it. There is
- * no platform-wide role: the person who creates a CFP is written as its owner
- * in the same transaction, which is what replaced the bootstrap script.
+ * Every function below takes a `cfpId` and touches nothing outside it. Platform
+ * creator access lives in `platform.ts`; creating a CFP still writes its event
+ * owner in one transaction.
  */
 
 import type { Auth } from 'firebase-admin/auth';

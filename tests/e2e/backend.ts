@@ -191,6 +191,34 @@ export async function seedMember(
   }
 }
 
+/** Platform access is independent from every CFP membership. */
+export async function seedPlatformMember(
+  uid: string,
+  role: 'admin' | 'creator',
+  email = `${uid}@example.org`,
+  name = '',
+) {
+  await patch(`platformMembers/${uid}`, {
+    uid: { stringValue: uid },
+    email: { stringValue: email },
+    ...(name ? { name: { stringValue: name } } : {}),
+    role: { stringValue: role },
+    grantedBy: { stringValue: 'seed' },
+  });
+}
+
+/** Waits for a verified account to claim platform access on its first check. */
+export async function invitePlatformRole(
+  email: string,
+  role: 'admin' | 'creator',
+) {
+  await patch(`platformRoleGrants/${email.toLowerCase()}`, {
+    email: { stringValue: email.toLowerCase() },
+    role: { stringValue: role },
+    createdBy: { stringValue: 'seed' },
+  });
+}
+
 /**
  * Creates the account ahead of the browser and returns its uid.
  *
@@ -217,6 +245,27 @@ export async function createAccount(who: {
     },
   );
   await expectOk(response, 'createAccount');
+  const { localId, idToken } = await response.json();
+  return { uid: localId, idToken };
+}
+
+/** Email/password exists only to prove that platform grants require verification. */
+export async function createUnverifiedAccount(who: {
+  email: string;
+}): Promise<{ uid: string; idToken: string }> {
+  const response = await fetch(
+    `${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: who.email,
+        password: 'safe-test-password',
+        returnSecureToken: true,
+      }),
+    },
+  );
+  await expectOk(response, 'createUnverifiedAccount');
   const { localId, idToken } = await response.json();
   return { uid: localId, idToken };
 }

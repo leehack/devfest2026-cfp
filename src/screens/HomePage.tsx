@@ -25,6 +25,7 @@ import {
 } from '../lib/roles';
 import { calendarDate } from '@shared/cfp';
 import type { ProposalStatus } from '@shared/enums';
+import type { PlatformAccessStatus } from '@shared/platform';
 
 interface AccountActivity {
   uid: string;
@@ -33,7 +34,19 @@ interface AccountActivity {
   proposals: CfpProposalActivity[];
 }
 
-export function HomePage({ user }: { user: User | null }) {
+export function HomePage({
+  user,
+  platformStatus,
+  platformReady,
+  platformError,
+  retryPlatform,
+}: {
+  user: User | null;
+  platformStatus: PlatformAccessStatus | null;
+  platformReady: boolean;
+  platformError: boolean;
+  retryPlatform: () => void;
+}) {
   const { t } = useI18n();
   const uid = user?.uid ?? null;
   const [open, setOpen] = useState<CfpSummary[] | null>(null);
@@ -224,10 +237,41 @@ export function HomePage({ user }: { user: User | null }) {
           <p className="organiser-callout__help">{t.platform.organiserHelp}</p>
         </div>
         <div className="organiser-callout__action">
-          <Link className="btn" to={href({ route: 'new' })}>
-            {t.platform.create}
-          </Link>
-          {!user && <p className="organiser-callout__note">{t.platform.signInFirst}</p>}
+          {(!user || platformStatus?.canCreateCfp) && (
+            <Link className="btn" to={href({ route: 'new' })}>
+              {t.platform.create}
+            </Link>
+          )}
+          {platformStatus?.isPlatformAdmin && (
+            <Link className="btn btn--ghost" to={href({ route: 'platform' })}>
+              {t.platformAdmin.accountLink}
+            </Link>
+          )}
+          {!user ? (
+            <p className="organiser-callout__note">{t.platform.signInFirst}</p>
+          ) : !platformReady ? (
+            <p className="organiser-callout__note" role="status">
+              {t.app.loading}
+            </p>
+          ) : platformError ? (
+            <>
+              <p className="organiser-callout__note" role="alert">
+                {t.platformAdmin.loadError}
+              </p>
+              <button type="button" className="btn btn--ghost" onClick={retryPlatform}>
+                {t.platformAdmin.retry}
+              </button>
+            </>
+          ) : !platformStatus?.canCreateCfp ? (
+            <>
+              <p className="organiser-callout__note">
+                {t.platformAdmin.accessRequiredHelp}
+              </p>
+              <button type="button" className="btn btn--ghost" onClick={retryPlatform}>
+                {t.platformAdmin.checkAgain}
+              </button>
+            </>
+          ) : null}
         </div>
       </aside>
 

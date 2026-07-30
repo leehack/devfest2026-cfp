@@ -8,6 +8,7 @@ type EventRoute = Extract<Route, 'cfp' | 'form' | 'review' | 'admin'>;
 
 function taskLabel(place: Place, t: Dictionary): string {
   if (place.route === 'new') return t.platform.createTitle;
+  if (place.route === 'platform') return t.platformAdmin.title;
   if (place.route === 'me') return t.profile.title;
   if (place.route === 'cfp') return t.nav.cfp;
   if (place.route === 'form') return t.nav.form;

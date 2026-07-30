@@ -18,8 +18,9 @@ import { HomePage } from './screens/HomePage';
 import { CfpPage } from './screens/CfpPage';
 import { ProfilePage } from './screens/ProfilePage';
 import { NewCfpPage } from './screens/NewCfpPage';
+import { PlatformAdminPage } from './screens/PlatformAdminPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
-import { useRole } from './lib/roles';
+import { usePlatformAccess, useRole } from './lib/roles';
 import { navigate, usePlace, type Place } from './lib/router';
 import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
@@ -39,6 +40,7 @@ import { AccountMenu } from './components/AccountMenu';
 import { ThemeSwitch } from './components/ThemeSwitch';
 import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
+import type { PlatformAccessStatus } from '@shared/platform';
 
 export function App({ initialPath }: { initialPath?: string } = {}) {
   /*
@@ -75,6 +77,12 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
     error: roleError,
     retry: retryRole,
   } = useRole(user, cfpId);
+  const {
+    status: platformStatus,
+    ready: platformReady,
+    error: platformError,
+    retry: retryPlatform,
+  } = usePlatformAccess(user);
 
   const t = dictionaries[locale];
   const visibleCfp = loadedCfpId === cfpId ? cfp : null;
@@ -244,6 +252,9 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                   <AccountMenu
                     user={user}
                     showProfile={route !== 'me'}
+                    showPlatformAdmin={
+                      platformStatus?.isPlatformAdmin === true && route !== 'platform'
+                    }
                     onSignOut={() => signOut(auth)}
                   />
                 ) : (
@@ -291,6 +302,10 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                 roleReady={roleReady}
                 roleError={roleError}
                 retryRole={retryRole}
+                platformStatus={platformStatus}
+                platformReady={platformReady}
+                platformError={platformError}
+                retryPlatform={retryPlatform}
                 cfpError={cfpError}
                 retryCfp={retryCfp}
               />
@@ -331,6 +346,10 @@ interface RoutedProps {
   roleReady: boolean;
   roleError: boolean;
   retryRole: () => void;
+  platformStatus: PlatformAccessStatus | null;
+  platformReady: boolean;
+  platformError: boolean;
+  retryPlatform: () => void;
   cfpError: boolean;
   retryCfp: () => void;
 }
@@ -347,19 +366,51 @@ function Routed({
   roleReady,
   roleError,
   retryRole,
+  platformStatus,
+  platformReady,
+  platformError,
+  retryPlatform,
   cfpError,
   retryCfp,
 }: RoutedProps) {
   const { t } = useI18n();
   const { route, cfpId, tab } = place;
 
-  if (route === 'home') return <HomePage user={user} />;
-  if (route === 'new') {
-    return user ? (
-      <NewCfpPage user={user} />
-    ) : (
-      <SignIn cfp={null} cfpId={null} purpose="organising" />
+  if (route === 'home') {
+    return (
+      <HomePage
+        user={user}
+        platformStatus={platformStatus}
+        platformReady={platformReady}
+        platformError={platformError}
+        retryPlatform={retryPlatform}
+      />
     );
+  }
+  if (route === 'new') {
+    if (!user) return <SignIn cfp={null} cfpId={null} purpose="organising" />;
+    if (!platformReady) return <p className="muted">{t.app.loading}</p>;
+    if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
+    if (!platformStatus?.canCreateCfp) {
+      return <PlatformCreationRestricted onRetry={retryPlatform} />;
+    }
+    return <NewCfpPage user={user} />;
+  }
+  if (route === 'platform') {
+    if (!user) return <SignIn cfp={null} cfpId={null} purpose="account" />;
+    if (!platformReady) return <p className="muted">{t.app.loading}</p>;
+    if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
+    if (!platformStatus?.isPlatformAdmin) {
+      return (
+        <div className="panel">
+          <p>{t.nav.forbidden}</p>
+          <button type="button" className="btn btn--primary" onClick={() => navigate('home')}>
+            {t.platform.back}
+          </button>
+        </div>
+      );
+    }
+    return <PlatformAdminPage user={user} />;
   }
   if (route === 'me') {
     return user ? (
@@ -371,7 +422,17 @@ function Routed({
 
   // Every route below is inside a CFP, and `currentPlace` will not produce one
   // without an id — but the narrowing has to be written down for the compiler.
-  if (!cfpId) return <HomePage user={user} />;
+  if (!cfpId) {
+    return (
+      <HomePage
+        user={user}
+        platformStatus={platformStatus}
+        platformReady={platformReady}
+        platformError={platformError}
+        retryPlatform={retryPlatform}
+      />
+    );
+  }
 
   if (cfpError) {
     return (
@@ -452,6 +513,39 @@ function Routed({
     <AdminPage user={user} cfpId={cfpId} cfpName={cfp.name} tab={tab} role={role!} />
   ) : (
     <ReviewPage user={user} cfpId={cfpId} />
+  );
+}
+
+function PlatformAccessFailure({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="panel">
+      <p className="field__error" role="alert">
+        {t.platformAdmin.loadError}
+      </p>
+      <button type="button" className="btn" onClick={onRetry}>
+        {t.platformAdmin.retry}
+      </button>
+    </div>
+  );
+}
+
+function PlatformCreationRestricted({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="panel platform-access-gate">
+      <p className="platform-admin__eyebrow">{t.platformAdmin.eyebrow}</p>
+      <h2>{t.platformAdmin.accessRequiredTitle}</h2>
+      <p>{t.platformAdmin.accessRequiredHelp}</p>
+      <div className="platform-access-gate__actions">
+        <button type="button" className="btn btn--primary" onClick={onRetry}>
+          {t.platformAdmin.checkAgain}
+        </button>
+        <button type="button" className="btn" onClick={() => navigate('home')}>
+          {t.platform.back}
+        </button>
+      </div>
+    </div>
   );
 }
 

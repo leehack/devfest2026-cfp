@@ -15,10 +15,12 @@ function initials(user: User): string {
 export function AccountMenu({
   user,
   showProfile,
+  showPlatformAdmin,
   onSignOut,
 }: {
   user: User;
   showProfile: boolean;
+  showPlatformAdmin: boolean;
   onSignOut: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
@@ -83,6 +85,15 @@ export function AccountMenu({
             <p className="account-menu__email">{user.email}</p>
           )}
           <div className="account-menu__actions">
+            {showPlatformAdmin && (
+              <Link
+                className="account-menu__action"
+                to={href({ route: 'platform' })}
+                onClick={() => setOpen(false)}
+              >
+                {t.platformAdmin.accountLink}
+              </Link>
+            )}
             {showProfile && (
               <Link
                 className="account-menu__action"

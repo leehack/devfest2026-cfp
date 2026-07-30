@@ -6,7 +6,12 @@ import { describe, expect, it } from 'vitest';
 import { Timestamp } from 'firebase/firestore';
 
 import { toDate, toDateTimeInput } from '../src/lib/dates';
-import { adminError, friendlyError, resendError } from '../src/lib/errors';
+import {
+  adminError,
+  friendlyError,
+  platformAdminError,
+  resendError,
+} from '../src/lib/errors';
 import { en } from '../src/i18n/en';
 import { fr } from '../src/i18n/fr';
 
@@ -96,5 +101,33 @@ describe('resendError', () => {
     expect(resendError(failed('invalid-argument'), en)).toBe(en.admin.emailErrors.rejected);
     expect(resendError(failed('unavailable'), en)).toBe(en.admin.emailErrors.unreachable);
     expect(resendError(failed('permission-denied'), en)).toBe(en.nav.forbidden);
+  });
+});
+
+describe('platformAdminError', () => {
+  const failed = (code: string) => ({ code });
+
+  it('maps creator-management failures without borrowing event-admin copy', () => {
+    expect(platformAdminError(failed('functions/invalid-argument'), en)).toBe(
+      en.platformAdmin.badEmail,
+    );
+    expect(platformAdminError(failed('functions/failed-precondition'), en)).toBe(
+      en.platformAdmin.adminManaged,
+    );
+    expect(platformAdminError(failed('functions/permission-denied'), en)).toBe(
+      en.nav.forbidden,
+    );
+  });
+
+  it('speaks the reader’s language and never leaks a callable message', () => {
+    expect(platformAdminError(failed('functions/invalid-argument'), fr)).toBe(
+      fr.platformAdmin.badEmail,
+    );
+    expect(
+      platformAdminError(
+        { code: 'functions/failed-precondition', message: 'bootstrap internals' },
+        fr,
+      ),
+    ).toBe(fr.platformAdmin.adminManaged);
   });
 });

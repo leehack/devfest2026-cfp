@@ -39,7 +39,7 @@ test.describe('responsive navigation', () => {
     await reset();
   });
 
-  test('French event navigation does not cover the admin section picker at 320px', async ({
+  test('French event navigation does not cover the admin section menu at 320px', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 320, height: 760 });
@@ -49,24 +49,24 @@ test.describe('responsive navigation', () => {
     await signInAs(page, ADMIN, at('/admin/proposals'));
 
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
-    await expect(page.locator('.admin-section-picker')).toBeVisible();
+    await expect(page.locator('.admin-section-menu')).toBeVisible();
     await scrollToLastProposal(page);
 
     const layout = await page.evaluate(() => {
       const eventNavigation = document.querySelector<HTMLElement>('nav.nav');
-      const sectionPicker = document.querySelector<HTMLElement>('.admin-section-picker');
-      if (!eventNavigation || !sectionPicker) throw new Error('Admin navigation is missing');
+      const sectionMenu = document.querySelector<HTMLElement>('.admin-section-menu');
+      if (!eventNavigation || !sectionMenu) throw new Error('Admin navigation is missing');
 
       return {
         eventBottom: eventNavigation.getBoundingClientRect().bottom,
-        pickerTop: sectionPicker.getBoundingClientRect().top,
+        menuTop: sectionMenu.getBoundingClientRect().top,
       };
     });
 
     expect(
       layout.eventBottom,
-      'the sticky event navigation must end before the section picker begins',
-    ).toBeLessThanOrEqual(layout.pickerTop + 1);
+      'the sticky event navigation must end before the section menu begins',
+    ).toBeLessThanOrEqual(layout.menuTop + 1);
   });
 
   test('desktop admin subsection navigation remains in view after deep scrolling', async ({

@@ -1,7 +1,8 @@
 # A call-for-proposals platform
 
-Anyone signed in starts a call for proposals and owns it. Submission form,
-Firestore write path, security rules. `SPEC.md` is the design;
+An approved creator starts a call for proposals and owns it. Platform admins
+control that creator access without inheriting access to any event. Submission
+form, Firestore write path, security rules. `SPEC.md` is the design;
 [`AGENTS.md`](AGENTS.md) is the working conventions.
 
 It began as one event's CFP — DevFest Montréal 2026 — which is still the shape
@@ -23,17 +24,18 @@ Everything hangs under `cfps/{cfpId}`, where the id is the slug — `proposals`,
 one call. The document id being the slug means creating one *is* the uniqueness
 check: there is no second index to keep honest, and no window in which two people
 both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
-account, not to any one talk), `signInLinks` (a platform-wide throttle) and
-`config/platform` sit outside.
+account, not to any one talk), `platformMembers/{uid}` and
+`platformRoleGrants/{email}` (global creator access), `signInLinks` (a
+platform-wide throttle) and `config/platform` sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
-and then `/c/{cfpId}` is that call's public page, `/submit` the form, `/review`
-for anyone holding a role on it and `/admin/{tab}` for its admins. The public
-page is server-rendered by its Next App Router segment, which puts the call's
-own title and description into the HTML — a crawler and a link preview never
-run the script, so `document.title` alone buys nothing. Everyone may submit a
-talk, reviewers and admins included — they simply never get their own in the
-queue.
+`/platform` manages approved creators, and then `/c/{cfpId}` is that call's
+public page, `/submit` the form, `/review` for anyone holding a role on it and
+`/admin/{tab}` for its admins. The public page is server-rendered by its Next
+App Router segment, which puts the call's own title and description into the
+HTML — a crawler and a link preview never run the script, so `document.title`
+alone buys nothing. Everyone may submit a talk, reviewers and admins included —
+they simply never get their own in the queue.
 
 A call is **public** (listed on the home page) or **private** (unlisted, but
 readable by anyone with the link — private means unlisted, not secret). Its owner
@@ -75,6 +77,22 @@ module load and nothing renders at all.
 embedded webviews, so under the emulators the sign-in panel grows a **"Sign in as
 a test speaker"** button ([`src/lib/devAuth.ts`](src/lib/devAuth.ts)). It is not
 rendered against a real project.
+
+Creation is restricted even locally. After signing in as the test speaker,
+grant that account platform-admin access through the emulators:
+
+```bash
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
+GCLOUD_PROJECT=demo-devfest-cfp \
+node scripts/set-platform-admin.mjs --email test.speaker@example.org
+```
+
+For a deployed project, run the same script with its project id and application
+default credentials. A verified existing account becomes active immediately;
+otherwise the grant waits for that address's first verified sign-in. The app
+cannot grant or revoke platform admins, and the script refuses to remove the
+last active one.
 
 ## Verify
 
@@ -164,6 +182,14 @@ in the same transaction. `owner` is deliberately not grantable through
 `grantRole` — otherwise an admin could promote themselves and archive the call
 out from under its owner. The callables call the same `grant()` the
 callable does, so "what granting means" cannot drift between them.
+
+**Platform access is separate from event roles.** `platformMembers` answers only
+who may create a new CFP; a platform admin cannot read or administer an event
+unless that CFP separately grants them a role. Admins approve and revoke
+creators from `/platform`. The two global collections are unreadable and
+unwritable from every browser, including an admin's, so the directory and every
+change go through callables. The first platform admin is deliberately
+bootstrapped out of band with `scripts/set-platform-admin.mjs`.
 
 **A reviewer who is also a speaker must never read the reviews of their own
 proposal.** §6 outranks any role, so the block is on reads and writes alike,
@@ -276,10 +302,11 @@ the app — it is where every mailed link points, sign-in links included, and th
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
 
 Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
-window and organisers are managed from `/admin`. The ordinary `createCfp` flow
-writes the CFP and its owner in one transaction; `scripts/seed-cfp.mjs` is the
-outside-the-app option for a fresh environment. `scripts/set-platform.mjs` sets
-the platform-wide public origin.
+window and organisers are managed from `/admin`. An approved creator's
+`createCfp` flow writes the CFP and its owner in one transaction;
+`scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment.
+`scripts/set-platform-admin.mjs` bootstraps global admins, and
+`scripts/set-platform.mjs` sets the platform-wide public origin.
 
 ## Email
 
@@ -357,6 +384,11 @@ readable. The rules suite exercises every boundary and is mutation-checked.
   caller's role for that CFP server-side. `createCfp` writes its owner in the
   creation transaction. `claimRole` trusts only the verified auth token's email,
   and requires `email_verified === true` rather than merely "not false".
+- **Creator access cannot be self-served either.** `platformMembers` and
+  `platformRoleGrants` are closed to every client. `createCfp` rechecks the
+  caller's platform role in its creation transaction, so a stale screen or a
+  concurrent revocation cannot bypass it. App callables grant only `creator`;
+  platform-admin changes stay with the guarded bootstrap script.
 - **Every callable authorises before it acts** — `requireUid`, `requireAdmin`, or
   ownership via `readOwnProposal`, which reports `not-found` for someone else's
   proposal so a prober learns nothing either way.

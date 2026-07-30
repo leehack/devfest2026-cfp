@@ -375,6 +375,19 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ------------------------------------------------------ platform access
+
+    // Global creator access is not a global directory. Even a platform admin
+    // reaches it through narrowly scoped callables, so no browser can enumerate
+    // verified addresses or promote itself by writing a membership.
+    match /platformMembers/{memberUid} {
+      allow read, write: if false;
+    }
+
+    match /platformRoleGrants/{email} {
+      allow read, write: if false;
+    }
+
     // ------------------------------------------------------- platform config
 
     // `config/platform` holds the site's own URL, which only the functions need

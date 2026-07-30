@@ -15,6 +15,11 @@ describe('navigation labels', () => {
       'Create your call for proposals — Call for Proposals',
     ],
     [
+      { route: 'platform', cfpId: null, tab: 'overview' },
+      'Platform administration',
+      'Platform administration — Call for Proposals',
+    ],
+    [
       { route: 'me', cfpId: null, tab: 'overview' },
       'Your profile',
       'Your profile — Call for Proposals',

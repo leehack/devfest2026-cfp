@@ -24,7 +24,7 @@ export { pageShape } from './pageShape';
  * The links mailed before the move are handled by the inline script in
  * `shared/legacyHash.ts`, which has to run before the first paint.
  */
-export type Route = 'home' | 'new' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
+export type Route = 'home' | 'new' | 'platform' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
 
 export interface Place {
   route: Route;
@@ -49,6 +49,7 @@ export function placeOf(path: string): Place {
   const trimmed = path.replace(/^\/+/, '').replace(/\/+$/, '');
   if (!trimmed) return HOME;
   if (trimmed === 'new') return { ...HOME, route: 'new' };
+  if (trimmed === 'platform') return { ...HOME, route: 'platform' };
   if (trimmed === 'me') return { ...HOME, route: 'me' };
 
   const [prefix, cfpId = '', section = '', tab = ''] = trimmed.split('/');
@@ -81,6 +82,7 @@ export function currentPlace(): Place {
 export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTab }): string {
   if (place.route === 'home') return paths.home();
   if (place.route === 'new') return paths.new();
+  if (place.route === 'platform') return paths.platform();
   if (place.route === 'me') return paths.me();
   const cfpId = place.cfpId ?? '';
   if (place.route === 'cfp') return paths.cfp(cfpId);

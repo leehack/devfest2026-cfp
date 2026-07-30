@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   CFP_ID,
   createAccount,
+  invitePlatformRole,
   inviteRole,
   reset,
   seedCfp,
@@ -160,6 +161,7 @@ test.describe('navigation by persona', () => {
   });
 
   test('the create page separates the page title from its form heading', async ({ page }) => {
+    await invitePlatformRole(SPEAKER.email, 'creator');
     await signInAs(page, SPEAKER, '/new');
 
     await expect(
@@ -176,7 +178,7 @@ test.describe('navigation by persona', () => {
     ).toBeVisible();
   });
 
-  test('a 320px admin gets contained primary tabs and a discoverable section picker', async ({
+  test('a 320px admin gets contained primary tabs and direct section links', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 320, height: 760 });
@@ -201,16 +203,69 @@ test.describe('navigation by persona', () => {
       expect(link.right).toBeLessThanOrEqual(layout.viewport);
     }
 
-    const picker = page.getByRole('combobox', { name: 'Manage section' });
-    await expect(picker).toBeVisible();
-    await expect(picker).toHaveValue('proposals');
-    await expect(page.getByRole('navigation', { name: 'Admin sections' })).toBeHidden();
-    await picker.selectOption('email');
-    await expect(page).toHaveURL(at('/admin/proposals'));
-    await page.getByRole('button', { name: 'Go', exact: true }).click();
+    const menu = page.locator('.admin-section-menu');
+    await expect(menu).toBeVisible();
+    const trigger = menu.locator('summary');
+    await expect(trigger).toContainText('Proposals');
+    await expect(page.getByRole('button', { name: 'Go', exact: true })).toHaveCount(0);
+    await trigger.click();
+    const email = menu.getByRole('link', { name: 'Email', exact: true });
+    await expect(email).toHaveAttribute('href', at('/admin/email'));
+    await email.click();
     await expect(page).toHaveURL(at('/admin/email'));
-    await expect(picker).toHaveValue('email');
+    await expect(menu.locator('details')).not.toHaveAttribute('open');
+    await expect(menu.locator('summary')).toContainText('Email');
     await expect(page).toHaveTitle('Email — DevFest Montréal 2026 — Call for Proposals');
+  });
+
+  test('the section menu stays usable and dismissible in a short mobile viewport', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 320 });
+    await inviteRole(ADMIN.email, 'admin');
+    await signInAs(page, ADMIN, at('/admin/proposals'));
+
+    const menu = page.getByRole('navigation', { name: 'Admin sections' });
+    const trigger = menu.getByRole('button', { name: 'Section: Proposals' });
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+
+    const list = menu.locator('.admin-section-menu__list');
+    await expect(list).toBeVisible();
+    await expect
+      .poll(() => list.evaluate((element) => element.getBoundingClientRect().bottom))
+      .toBeLessThanOrEqual(321);
+    const geometry = await list.evaluate((element) => ({
+      top: element.getBoundingClientRect().top,
+      bottom: element.getBoundingClientRect().bottom,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      viewport: window.innerHeight,
+      rowHeights: [...element.querySelectorAll('.admin-section-menu__link')].map(
+        (row) => row.getBoundingClientRect().height,
+      ),
+    }));
+    expect(geometry.top).toBeGreaterThanOrEqual(0);
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewport + 1);
+    expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
+    expect(Math.min(...geometry.rowHeights)).toBeGreaterThanOrEqual(44);
+
+    await page.keyboard.press('Escape');
+    await expect(menu.locator('details')).not.toHaveAttribute('open');
+    await expect(trigger).toBeFocused();
+
+    await trigger.click();
+    await page.locator('.admin-shell-header').click();
+    await expect(menu.locator('details')).not.toHaveAttribute('open');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await menu.getByRole('link', { name: 'Dashboard', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(at('/admin/overview'));
   });
 });
 

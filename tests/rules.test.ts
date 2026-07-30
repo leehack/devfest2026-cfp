@@ -1200,6 +1200,66 @@ describe('finding a CFP', () => {
   });
 });
 
+describe('platform access is callable-only', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'platformMembers', REVIEWER), {
+        uid: REVIEWER,
+        email: 'chen@example.org',
+        role: 'admin',
+        grantedBy: 'bootstrap',
+      });
+      await setDoc(doc(db, 'platformRoleGrants', 'creator@example.org'), {
+        email: 'creator@example.org',
+        role: 'creator',
+        createdBy: REVIEWER,
+      });
+    });
+  });
+
+  it('does not turn a platform admin into a client-readable user directory', async () => {
+    await assertFails(getDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
+    await assertFails(getDocs(collection(asReviewer(), 'platformMembers')));
+    await assertFails(getDocs(collection(asReviewer(), 'platformRoleGrants')));
+  });
+
+  it('does not expose grants to signed-out or ordinary signed-in visitors', async () => {
+    await assertFails(
+      getDoc(
+        doc(
+          env.unauthenticatedContext().firestore(),
+          'platformRoleGrants',
+          'creator@example.org',
+        ),
+      ),
+    );
+    await assertFails(
+      getDoc(doc(asApplicant(), 'platformRoleGrants', 'creator@example.org')),
+    );
+  });
+
+  it('never lets a client grant, promote, revoke, or delete platform access', async () => {
+    await assertFails(
+      setDoc(doc(asApplicant(), 'platformMembers', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        role: 'admin',
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'creator' }),
+    );
+    await assertFails(deleteDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
+    await assertFails(
+      setDoc(doc(asReviewer(), 'platformRoleGrants', 'friend@example.org'), {
+        email: 'friend@example.org',
+        role: 'creator',
+      }),
+    );
+  });
+});
+
 /** Archiving is how a round is stopped without editing its window. */
 describe('an archived CFP is read-only', () => {
   beforeEach(async () => {

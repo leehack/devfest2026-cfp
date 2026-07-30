@@ -54,6 +54,20 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
+/** Platform creator controls have their own input and admin-bootstrap guard. */
+export function platformAdminError(error: unknown, t: Dictionary): string {
+  switch (codeOf(error)) {
+    case 'invalid-argument':
+      return t.platformAdmin.badEmail;
+    case 'failed-precondition':
+      return t.platformAdmin.adminManaged;
+    case 'permission-denied':
+      return t.nav.forbidden;
+    default:
+      return friendlyError(error, t);
+  }
+}
+
 /**
  * Resend's failures, which are about a third party and not about the caller.
  *

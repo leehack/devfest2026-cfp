@@ -11,6 +11,10 @@ import type { TemplateOverrides } from '@shared/emailTemplates';
 import type { ConfirmField } from '@shared/confirmForm';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp, CfpMember, Proposal, RoleGrant } from '@shared/types';
+import type {
+  PlatformAccessDirectory,
+  PlatformAccessStatus,
+} from '@shared/platform';
 
 /**
  * Every callable below takes a `cfpId`, and the server checks the caller's role
@@ -21,6 +25,66 @@ type In<T = unknown> = T & { cfpId: string };
 
 /** The ones whose only argument is which CFP. */
 type Just = { cfpId: string };
+
+export const platformAccess = httpsCallable<Record<string, never>, PlatformAccessStatus>(
+  functions,
+  'platformAccess',
+);
+export const listPlatformUsers = httpsCallable<
+  Record<string, never>,
+  { ok: boolean } & PlatformAccessDirectory
+>(functions, 'listPlatformUsers');
+export const grantCfpCreator = httpsCallable<
+  { email: string },
+  { email: string; applied: boolean }
+>(functions, 'grantCfpCreator');
+export const revokeCfpCreator = httpsCallable<{ email: string }, { email: string }>(
+  functions,
+  'revokeCfpCreator',
+);
+
+export function usePlatformAccess(user: User | null): {
+  status: PlatformAccessStatus | null;
+  ready: boolean;
+  error: boolean;
+  retry: () => void;
+} {
+  const uid = user?.uid ?? null;
+  const [lookup, setLookup] = useState<{
+    uid: string;
+    status: PlatformAccessStatus | null;
+    ready: boolean;
+    error: boolean;
+  } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((current) => current + 1), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!uid) {
+      setLookup(null);
+      return;
+    }
+
+    setLookup({ uid, status: null, ready: false, error: false });
+    platformAccess({})
+      .then(({ data }) => {
+        if (!cancelled) setLookup({ uid, status: data, ready: true, error: false });
+      })
+      .catch(() => {
+        if (!cancelled) setLookup({ uid, status: null, ready: true, error: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, uid]);
+
+  if (!uid) return { status: null, ready: true, error: false, retry };
+  if (!lookup || lookup.uid !== uid) {
+    return { status: null, ready: false, error: false, retry };
+  }
+  return { status: lookup.status, ready: lookup.ready, error: lookup.error, retry };
+}
 
 export const claimRole = httpsCallable<Just, { role: CfpRole | null }>(functions, 'claimRole');
 export const grantRole = httpsCallable<

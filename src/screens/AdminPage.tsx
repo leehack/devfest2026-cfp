@@ -40,12 +40,12 @@ export function AdminPage({
 }) {
   const { t } = useI18n();
   const [dirty, setDirty] = useState(false);
-  const [selectedTab, setSelectedTab] = useState(tab);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [pendingEmailState, setPendingEmailState] = useState<PendingEmailState | null>(null);
   const dirtyRef = useRef(dirty);
   const restoringHistory = useRef(false);
-  const subnav = useRef<HTMLElement>(null);
   const queueRequest = useRef(0);
+  const mobileMenu = useRef<HTMLDetailsElement>(null);
   dirtyRef.current = dirty;
   const pendingEmailCount =
     pendingEmailState?.cfpId === cfpId ? pendingEmailState.count : null;
@@ -77,29 +77,11 @@ export function AdminPage({
   }, [cfpId]);
 
   useEffect(() => {
-    setSelectedTab(tab);
-  }, [tab]);
-
-  useEffect(() => {
     void refreshPendingEmails();
     return () => {
       queueRequest.current += 1;
     };
   }, [refreshPendingEmails, tab]);
-
-  useEffect(() => {
-    const mobile = window.matchMedia('(max-width: 41.99rem)');
-    const revealActiveTab = () => {
-      if (!mobile.matches) return;
-      subnav.current
-        ?.querySelector<HTMLElement>('[aria-current="page"]')
-        ?.scrollIntoView({ block: 'nearest', inline: 'center' });
-    };
-
-    revealActiveTab();
-    mobile.addEventListener('change', revealActiveTab);
-    return () => mobile.removeEventListener('change', revealActiveTab);
-  }, [tab]);
 
   useEffect(() => {
     const pagePath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -173,13 +155,28 @@ export function AdminPage({
     };
   }, [cfpId, t.admin.unsaved, tab]);
 
-  function changeSection(next: AdminTab) {
-    if (next === tab) return;
-    if (dirtyRef.current && !window.confirm(t.admin.unsaved)) return;
-    dirtyRef.current = false;
-    setDirty(false);
-    goTo(href({ route: 'admin', cfpId, tab: next }));
-  }
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      const menu = mobileMenu.current;
+      if (!menu?.open || !(event.target instanceof Node) || menu.contains(event.target)) return;
+      setMobileMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const menu = mobileMenu.current;
+      if (event.key !== 'Escape' || !menu?.open) return;
+      setMobileMenuOpen(false);
+      menu.querySelector<HTMLElement>('summary')?.focus();
+    };
+
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => setMobileMenuOpen(false), [cfpId, tab]);
 
   return (
     <>
@@ -191,40 +188,87 @@ export function AdminPage({
         <span className="admin-shell-header__role">{t.enums.role[role]}</span>
       </header>
 
-      <form
-        className="admin-section-picker"
-        onSubmit={(event) => {
-          event.preventDefault();
-          changeSection(selectedTab);
-        }}
-      >
-        <label className="admin-section-picker__label" htmlFor="admin-section">
-          {t.admin.sectionPicker}
-        </label>
-        <select
-          id="admin-section"
-          className="field__input"
-          value={selectedTab}
-          onChange={(event) => setSelectedTab(event.target.value as AdminTab)}
+      <nav className="admin-section-menu" aria-label={t.admin.sections}>
+        <details
+          key={tab}
+          ref={mobileMenu}
+          open={mobileMenuOpen}
+          onToggle={(event) => {
+            const open = event.currentTarget.open;
+            setMobileMenuOpen(open);
+            if (open) {
+              const nav = event.currentTarget.closest('nav');
+              if (nav) {
+                const stickyTop = Number.parseFloat(getComputedStyle(nav).top) || 0;
+                window.scrollTo({
+                  top: window.scrollY + nav.getBoundingClientRect().top - stickyTop,
+                });
+              }
+            }
+          }}
         >
-          {ADMIN_TABS.map((name) => (
-            <option key={name} value={name}>
-              {name === 'email' && pendingEmailCount
-                ? t.admin.pendingEmailTabOption(pendingEmailCount)
-                : t.admin.tabs[name]}
-            </option>
-          ))}
-        </select>
-        <button
-          type="submit"
-          className="btn btn--primary btn--compact"
-          disabled={selectedTab === tab}
-        >
-          {t.admin.sectionGo}
-        </button>
-      </form>
+          <summary
+            role="button"
+            aria-expanded={mobileMenuOpen}
+            aria-label={`${t.admin.sectionPicker}: ${t.admin.tabs[tab]}`}
+          >
+            <span className="admin-section-menu__current">
+              <span className="admin-section-menu__label">{t.admin.sectionPicker}</span>
+              <strong>{t.admin.tabs[tab]}</strong>
+            </span>
+            {pendingEmailCount ? (
+              <>
+                <span className="subnav__badge" aria-hidden="true">
+                  {pendingEmailCount}
+                </span>
+                <span className="visually-hidden">
+                  {t.admin.pendingEmailTabLabel(pendingEmailCount)}
+                </span>
+              </>
+            ) : null}
+          </summary>
+          <ul className="admin-section-menu__list">
+            {ADMIN_TABS.map((name) => {
+              const content = (
+                <>
+                  <span>{t.admin.tabs[name]}</span>
+                  {name === 'email' && pendingEmailCount ? (
+                    <span className="subnav__badge" aria-hidden="true">
+                      {pendingEmailCount}
+                    </span>
+                  ) : null}
+                </>
+              );
+              return (
+                <li key={name}>
+                  {name === tab ? (
+                    <span
+                      className="admin-section-menu__link admin-section-menu__link--on"
+                      aria-current="page"
+                    >
+                      {content}
+                    </span>
+                  ) : (
+                    <Link
+                      to={href({ route: 'admin', cfpId, tab: name })}
+                      className="admin-section-menu__link"
+                      aria-label={
+                        name === 'email' && pendingEmailCount
+                          ? t.admin.pendingEmailTabLabel(pendingEmailCount)
+                          : undefined
+                      }
+                    >
+                      {content}
+                    </Link>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      </nav>
 
-      <nav className="subnav" aria-label={t.admin.sections} ref={subnav}>
+      <nav className="subnav" aria-label={t.admin.sections}>
         {ADMIN_TABS.map((name) => (
           <Link
             key={name}

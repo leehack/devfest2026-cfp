@@ -90,7 +90,9 @@ export function NewCfpPage({ user }: { user: User }) {
             ? t.platform.errors.limit
             : code === 'functions/failed-precondition'
               ? t.platform.errors.unverified
-              : t.errors.generic,
+              : code === 'functions/permission-denied'
+                ? t.platformAdmin.accessRequiredHelp
+                : t.errors.generic,
       );
     } finally {
       setBusy(false);
