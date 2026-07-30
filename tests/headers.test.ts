@@ -159,7 +159,14 @@ describe('production metadata configuration', () => {
       () =>
         expect(() => nextConfig('phase-production-build')).toThrow(
           /NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID is not a GA4 measurement ID/,
-        ),
+      ),
+    );
+  });
+
+  it('accepts Secret Manager transport whitespace around the GA4 measurement ID', () => {
+    withEnv(
+      { ...productionEnv, NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: ' G-ABC123XYZ9\n' },
+      () => expect(() => nextConfig('phase-production-build')).not.toThrow(),
     );
   });
 });
