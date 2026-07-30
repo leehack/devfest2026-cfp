@@ -2801,8 +2801,7 @@ body:has(.consent) .page {
 body:has(.consent) .actions,
 body:has(.consent) .profile-actions,
 body:has(.consent) .editorbar {
-  bottom: 0;
-  transform: translateY(calc(0px - var(--consent-height, 0px)));
+  bottom: var(--consent-height, 0px);
 }
 
 /*

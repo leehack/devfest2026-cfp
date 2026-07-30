@@ -299,13 +299,29 @@ test('full localized analytics consent copy clears sticky actions at phone and t
         )
         .toBeLessThanOrEqual(1);
 
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const actions = document.querySelector<HTMLElement>('.actions');
+            const consent = document.querySelector<HTMLElement>('.consent');
+            if (!actions || !consent) return Number.POSITIVE_INFINITY;
+            return actions.getBoundingClientRect().bottom - consent.getBoundingClientRect().top;
+          }),
+        )
+        .toBeLessThanOrEqual(1);
+
       const layout = await page.evaluate(() => {
         const actions = document.querySelector<HTMLElement>('.actions');
         const consent = document.querySelector<HTMLElement>('.consent');
         if (!actions || !consent) throw new Error('Sticky actions or consent bar is missing');
+        const actionStyle = getComputedStyle(actions);
         return {
           actionBottom: actions.getBoundingClientRect().bottom,
           consentTop: consent.getBoundingClientRect().top,
+          stickyBottom: Number.parseFloat(actionStyle.bottom),
+          transform: actionStyle.transform,
           actionButtonHeight:
             actions.querySelector('button')?.getBoundingClientRect().height ?? 0,
           pagePaddingBottom: Number.parseFloat(
@@ -316,6 +332,8 @@ test('full localized analytics consent copy clears sticky actions at phone and t
       });
 
       expect(layout.actionBottom).toBeLessThanOrEqual(layout.consentTop + 1);
+      expect(layout.stickyBottom).toBeCloseTo(layout.consentHeight, 0);
+      expect(layout.transform).toBe('none');
       expect(layout.actionButtonHeight).toBeGreaterThanOrEqual(44);
       expect(layout.pagePaddingBottom).toBeGreaterThanOrEqual(layout.consentHeight + 63);
     }
