@@ -39,6 +39,7 @@ import {
   loadConfirmForm,
   loadSubmissionForm,
   loadMyProposals,
+  deleteDraftProposal,
   saveDraft,
   submitProposal,
   respondToDecision,
@@ -63,6 +64,11 @@ import {
 
 type Errors = Record<string, string>;
 type SaveSource = 'background' | 'manual' | 'transition';
+const PAST_STATUSES = new Set<ProposalStatus>(['withdrawn', 'rejected', 'declined']);
+
+function isPastTalk(talk: LoadedProposal): boolean {
+  return PAST_STATUSES.has(talk.status);
+}
 
 interface TalkPickerProps {
   talks: LoadedProposal[];
@@ -88,37 +94,59 @@ function TalkPicker({
   onAdd,
 }: TalkPickerProps) {
   const { t } = useI18n();
-  if (talks.length === 0 || (talks.length === 1 && !canAdd)) return null;
-
   const isNew = currentId === null;
+  const currentTalks = talks.filter((talk) => !isPastTalk(talk));
+  const pastTalks = talks.filter(isPastTalk);
+  const currentIsPast = pastTalks.some((talk) => talk.id === currentId);
+  const [pastOpen, setPastOpen] = useState(currentIsPast);
+
+  useEffect(() => {
+    if (currentIsPast) setPastOpen(true);
+  }, [currentIsPast]);
+
+  if (talks.length === 0 || (talks.length === 1 && !canAdd && pastTalks.length === 0)) {
+    return null;
+  }
+
+  const renderTab = (talk: LoadedProposal) => {
+    const current = talk.id === currentId;
+    const title = (current ? currentTitle : talk.proposal.title) || t.form.untitled;
+    return (
+      <button
+        key={talk.id}
+        type="button"
+        className={`talks__tab${current ? ' talks__tab--on' : ''}`}
+        aria-current={current ? 'true' : undefined}
+        disabled={busy}
+        onClick={() => onOpen(talk.id)}
+      >
+        {title}
+        {talk.status !== 'draft' && (
+          <span className="talks__status">{t.enums.status[talk.status]}</span>
+        )}
+      </button>
+    );
+  };
 
   return (
     <nav className="talks" aria-label={t.form.yourTalks}>
       <span className="talks__label">{t.form.yourTalks}</span>
-      {talks.map((talk) => {
-        const current = talk.id === currentId;
-        const title = (current ? currentTitle : talk.proposal.title) || t.form.untitled;
-        return (
-          <button
-            key={talk.id}
-            type="button"
-            className={`talks__tab${current ? ' talks__tab--on' : ''}`}
-            aria-current={current ? 'true' : undefined}
-            disabled={busy}
-            onClick={() => onOpen(talk.id)}
-          >
-            {title}
-            {talk.status !== 'draft' && (
-              <span className="talks__status">{t.enums.status[talk.status]}</span>
-            )}
-          </button>
-        );
-      })}
+      {currentTalks.map(renderTab)}
       {isNew && <span className="talks__tab talks__tab--on">{currentTitle || t.form.newTalk}</span>}
       {canAdd && !isNew && (
         <button type="button" className="talks__add" disabled={busy} onClick={onAdd}>
           {t.form.addTalk}
         </button>
+      )}
+      {pastTalks.length > 0 && (
+        <details
+          className="talks__past"
+          open={pastOpen}
+          onToggle={(event) => setPastOpen(event.currentTarget.open)}
+        >
+          <summary>{t.form.pastTalksCount(pastTalks.length)}</summary>
+          <div className="talks__past-list">{pastTalks.map(renderTab)}</div>
+        </details>
       )}
       {atCap && <span className="talks__status">{t.form.talkCap(LIMITS.maxTalksPerSpeaker)}</span>}
     </nav>
@@ -549,11 +577,13 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
+        const currentTalks = found.filter((talk) => !isPastTalk(talk));
         const open =
           cfp.state === 'open'
-            ? (found.find((talk) => talk.status === 'draft') ?? found[0])
-            : (found.find((talk) => talk.status === 'accepted') ??
-              found.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
+            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0])
+            : (currentTalks.find((talk) => talk.status === 'accepted') ??
+              currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
+              currentTalks[0] ??
               found[0]);
         if (open) {
           const next = fromDocuments(open.proposal, profile);
@@ -693,7 +723,6 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     }
 
     if (!dirty.current) {
-      if (source === 'manual') showToast(tRef.current.form.saved, 'success');
       return true;
     }
 
@@ -752,7 +781,14 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       if (revision.current === savedRevision) {
         dirty.current = false;
         setSaveState('saved');
-        if (source === 'manual') showToast(tRef.current.form.saved, 'success');
+        if (source === 'manual') {
+          showToast(
+            currentScope === 'none'
+              ? tRef.current.profile.saved
+              : tRef.current.form.saved,
+            'success',
+          );
+        }
         if (source !== 'transition' && !answerDirty.current) collapseHistoryGuard();
       } else {
         shouldFlushAgain = source !== 'background';
@@ -981,24 +1017,24 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   // -------------------------------------------------------------- switching
 
-  /**
-   * Flushes first. The autosave is on a 1.5s debounce, so switching mid-edit
-   * would otherwise write the talk you just left into the one you opened.
-   */
-  async function openTalk(id: string) {
-    if (id === proposalId) return;
-    if (dirty.current && !(await persist('transition'))) return;
-
-    const talk = talksRef.current.find((candidate) => candidate.id === id);
-    if (!talk) return;
+  function showTalk(talk?: LoadedProposal) {
     revision.current += 1;
-    setForm(fromDocuments(talk.proposal, speakerRef.current));
-    setProposalId(id);
-    proposalIdRef.current = id;
-    setStatus(talk.status);
-    const loadedAnswers = (talk.proposal.confirmAnswers ?? {}) as Answers;
-    setAnswers(loadedAnswers);
-    savedAnswersRef.current = loadedAnswers;
+    if (talk) {
+      setForm(fromDocuments(talk.proposal, speakerRef.current));
+      setProposalId(talk.id);
+      proposalIdRef.current = talk.id;
+      setStatus(talk.status);
+      const loadedAnswers = (talk.proposal.confirmAnswers ?? {}) as Answers;
+      setAnswers(loadedAnswers);
+      savedAnswersRef.current = loadedAnswers;
+    } else {
+      setForm((previous) => clearTalk(previous));
+      setProposalId(null);
+      proposalIdRef.current = null;
+      setStatus('draft');
+      setAnswers({});
+      savedAnswersRef.current = {};
+    }
     answerDirty.current = false;
     setAnswerSaveState('idle');
     setAnswerFaults({});
@@ -1009,24 +1045,25 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     dirty.current = false;
   }
 
+  /**
+   * Flushes first. The autosave is on a 1.5s debounce, so switching mid-edit
+   * would otherwise write the talk you just left into the one you opened.
+   */
+  async function openTalk(id: string) {
+    if (id === proposalId) return;
+    if (dirty.current && !(await persist('transition'))) return;
+
+    const talk = talksRef.current.find((candidate) => candidate.id === id);
+    if (!talk) return;
+    showTalk(talk);
+  }
+
   async function startNewTalk() {
     if (dirty.current && !(await persist('transition'))) return;
 
     // From the form rather than the loaded profile: right after a first save
     // the loaded copy is a page-load old and would blank the bio just typed.
-    revision.current += 1;
-    setForm((prev) => clearTalk(prev));
-    setProposalId(null);
-    proposalIdRef.current = null;
-    setStatus('draft');
-    setAnswers({});
-    savedAnswersRef.current = {};
-    answerDirty.current = false;
-    setAnswerSaveState('idle');
-    setShowErrors(false);
-    setBanner(null);
-    setSaveState('idle');
-    dirty.current = false;
+    showTalk();
   }
 
   // ------------------------------------------------------------------- submit
@@ -1106,6 +1143,50 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       setStatus('withdrawn');
       markTalk(proposalId, 'withdrawn');
     } catch (error: any) {
+      setBanner(friendlyError(error, t));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onDeleteDraft() {
+    const target = proposalIdRef.current;
+    if (
+      archived ||
+      submitting ||
+      statusRef.current !== 'draft' ||
+      !target ||
+      !window.confirm(t.form.deleteDraftConfirm)
+    ) {
+      return;
+    }
+
+    setSubmitting(true);
+    setBanner(null);
+    try {
+      // The same form owns the account-wide profile. Flush it before removing
+      // the talk so a quick profile edit is kept as promised by the dialog.
+      // This also joins any autosave already in flight.
+      if (!(await persist('transition'))) return;
+
+      // Stop any queued debounce after the flush. Nothing may recreate the row
+      // once the callable removes it.
+      dirty.current = false;
+      revision.current += 1;
+      await activeSave.current?.catch(() => undefined);
+      await deleteDraftProposal({ cfpId, proposalId: target });
+
+      const remaining = talksRef.current.filter((talk) => talk.id !== target);
+      talksRef.current = remaining;
+      setTalks(remaining);
+      const currentTalks = remaining.filter((talk) => !isPastTalk(talk));
+      const next =
+        cfp.state === 'open'
+          ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0])
+          : (currentTalks[0] ?? remaining[0]);
+      showTalk(next);
+      showToast(t.form.draftDeleted, 'success');
+    } catch (error) {
       setBanner(friendlyError(error, t));
     } finally {
       setSubmitting(false);
@@ -1251,6 +1332,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   const withdrawable = status !== 'draft' && inStatusSet('withdrawable', status);
+  const profileOnly = scope === 'none';
   const liveErrorKeys = Object.keys(liveErrors);
   const hasAny = (keys: string[]) => keys.some((key) => liveErrorKeys.includes(key));
   const hasPrefix = (prefix: string) => liveErrorKeys.some((key) => key.startsWith(prefix));
@@ -1647,18 +1729,22 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       {/* -------------------------------------------------------- actions */}
       <div className="actions">
         <div className="actions__status" aria-live="polite">
-          {saveState === 'saving' && t.form.saving}
-          {saveState === 'saved' && t.form.saved}
-          {saveState === 'idle' && dirty.current && t.form.unsaved}
+          {saveState === 'saving' && (profileOnly ? t.profile.saving : t.form.saving)}
+          {saveState === 'saved' && (profileOnly ? t.profile.saved : t.form.saved)}
+          {saveState === 'idle' &&
+            dirty.current &&
+            (profileOnly ? t.profile.unsaved : t.form.unsaved)}
           {saveState === 'failed' && (
             <div className="actions__save-failure" role="alert">
-              <span className="field__error">{saveError || t.form.saveFailed}</span>
+              <span className="field__error">
+                {saveError || (profileOnly ? t.profile.saveFailed : t.form.saveFailed)}
+              </span>
               <button
                 type="button"
                 className="btn btn--ghost actions__retry"
                 onClick={() => void persist('manual')}
               >
-                {t.form.retrySave}
+                {profileOnly ? t.profile.retrySave : t.form.retrySave}
               </button>
             </div>
           )}
@@ -1676,18 +1762,30 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         )}
 
         <div className="actions__buttons">
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={
-              (scope === 'none' && proposalId === null) ||
-              saveState === 'saving' ||
-              submitting
-            }
-            onClick={() => void persist('manual')}
-          >
-            {status === 'draft' ? t.form.save : t.form.saveChanges}
-          </button>
+          {(!profileOnly || dirty.current) && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={!dirty.current || saveState === 'saving' || submitting}
+              onClick={() => void persist('manual')}
+            >
+              {profileOnly
+                ? t.profile.save
+                : status === 'draft'
+                  ? t.form.save
+                  : t.form.saveChanges}
+            </button>
+          )}
+          {!archived && status === 'draft' && proposalId !== null && (
+            <button
+              type="button"
+              className="btn btn--danger"
+              disabled={submitting || saveState === 'saving'}
+              onClick={() => void onDeleteDraft()}
+            >
+              {t.form.deleteDraft}
+            </button>
+          )}
           {status === 'draft' && (
             <button type="submit" className="btn btn--primary" disabled={talkDisabled}>
               {submitting ? t.form.submitting : t.form.submit}

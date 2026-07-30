@@ -1197,7 +1197,7 @@ p {
   color: var(--accent);
 }
 
-/* Reserved for what cannot be undone. Deleting a CFP is the only one. */
+/* Reserved for destructive actions that cannot be undone. */
 .btn--danger {
   border-color: var(--error);
   background: var(--error);
@@ -1216,6 +1216,7 @@ p {
   .subnav__tab,
   .talks__tab,
   .talks__add,
+  .talks__past summary,
   .field__input,
   .people__role {
     min-height: 44px;
@@ -1441,6 +1442,32 @@ p {
 .talks__add:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.talks__past {
+  flex-basis: 100%;
+  margin-top: var(--s-1);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--line);
+}
+
+.talks__past summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.talks__past-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.talks__past-list .talks__tab {
+  background: var(--surface-2);
 }
 
 /* --------------------------------------------- committee-only screens */
@@ -3845,6 +3872,7 @@ p {
 
 .setup-panel,
 .proposal-dashboard,
+.review-coverage,
 .decision-panel {
   margin-bottom: 0;
   padding: clamp(1.25rem, 1rem + 1vw, 2rem);
@@ -3856,6 +3884,7 @@ p {
 
 .setup-panel__heading,
 .proposal-dashboard__heading,
+.review-coverage__heading,
 .decision-panel__heading {
   display: flex;
   flex-wrap: wrap;
@@ -3866,6 +3895,7 @@ p {
 
 .setup-panel__heading h2,
 .proposal-dashboard__heading h2,
+.review-coverage__heading h2,
 .decision-panel__heading h2 {
   margin: 0 0 var(--s-1);
 }
@@ -3944,6 +3974,152 @@ p {
 
 .proposal-dashboard {
   margin-bottom: var(--s-5);
+}
+
+.review-coverage {
+  margin-bottom: var(--s-5);
+}
+
+.review-coverage__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: var(--s-4);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.review-coverage__metrics > div {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+  padding: var(--s-3) var(--s-4);
+}
+
+.review-coverage__metrics > div:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
+}
+
+.review-coverage__metrics > div:nth-child(even) {
+  border-left: 1px solid var(--line);
+}
+
+.review-coverage__metrics span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.review-coverage__metrics strong {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-coverage__list {
+  display: grid;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+}
+
+.review-coverage__error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--s-4);
+}
+
+.review-coverage__error p {
+  margin: 0;
+}
+
+.reviewer-progress {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+
+.reviewer-progress--complete {
+  border-color: color-mix(in srgb, var(--good) 35%, var(--line));
+}
+
+.reviewer-progress__identity,
+.reviewer-progress__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reviewer-progress__identity > div {
+  min-width: 0;
+}
+
+.reviewer-progress__identity h3,
+.reviewer-progress__identity p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reviewer-progress__identity p,
+.reviewer-progress__summary span {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.reviewer-progress__bar {
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: var(--r-full);
+  background: var(--line);
+}
+
+.reviewer-progress__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--g-blue);
+  transition: width 180ms ease;
+}
+
+.reviewer-progress--complete .reviewer-progress__bar > span {
+  background: var(--good);
+}
+
+.reviewer-progress__missing {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s-3);
+}
+
+.reviewer-progress__missing summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--g-blue);
+  font-weight: 700;
+}
+
+.reviewer-progress__missing ul {
+  display: grid;
+  gap: var(--s-2);
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-5);
+}
+
+.reviewer-progress__missing li {
+  overflow-wrap: anywhere;
+}
+
+.review-coverage__privacy {
+  margin: var(--s-4) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 .proposal-dashboard__charts {
@@ -4212,6 +4388,18 @@ p {
 
   .decision-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-coverage__metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .review-coverage__metrics > div:nth-child(n) {
+    border-top: 0;
+  }
+
+  .review-coverage__metrics > div + div {
+    border-left: 1px solid var(--line);
   }
 
   .decision-filter--search {

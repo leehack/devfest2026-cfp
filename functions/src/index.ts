@@ -20,7 +20,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
-import { inStatusSet, LIMITS, STATUS_SETS } from '../../shared/enums';
+import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES, STATUS_SETS } from '../../shared/enums';
 import { submissionSchema } from '../../shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -29,7 +29,7 @@ import {
   validateSubmissionForm,
   type SubmissionForm,
 } from '../../shared/submissionForm';
-import { aggregateReviews, type ReviewRecord } from '../../shared/aggregate';
+import { aggregateReviews, type Aggregate, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
 import {
   DECISION_KINDS,
@@ -572,12 +572,70 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
 
     tx.update(proposalRef, {
       status: 'withdrawn',
+      // A withdrawn talk must not keep serving a score while the aggregate
+      // refresh trigger catches up.
+      aggregate: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
 
   logger.info('proposal withdrawn', { proposalId, uid });
   return { ok: true };
+});
+
+/**
+ * Deletes writing that was never submitted to the committee.
+ *
+ * Once a proposal has any submission or review history it is an audit record,
+ * so withdrawal — not deletion — is the only supported operation. Every
+ * precondition is read in the same transaction as the delete so a concurrent
+ * archive, submit, review or email write cannot slip through.
+ */
+export const deleteDraftProposal = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = requireUid(request, 'delete a draft');
+  const proposalId = requireProposalId(request.data);
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
+
+  await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
+    const proposal = await readOwnProposal(tx, proposalRef, uid);
+
+    if (proposal.status !== 'draft') {
+      throw new HttpsError('failed-precondition', 'Only an unsubmitted draft can be deleted.');
+    }
+
+    const hasSubmissionHistory = ['submittedAt', 'speakerSnapshot', 'aggregate'].some((key) =>
+      Object.prototype.hasOwnProperty.call(proposal, key),
+    );
+    if (hasSubmissionHistory) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This draft has submission history and cannot be deleted.',
+      );
+    }
+
+    const [reviews, emailHistory] = await Promise.all([
+      tx.get(proposalRef.collection('reviews').limit(1)),
+      tx.get(
+        db
+          .collection(`cfps/${cfpId}/emailLog`)
+          .where('proposalId', '==', proposalId)
+          .limit(1),
+      ),
+    ]);
+    if (!reviews.empty || !emailHistory.empty) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This draft has committee or email history and cannot be deleted.',
+      );
+    }
+
+    tx.delete(proposalRef);
+  });
+
+  logger.info('draft proposal deleted', { cfpId, proposalId, uid });
+  return { ok: true, proposalId };
 });
 
 /**
@@ -808,60 +866,315 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
   return { ok: true, form };
 });
 
+const REVIEW_QUEUE_STATUSES = ['submitted', 'under_review'] as const;
+const AGGREGATE_REVISION_FIELD = '_aggregateRevision';
+const AGGREGATE_CHUNK = 400;
+
+const isKnownScore = (score: unknown): score is number =>
+  (SCORES as readonly unknown[]).includes(score);
+
+const aggregateScorable = (status: unknown): boolean =>
+  typeof status === 'string' &&
+  (PROPOSAL_STATUSES as readonly string[]).includes(status) &&
+  status !== 'draft' &&
+  status !== 'withdrawn';
+
 /**
- * Recomputes `aggregate` on every reviewed proposal. Run once when the round
- * closes (§8) — a batch job, not a trigger: a z-score is relative to everything
- * that reviewer scored, so one new review moves the normalised score of every
- * proposal they touched. Per-review triggers would fan out across the whole
- * collection and race each other.
+ * The current review policy is deliberately explicit: every active role-holder
+ * sees every in-round proposal they do not speak on. There is no assignment
+ * document yet, so a report that implied partitioned panels would manufacture
+ * obligations the data model cannot represent.
+ *
+ * Only completion metadata leaves this callable. Scores and comments do not,
+ * and an admin who is also a speaker gets no coverage metadata at all for their
+ * own proposal — the same privacy boundary enforced by Firestore rules.
+ */
+export const reviewCoverage = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const requesterUid = await requireAdmin(request, cfpId, 'view review coverage');
+
+  const [members, proposalSnaps, reviewSnaps] = await Promise.all([
+    db.collection(`cfps/${cfpId}/members`).get(),
+    db
+      .collection(`cfps/${cfpId}/proposals`)
+      .where('status', 'in', [...REVIEW_QUEUE_STATUSES])
+      .get(),
+    db.collectionGroup('reviews').where('cfpId', '==', cfpId).get(),
+  ]);
+
+  const current = proposalSnaps.docs.map((proposal) => ({
+    id: proposal.id,
+    title: String(proposal.get('title') ?? ''),
+    speakerIds: ((proposal.get('speakerIds') as unknown[]) ?? []).filter(
+      (uid): uid is string => typeof uid === 'string',
+    ),
+  }));
+  const hiddenOwnProposalCount = current.filter((proposal) =>
+    proposal.speakerIds.includes(requesterUid),
+  ).length;
+  const visible = current
+    .filter((proposal) => !proposal.speakerIds.includes(requesterUid))
+    .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+  const visibleIds = new Set(visible.map((proposal) => proposal.id));
+  const activeReviewerIds = new Set(members.docs.map((member) => member.id));
+
+  const reviewByPair = new Map<
+    string,
+    { score: unknown; conflictOfInterest: boolean }
+  >();
+  for (const review of reviewSnaps.docs) {
+    const proposalId = review.ref.parent.parent?.id;
+    if (!proposalId || !visibleIds.has(proposalId) || !activeReviewerIds.has(review.id)) continue;
+    reviewByPair.set(`${proposalId}:${review.id}`, {
+      score: review.get('score'),
+      conflictOfInterest: review.get('conflictOfInterest') === true,
+    });
+  }
+
+  const reviewers = members.docs
+    .map((member) => {
+      const data = member.data();
+      const eligible = visible.filter((proposal) => !proposal.speakerIds.includes(member.id));
+      const scoredProposalIds: string[] = [];
+      const conflictProposalIds: string[] = [];
+      const missingProposalIds: string[] = [];
+
+      for (const proposal of eligible) {
+        const review = reviewByPair.get(`${proposal.id}:${member.id}`);
+        if (!review) {
+          missingProposalIds.push(proposal.id);
+        } else if (review.conflictOfInterest) {
+          conflictProposalIds.push(proposal.id);
+        } else if (isKnownScore(review.score)) {
+          scoredProposalIds.push(proposal.id);
+        } else {
+          // A malformed historic row is not evidence that a valid score landed.
+          missingProposalIds.push(proposal.id);
+        }
+      }
+
+      return {
+        uid: member.id,
+        name: String(data.name ?? ''),
+        email: String(data.email ?? ''),
+        role: data.role as CfpRole,
+        eligibleCount: eligible.length,
+        scoredProposalIds,
+        conflictProposalIds,
+        missingProposalIds,
+      };
+    })
+    .sort(
+      (a, b) =>
+        (a.name || a.email).localeCompare(b.name || b.email) || a.uid.localeCompare(b.uid),
+    );
+
+  return {
+    ok: true,
+    hiddenOwnProposalCount,
+    proposals: visible.map(({ id, title }) => ({ id, title })),
+    reviewers,
+  };
+});
+
+interface AggregateRefresh {
+  reviewCount: number;
+  proposalCount: number;
+  writes: number;
+  superseded: boolean;
+}
+
+/** A monotonic fence: an older refresh may never commit after a newer one starts. */
+async function reserveAggregateRevision(cfpId: string): Promise<number | null> {
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  return db.runTransaction(async (tx) => {
+    const cfp = await tx.get(cfpRef);
+    if (!cfp.exists) return null;
+    const stored = cfp.get(AGGREGATE_REVISION_FIELD);
+    const current = typeof stored === 'number' && Number.isSafeInteger(stored) ? stored : 0;
+    const revision = current + 1;
+    tx.update(cfpRef, { [AGGREGATE_REVISION_FIELD]: revision });
+    return revision;
+  });
+}
+
+function sameAggregate(current: unknown, desired: Aggregate): boolean {
+  if (!current || typeof current !== 'object') return false;
+  const value = current as Record<string, unknown>;
+  return (
+    value.avgScore === desired.avgScore &&
+    value.normalizedScore === desired.normalizedScore &&
+    value.reviewCount === desired.reviewCount &&
+    value.stdDev === desired.stdDev &&
+    Object.keys(value).length === 4
+  );
+}
+
+/**
+ * Recomputes the complete CFP because one review changes that reviewer's
+ * calibration, which can move every proposal they scored. Each write chunk
+ * checks the revision fence transactionally. If a newer event starts, the old
+ * run stops; it cannot land stale values after the new run.
+ */
+async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
+  const revision = await reserveAggregateRevision(cfpId);
+  if (revision === null) {
+    return { reviewCount: 0, proposalCount: 0, writes: 0, superseded: false };
+  }
+
+  const [proposalSnaps, reviewSnaps] = await Promise.all([
+    db.collection(`cfps/${cfpId}/proposals`).get(),
+    db.collectionGroup('reviews').where('cfpId', '==', cfpId).get(),
+  ]);
+  const scorableIds = new Set(
+    proposalSnaps.docs
+      .filter((proposal) => aggregateScorable(proposal.get('status')))
+      .map((proposal) => proposal.id),
+  );
+  const reviews = reviewSnaps.docs.flatMap<ReviewRecord>((review) => {
+    const proposalId = review.ref.parent.parent?.id ?? '';
+    const score = review.get('score') as unknown;
+    if (!scorableIds.has(proposalId) || !isKnownScore(score)) return [];
+    return [
+      {
+        proposalId,
+        reviewerUid: review.id,
+        score,
+        conflictOfInterest: review.get('conflictOfInterest') === true,
+      },
+    ];
+  });
+  const aggregates = aggregateReviews(reviews);
+
+  const candidates = proposalSnaps.docs.filter((proposal) => {
+    const desired = aggregates.get(proposal.id);
+    const current = proposal.get('aggregate') as unknown;
+    return desired
+      ? !sameAggregate(current, desired)
+      : Object.prototype.hasOwnProperty.call(proposal.data(), 'aggregate');
+  });
+
+  let writes = 0;
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  for (let i = 0; i < candidates.length; i += AGGREGATE_CHUNK) {
+    const chunk = candidates.slice(i, i + AGGREGATE_CHUNK);
+    const result = await db.runTransaction(async (tx) => {
+      const cfp = await tx.get(cfpRef);
+      if (!cfp.exists || cfp.get(AGGREGATE_REVISION_FIELD) !== revision) {
+        return { applied: false, writes: 0 };
+      }
+
+      const currentProposals = [];
+      for (const proposal of chunk) currentProposals.push(await tx.get(proposal.ref));
+
+      let chunkWrites = 0;
+      for (const proposal of currentProposals) {
+        if (!proposal.exists) continue;
+        const desired = aggregateScorable(proposal.get('status'))
+          ? aggregates.get(proposal.id)
+          : undefined;
+        const current = proposal.get('aggregate') as unknown;
+        if (desired ? sameAggregate(current, desired) : current === undefined) continue;
+
+        tx.update(proposal.ref, {
+          aggregate: desired ?? FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        chunkWrites += 1;
+      }
+      return { applied: true, writes: chunkWrites };
+    });
+
+    if (!result.applied) {
+      return {
+        reviewCount: reviews.length,
+        proposalCount: aggregates.size,
+        writes,
+        superseded: true,
+      };
+    }
+    writes += result.writes;
+  }
+
+  return {
+    reviewCount: reviews.length,
+    proposalCount: aggregates.size,
+    writes,
+    superseded: false,
+  };
+}
+
+/**
+ * Operational fallback for an admin. Automatic triggers normally keep these
+ * current; this remains useful after an outage or a historic data repair.
  */
 export const recomputeAggregates = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
-  const uid = await requireAdmin(request, cfpId, 'close the review round');
+  const uid = await requireAdmin(request, cfpId, 'recompute review scores');
+  const result = await refreshAggregates(cfpId);
 
-  /*
-   * Every review on every proposal in *this* CFP, in one read pass.
-   *
-   * Filtered on the denormalised `cfpId` rather than on the path, because a
-   * collection-group query cannot be constrained by ancestor — without the
-   * filter this would sweep up every review on the platform and write one
-   * organiser's scores onto another's proposals. The rules pin
-   * `request.resource.data.cfpId` to the path on write, so the field cannot lie.
-   */
-  const reviewSnaps = await db.collectionGroup('reviews').where('cfpId', '==', cfpId).get();
-
-  const reviews: ReviewRecord[] = reviewSnaps.docs.map((d) => ({
-    // reviews live at cfps/{cfpId}/proposals/{proposalId}/reviews/{reviewerUid}
-    proposalId: d.ref.parent.parent!.id,
-    reviewerUid: d.id,
-    score: d.data().score,
-    conflictOfInterest: d.data().conflictOfInterest === true,
-  }));
-
-  const aggregates = aggregateReviews(reviews);
-
-  // Firestore caps a batch at 500 writes.
-  const entries = [...aggregates.entries()];
-  const CHUNK = 400;
-  for (let i = 0; i < entries.length; i += CHUNK) {
-    const batch = db.batch();
-    for (const [proposalId, aggregate] of entries.slice(i, i + CHUNK)) {
-      batch.update(db.doc(`cfps/${cfpId}/proposals/${proposalId}`), {
-        aggregate,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }
-    await batch.commit();
-  }
-
-  logger.info('aggregates recomputed', {
-    uid,
-    reviews: reviews.length,
-    proposals: aggregates.size,
-  });
-
-  return { ok: true, reviewCount: reviews.length, proposalCount: aggregates.size };
+  logger.info('aggregates recomputed', { cfpId, uid, ...result });
+  return {
+    ok: true,
+    reviewCount: result.reviewCount,
+    proposalCount: result.proposalCount,
+  };
 });
+
+export const refreshReviewAggregates = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}/reviews/{reviewerUid}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const before = event.data?.before;
+    const after = event.data?.after;
+    if (before?.exists && after?.exists) {
+      const scoreChanged = before.get('score') !== after.get('score');
+      const conflictChanged =
+        (before.get('conflictOfInterest') === true) !==
+        (after.get('conflictOfInterest') === true);
+      if (!scoreChanged && !conflictChanged) return;
+    }
+
+    const result = await refreshAggregates(event.params.cfpId);
+    logger.info('review aggregate refresh completed', {
+      cfpId: event.params.cfpId,
+      proposalId: event.params.proposalId,
+      reviewerUid: event.params.reviewerUid,
+      ...result,
+    });
+  },
+);
+
+export const refreshProposalAggregates = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const beforeScorable =
+      event.data?.before.exists === true &&
+      aggregateScorable(event.data.before.get('status'));
+    const afterScorable =
+      event.data?.after.exists === true &&
+      aggregateScorable(event.data.after.get('status'));
+    if (beforeScorable === afterScorable) return;
+
+    const result = await refreshAggregates(event.params.cfpId);
+    logger.info('proposal aggregate refresh completed', {
+      cfpId: event.params.cfpId,
+      proposalId: event.params.proposalId,
+      beforeScorable,
+      afterScorable,
+      ...result,
+    });
+  },
+);
 
 /**
  * Fetches and parses a public Sessionize profile. Writes nothing.

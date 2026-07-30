@@ -39,10 +39,29 @@ export const setProposalStatus = httpsCallable<
   In<{ proposalId: string; status: string }>,
   { ok: boolean; proposalId: string; status: ProposalStatus }
 >(functions, 'setProposalStatus');
-export const recomputeAggregates = httpsCallable<
-  Just,
-  { ok: boolean; reviewCount: number; proposalCount: number }
->(functions, 'recomputeAggregates');
+
+export interface ReviewCoverageReviewer {
+  uid: string;
+  name: string;
+  email: string;
+  role: CfpRole;
+  eligibleCount: number;
+  scoredProposalIds: string[];
+  conflictProposalIds: string[];
+  missingProposalIds: string[];
+}
+
+export interface ReviewCoverageResult {
+  ok: boolean;
+  hiddenOwnProposalCount: number;
+  proposals: Array<{ id: string; title: string }>;
+  reviewers: ReviewCoverageReviewer[];
+}
+
+export const reviewCoverage = httpsCallable<Just, ReviewCoverageResult>(
+  functions,
+  'reviewCoverage',
+);
 
 // ------------------------------------------------------------ the CFP itself
 

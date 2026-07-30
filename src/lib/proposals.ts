@@ -241,6 +241,11 @@ export const withdrawProposal = httpsCallable<{ cfpId: string; proposalId: strin
   'withdrawProposal',
 );
 
+export const deleteDraftProposal = httpsCallable<
+  { cfpId: string; proposalId: string },
+  CallableResult
+>(functions, 'deleteDraftProposal');
+
 export const respondToDecision = httpsCallable<
   { cfpId: string; proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
   CallableResult & { status: 'confirmed' | 'declined' }

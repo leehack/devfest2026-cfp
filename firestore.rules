@@ -243,9 +243,9 @@ service cloud.firestore {
           && !archived(cfpId)
           && ((cfpOpen(cfpId) && beforeReview()) || (underConsideration() && onlyLogistics()));
 
-        // Withdrawal is a status change, handled by a function. Hard deletes
-        // would break the emailLog audit trail. Deleting a whole CFP is a
-        // callable using admin credentials, which bypasses this.
+        // Submitted work is withdrawn rather than deleted so email and review
+        // history stays intact. The narrowly guarded deleteDraftProposal
+        // callable is the only per-talk hard delete; clients never delete.
         allow delete: if false;
 
         // ----------------------------------------------------------- reviews

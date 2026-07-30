@@ -88,8 +88,8 @@ export const STATUS_SETS = {
   decidable: ['under_review', 'accepted', 'confirmed', 'declined', 'waitlisted', 'rejected'],
   /** Settled either way — the rest is what the committee still owes an answer on. */
   decided: ['accepted', 'confirmed', 'declined', 'waitlisted', 'rejected'],
-  /** A speaker may take it back from any of these. */
-  withdrawable: ['draft', 'submitted', 'under_review', 'accepted', 'confirmed', 'waitlisted'],
+  /** A submitted talk may be taken back. An unsubmitted draft is deleted instead. */
+  withdrawable: ['submitted', 'under_review', 'accepted', 'confirmed', 'waitlisted'],
   /** The speaker's own answer to an acceptance, and the only statuses they set. */
   speakerResponse: ['confirmed', 'declined'],
 } as const satisfies Record<string, readonly ProposalStatus[]>;

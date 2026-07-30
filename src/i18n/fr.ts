@@ -172,6 +172,8 @@ export const fr: Dictionary = {
     save: 'Enregistrer le profil',
     saving: 'Enregistrement…',
     saved: 'Enregistré.',
+    saveFailed: 'Impossible d’enregistrer votre profil',
+    retrySave: 'Réessayer',
     incomplete: 'Certains champs restent à remplir.',
   },
 
@@ -382,7 +384,8 @@ export const fr: Dictionary = {
       rejected:
         'Pas cette année. Il y a eu plus de bonnes propositions que de places, et nous en sommes désolés.',
       declined: 'Vous avez décliné la place.',
-      withdrawn: 'Vous avez retiré celle-ci.',
+      withdrawn:
+        'Vous avez retiré celle-ci. Elle n’est plus évaluée ni comptée dans votre limite; les organisateurs en conservent le dossier.',
     } as Record<string, string>,
 
     editHelp: {
@@ -391,6 +394,11 @@ export const fr: Dictionary = {
         'La conférence elle-même est maintenant verrouillée. Votre profil et vos réponses de voyage restent modifiables.',
       none: 'Celle-ci est close. Votre profil vous appartient toujours.',
     } as Record<string, string>,
+    pastTalksCount: (count: number) => `Propositions passées (${count})`,
+    deleteDraft: 'Supprimer le brouillon',
+    deleteDraftConfirm:
+      'Supprimer définitivement ce brouillon ? Votre profil sera conservé, mais cette proposition sera irrécupérable.',
+    draftDeleted: 'Brouillon supprimé.',
     withdraw: 'Retirer la proposition',
     withdrawConfirm: 'Retirer cette proposition ? Cette action est irréversible.',
     confirmAccept: 'Oui, je serai là',
@@ -719,7 +727,7 @@ export const fr: Dictionary = {
 
     proposals: 'Propositions',
     proposalsHelp:
-      'Trouvez les conférences qui demandent votre attention, puis prenez une décision explicite à la fois.',
+      'Les notes se mettent à jour automatiquement à chaque évaluation. Trouvez les conférences qui demandent votre attention, puis prenez une décision explicite à la fois.',
     overview: 'La ronde en un coup d’œil',
     overviewHelp:
       'Couverture, résultats et équilibre du programme avant de prendre la prochaine décision.',
@@ -735,10 +743,11 @@ export const fr: Dictionary = {
     search: 'Rechercher',
     searchPlaceholder: 'Titre ou conférencier',
     filterStatus: 'Statut',
+    filterCurrentStatuses: 'Propositions actuelles',
     filterAllStatuses: 'Tous les statuts',
     filterCategory: 'Catégorie',
     filterAllCategories: 'Toutes les catégories',
-    filterCoverage: 'Couverture des évaluations',
+    filterScoreStatus: 'État des notes',
     filterAllScores: 'Toutes les propositions',
     filterScored: 'Évaluées',
     filterUnscored: 'Non évaluées',
@@ -752,6 +761,9 @@ export const fr: Dictionary = {
     showingProposals: (shown: number, total: number) => `${shown} sur ${total} propositions`,
     clearFilters: 'Effacer les filtres',
     noMatchingProposals: 'Aucune proposition ne correspond à ces filtres.',
+    noCurrentProposals:
+      'Aucune proposition actuelle. Les propositions retirées sont masquées par défaut.',
+    showWithdrawn: 'Afficher les propositions retirées',
     savingDecision: 'Enregistrement…',
     decisionChanged: (title: string, from: string, to: string) =>
       `« ${title} » est passée de ${from} à ${to}.`,
@@ -872,11 +884,27 @@ export const fr: Dictionary = {
       `${live} devant le comité · ${accepted} acceptées · ${waitlisted} en liste d’attente · ${live - decided} à décider`,
     noneAccepted: 'Aucune acceptation pour l’instant.',
     colSpeaker: 'Conférencier',
-    recompute: 'Recalculer les notes',
-    recomputing: 'Calcul en cours…',
-    recomputed: (proposals: number, reviews: number) =>
-      `${reviews} évaluations réparties sur ${proposals} propositions.`,
     noProposals: 'Aucune proposition pour l’instant.',
+    reviewerCoverage: 'Progression des évaluations',
+    reviewerCoverageHelp:
+      'La file actuelle de chaque membre actif du comité. Il n’y a pas d’attribution par proposition; un conflit compte comme réponse, mais pas comme note.',
+    reviewerCoverageEmpty: 'Aucun membre actif du comité ne peut encore évaluer.',
+    reviewerCoverageNoTalks: 'Aucune proposition n’attend une évaluation.',
+    reviewerCoveragePrivate: (count: number) =>
+      count === 1
+        ? 'Une de vos propositions est masquée ici pour protéger la confidentialité des évaluations.'
+        : `${count} de vos propositions sont masquées ici pour protéger la confidentialité des évaluations.`,
+    reviewerHandled: (handled: number, eligible: number) =>
+      `${handled} réponses sur ${eligible}`,
+    reviewerBreakdown: (scored: number, conflicts: number, missing: number) =>
+      `${scored} notées · ${conflicts} conflits · ${missing} sans réponse`,
+    reviewerMissing: (count: number) =>
+      count === 1 ? '1 proposition sans réponse' : `${count} propositions sans réponse`,
+    reviewerProgressFor: (name: string) => `Progression des évaluations de ${name}`,
+    coverageResponses: 'Réponses',
+    coverageScores: 'Notes',
+    coverageConflicts: 'Conflits',
+    coverageWaiting: 'En attente',
     colTitle: 'Titre',
     colStatus: 'Statut',
     colScore: 'Moyenne',

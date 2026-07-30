@@ -84,11 +84,18 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   await scoreTalk(page, then, scores[then], 2);
 
   // ------------------------------------------------------------------ admin
+  await expect
+    .poll(
+      async () =>
+        (await readProposals()).filter((proposal) => proposal.aggregate?.reviewCount === 1).length,
+      { timeout: 15_000 },
+    )
+    .toBe(2);
+
   await inviteRole(ADMIN.email, 'admin');
   await signInAs(page, ADMIN, at('/admin/proposals'));
-
-  await page.getByRole('button', { name: 'Recompute scores' }).click();
-  await expect(page.getByText('2 reviews across 2 proposals.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Recompute scores' })).toHaveCount(0);
+  await expect(page.getByText('2 of 2 proposals')).toBeVisible();
 
   // Ranked best first, so the 4 outranks the 2. Scoped to the Proposals
   // section — the admin page has several tables, and the email log is one.

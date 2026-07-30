@@ -173,6 +173,8 @@ export const en = {
     save: 'Save profile',
     saving: 'Saving…',
     saved: 'Saved.',
+    saveFailed: 'Could not save your profile',
+    retrySave: 'Try saving again',
     incomplete: 'Some of this still needs filling in.',
   },
 
@@ -390,7 +392,8 @@ export const en = {
       waitlisted: 'Not in yet, but not out — we come back to the waitlist as places free up.',
       rejected: 'Not this year. There were more good proposals than slots, and we are sorry.',
       declined: 'You turned down the slot.',
-      withdrawn: 'You withdrew this one.',
+      withdrawn:
+        'You withdrew this one. It is no longer reviewed or counted toward your limit; organisers keep the record.',
     } as Record<string, string>,
 
     /** What is still theirs to change, keyed by `EditScope`. */
@@ -402,6 +405,11 @@ export const en = {
         'The talk itself is locked now. Your profile and your travel answers are still editable.',
       none: 'This one is closed. Your profile is still yours to edit.',
     } as Record<string, string>,
+    pastTalksCount: (count: number) => `Past talks (${count})`,
+    deleteDraft: 'Delete draft',
+    deleteDraftConfirm:
+      'Delete this draft permanently? Your speaker profile will be kept, but this talk cannot be recovered.',
+    draftDeleted: 'Draft deleted.',
     withdraw: 'Withdraw proposal',
     withdrawConfirm: 'Withdraw this proposal? This cannot be undone.',
     confirmAccept: 'Yes, I can present',
@@ -725,7 +733,7 @@ export const en = {
 
     proposals: 'Proposals',
     proposalsHelp:
-      'Find the talks that need attention, then make one explicit decision at a time.',
+      'Scores update automatically as reviews are saved. Find the talks that need attention, then make one explicit decision at a time.',
     overview: 'The round at a glance',
     overviewHelp: 'Coverage, outcomes, and programme balance before you make the next decision.',
     metricInRound: 'In the round',
@@ -740,10 +748,11 @@ export const en = {
     search: 'Search',
     searchPlaceholder: 'Title or speaker',
     filterStatus: 'Status',
+    filterCurrentStatuses: 'Current proposals',
     filterAllStatuses: 'All statuses',
     filterCategory: 'Category',
     filterAllCategories: 'All categories',
-    filterCoverage: 'Review coverage',
+    filterScoreStatus: 'Talk score status',
     filterAllScores: 'All proposals',
     filterScored: 'Scored',
     filterUnscored: 'Not scored',
@@ -757,6 +766,8 @@ export const en = {
     showingProposals: (shown: number, total: number) => `${shown} of ${total} proposals`,
     clearFilters: 'Clear filters',
     noMatchingProposals: 'No proposals match these filters.',
+    noCurrentProposals: 'No current proposals. Withdrawn talks are hidden by default.',
+    showWithdrawn: 'Show withdrawn talks',
     savingDecision: 'Saving…',
     decisionChanged: (title: string, from: string, to: string) =>
       `“${title}” moved from ${from} to ${to}.`,
@@ -874,11 +885,27 @@ export const en = {
       `${live} in front of the committee · ${accepted} accepted · ${waitlisted} waitlisted · ${live - decided} still to decide`,
     noneAccepted: 'Nothing accepted yet.',
     colSpeaker: 'Speaker',
-    recompute: 'Recompute scores',
-    recomputing: 'Recomputing…',
-    recomputed: (proposals: number, reviews: number) =>
-      `${reviews} reviews across ${proposals} proposals.`,
     noProposals: 'No proposals yet.',
+    reviewerCoverage: 'Review progress',
+    reviewerCoverageHelp:
+      'Every active committee member’s current review queue. There are no per-talk assignments; conflicts count as a response, not a score.',
+    reviewerCoverageEmpty: 'No active committee members can review yet.',
+    reviewerCoverageNoTalks: 'Nothing is waiting for review.',
+    reviewerCoveragePrivate: (count: number) =>
+      count === 1
+        ? '1 of your own talks is hidden here to protect review privacy.'
+        : `${count} of your own talks are hidden here to protect review privacy.`,
+    reviewerHandled: (handled: number, eligible: number) =>
+      `${handled} of ${eligible} responses`,
+    reviewerBreakdown: (scored: number, conflicts: number, missing: number) =>
+      `${scored} scored · ${conflicts} conflicts · ${missing} no response yet`,
+    reviewerMissing: (count: number) =>
+      count === 1 ? '1 talk with no response yet' : `${count} talks with no response yet`,
+    reviewerProgressFor: (name: string) => `Review progress for ${name}`,
+    coverageResponses: 'Responses',
+    coverageScores: 'Scores',
+    coverageConflicts: 'Conflicts',
+    coverageWaiting: 'Waiting',
     colTitle: 'Title',
     colStatus: 'Status',
     colScore: 'Average',

@@ -5,9 +5,10 @@ import { adminError } from '../../lib/errors';
 import {
   headshotImage,
   loadAllProposals,
-  recomputeAggregates,
+  reviewCoverage,
   setProposalStatus,
   type ProposalRow,
+  type ReviewCoverageResult,
 } from '../../lib/roles';
 import { BarChart, ScoreHistogram, StackedBar } from '../../components/charts';
 import {
@@ -323,6 +324,7 @@ function Dashboard({ rows, shape }: { rows: ProposalRow[]; shape: SubmissionForm
 
 type ScoreFilter = 'all' | 'scored' | 'unscored' | 'disagreement';
 type ProposalSort = 'score' | 'spread' | 'reviews' | 'title' | 'status';
+type StatusFilter = 'current' | 'all' | 'undecided' | ProposalStatus;
 
 interface UndoDecision {
   action: number;
@@ -330,6 +332,133 @@ interface UndoDecision {
   title: string;
   previous: ProposalStatus;
   next: ProposalStatus;
+}
+
+function ReviewCoverage({
+  coverage,
+  loading,
+  error,
+  onRetry,
+}: {
+  coverage: ReviewCoverageResult | null;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+}) {
+  const { t } = useI18n();
+  const titles = new Map(coverage?.proposals.map((proposal) => [proposal.id, proposal.title]));
+  const totals = coverage?.reviewers.reduce(
+    (sum, reviewer) => ({
+      eligible: sum.eligible + reviewer.eligibleCount,
+      scored: sum.scored + reviewer.scoredProposalIds.length,
+      conflicts: sum.conflicts + reviewer.conflictProposalIds.length,
+      missing: sum.missing + reviewer.missingProposalIds.length,
+    }),
+    { eligible: 0, scored: 0, conflicts: 0, missing: 0 },
+  );
+
+  return (
+    <section className="section review-coverage">
+      <div className="review-coverage__heading">
+        <div>
+          <h2>{t.admin.reviewerCoverage}</h2>
+          <p className="section__help">{t.admin.reviewerCoverageHelp}</p>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="muted">{t.app.loading}</p>
+      ) : error ? (
+        <div className="review-coverage__error">
+          <p className="field__error" role="alert">{error}</p>
+          <button type="button" className="btn btn--ghost" onClick={onRetry}>
+            {t.errors.reload}
+          </button>
+        </div>
+      ) : !coverage || coverage.reviewers.length === 0 ? (
+        <p className="muted">{t.admin.reviewerCoverageEmpty}</p>
+      ) : coverage.proposals.length === 0 ? (
+        <p className="muted">{t.admin.reviewerCoverageNoTalks}</p>
+      ) : (
+        <>
+          <div className="review-coverage__metrics" aria-label={t.admin.reviewerCoverage}>
+            <div><span>{t.admin.coverageResponses}</span><strong>{(totals?.scored ?? 0) + (totals?.conflicts ?? 0)}/{totals?.eligible ?? 0}</strong></div>
+            <div><span>{t.admin.coverageScores}</span><strong>{totals?.scored ?? 0}</strong></div>
+            <div><span>{t.admin.coverageConflicts}</span><strong>{totals?.conflicts ?? 0}</strong></div>
+            <div><span>{t.admin.coverageWaiting}</span><strong>{totals?.missing ?? 0}</strong></div>
+          </div>
+          <div className="review-coverage__list">
+          {[...coverage.reviewers]
+            .sort((a, b) => b.missingProposalIds.length - a.missingProposalIds.length)
+            .map((reviewer) => {
+            const handled =
+              reviewer.scoredProposalIds.length + reviewer.conflictProposalIds.length;
+            const complete = reviewer.missingProposalIds.length === 0;
+            return (
+              <article
+                key={reviewer.uid}
+                className={`reviewer-progress${complete ? ' reviewer-progress--complete' : ''}`}
+              >
+                <div className="reviewer-progress__identity">
+                  <div>
+                    <h3>{reviewer.name || reviewer.email}</h3>
+                    {reviewer.name && <p>{reviewer.email}</p>}
+                  </div>
+                  <span className="status-chip">{t.enums.role[reviewer.role]}</span>
+                </div>
+
+                <div className="reviewer-progress__summary">
+                  <strong>{t.admin.reviewerHandled(handled, reviewer.eligibleCount)}</strong>
+                  <span>
+                    {t.admin.reviewerBreakdown(
+                      reviewer.scoredProposalIds.length,
+                      reviewer.conflictProposalIds.length,
+                      reviewer.missingProposalIds.length,
+                    )}
+                  </span>
+                </div>
+
+                <div
+                  className="reviewer-progress__bar"
+                  role="progressbar"
+                  aria-label={t.admin.reviewerProgressFor(reviewer.name || reviewer.email)}
+                  aria-valuemin={0}
+                  aria-valuemax={reviewer.eligibleCount}
+                  aria-valuenow={handled}
+                >
+                  <span
+                    style={{
+                      width: `${reviewer.eligibleCount === 0 ? 100 : (handled / reviewer.eligibleCount) * 100}%`,
+                    }}
+                  />
+                </div>
+
+                {reviewer.missingProposalIds.length > 0 && (
+                  <details className="reviewer-progress__missing">
+                    <summary>
+                      {t.admin.reviewerMissing(reviewer.missingProposalIds.length)}
+                    </summary>
+                    <ul>
+                      {reviewer.missingProposalIds.map((proposalId) => (
+                        <li key={proposalId}>{titles.get(proposalId) || t.admin.untitled}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </article>
+            );
+          })}
+          </div>
+        </>
+      )}
+
+      {coverage && coverage.hiddenOwnProposalCount > 0 && (
+        <p className="review-coverage__privacy">
+          {t.admin.reviewerCoveragePrivate(coverage.hiddenOwnProposalCount)}
+        </p>
+      )}
+    </section>
+  );
 }
 
 export function Proposals({ cfpId }: { cfpId: string }) {
@@ -340,14 +469,16 @@ export function Proposals({ cfpId }: { cfpId: string }) {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadedFor, setLoadedFor] = useState('');
-  const [recomputing, setRecomputing] = useState(false);
+  const [coverage, setCoverage] = useState<ReviewCoverageResult | null>(null);
+  const [coverageLoading, setCoverageLoading] = useState(true);
+  const [coverageError, setCoverageError] = useState('');
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [rowErrors, setRowErrors] = useState<Map<string, string>>(new Map());
   const [undo, setUndo] = useState<UndoDecision | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('current');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [sort, setSort] = useState<ProposalSort>('score');
@@ -359,6 +490,8 @@ export function Proposals({ cfpId }: { cfpId: string }) {
 
   const refresh = useCallback(async (reset = false) => {
     const request = ++loadGeneration.current;
+    setCoverageLoading(true);
+    setCoverageError('');
     if (reset) {
       setLoading(true);
       setLoadFailed(false);
@@ -366,14 +499,16 @@ export function Proposals({ cfpId }: { cfpId: string }) {
       setRows([]);
       setQuestions([]);
       setShape(DEFAULT_SUBMISSION_FORM);
-      setRecomputing(false);
+      setCoverage(null);
+      setCoverageLoading(true);
+      setCoverageError('');
       setPending(new Set());
       setRowErrors(new Map());
       setUndo(null);
       setNote('');
       setError('');
       setSearch('');
-      setStatusFilter('all');
+      setStatusFilter('current');
       setCategoryFilter('all');
       setScoreFilter('all');
       setSort('score');
@@ -393,6 +528,21 @@ export function Proposals({ cfpId }: { cfpId: string }) {
       setLoadedFor(cfpId);
       setLoadFailed(false);
       setError('');
+      void reviewCoverage({ cfpId })
+        .then(({ data }) => {
+          if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
+          setCoverage(data);
+          setCoverageError('');
+        })
+        .catch((coverageFailure) => {
+          if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
+          setCoverageError(adminError(coverageFailure, t));
+        })
+        .finally(() => {
+          if (request === loadGeneration.current && activeCfp.current === cfpId) {
+            setCoverageLoading(false);
+          }
+        });
     } catch (e) {
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setError(adminError(e, t));
@@ -419,25 +569,6 @@ export function Proposals({ cfpId }: { cfpId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfpId]);
 
-  async function recompute() {
-    if (pending.size > 0) return;
-    const scope = cfpId;
-    setRecomputing(true);
-    setNote('');
-    setError('');
-    try {
-      const { data } = await recomputeAggregates({ cfpId });
-      if (activeCfp.current !== scope) return;
-      setNote(t.admin.recomputed(data.proposalCount, data.reviewCount));
-      await refresh();
-    } catch (e) {
-      if (activeCfp.current !== scope) return;
-      setError(adminError(e, t));
-    } finally {
-      if (activeCfp.current === scope) setRecomputing(false);
-    }
-  }
-
   /*
    * From the snapshot on the proposal, not from `speakers/{uid}`.
    *
@@ -456,7 +587,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
 
   async function decide(row: ProposalRow, next: ProposalStatus) {
     const previous = row.status;
-    if (recomputing || previous === next || pending.has(row.id)) return;
+    if (previous === next || pending.has(row.id)) return;
     const scope = cfpId;
     const action = ++decisionSequence.current;
 
@@ -508,7 +639,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
   }
 
   async function undoDecision() {
-    if (recomputing || !undo || pending.has(undo.proposalId)) return;
+    if (!undo || pending.has(undo.proposalId)) return;
     const snapshot = undo;
     const scope = cfpId;
     setUndo(null);
@@ -574,8 +705,14 @@ export function Proposals({ cfpId }: { cfpId: string }) {
       ) {
         return false;
       }
+      if (statusFilter === 'current' && row.status === 'withdrawn') return false;
       if (statusFilter === 'undecided' && inStatusSet('decided', row.status)) return false;
-      if (statusFilter !== 'all' && statusFilter !== 'undecided' && row.status !== statusFilter) {
+      if (
+        statusFilter !== 'all' &&
+        statusFilter !== 'current' &&
+        statusFilter !== 'undecided' &&
+        row.status !== statusFilter
+      ) {
         return false;
       }
       if (categoryFilter !== 'all' && row.category !== categoryFilter) return false;
@@ -619,7 +756,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
 
   const filtersActive =
     search !== '' ||
-    statusFilter !== 'all' ||
+    statusFilter !== 'current' ||
     categoryFilter !== 'all' ||
     scoreFilter !== 'all' ||
     sort !== 'score';
@@ -656,6 +793,12 @@ export function Proposals({ cfpId }: { cfpId: string }) {
   return (
     <>
       <Dashboard rows={scopedRows} shape={scopedShape} />
+      <ReviewCoverage
+        coverage={coverage}
+        loading={coverageLoading}
+        error={coverageError}
+        onRetry={() => void refresh()}
+      />
 
       <section className="section decision-panel">
         <div className="decision-panel__heading">
@@ -663,14 +806,6 @@ export function Proposals({ cfpId }: { cfpId: string }) {
             <h2>{t.admin.proposals}</h2>
             <p className="section__help">{t.admin.proposalsHelp}</p>
           </div>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={recomputing || pending.size > 0}
-            onClick={recompute}
-          >
-            {recomputing ? t.admin.recomputing : t.admin.recompute}
-          </button>
         </div>
 
         {inCurrentScope && undo && (
@@ -685,7 +820,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
             <button
               type="button"
               className="btn btn--ghost"
-              disabled={recomputing || pending.has(undo.proposalId)}
+              disabled={pending.has(undo.proposalId)}
               onClick={undoDecision}
             >
               {t.admin.undo}
@@ -710,8 +845,9 @@ export function Proposals({ cfpId }: { cfpId: string }) {
             <select
               className="field__input field__input--select"
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+              onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
             >
+              <option value="current">{t.admin.filterCurrentStatuses}</option>
               <option value="all">{t.admin.filterAllStatuses}</option>
               <option value="undecided">{t.admin.undecided}</option>
               {PROPOSAL_STATUSES.filter((status) => status !== 'draft').map((status) => (
@@ -739,7 +875,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
           </label>
 
           <label className="decision-filter">
-            <span>{t.admin.filterCoverage}</span>
+            <span>{t.admin.filterScoreStatus}</span>
             <select
               className="field__input field__input--select"
               value={scoreFilter}
@@ -778,7 +914,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
               className="btn btn--ghost"
               onClick={() => {
                 setSearch('');
-                setStatusFilter('all');
+                setStatusFilter('current');
                 setCategoryFilter('all');
                 setScoreFilter('all');
                 setSort('score');
@@ -791,6 +927,19 @@ export function Proposals({ cfpId }: { cfpId: string }) {
 
         {scopedRows.length === 0 ? (
           <p className="muted">{t.admin.noProposals}</p>
+        ) : filtered.length === 0 &&
+          statusFilter === 'current' &&
+          scopedRows.some((row) => row.status === 'withdrawn') ? (
+          <div className="empty-filter">
+            <p>{t.admin.noCurrentProposals}</p>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => setStatusFilter('withdrawn')}
+            >
+              {t.admin.showWithdrawn}
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
           <p className="empty-filter">{t.admin.noMatchingProposals}</p>
         ) : (
@@ -837,7 +986,7 @@ export function Proposals({ cfpId }: { cfpId: string }) {
                               className="field__input field__input--select"
                               aria-label={`${t.admin.colStatus}: ${row.title}`}
                               value={row.status}
-                              disabled={recomputing || saving}
+                              disabled={saving}
                               onChange={(event) =>
                                 void decide(row, event.target.value as ProposalStatus)
                               }

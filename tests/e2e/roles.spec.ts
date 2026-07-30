@@ -216,6 +216,48 @@ test.describe('roles', () => {
       .toBe('submitted');
   });
 
+  test('withdrawn talks are hidden by default and never keep a score', async ({ page }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-current', {
+      speakerUid: speaker.uid,
+      title: 'Current talk',
+    });
+    await seedProposal('p-withdrawn', {
+      speakerUid: speaker.uid,
+      title: 'Withdrawn talk',
+      status: 'withdrawn',
+      aggregate: {
+        avgScore: 4,
+        normalizedScore: 4,
+        reviewCount: 2,
+        stdDev: 0,
+      },
+    });
+
+    await expect
+      .poll(async () => {
+        const withdrawn = (await readProposals()).find((row) => row.title === 'Withdrawn talk');
+        return withdrawn ? 'aggregate' in withdrawn : null;
+      })
+      .toBe(false);
+
+    await asAdmin(page, 'proposals');
+    const proposals = page.locator('.decision-panel', {
+      has: page.getByRole('heading', { name: 'Proposals' }),
+    });
+    await expect(proposals.getByText('Current talk')).toBeVisible();
+    await expect(proposals.getByText('Withdrawn talk')).toHaveCount(0);
+    await expect(proposals.getByText('1 of 2 proposals')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Recompute scores' })).toHaveCount(0);
+
+    await proposals
+      .getByRole('combobox', { name: 'Status', exact: true })
+      .selectOption('withdrawn');
+    await expect(proposals.getByText('Withdrawn talk')).toBeVisible();
+    await expect(proposals.getByText('Current talk')).toHaveCount(0);
+    await expect(proposals.getByRole('cell', { name: '0', exact: true })).toBeVisible();
+  });
+
   test('the proposal workspace stays usable across screen sizes', async ({ page }) => {
     const title =
       'A deliberately long proposal title that still keeps every committee control on screen';
@@ -228,7 +270,7 @@ test.describe('roles', () => {
       await page.setViewportSize({ width, height: 900 });
       const toolbar = page.locator('.decision-toolbar');
       await expect(toolbar.getByRole('searchbox', { name: 'Search', exact: true })).toBeVisible();
-      for (const name of ['Status', 'Category', 'Review coverage', 'Sort by']) {
+      for (const name of ['Status', 'Category', 'Talk score status', 'Sort by']) {
         await expect(toolbar.getByRole('combobox', { name, exact: true })).toBeVisible();
       }
 
