@@ -12,7 +12,7 @@
  * is where that half is tested.
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import {
   CFP_ID,
@@ -37,6 +37,10 @@ const OTHER = 'someone-elses-conf';
 const OWNER = { sub: 'plat-owner', email: 'owner@devfest.test', name: 'Ora Owner' };
 const OUTSIDER = { sub: 'plat-outsider', email: 'outsider@other.test', name: 'Otto Outsider' };
 const SPEAKER = { sub: 'plat-speaker', email: 'speaker@example.test', name: 'Sam Speaker' };
+const THEME_KEY = 'cfp.theme';
+
+const themeToggle = (page: Page) =>
+  page.getByRole('button', { name: 'Dark theme', exact: true });
 
 test.describe('the front door', () => {
   test.beforeEach(async () => {
@@ -68,6 +72,91 @@ test.describe('the front door', () => {
     expect(signIn).not.toBeNull();
     expect(signIn!.x).toBeGreaterThan(locale!.x);
     expect(signIn!.x + signIn!.width).toBeLessThanOrEqual(390);
+  });
+
+  test('uses the system theme until the visitor chooses one', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto(at(''));
+
+    await expect(themeToggle(page)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    expect(await page.evaluate((key) => localStorage.getItem(key), THEME_KEY)).toBeNull();
+  });
+
+  test('an explicit theme survives reload and overrides the system', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(at(''));
+
+    const toggle = themeToggle(page);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    expect(await page.evaluate((key) => localStorage.getItem(key), THEME_KEY)).toBe('dark');
+
+    await page.reload();
+    await expect(themeToggle(page)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  });
+
+  test('an explicit theme remains in effect when browser storage is unavailable', async ({
+    page,
+  }) => {
+    await page.addInitScript((key) => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (name, value) {
+        if (name === key) throw new DOMException('Storage is unavailable', 'SecurityError');
+        setItem.call(this, name, value);
+      };
+    }, THEME_KEY);
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(at(''));
+
+    const toggle = themeToggle(page);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  });
+
+  test('the theme control stays labelled and contained in French on a phone', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(at(''));
+    await themeToggle(page).click();
+
+    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    const frenchToggle = page.getByRole('button', { name: 'Thème sombre', exact: true });
+    await expect(frenchToggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const header = page.locator('header.header');
+    await expect(header.getByRole('button', { name: 'English', exact: true })).toBeVisible();
+    await expect(frenchToggle).toBeVisible();
+    await expect(
+      header.getByRole('button', { name: 'Se connecter', exact: true }),
+    ).toBeVisible();
+
+    const overflow = await page.evaluate(() => {
+      const controls = document.querySelector<HTMLElement>('.header__right');
+      return {
+        document:
+          document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        controls: controls ? controls.scrollWidth - controls.clientWidth : 999,
+      };
+    });
+    expect(overflow.document).toBeLessThanOrEqual(1);
+    expect(overflow.controls).toBeLessThanOrEqual(1);
+
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: 'Thème sombre', exact: true }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
   });
 
   test('lists the public calls and not the private ones', async ({ page }) => {

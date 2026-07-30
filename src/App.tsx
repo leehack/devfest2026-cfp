@@ -31,6 +31,7 @@ import {
 import { TextField } from './components/fields';
 import { ToastProvider } from './components/Toast';
 import { AccountMenu } from './components/AccountMenu';
+import { ThemeSwitch } from './components/ThemeSwitch';
 import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
 
@@ -80,7 +81,13 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
     document.documentElement.lang = locale;
     // Not before the detected locale has been read, or this would write the
     // server's placeholder over what the visitor actually chose last time.
-    if (localeSettled) localStorage.setItem('cfp.locale', locale);
+    if (localeSettled) {
+      try {
+        localStorage.setItem('cfp.locale', locale);
+      } catch {
+        // The language still applies for this page; only persistence is unavailable.
+      }
+    }
   }, [locale, localeSettled]);
 
   // The tab is how someone finds this among twenty others, so it names the CFP
@@ -211,13 +218,16 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
               </div>
             </div>
             <div className="header__right">
-              <button
-                type="button"
-                className="btn btn--ghost locale-switch"
-                onClick={() => setLocale(locale === 'en' ? 'fr' : 'en')}
-              >
-                {t.switchTo}
-              </button>
+              <div className="header__preferences">
+                <button
+                  type="button"
+                  className="btn btn--ghost locale-switch"
+                  onClick={() => setLocale(locale === 'en' ? 'fr' : 'en')}
+                >
+                  {t.switchTo}
+                </button>
+                <ThemeSwitch />
+              </div>
               {authReady &&
                 (user ? (
                   <AccountMenu

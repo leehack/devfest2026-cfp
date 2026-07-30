@@ -9,6 +9,7 @@ export const en = {
     account: 'Account',
     signedInAs: 'Signed in as',
     closeNotification: 'Close notification',
+    darkTheme: 'Dark theme',
     signIn: 'Sign in',
     signInGoogle: 'Sign in with Google',
     signInHint: 'We use your Google account so you can come back and edit your draft.',

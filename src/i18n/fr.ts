@@ -9,6 +9,7 @@ export const fr: Dictionary = {
     account: 'Compte',
     signedInAs: 'Connecté comme',
     closeNotification: 'Fermer la notification',
+    darkTheme: 'Thème sombre',
     signIn: 'Se connecter',
     signInGoogle: 'Se connecter avec Google',
     signInHint:

@@ -13,7 +13,7 @@
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* ---------------------------------------------------------------- colour */
   --bg: #f8f9fb;
@@ -32,16 +32,28 @@
   --accent-fg: #ffffff;
   --accent-soft: #e8f0fe;
 
+  /* Filled actions stay saturated; readable dark-theme links need a paler blue. */
+  --primary: #1a73e8;
+  --primary-hover: #185abc;
+  --primary-fg: #ffffff;
+
   --error: #c0271f;
+  --error-fg: #ffffff;
   --error-bg: #fdeceb;
   --error-line: #f0b3ae;
 
   --good: #137333;
+  --good-fg: #ffffff;
   --good-bg: #e6f4ea;
   --warning: #765000;
   --warning-bg: #fff4c2;
 
   --note-bg: #eef3fc;
+
+  --provider-bg: #ffffff;
+  --provider-fg: #1f1f1f;
+  --provider-border: #747775;
+  --provider-hover: #f7f8f8;
 
   /* DevFest's four. Charts and the masthead rule; never load-bearing alone. */
   --g-blue: #4285f4;
@@ -91,7 +103,9 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
     --bg: #0d1117;
     --surface: #151a22;
     --surface-2: #1b222c;
@@ -108,21 +122,70 @@
     --accent-soft: #16233a;
 
     --error: #f2938b;
+    --error-fg: #0f1116;
     --error-bg: #2c1a19;
     --error-line: #5c2f2b;
 
     --good: #7cc998;
+    --good-fg: #0f1116;
     --good-bg: #16281d;
     --warning: #f8c839;
     --warning-bg: #352f1e;
 
     --note-bg: #17202e;
 
+    --provider-bg: #131314;
+    --provider-fg: #e3e3e3;
+    --provider-border: #8e918f;
+    --provider-hover: #1e1f20;
+
     --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
     --shadow-2: 0 4px 16px rgb(0 0 0 / 45%);
     --shadow-up: 0 -6px 20px rgb(0 0 0 / 45%);
     --edge: rgb(0 0 0 / 55%);
   }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0d1117;
+  --surface: #151a22;
+  --surface-2: #1b222c;
+  --surface-3: #242d39;
+
+  --fg: #edf1f7;
+  --muted: #a4afbd;
+  --line: #2a333f;
+  --line-strong: #465264;
+
+  --accent: #7cadf8;
+  --accent-hover: #a3c6fa;
+  --accent-fg: #0f1116;
+  --accent-soft: #16233a;
+
+  --error: #f2938b;
+  --error-fg: #0f1116;
+  --error-bg: #2c1a19;
+  --error-line: #5c2f2b;
+
+  --good: #7cc998;
+  --good-fg: #0f1116;
+  --good-bg: #16281d;
+  --warning: #f8c839;
+  --warning-bg: #352f1e;
+
+  --note-bg: #17202e;
+
+  --provider-bg: #131314;
+  --provider-fg: #e3e3e3;
+  --provider-border: #8e918f;
+  --provider-hover: #1e1f20;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-2: 0 4px 16px rgb(0 0 0 / 45%);
+  --shadow-up: 0 -6px 20px rgb(0 0 0 / 45%);
+  --edge: rgb(0 0 0 / 55%);
 }
 
 *,
@@ -155,10 +218,6 @@ a {
   text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
   text-decoration-thickness: 0.08em;
   text-underline-offset: 0.18em;
-}
-
-a:visited {
-  color: var(--accent);
 }
 
 a:hover {
@@ -349,8 +408,55 @@ p {
   align-items: center;
 }
 
+.header__preferences {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+
 .header__sign-in {
   white-space: nowrap;
+}
+
+.theme-toggle {
+  width: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0;
+}
+
+.theme-toggle__icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.theme-toggle__icon--light circle,
+.theme-toggle__icon--dark {
+  fill: currentcolor;
+  stroke: none;
+}
+
+.theme-toggle__icon--dark,
+:root[data-theme='dark'] .theme-toggle__icon--light {
+  display: none;
+}
+
+:root[data-theme='dark'] .theme-toggle__icon--dark {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .theme-toggle__icon--light {
+    display: none;
+  }
+
+  :root:not([data-theme]) .theme-toggle__icon--dark {
+    display: block;
+  }
 }
 
 .skip-link {
@@ -544,10 +650,10 @@ p {
   justify-content: center;
   min-height: 2.5rem;
   padding: 0 0.75rem;
-  border: 1px solid #747775;
+  border: 1px solid var(--provider-border);
   border-radius: var(--r);
-  background: #fff;
-  color: #1f1f1f;
+  background: var(--provider-bg);
+  color: var(--provider-fg);
   font-family: 'Roboto', var(--font);
   font-size: 0.875rem;
   font-weight: 500;
@@ -556,7 +662,7 @@ p {
 }
 
 .google-btn:hover:not(:disabled) {
-  background: #f7f8f8;
+  background: var(--provider-hover);
 }
 
 .google-btn:disabled {
@@ -574,18 +680,6 @@ p {
    than a button that grows. */
 .google-btn__label {
   white-space: nowrap;
-}
-
-@media (prefers-color-scheme: dark) {
-  .google-btn {
-    border-color: #8e918f;
-    background: #131314;
-    color: #e3e3e3;
-  }
-
-  .google-btn:hover:not(:disabled) {
-    background: #1e1f20;
-  }
 }
 
 .muted {
@@ -1172,18 +1266,19 @@ p {
   cursor: not-allowed;
 }
 
-.btn--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-fg);
+.btn--primary,
+.btn--primary:visited {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-fg);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgb(15 87 182 / 20%);
+  box-shadow: 0 1px 2px rgb(24 90 188 / 24%);
 }
 
 .btn--primary:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-  box-shadow: 0 3px 10px rgb(15 87 182 / 18%);
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+  box-shadow: 0 3px 10px rgb(24 90 188 / 22%);
 }
 
 .btn--ghost {
@@ -1198,10 +1293,11 @@ p {
 }
 
 /* Reserved for destructive actions that cannot be undone. */
-.btn--danger {
+.btn--danger,
+.btn--danger:visited {
   border-color: var(--error);
   background: var(--error);
-  color: #fff;
+  color: var(--error-fg);
   font-weight: 600;
 }
 
@@ -2564,7 +2660,7 @@ p {
 
 .step-progress__item--completed .step-progress__number {
   background: var(--good);
-  color: #ffffff;
+  color: var(--good-fg);
 }
 
 .step-progress__line {
@@ -3519,7 +3615,7 @@ p {
 .form-progress__item--complete .form-progress__marker {
   border-color: var(--good);
   background: var(--good);
-  color: #fff;
+  color: var(--good-fg);
 }
 
 .form-progress__item--attention .form-progress__link {
@@ -3935,7 +4031,7 @@ p {
 .setup-step--done .setup-step__mark {
   border-color: var(--good);
   background: var(--good);
-  color: #fff;
+  color: var(--good-fg);
 }
 
 .setup-step--unknown .setup-step__mark {
@@ -4290,7 +4386,7 @@ p {
   justify-content: center;
   border-radius: 50%;
   background: var(--error);
-  color: #fff;
+  color: var(--error-fg);
   font-size: var(--text-sm);
   font-weight: 750;
 }
