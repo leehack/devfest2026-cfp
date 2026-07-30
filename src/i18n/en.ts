@@ -42,11 +42,14 @@ export const en = {
   },
 
   nav: {
-    form: 'Your proposal',
-    review: 'Review',
-    admin: 'Admin',
+    cfp: 'Event',
+    form: 'My proposals',
+    review: 'Review talks',
+    admin: 'Manage event',
+    breadcrumb: 'Breadcrumb',
+    eventSections: 'Event sections',
     forbidden: 'That page is not available to your account.',
-    backToForm: 'Go to your proposal',
+    backToForm: 'Go to my proposals',
   },
 
   platform: {
@@ -62,7 +65,17 @@ export const en = {
     yoursHelp: 'Your public, private, and archived calls — all in one place.',
     helping: 'Where you help out',
     helpingHelp: 'Calls run by another organiser where you have a committee role.',
-    view: 'View call',
+    activity: 'Your activity',
+    activityHelp: 'Pick up a draft, review queue, or event workspace where you left off.',
+    submissions: 'Your proposals',
+    submissionsHelp: 'Drafts, submitted talks, and decisions across every call.',
+    continueDraft: 'Continue draft',
+    viewProposals: 'View proposals',
+    respondToDecision: 'Respond to decision',
+    viewDecision: 'View decision',
+    reviewTalks: 'Review talks',
+    manageEvent: 'Manage event',
+    view: 'View event',
     cardLabel: '{name}. {status}. Address {path}.{details}',
     status: {
       open: 'Open',
@@ -74,6 +87,7 @@ export const en = {
     create: 'Start a call for proposals',
     createEyebrow: 'For organisers',
     createTitle: 'Create your call for proposals',
+    createDetailsTitle: 'Event details',
     createHelp:
       'Start with the essentials. You will move straight into setup to add event details and shape the submission form.',
     createStep: 'Step {step} of 3',
@@ -165,6 +179,7 @@ export const en = {
     link: 'Your profile',
     eyebrow: 'Speaker account',
     title: 'Your profile',
+    editorTitle: 'Speaker details',
     help:
       'This belongs to your account, not to any one call for proposals. Editing it here changes it everywhere, including talks you have already submitted but that nobody has started reading.',
     complete: 'Ready to use',
@@ -449,14 +464,16 @@ export const en = {
 
   admin: {
     sections: 'Admin sections',
-    workspace: 'Organiser workspace',
+    sectionPicker: 'Manage section',
+    sectionGo: 'Go',
+    workspace: 'Event management',
     tabs: {
-      overview: 'Overview',
+      overview: 'Dashboard',
       proposals: 'Proposals',
       committee: 'Committee',
-      settings: 'Settings',
+      settings: 'Event setup',
       submission: 'Submission form',
-      confirmation: 'Confirmation',
+      confirmation: 'Confirmation form',
       email: 'Email',
     },
     setupTitle: 'Finish the essentials before you share',
@@ -732,7 +749,7 @@ export const en = {
     emailResent: 'Queued again for {to}.',
     emailLogTruncated: '{count} older messages are not shown.',
 
-    proposals: 'Proposals',
+    proposals: 'Proposal decisions',
     proposalsHelp:
       'Scores update automatically as reviews are saved. Find the talks that need attention, then make one explicit decision at a time.',
     overview: 'The round at a glance',
@@ -939,6 +956,14 @@ export const en = {
     position: (n: number, total: number) => `${n} of ${total}`,
     previous: 'Previous proposal',
     next: 'Next proposal',
+    queue: 'Review queue',
+    queueHelp: 'Jump to any talk and see what still needs a score.',
+    queueClose: 'Close queue',
+    nextUnscored: 'Next unscored',
+    queueCurrent: 'Current',
+    queueScored: 'Scored',
+    queueWaiting: 'Not scored',
+    complete: 'Every talk in this view has a score.',
     shortcuts: 'Shortcuts',
     shortcutScore: 'Score, and move to the next one',
     shortcutMove: 'Back and forward without scoring',

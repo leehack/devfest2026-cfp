@@ -49,7 +49,10 @@ test.describe('a call’s front page', () => {
     await expect(visitor.getByText(/14 November 2026|November 14, 2026/)).toBeVisible();
 
     // And the way onwards is a link, so it can be opened in a new tab.
-    await visitor.getByRole('link', { name: 'Submit a talk' }).click();
+    await visitor
+      .locator('.cfp-hero')
+      .getByRole('link', { name: 'Submit a talk', exact: true })
+      .click();
     await expect(visitor).toHaveURL(at());
     await expect(visitor.locator('#main-content')).toBeFocused();
     await stranger.close();
@@ -86,10 +89,18 @@ test.describe('a call’s front page', () => {
       page.getByText('Organisers will contact speakers about the next steps.'),
     ).toBeVisible();
     await expect(page.getByRole('link', { name: 'Submit a talk', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: 'View your proposals' })).toHaveAttribute(
-      'href',
-      `/c/${CFP_ID}/submit`,
-    );
+    await expect(
+      page.locator('.cfp-hero').getByRole('link', {
+        name: 'View your proposals',
+        exact: true,
+      }),
+    ).toHaveAttribute('href', `/c/${CFP_ID}/submit`);
+    await expect(
+      page.getByRole('region', { name: 'Your proposals' }).getByRole('link', {
+        name: 'View your proposals',
+        exact: true,
+      }),
+    ).toHaveAttribute('href', `/c/${CFP_ID}/submit`);
   });
 
   test('the details survive a reload of the admin panel', async ({ page }) => {

@@ -383,6 +383,17 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // A returning speaker's home page deliberately spans CFPs so a private or
+    // archived draft does not become unreachable when its original link is
+    // lost. Collection-group queries need a recursive wildcard in rules v2;
+    // the tenant-specific proposal match above cannot authorise the group.
+    //
+    // The query still has to carry `array-contains uid()`. Rules are not
+    // filters, so asking for another speaker or for the whole group is denied.
+    match /{path=**}/proposals/{proposalId} {
+      allow list: if signedIn() && uid() in resource.data.speakerIds;
+    }
+
     // Anything not matched above is denied.
     match /{document=**} {
       allow read, write: if false;

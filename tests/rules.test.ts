@@ -198,6 +198,27 @@ describe('applicants read and write only their own proposal', () => {
     expect(snap.docs.map((d) => d.id)).toEqual(['p-anna']);
   });
 
+  it('can find its own proposals across CFPs without listing anyone else’s', async () => {
+    const q = query(
+      collectionGroup(asApplicant(), 'proposals'),
+      where('speakerIds', 'array-contains', APPLICANT),
+    );
+    const snap = await assertSucceeds(getDocs(q));
+    expect(snap.docs.map((d) => d.id)).toEqual(['p-anna']);
+  });
+
+  it('cannot use the cross-CFP query to find another speaker’s proposals', async () => {
+    await assertFails(
+      getDocs(
+        query(
+          collectionGroup(asApplicant(), 'proposals'),
+          where('speakerIds', 'array-contains', OTHER_APPLICANT),
+        ),
+      ),
+    );
+    await assertFails(getDocs(collectionGroup(asApplicant(), 'proposals')));
+  });
+
   it('cannot scope a query to someone else', async () => {
     const q = query(
       collection(asApplicant(), `${CFP}/proposals`),

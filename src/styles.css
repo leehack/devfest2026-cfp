@@ -348,7 +348,7 @@ p {
   background: var(--g-green);
 }
 
-.header__event {
+.breadcrumb {
   margin: 0;
   color: var(--muted);
   font-size: var(--text-sm);
@@ -357,17 +357,45 @@ p {
   text-transform: uppercase;
 }
 
+.breadcrumb__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.breadcrumb__list li {
+  display: flex;
+  gap: var(--s-1);
+  align-items: center;
+  min-width: 0;
+}
+
+.breadcrumb__list li + li::before {
+  content: '›';
+  color: var(--line-strong);
+}
+
+.breadcrumb__list a {
+  color: inherit;
+}
+
+.breadcrumb__list span[aria-current='page'] {
+  overflow: hidden;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .header__title {
   margin: 0.1rem 0 0;
   overflow-wrap: anywhere;
   font-size: var(--text-2xl);
   font-weight: 650;
   letter-spacing: -0.025em;
-}
-
-/* The way back out of a CFP, in the slot its name would otherwise occupy. */
-.header__home {
-  color: inherit;
 }
 
 /* ------------------------------------------------------------- the listing */
@@ -1611,6 +1639,48 @@ p {
   font-weight: 650;
 }
 
+@media (max-width: 41.99rem) {
+  .nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    overflow: visible;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--line);
+    box-shadow: var(--shadow-1);
+  }
+
+  .nav__tab {
+    display: grid;
+    min-width: 0;
+    min-height: 44px;
+    place-items: center;
+    padding: var(--s-2) var(--s-3);
+    border-bottom: 0;
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    text-align: center;
+    white-space: normal;
+  }
+
+  .nav__tab:first-child {
+    border-radius: calc(var(--r) - 1px) 0 0 0;
+  }
+
+  .nav__tab:nth-child(2) {
+    border-radius: 0 calc(var(--r) - 1px) 0 0;
+  }
+
+  .nav__tab:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+
+  .nav__tab--on {
+    background: var(--accent-soft);
+    box-shadow: inset 0 -3px var(--accent);
+  }
+}
+
 /* The admin screen's own tabs, one level in. Pills rather than a second
    underlined row, so the two navigations do not read as siblings. */
 .subnav {
@@ -2128,6 +2198,7 @@ p {
 
 .deck__nav {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--s-2);
 }
 
@@ -2155,6 +2226,109 @@ p {
 
 .deck__dot--here {
   background: var(--fg);
+}
+
+.deck-queue {
+  margin: 0 0 var(--s-4);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.deck-queue__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.deck-queue__header h2,
+.deck-queue__header p {
+  margin: 0;
+}
+
+.deck-queue__header h2 {
+  font-size: var(--text-lg);
+}
+
+.deck-queue__header p {
+  margin-top: var(--s-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.deck-queue__list {
+  display: grid;
+  max-height: min(28rem, 60vh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.deck-queue__list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.deck-queue__item {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  gap: var(--s-3);
+  align-items: center;
+  width: 100%;
+  padding: var(--s-3) var(--s-4);
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+}
+
+button.deck-queue__item {
+  cursor: pointer;
+}
+
+button.deck-queue__item:hover {
+  background: var(--surface-2);
+}
+
+.deck-queue__item--current {
+  background: var(--accent-soft);
+}
+
+.deck-queue__number {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  text-align: right;
+}
+
+.deck-queue__title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-queue__status {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.deck-queue__status--done {
+  color: var(--good);
+  font-weight: 650;
+}
+
+.deck__complete {
+  margin: 0 0 var(--s-4);
 }
 
 .shortcuts {
@@ -2775,6 +2949,7 @@ p {
  */
 
 .home-discovery__eyebrow,
+.home-activity__eyebrow,
 .organiser-callout__eyebrow,
 .cfp-hero__eyebrow,
 .cfp-cta__eyebrow,
@@ -2796,6 +2971,34 @@ p {
 .home-discovery {
   display: grid;
   gap: clamp(2.5rem, 2rem + 2vw, 4.5rem);
+}
+
+.home-activity {
+  display: grid;
+  gap: var(--s-6);
+  padding: clamp(1.25rem, 1rem + 1vw, 2rem);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+}
+
+.home-activity__header {
+  max-width: 42rem;
+}
+
+.home-activity__header h2 {
+  margin: var(--s-2) 0 var(--s-2);
+  font-size: var(--text-2xl);
+}
+
+.home-activity__header > p:last-child {
+  margin: 0;
+  color: var(--muted);
+}
+
+.home-activity > .home-collection {
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--line);
 }
 
 .home-discovery__primary {
@@ -2974,6 +3177,12 @@ p {
   overflow-wrap: anywhere;
 }
 
+.cfp-card__context {
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
 .cfp-card__event {
   color: var(--muted);
   font-size: var(--text-sm);
@@ -3110,6 +3319,24 @@ p {
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--s-6);
+}
+
+.cfp-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.cfp-hero__actions .btn {
+  display: inline-flex;
+}
+
+.btn--compact {
+  min-height: 2.15rem;
+  padding: 0.35rem 0.75rem;
+  font-size: var(--text-sm);
 }
 
 .cfp-hero__status,
@@ -3837,6 +4064,10 @@ p {
   font-weight: 700;
 }
 
+.admin-section-picker {
+  display: none;
+}
+
 .subnav__tab,
 .subnav__tab:visited {
   color: var(--muted);
@@ -4545,6 +4776,15 @@ p {
 }
 
 @media (min-width: 64rem) {
+  .subnav {
+    position: sticky;
+    z-index: 29;
+    top: 3.5rem;
+    padding: var(--s-2) 0;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(14px);
+  }
+
   .decision-toolbar {
     grid-template-columns: minmax(14rem, 1.6fr) repeat(4, minmax(8rem, 1fr));
   }
@@ -4572,18 +4812,86 @@ p {
   }
 }
 
-@media (max-width: 41.99rem) {
+@media (max-width: 63.99rem) {
+  .admin-shell-header {
+    margin-bottom: var(--s-3);
+  }
+
+  .admin-section-picker {
+    position: sticky;
+    z-index: 29;
+    top: 3.5rem;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--s-3);
+    align-items: center;
+    margin: 0 0 var(--s-5);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    box-shadow: var(--shadow-1);
+    backdrop-filter: blur(14px);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-weight: 650;
+  }
+
+  .admin-section-picker .field__input {
+    min-width: 0;
+    margin: 0;
+    background-color: var(--surface);
+  }
+
   .subnav {
-    flex-wrap: nowrap;
-    padding-bottom: var(--s-2);
+    display: none;
+  }
+
+  .form-progress {
+    position: sticky;
+    z-index: 28;
+    top: 3.5rem;
+    padding: var(--s-3);
+    backdrop-filter: blur(14px);
+  }
+
+  .form-progress__list {
+    display: flex;
+    padding-bottom: var(--s-1);
     overflow-x: auto;
-    scroll-snap-type: x proximity;
     scrollbar-width: thin;
   }
 
-  .subnav__tab {
+  .form-progress__item {
     flex: none;
-    scroll-snap-align: start;
+  }
+
+  .form-progress__link {
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+
+  .submission-section {
+    scroll-margin-top: 13rem;
+  }
+}
+
+@media (max-width: 41.99rem) {
+  .nav {
+    position: static;
+  }
+
+  .admin-section-picker {
+    top: 3px;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-section-picker__label {
+    grid-column: 1 / -1;
+  }
+
+  .form-progress {
+    top: 3px;
   }
 
   .cfp-card__footer {
@@ -4643,25 +4951,6 @@ p {
     justify-items: start;
   }
 
-  .form-progress {
-    padding: var(--s-3);
-  }
-
-  .form-progress__list {
-    display: flex;
-    padding-bottom: var(--s-1);
-    overflow-x: auto;
-  }
-
-  .form-progress__item {
-    flex: none;
-  }
-
-  .form-progress__link {
-    border: 1px solid var(--line);
-    background: var(--surface-2);
-  }
-
   .profile-actions .btn,
   .save-recovery__actions,
   .save-recovery__actions .btn {
@@ -4710,6 +4999,15 @@ p {
 
   .deck__nav .btn {
     flex: 1;
+  }
+
+  .deck-queue__item {
+    grid-template-columns: 1.5rem minmax(0, 1fr);
+    gap: var(--s-2);
+  }
+
+  .deck-queue__status {
+    grid-column: 2;
   }
 }
 

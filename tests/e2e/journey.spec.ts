@@ -100,7 +100,7 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   // Ranked best first, so the 4 outranks the 2. Scoped to the Proposals
   // section — the admin page has several tables, and the email log is one.
   const proposals = page.locator('.section', {
-    has: page.getByRole('heading', { name: 'Proposals' }),
+    has: page.getByRole('heading', { name: 'Proposal decisions' }),
   });
   const titles = await proposals.locator('.table tbody tr td:first-child strong').allInnerTexts();
   expect(titles).toEqual([FIRST, SECOND]);

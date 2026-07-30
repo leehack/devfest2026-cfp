@@ -71,6 +71,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [loadedFor, setLoadedFor] = useState('');
   const [error, setError] = useState('');
   const [help, setHelp] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const loadGeneration = useRef(0);
@@ -84,6 +85,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     setLoadedFor('');
     setError('');
     setSelectedCategory(null);
+    setQueueOpen(false);
     setIndex(0);
     setSavingIds(new Set());
     setSavedId('');
@@ -160,6 +162,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const current = filteredOrder[index] ?? filteredOrder[0];
   const displayIndex = current ? filteredOrder.indexOf(current) : 0;
   const filteredScored = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
+  const unscored = filteredOrder
+    .map((proposal, proposalIndex) => ({ proposal, proposalIndex }))
+    .filter(({ proposal }) => !mine.has(proposal.id));
+  const nextUnscored =
+    unscored.find(({ proposalIndex }) => proposalIndex > displayIndex) ?? unscored[0];
 
   // Clamped rather than wrapping: the ends are ends, so a held-down arrow does
   // not quietly loop back to the start.
@@ -374,6 +381,15 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           <button
             type="button"
             className="btn btn--ghost"
+            aria-expanded={queueOpen}
+            aria-controls="review-queue"
+            onClick={() => setQueueOpen((open) => !open)}
+          >
+            {queueOpen ? t.review.queueClose : t.review.queue}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost"
             aria-expanded={help}
             onClick={() => setHelp((open) => !open)}
           >
@@ -395,6 +411,86 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         ))}
       </ol>
 
+      {queueOpen && (
+        <section
+          className="deck-queue"
+          id="review-queue"
+          aria-labelledby="review-queue-title"
+        >
+          <header className="deck-queue__header">
+            <div>
+              <h2 id="review-queue-title">{t.review.queue}</h2>
+              <p>{t.review.queueHelp}</p>
+            </div>
+            {nextUnscored && nextUnscored.proposalIndex !== displayIndex && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setIndex(nextUnscored.proposalIndex);
+                  setQueueOpen(false);
+                  setSavedId('');
+                }}
+              >
+                {t.review.nextUnscored}
+              </button>
+            )}
+          </header>
+          <ol className="deck-queue__list">
+            {filteredOrder.map((proposal, proposalIndex) => {
+              const currentProposal = proposalIndex === displayIndex;
+              const scored = mine.has(proposal.id);
+              const reviewState = scored ? t.review.queueScored : t.review.queueWaiting;
+              const content = (
+                <>
+                  <span className="deck-queue__number">{proposalIndex + 1}</span>
+                  <span className="deck-queue__title">
+                    {proposal.title || t.review.untitled}
+                  </span>
+                  <span
+                    className={`deck-queue__status${scored ? ' deck-queue__status--done' : ''}`}
+                  >
+                    {currentProposal
+                      ? `${t.review.queueCurrent} · ${reviewState}`
+                      : reviewState}
+                  </span>
+                </>
+              );
+              return (
+                <li key={proposal.id}>
+                  {currentProposal ? (
+                    <div
+                      className="deck-queue__item deck-queue__item--current"
+                      aria-current="true"
+                    >
+                      {content}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="deck-queue__item"
+                      onClick={() => {
+                        setIndex(proposalIndex);
+                        setQueueOpen(false);
+                        setSavedId('');
+                      }}
+                    >
+                      {content}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
+
+      {filteredScored === filteredOrder.length && (
+        <p className="note deck__complete" role="status">
+          {t.review.complete}
+        </p>
+      )}
+
       {categories.length > 1 && (
         <div className="filter-bar">
           <button
@@ -404,6 +500,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             onClick={() => {
               setSelectedCategory(null);
               setIndex(0);
+              setQueueOpen(false);
             }}
           >
             {t.review.allCategories} ({scopedOrder.length})
@@ -417,6 +514,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
               onClick={() => {
                 setSelectedCategory(cat);
                 setIndex(0);
+                setQueueOpen(false);
               }}
             >
               {labelOf(shape.category, cat, locale)} (

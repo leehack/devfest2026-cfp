@@ -33,10 +33,15 @@ export function AdminPage({
 }) {
   const { t } = useI18n();
   const [dirty, setDirty] = useState(false);
+  const [selectedTab, setSelectedTab] = useState(tab);
   const dirtyRef = useRef(dirty);
   const restoringHistory = useRef(false);
   const subnav = useRef<HTMLElement>(null);
   dirtyRef.current = dirty;
+
+  useEffect(() => {
+    setSelectedTab(tab);
+  }, [tab]);
 
   useEffect(() => {
     const mobile = window.matchMedia('(max-width: 41.99rem)');
@@ -124,15 +129,54 @@ export function AdminPage({
     };
   }, [cfpId, t.admin.unsaved, tab]);
 
+  function changeSection(next: AdminTab) {
+    if (next === tab) return;
+    if (dirtyRef.current && !window.confirm(t.admin.unsaved)) return;
+    dirtyRef.current = false;
+    setDirty(false);
+    goTo(href({ route: 'admin', cfpId, tab: next }));
+  }
+
   return (
     <>
       <header className="admin-shell-header">
         <div>
           <p className="admin-shell-header__eyebrow">{t.admin.workspace}</p>
-          <h2 className="admin-shell-header__title">{cfpName}</h2>
+          <h2 className="admin-shell-header__title">{t.admin.tabs[tab]}</h2>
         </div>
         <span className="admin-shell-header__role">{t.enums.role[role]}</span>
       </header>
+
+      <form
+        className="admin-section-picker"
+        onSubmit={(event) => {
+          event.preventDefault();
+          changeSection(selectedTab);
+        }}
+      >
+        <label className="admin-section-picker__label" htmlFor="admin-section">
+          {t.admin.sectionPicker}
+        </label>
+        <select
+          id="admin-section"
+          className="field__input"
+          value={selectedTab}
+          onChange={(event) => setSelectedTab(event.target.value as AdminTab)}
+        >
+          {ADMIN_TABS.map((name) => (
+            <option key={name} value={name}>
+              {t.admin.tabs[name]}
+            </option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          className="btn btn--primary btn--compact"
+          disabled={selectedTab === tab}
+        >
+          {t.admin.sectionGo}
+        </button>
+      </form>
 
       <nav className="subnav" aria-label={t.admin.sections} ref={subnav}>
         {ADMIN_TABS.map((name) => (

@@ -5,7 +5,12 @@ import { auth, googleProvider } from './firebase';
 import { dictionaries, formatDate, type Locale } from './i18n';
 import { detectLocale, I18nContext, SERVER_LOCALE, useI18n } from './i18n/context';
 import { GoogleButton } from './components/GoogleButton';
-import { Link } from './components/Link';
+import {
+  AppBreadcrumb,
+  documentTitle,
+  EventNavigation,
+  headerTitle,
+} from './components/AppNavigation';
 import { SubmitPage } from './screens/SubmitPage';
 import { AdminPage } from './screens/AdminPage';
 import { ReviewPage } from './screens/ReviewPage';
@@ -15,7 +20,7 @@ import { ProfilePage } from './screens/ProfilePage';
 import { NewCfpPage } from './screens/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { useRole } from './lib/roles';
-import { href, navigate, usePlace, type Place, type Route } from './lib/router';
+import { navigate, usePlace, type Place } from './lib/router';
 import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
@@ -45,6 +50,7 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [cfp, setCfp] = useState<CfpWindow | null>(null);
+  const [loadedCfpId, setLoadedCfpId] = useState<string | null>(null);
   const [cfpReady, setCfpReady] = useState(false);
   const [cfpError, setCfpError] = useState(false);
   const [cfpAttempt, setCfpAttempt] = useState(0);
@@ -71,6 +77,8 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   } = useRole(user, cfpId);
 
   const t = dictionaries[locale];
+  const visibleCfp = loadedCfpId === cfpId ? cfp : null;
+  const signedOutProtectedRoute = !user && (route === 'review' || route === 'admin');
 
   const [localeSettled, setLocaleSettled] = useState(false);
   useEffect(() => {
@@ -92,10 +100,11 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   }, [locale, localeSettled]);
 
   // The tab is how someone finds this among twenty others, so it names the CFP
-  // they are actually on rather than whichever one the HTML was written for.
+  // and the task they are actually on rather than whichever screen the HTML
+  // was written for.
   useEffect(() => {
-    document.title = cfp?.name ? `${cfp.name} — ${t.app.title}` : t.app.title;
-  }, [cfp, t]);
+    document.title = documentTitle(place, visibleCfp?.name ?? null, t);
+  }, [place, t, visibleCfp?.name]);
 
   /*
    * Starts the SDK for somebody who agreed on an earlier visit. A no-op for
@@ -161,6 +170,7 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
 
     if (!cfpId) {
       setCfp(null);
+      setLoadedCfpId(null);
       setCfpReady(true);
       setCfpError(false);
       return;
@@ -169,11 +179,15 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
     setCfpError(false);
     loadCfpWindow(cfpId)
       .then((next) => {
-        if (!cancelled) setCfp(next);
+        if (!cancelled) {
+          setCfp(next);
+          setLoadedCfpId(cfpId);
+        }
       })
       .catch(() => {
         if (!cancelled) {
           setCfp(null);
+          setLoadedCfpId(cfpId);
           setCfpError(true);
         }
       })
@@ -208,16 +222,10 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                 <span />
               </span>
               <div>
-                {/* The way back out, everywhere but the page it leads to. The home
-                    page needs no eyebrow: it would only repeat its own title. */}
-                {route !== 'home' && (
-                  <p className="header__event">
-                    <Link className="header__home" to={href({ route: 'home' })}>
-                      {t.platform.back}
-                    </Link>
-                  </p>
-                )}
-                <h1 className="header__title">{cfp?.name ?? t.app.title}</h1>
+                <AppBreadcrumb place={place} cfpName={visibleCfp?.name ?? null} />
+                <h1 className="header__title">
+                  {headerTitle(place, visibleCfp?.name ?? null, t)}
+                </h1>
               </div>
             </div>
             <div className="header__right">
@@ -247,6 +255,8 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                       if (signIn) {
                         signIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         signIn.focus({ preventScroll: true });
+                      } else if (cfpId) {
+                        navigate('form', { cfpId });
                       } else {
                         navigate('me');
                       }
@@ -258,7 +268,9 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
             </div>
           </header>
 
-          {role && cfpId && <Nav route={route} cfpId={cfpId} role={role} />}
+          {cfpId && visibleCfp && !signedOutProtectedRoute && (
+            <EventNavigation place={place} cfpName={visibleCfp.name} role={role} />
+          )}
 
           {/* Long-form routes set their own readable measure. The submission
               workspace also needs room for its progress rail, so it uses the
@@ -274,7 +286,7 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
               <Routed
                 place={place}
                 user={user}
-                cfp={cfp}
+                cfp={visibleCfp}
                 role={role}
                 roleReady={roleReady}
                 roleError={roleError}
@@ -308,26 +320,6 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
         />
       </ToastProvider>
     </I18nContext.Provider>
-  );
-}
-
-function Nav({ route, cfpId, role }: { route: Route; cfpId: string; role: CfpRole }) {
-  const { t } = useI18n();
-  const tabs: Route[] = role === 'reviewer' ? ['form', 'review'] : ['form', 'review', 'admin'];
-
-  return (
-    <nav className="nav" aria-label={t.app.title}>
-      {tabs.map((tab) => (
-        <Link
-          key={tab}
-          to={href({ route: tab, cfpId })}
-          className={`nav__tab${tab === route ? ' nav__tab--on' : ''}`}
-          aria-current={tab === route ? 'page' : undefined}
-        >
-          {t.nav[tab as 'form' | 'review' | 'admin']}
-        </Link>
-      ))}
-    </nav>
   );
 }
 
@@ -466,6 +458,17 @@ function Routed({
 function WindowNotice({ cfp }: { cfp: CfpWindow }) {
   const { t, locale } = useI18n();
 
+  if (cfp.state === 'before') {
+    return (
+      <div className="panel">
+        <p>{t.window.notOpen}</p>
+        <p>
+          {t.window.opensAt} <strong>{formatDate(cfp.opensAt, locale)}</strong>
+        </p>
+      </div>
+    );
+  }
+
   if (cfp.state === 'paused') {
     return <div className="panel">{t.window.paused}</div>;
   }
@@ -485,19 +488,6 @@ function WindowNotice({ cfp }: { cfp: CfpWindow }) {
 }
 
 function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cfpId: string }) {
-  const { t, locale } = useI18n();
-
-  if (cfp.state === 'before') {
-    return (
-      <div className="panel">
-        <p>{t.window.notOpen}</p>
-        <p>
-          {t.window.opensAt} <strong>{formatDate(cfp.opensAt, locale)}</strong>
-        </p>
-      </div>
-    );
-  }
-
   if (!user) {
     return (
       <>
@@ -506,6 +496,8 @@ function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cf
       </>
     );
   }
+
+  if (cfp.state === 'before') return <WindowNotice cfp={cfp} />;
 
   // A closed call blocks creating a proposal, not opening one that already
   // belongs to this account. SubmitPage decides which case this is after its

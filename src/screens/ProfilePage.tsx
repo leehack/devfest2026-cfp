@@ -205,7 +205,7 @@ export function ProfilePage({ user }: { user: User }) {
       <header className="profile-page__header">
         <div className="profile-page__intro">
           <p className="profile-page__eyebrow">{t.profile.eyebrow}</p>
-          <h2>{t.profile.title}</h2>
+          <h2>{t.profile.editorTitle}</h2>
           <p>{t.profile.help}</p>
         </div>
         <span

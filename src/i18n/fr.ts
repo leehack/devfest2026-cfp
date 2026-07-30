@@ -39,11 +39,14 @@ export const fr: Dictionary = {
   },
 
   nav: {
-    form: 'Votre proposition',
-    review: 'Évaluation',
-    admin: 'Administration',
+    cfp: 'Événement',
+    form: 'Mes propositions',
+    review: 'Évaluer',
+    admin: 'Gérer l’événement',
+    breadcrumb: 'Fil d’Ariane',
+    eventSections: 'Sections de l’événement',
     forbidden: 'Cette page n’est pas accessible avec votre compte.',
-    backToForm: 'Aller à votre proposition',
+    backToForm: 'Aller à mes propositions',
   },
 
   platform: {
@@ -60,7 +63,19 @@ export const fr: Dictionary = {
     yoursHelp: 'Vos appels publics, privés et archivés, réunis au même endroit.',
     helping: 'Où vous prêtez main-forte',
     helpingHelp: 'Les appels tenus par une autre équipe où vous faites partie du comité.',
-    view: 'Voir l’appel',
+    activity: 'Votre activité',
+    activityHelp:
+      'Reprenez un brouillon, une file d’évaluation ou un espace événement là où vous l’avez laissé.',
+    submissions: 'Vos propositions',
+    submissionsHelp:
+      'Brouillons, conférences soumises et décisions dans tous les appels.',
+    continueDraft: 'Continuer le brouillon',
+    viewProposals: 'Voir les propositions',
+    respondToDecision: 'Répondre à la décision',
+    viewDecision: 'Voir la décision',
+    reviewTalks: 'Évaluer',
+    manageEvent: 'Gérer l’événement',
+    view: 'Voir l’événement',
     cardLabel: '{name}. {status}. Adresse {path}.{details}',
     status: {
       open: 'Ouvert',
@@ -72,6 +87,7 @@ export const fr: Dictionary = {
     create: 'Lancer un appel à conférences',
     createEyebrow: 'Pour les organisateurs',
     createTitle: 'Créez votre appel à conférences',
+    createDetailsTitle: 'Détails de l’événement',
     createHelp:
       'Commencez par l’essentiel. Vous passerez ensuite directement à la configuration des détails et du formulaire.',
     createStep: 'Étape {step} sur 3',
@@ -164,6 +180,7 @@ export const fr: Dictionary = {
     link: 'Votre profil',
     eyebrow: 'Compte de conférencier',
     title: 'Votre profil',
+    editorTitle: 'Renseignements du conférencier',
     help:
       'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Le modifier ici le change partout, y compris sur les conférences déjà soumises que personne n’a encore commencé à lire.',
     complete: 'Prêt à utiliser',
@@ -439,14 +456,16 @@ export const fr: Dictionary = {
 
   admin: {
     sections: 'Sections d’administration',
-    workspace: 'Espace organisateur',
+    sectionPicker: 'Section de gestion',
+    sectionGo: 'Ouvrir',
+    workspace: 'Gestion de l’événement',
     tabs: {
-      overview: 'Aperçu',
+      overview: 'Tableau de bord',
       proposals: 'Propositions',
       committee: 'Comité',
-      settings: 'Paramètres',
+      settings: 'Configuration',
       submission: 'Formulaire',
-      confirmation: 'Confirmation',
+      confirmation: 'Formulaire de confirmation',
       email: 'Courriel',
     },
     setupTitle: 'Terminez l’essentiel avant de partager',
@@ -726,7 +745,7 @@ export const fr: Dictionary = {
     emailResent: 'Remis en file pour {to}.',
     emailLogTruncated: '{count} messages plus anciens ne sont pas affichés.',
 
-    proposals: 'Propositions',
+    proposals: 'Décisions sur les propositions',
     proposalsHelp:
       'Les notes se mettent à jour automatiquement à chaque évaluation. Trouvez les conférences qui demandent votre attention, puis prenez une décision explicite à la fois.',
     overview: 'La ronde en un coup d’œil',
@@ -939,6 +958,14 @@ export const fr: Dictionary = {
     position: (n: number, total: number) => `${n} sur ${total}`,
     previous: 'Proposition précédente',
     next: 'Proposition suivante',
+    queue: 'File d’évaluation',
+    queueHelp: 'Passez à n’importe quelle conférence et voyez lesquelles restent à noter.',
+    queueClose: 'Fermer la file',
+    nextUnscored: 'Prochaine sans note',
+    queueCurrent: 'En cours',
+    queueScored: 'Évaluée',
+    queueWaiting: 'Sans note',
+    complete: 'Toutes les conférences de cette vue ont une note.',
     shortcuts: 'Raccourcis',
     shortcutScore: 'Noter, puis passer à la suivante',
     shortcutMove: 'Reculer et avancer sans noter',

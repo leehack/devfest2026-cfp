@@ -102,7 +102,7 @@ export function NewCfpPage({ user }: { user: User }) {
       <header className="new-cfp__intro">
         <p className="new-cfp__eyebrow">{t.platform.createEyebrow}</p>
         <h2 className="new-cfp__title" id="new-cfp-title">
-          {t.platform.createTitle}
+          {t.platform.createDetailsTitle}
         </h2>
         <p className="new-cfp__help">{t.platform.createHelp}</p>
       </header>

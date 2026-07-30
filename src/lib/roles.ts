@@ -205,54 +205,60 @@ export function useRole(
   user: User | null,
   cfpId: string | null,
 ): { role: CfpRole | null; ready: boolean; error: boolean; retry: () => void } {
-  const [role, setRole] = useState<CfpRole | null>(null);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState(false);
+  const uid = user?.uid ?? null;
+  const [lookup, setLookup] = useState<{
+    uid: string;
+    cfpId: string;
+    role: CfpRole | null;
+    ready: boolean;
+    error: boolean;
+  } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((current) => current + 1), []);
 
   useEffect(() => {
     let cancelled = false;
-    if (!user || !cfpId) {
-      setRole(null);
-      setError(false);
-      setReady(true);
+    if (!uid || !cfpId) {
+      setLookup(null);
       return;
     }
 
-    setRole(null);
-    setError(false);
-    setReady(false);
+    const scope = { uid, cfpId };
+    setLookup({ ...scope, role: null, ready: false, error: false });
     (async () => {
+      let role: CfpRole | null = null;
+      let error = false;
       try {
-        const mine = await getDoc(doc(db, 'cfps', cfpId, 'members', user.uid));
+        const mine = await getDoc(doc(db, 'cfps', cfpId, 'members', uid));
         if (cancelled) return;
         if (mine.exists()) {
-          setRole((mine.data() as CfpMember).role);
-          return;
+          role = (mine.data() as CfpMember).role;
+        } else {
+          const { data } = await claimRole({ cfpId });
+          if (cancelled) return;
+          role = data.role;
         }
-        const { data } = await claimRole({ cfpId });
-        if (!cancelled) setRole(data.role);
       } catch {
         // A missing membership is an ordinary speaker and is answered by
         // `claimRole` with `{role:null}`. Reaching here means neither read nor
         // claim completed, so calling it "forbidden" would turn an outage into a
         // false statement about the person's account.
-        if (!cancelled) {
-          setRole(null);
-          setError(true);
-        }
+        error = true;
       } finally {
-        if (!cancelled) setReady(true);
+        if (!cancelled) setLookup({ ...scope, role, ready: true, error });
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [user, cfpId, attempt]);
+  }, [uid, cfpId, attempt]);
 
-  return { role, ready, error, retry };
+  if (!uid || !cfpId) return { role: null, ready: true, error: false, retry };
+  if (!lookup || lookup.uid !== uid || lookup.cfpId !== cfpId) {
+    return { role: null, ready: false, error: false, retry };
+  }
+  return { role: lookup.role, ready: lookup.ready, error: lookup.error, retry };
 }
 
 export interface Person extends CfpMember {
@@ -331,6 +337,15 @@ export interface CfpSummary extends Cfp {
   id: string;
 }
 
+export interface CfpMembershipSummary extends CfpSummary {
+  role: CfpRole;
+}
+
+export interface CfpProposalActivity extends CfpSummary {
+  proposalStatuses: ProposalStatus[];
+  activityUpdatedAt: unknown;
+}
+
 /**
  * The public directory.
  *
@@ -369,15 +384,68 @@ export async function loadMyCfps(uid: string): Promise<CfpSummary[]> {
  * exactly the access needed here. Without this, somebody invited to review a
  * private call could only ever reach it through the link in their invitation.
  */
-export async function loadMyMemberships(uid: string): Promise<CfpSummary[]> {
+export async function loadMyMemberships(uid: string): Promise<CfpMembershipSummary[]> {
   const snap = await getDocs(query(collectionGroup(db, 'members'), where('uid', '==', uid)));
-  const ids = [...new Set(snap.docs.map((d) => (d.data() as CfpMember).cfpId).filter(Boolean))];
+  const roles = new Map(
+    snap.docs
+      .map((d) => d.data() as CfpMember)
+      .filter((member) => member.cfpId)
+      .map((member) => [member.cfpId, member.role] as const),
+  );
 
   const found = await Promise.all(
-    ids.map(async (id) => {
+    [...roles].map(async ([id, role]) => {
       const cfp = await getDoc(doc(db, 'cfps', id));
-      return cfp.exists() ? ({ id, ...(cfp.data() as Cfp) } as CfpSummary) : null;
+      return cfp.exists()
+        ? ({ id, role, ...(cfp.data() as Cfp) } as CfpMembershipSummary)
+        : null;
     }),
   );
-  return found.filter((cfp): cfp is CfpSummary => cfp !== null);
+  return found.filter((cfp): cfp is CfpMembershipSummary => cfp !== null);
+}
+
+/**
+ * Every CFP where this account has written a proposal, including private,
+ * closed and archived ones. The direct collection-group query is why proposals
+ * carry `cfpId` and why `speakerIds` has a collection-group index.
+ */
+export async function loadMyProposalCfps(uid: string): Promise<CfpProposalActivity[]> {
+  const snap = await getDocs(
+    query(collectionGroup(db, 'proposals'), where('speakerIds', 'array-contains', uid)),
+  );
+  const grouped = new Map<
+    string,
+    { statuses: ProposalStatus[]; updatedAt: unknown; updatedMillis: number }
+  >();
+
+  for (const proposalDoc of snap.docs) {
+    const proposal = proposalDoc.data() as Proposal;
+    if (!proposal.cfpId) continue;
+    const updatedMillis =
+      (proposal.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+    const current = grouped.get(proposal.cfpId);
+    grouped.set(proposal.cfpId, {
+      statuses: [...(current?.statuses ?? []), proposal.status],
+      updatedAt:
+        !current || updatedMillis >= current.updatedMillis
+          ? proposal.updatedAt
+          : current.updatedAt,
+      updatedMillis: Math.max(updatedMillis, current?.updatedMillis ?? 0),
+    });
+  }
+
+  const found = await Promise.all(
+    [...grouped].map(async ([id, activity]) => {
+      const cfp = await getDoc(doc(db, 'cfps', id));
+      return cfp.exists()
+        ? ({
+            id,
+            ...(cfp.data() as Cfp),
+            proposalStatuses: activity.statuses,
+            activityUpdatedAt: activity.updatedAt,
+          } as CfpProposalActivity)
+        : null;
+    }),
+  );
+  return found.filter((cfp): cfp is CfpProposalActivity => cfp !== null);
 }

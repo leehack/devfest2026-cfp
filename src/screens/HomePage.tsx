@@ -7,7 +7,7 @@
  * trimmed to what the caller may see.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { User } from 'firebase/auth';
 
 import { formatCalendarDay, formatDay } from '../i18n';
@@ -17,19 +17,30 @@ import { Link } from '../components/Link';
 import {
   loadMyCfps,
   loadMyMemberships,
+  loadMyProposalCfps,
   loadPublicCfps,
+  type CfpMembershipSummary,
+  type CfpProposalActivity,
   type CfpSummary,
 } from '../lib/roles';
 import { calendarDate } from '@shared/cfp';
+import type { ProposalStatus } from '@shared/enums';
+
+interface AccountActivity {
+  uid: string;
+  mine: CfpSummary[];
+  helping: CfpMembershipSummary[];
+  proposals: CfpProposalActivity[];
+}
 
 export function HomePage({ user }: { user: User | null }) {
   const { t } = useI18n();
+  const uid = user?.uid ?? null;
   const [open, setOpen] = useState<CfpSummary[] | null>(null);
-  const [mine, setMine] = useState<CfpSummary[]>([]);
-  const [helping, setHelping] = useState<CfpSummary[]>([]);
+  const [accountActivity, setAccountActivity] = useState<AccountActivity | null>(null);
   const [publicFailed, setPublicFailed] = useState(false);
-  const [accountLoading, setAccountLoading] = useState(false);
-  const [accountFailed, setAccountFailed] = useState(false);
+  const [accountLoadingUid, setAccountLoadingUid] = useState<string | null>(null);
+  const [accountFailedUid, setAccountFailedUid] = useState<string | null>(null);
   const accountRequest = useRef(0);
 
   const loadPublic = useCallback(async () => {
@@ -45,17 +56,26 @@ export function HomePage({ user }: { user: User | null }) {
 
   const loadAccount = useCallback(async (uid: string) => {
     const request = ++accountRequest.current;
-    setAccountLoading(true);
-    setAccountFailed(false);
-    const [owned, memberships] = await Promise.allSettled([
+    setAccountLoadingUid(uid);
+    setAccountFailedUid(null);
+    const [owned, memberships, submitted] = await Promise.allSettled([
       loadMyCfps(uid),
       loadMyMemberships(uid),
+      loadMyProposalCfps(uid),
     ]);
     if (request !== accountRequest.current) return;
-    if (owned.status === 'fulfilled') setMine(owned.value);
-    if (memberships.status === 'fulfilled') setHelping(memberships.value);
-    setAccountFailed(owned.status === 'rejected' || memberships.status === 'rejected');
-    setAccountLoading(false);
+    const failed =
+      owned.status === 'rejected' ||
+        memberships.status === 'rejected' ||
+        submitted.status === 'rejected';
+    setAccountActivity({
+      uid,
+      mine: owned.status === 'fulfilled' ? owned.value : [],
+      helping: memberships.status === 'fulfilled' ? memberships.value : [],
+      proposals: submitted.status === 'fulfilled' ? submitted.value : [],
+    });
+    setAccountFailedUid(failed ? uid : null);
+    setAccountLoadingUid(null);
   }, []);
 
   useEffect(() => {
@@ -64,23 +84,113 @@ export function HomePage({ user }: { user: User | null }) {
 
   useEffect(() => {
     accountRequest.current += 1;
-    if (!user) {
-      setMine([]);
-      setHelping([]);
-      setAccountLoading(false);
-      setAccountFailed(false);
+    if (!uid) {
+      setAccountActivity(null);
+      setAccountLoadingUid(null);
+      setAccountFailedUid(null);
       return;
     }
-    void loadAccount(user.uid);
-  }, [loadAccount, user]);
+    void loadAccount(uid);
+  }, [loadAccount, uid]);
+
+  const currentActivity = uid && accountActivity?.uid === uid ? accountActivity : null;
+  const mine = currentActivity?.mine ?? [];
+  const helping = currentActivity?.helping ?? [];
+  const proposals = currentActivity?.proposals ?? [];
+  const accountLoading =
+    uid !== null &&
+    (accountLoadingUid === uid ||
+      (accountActivity?.uid !== uid && accountFailedUid !== uid));
+  const accountFailed = uid !== null && accountFailedUid === uid;
 
   // Owning one already lists it above; this section is for the calls somebody
   // else runs and invited you onto.
   const owned = new Set(mine.map((cfp) => cfp.id));
   const elsewhere = helping.filter((cfp) => !owned.has(cfp.id));
+  const hasActivity = proposals.length > 0 || mine.length > 0 || elsewhere.length > 0;
 
   return (
     <div className="home-discovery">
+      {user && (accountLoading || accountFailed || hasActivity) && (
+        <section className="home-activity" aria-labelledby="your-activity-title">
+          <header className="home-activity__header">
+            <p className="home-activity__eyebrow">{t.app.account}</p>
+            <h2 id="your-activity-title">{t.platform.activity}</h2>
+            <p>{t.platform.activityHelp}</p>
+          </header>
+
+          {accountLoading && (
+            <p className="home-collection__state" role="status">
+              {t.app.loading}
+            </p>
+          )}
+          {!accountLoading && accountFailed && (
+            <LoadFailure onRetry={() => loadAccount(user.uid)} />
+          )}
+
+          {proposals.length > 0 && (
+            <ActivityCollection
+              title={t.platform.submissions}
+              help={t.platform.submissionsHelp}
+              id="your-proposals-title"
+            >
+              <CfpList
+                cfps={proposals}
+                sortBy="activity"
+                linkFor={(cfp) => {
+                  const activity = proposals.find((item) => item.id === cfp.id)!;
+                  return {
+                    to: href({ route: 'form', cfpId: cfp.id }),
+                    action: proposalAction(activity.proposalStatuses, t),
+                    context: proposalSummary(activity.proposalStatuses, t),
+                  };
+                }}
+              />
+            </ActivityCollection>
+          )}
+
+          {mine.length > 0 && (
+            <ActivityCollection
+              title={t.platform.yours}
+              help={t.platform.yoursHelp}
+              id="your-calls-title"
+            >
+              <CfpList
+                cfps={mine}
+                linkFor={(cfp) => ({
+                  to: href({ route: 'admin', cfpId: cfp.id }),
+                  action: t.platform.manageEvent,
+                })}
+              />
+            </ActivityCollection>
+          )}
+
+          {elsewhere.length > 0 && (
+            <ActivityCollection
+              title={t.platform.helping}
+              help={t.platform.helpingHelp}
+              id="helping-calls-title"
+            >
+              <CfpList
+                cfps={elsewhere}
+                linkFor={(cfp) => {
+                  const membership = elsewhere.find((item) => item.id === cfp.id)!;
+                  const manages = membership.role === 'admin' || membership.role === 'owner';
+                  return {
+                    to: href({
+                      route: manages ? 'admin' : 'review',
+                      cfpId: cfp.id,
+                    }),
+                    action: manages ? t.platform.manageEvent : t.platform.reviewTalks,
+                    context: t.enums.role[membership.role],
+                  };
+                }}
+              />
+            </ActivityCollection>
+          )}
+        </section>
+      )}
+
       <section className="home-discovery__primary" aria-labelledby="open-calls-title">
         <header className="home-discovery__intro">
           <p className="home-discovery__eyebrow">{t.platform.eyebrow}</p>
@@ -121,39 +231,31 @@ export function HomePage({ user }: { user: User | null }) {
         </div>
       </aside>
 
-      {user && accountLoading && (
-        <p className="home-collection__state" role="status">
-          {t.app.loading}
-        </p>
-      )}
-      {user && !accountLoading && accountFailed && (
-        <LoadFailure onRetry={() => loadAccount(user.uid)} />
-      )}
-
-      {mine.length > 0 && (
-        <section className="home-collection" aria-labelledby="your-calls-title">
-          <header className="home-collection__header">
-            <h2 id="your-calls-title" className="home-collection__title">
-              {t.platform.yours}
-            </h2>
-            <p className="home-collection__help">{t.platform.yoursHelp}</p>
-          </header>
-          <CfpList cfps={mine} />
-        </section>
-      )}
-
-      {elsewhere.length > 0 && (
-        <section className="home-collection" aria-labelledby="helping-calls-title">
-          <header className="home-collection__header">
-            <h2 id="helping-calls-title" className="home-collection__title">
-              {t.platform.helping}
-            </h2>
-            <p className="home-collection__help">{t.platform.helpingHelp}</p>
-          </header>
-          <CfpList cfps={elsewhere} />
-        </section>
-      )}
     </div>
+  );
+}
+
+function ActivityCollection({
+  title,
+  help,
+  id,
+  children,
+}: {
+  title: string;
+  help: string;
+  id: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="home-collection" aria-labelledby={id}>
+      <header className="home-collection__header">
+        <h3 id={id} className="home-collection__title">
+          {title}
+        </h3>
+        <p className="home-collection__help">{help}</p>
+      </header>
+      {children}
+    </section>
   );
 }
 
@@ -175,10 +277,29 @@ const toDate = (value: unknown): Date | null => {
   return at instanceof Date ? at : null;
 };
 
-function CfpList({ cfps }: { cfps: CfpSummary[] }) {
+interface CardLink {
+  to: string;
+  action: string;
+  context?: string;
+}
+
+function CfpList({
+  cfps,
+  sortBy = 'window',
+  linkFor,
+}: {
+  cfps: CfpSummary[];
+  sortBy?: 'window' | 'activity';
+  linkFor?: (cfp: CfpSummary) => CardLink;
+}) {
   const now = Date.now();
   const state = (cfp: CfpSummary) => cardState(cfp, now);
   const ordered = [...cfps].sort((a, b) => {
+    if (sortBy === 'activity') {
+      const aActivity = toDate((a as CfpProposalActivity).activityUpdatedAt)?.getTime() ?? 0;
+      const bActivity = toDate((b as CfpProposalActivity).activityUpdatedAt)?.getTime() ?? 0;
+      if (aActivity !== bActivity) return bActivity - aActivity;
+    }
     const rank = { open: 0, upcoming: 1, paused: 2, closed: 3, archived: 4 } as const;
     const byState = rank[state(a)] - rank[state(b)];
     if (byState !== 0) return byState;
@@ -191,7 +312,7 @@ function CfpList({ cfps }: { cfps: CfpSummary[] }) {
   return (
     <ul className="cfp-card-list">
       {ordered.map((cfp) => (
-        <CfpCard key={cfp.id} cfp={cfp} />
+        <CfpCard key={cfp.id} cfp={cfp} link={linkFor?.(cfp)} />
       ))}
     </ul>
   );
@@ -210,7 +331,7 @@ function cardState(cfp: CfpSummary, now: number): CardState {
   return 'open';
 }
 
-function CfpCard({ cfp }: { cfp: CfpSummary }) {
+function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
   const { t, locale } = useI18n();
   const opensAt = toDate(cfp.opensAt);
   const closesAt = toDate(cfp.closesAt);
@@ -239,14 +360,16 @@ function CfpCard({ cfp }: { cfp: CfpSummary }) {
     .replace('{name}', cfp.name)
     .replace('{status}', stateLabel)
     .replace('{path}', `/c/${cfp.id}`)
-    .replace('{details}', details);
+    .replace('{details}', `${details}${link?.context ? ` ${link.context}.` : ''}`);
+  const destination = link?.to ?? href({ route: 'cfp', cfpId: cfp.id });
+  const action = link?.action ?? t.platform.view;
 
   return (
     <li className={`cfp-card cfp-card--${state}`}>
       <Link
         className="cfp-card__link"
-        to={href({ route: 'cfp', cfpId: cfp.id })}
-        aria-label={accessibleName}
+        to={destination}
+        aria-label={`${accessibleName} ${action}.`}
       >
         <span className="cfp-card__topline">
           <span className={`cfp-card__status cfp-card__status--${state}`}>{stateLabel}</span>
@@ -256,6 +379,7 @@ function CfpCard({ cfp }: { cfp: CfpSummary }) {
         </span>
         <span className="cfp-card__name">{cfp.name}</span>
         <span className="cfp-card__slug">/c/{cfp.id}</span>
+        {link?.context && <span className="cfp-card__context">{link.context}</span>}
         {(eventDay || cfp.location) && (
           <span className="cfp-card__event">
             {eventDay && (
@@ -278,7 +402,7 @@ function CfpCard({ cfp }: { cfp: CfpSummary }) {
             </time>
           )}
           <span className="cfp-card__view">
-            {t.platform.view}
+            {action}
             <span className="cfp-card__arrow" aria-hidden="true">
               →
             </span>
@@ -287,4 +411,42 @@ function CfpCard({ cfp }: { cfp: CfpSummary }) {
       </Link>
     </li>
   );
+}
+
+const STATUS_PRIORITY: ProposalStatus[] = [
+  'accepted',
+  'draft',
+  'waitlisted',
+  'under_review',
+  'submitted',
+  'confirmed',
+  'rejected',
+  'declined',
+  'withdrawn',
+];
+
+function proposalAction(
+  statuses: ProposalStatus[],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (statuses.includes('accepted')) return t.platform.respondToDecision;
+  if (statuses.includes('draft')) return t.platform.continueDraft;
+  if (statuses.some((status) => ['waitlisted', 'rejected', 'declined'].includes(status))) {
+    return t.platform.viewDecision;
+  }
+  return t.platform.viewProposals;
+}
+
+function proposalSummary(
+  statuses: ProposalStatus[],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  const counts = new Map<ProposalStatus, number>();
+  for (const status of statuses) counts.set(status, (counts.get(status) ?? 0) + 1);
+  return STATUS_PRIORITY.filter((status) => counts.has(status))
+    .map((status) => {
+      const count = counts.get(status)!;
+      return `${count > 1 ? `${count} × ` : ''}${t.enums.status[status]}`;
+    })
+    .join(' · ');
 }
