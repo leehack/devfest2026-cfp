@@ -164,8 +164,9 @@ export function AdminPage({
     const closeOnEscape = (event: KeyboardEvent) => {
       const menu = mobileMenu.current;
       if (event.key !== 'Escape' || !menu?.open) return;
+      event.preventDefault();
       setMobileMenuOpen(false);
-      menu.querySelector<HTMLElement>('summary')?.focus();
+      menu.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
     };
 
     document.addEventListener('pointerdown', closeOutside);
@@ -211,6 +212,7 @@ export function AdminPage({
             role="button"
             aria-expanded={mobileMenuOpen}
             aria-label={`${t.admin.sectionPicker}: ${t.admin.tabs[tab]}`}
+            aria-describedby={pendingEmailCount ? 'admin-section-pending-email' : undefined}
           >
             <span className="admin-section-menu__current">
               <span className="admin-section-menu__label">{t.admin.sectionPicker}</span>
@@ -221,7 +223,7 @@ export function AdminPage({
                 <span className="subnav__badge" aria-hidden="true">
                   {pendingEmailCount}
                 </span>
-                <span className="visually-hidden">
+                <span className="visually-hidden" id="admin-section-pending-email">
                   {t.admin.pendingEmailTabLabel(pendingEmailCount)}
                 </span>
               </>

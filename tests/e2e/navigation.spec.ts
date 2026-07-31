@@ -209,6 +209,12 @@ test.describe('navigation by persona', () => {
     await expect(trigger).toContainText('Proposals');
     await expect(page.getByRole('button', { name: 'Go', exact: true })).toHaveCount(0);
     await trigger.click();
+    await expect(
+      menu.getByRole('link', { name: 'Proposals', exact: true }),
+    ).toHaveCount(0);
+    const current = menu.locator('.admin-section-menu__link--on');
+    await expect(current).toHaveText('Proposals');
+    await expect(current).toHaveAttribute('aria-current', 'page');
     const email = menu.getByRole('link', { name: 'Email', exact: true });
     await expect(email).toHaveAttribute('href', at('/admin/email'));
     await email.click();
@@ -266,6 +272,36 @@ test.describe('navigation by persona', () => {
     await menu.getByRole('link', { name: 'Dashboard', exact: true }).focus();
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(at('/admin/overview'));
+  });
+
+  test('the section menu remains bounded and compact in a short tablet viewport', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 700, height: 320 });
+    await inviteRole(ADMIN.email, 'admin');
+    await signInAs(page, ADMIN, at('/admin/proposals'));
+
+    const menu = page.getByRole('navigation', { name: 'Admin sections' });
+    const trigger = menu.getByRole('button', { name: 'Section: Proposals' });
+    await trigger.click();
+    const list = menu.locator('.admin-section-menu__list');
+    await expect(list).toBeVisible();
+    await expect
+      .poll(() => list.evaluate((element) => element.getBoundingClientRect().bottom))
+      .toBeLessThanOrEqual(321);
+
+    const geometry = await list.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return {
+        top: box.top,
+        bottom: box.bottom,
+        viewport: window.innerHeight,
+        columns: getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length,
+      };
+    });
+    expect(geometry.top).toBeGreaterThanOrEqual(0);
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewport + 1);
+    expect(geometry.columns).toBe(2);
   });
 });
 

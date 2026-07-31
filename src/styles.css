@@ -5334,7 +5334,7 @@ body:has(.consent) .editorbar {
     left: 0;
     display: grid;
     gap: 1px;
-    max-height: calc(100dvh - 4.75rem);
+    max-height: calc(100dvh - 7rem);
     margin: 0;
     padding: var(--s-1);
     overflow-x: hidden;
@@ -5345,6 +5345,7 @@ body:has(.consent) .editorbar {
     box-shadow: var(--shadow-2);
     list-style: none;
     overscroll-behavior: contain;
+    scrollbar-width: thin;
   }
 
   .admin-section-menu__link {
