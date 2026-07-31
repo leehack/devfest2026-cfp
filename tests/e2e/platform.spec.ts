@@ -2,7 +2,7 @@
  * The platform, rather than any one call for proposals.
  *
  * Two things are being proved here. That the front door works — a public CFP is
- * listed, a private one is not but is reachable by link, and anyone signed in
+ * listed, a private one is not but is reachable by link, and an approved creator
  * can start one. And that a tenant is a boundary: an admin of one CFP is
  * nobody's admin on another, from the callables as well as from the screen.
  *
@@ -19,6 +19,7 @@ import {
   callAs,
   callJson,
   createAccount,
+  invitePlatformRole,
   inviteRole,
   readProposalById,
   readStoredObjects,
@@ -187,6 +188,7 @@ test.describe('the front door', () => {
   });
 
   test('signing in and starting one makes you its owner', async ({ page }) => {
+    await invitePlatformRole(OWNER.email, 'creator');
     await signInAs(page, OWNER, '/new');
 
     await page.getByRole('textbox', { name: /^Name/ }).fill('Test Conf 2027');
@@ -222,6 +224,7 @@ test.describe('the front door', () => {
   });
 
   test('an address already taken is refused, and says so', async ({ page }) => {
+    await invitePlatformRole(OWNER.email, 'creator');
     await signInAs(page, OWNER, '/new');
 
     await page.getByRole('textbox', { name: /^Name/ }).fill('DevFest Montréal 2026');
@@ -256,6 +259,7 @@ test.describe('nothing crosses between two calls', () => {
     // a CFP you hold nothing on is the whole attack, and it buys nothing.
     for (const [name, data] of [
       ['setProposalStatus', { proposalId: 'theirs', status: 'accepted' }],
+      ['emailQueue', { action: 'summary' }],
       ['emailQueue', { action: 'preview' }],
       ['recomputeAggregates', {}],
       ['setCfpWindow', { paused: true }],

@@ -1,4 +1,11 @@
-import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  serverTimestamp,
+  setDoc,
+} from 'firebase/firestore/lite';
 
 import { db } from '../firebase';
 import type { Score } from '@shared/enums';

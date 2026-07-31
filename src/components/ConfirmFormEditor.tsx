@@ -107,7 +107,7 @@ export function ConfirmFormEditor({
         }}
       />
 
-      <div className="row row--wrap">
+      <div className="row row--wrap form-actions">
         <button
           type="button"
           className="btn btn--primary"
@@ -119,7 +119,13 @@ export function ConfirmFormEditor({
         {dirty && <span className="muted">{t.admin.unsaved}</span>}
       </div>
 
-      {note && <p className="note note--inline">{note}</p>}
+      <div
+        className={note ? 'note note--inline' : undefined}
+        role="status"
+        aria-atomic="true"
+      >
+        {note}
+      </div>
       {error && (
         <p className="field__error" role="alert">
           {error}

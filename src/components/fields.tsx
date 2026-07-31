@@ -218,9 +218,11 @@ export function SelectField<T extends string>({
   required,
   disabled,
 }: ChoiceProps<T>) {
+  const { t } = useI18n();
   const id = useId();
   const helpId = help ? `${id}-help` : undefined;
   const errorId = error ? `${id}-error` : undefined;
+  const hasEmptyOption = options.some((option) => option.value === '');
   return (
     <Shell
       label={label}
@@ -242,7 +244,11 @@ export function SelectField<T extends string>({
         aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value as T)}
       >
-        <option value="" disabled />
+        {!hasEmptyOption && (
+          <option value="" disabled>
+            {t.form.answerPick}
+          </option>
+        )}
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}

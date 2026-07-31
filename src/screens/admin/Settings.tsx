@@ -292,9 +292,9 @@ export function Settings({
 
   return (
     <>
-      <section className="section">
+      <section className="section section--form">
         <h2>{t.admin.identity}</h2>
-        <p className="muted">{t.admin.identityHelp}</p>
+        <p className="section__help">{t.admin.identityHelp}</p>
 
         <TextField
           label={t.admin.identityName}
@@ -390,7 +390,7 @@ export function Settings({
         </button>
       </section>
 
-      <section className="section">
+      <section className="section section--form">
         <h2>{t.admin.window}</h2>
 
         <div className="grid grid--2">
@@ -418,16 +418,21 @@ export function Settings({
           )}
         </p>
 
-        <Checkbox label={t.admin.pausedLabel} checked={paused} onChange={setPaused} disabled={busy} />
-        <p className="field__help">{t.admin.pausedHelp}</p>
+        <Checkbox
+          label={t.admin.pausedLabel}
+          help={t.admin.pausedHelp}
+          checked={paused}
+          onChange={setPaused}
+          disabled={busy}
+        />
 
         <Checkbox
           label={t.admin.reviewsVisibleLabel}
+          help={t.admin.reviewsVisibleHelp}
           checked={reviewsVisible}
           onChange={setReviewsVisible}
           disabled={busy}
         />
-        <p className="field__help">{t.admin.reviewsVisibleHelp}</p>
 
         <button
           type="button"
@@ -495,9 +500,9 @@ function Lifecycle({
 
   return (
     <>
-      <section className="section">
+      <section className="section section--form">
         <h2>{t.admin.archive}</h2>
-        <p className="muted">{t.admin.archiveHelp}</p>
+        <p className="section__help">{t.admin.archiveHelp}</p>
         <button
           type="button"
           className="btn"
@@ -514,9 +519,9 @@ function Lifecycle({
         </button>
       </section>
 
-      <section className="section">
+      <section className="section section--form">
         <h2>{t.admin.danger}</h2>
-        <p className="muted">{t.admin.dangerHelp}</p>
+        <p className="section__help">{t.admin.dangerHelp}</p>
         {!archived ? (
           <p className="field__help">{t.admin.dangerNeedsArchive}</p>
         ) : (

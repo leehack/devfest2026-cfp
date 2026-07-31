@@ -18,39 +18,56 @@ Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules
 ```bash
 node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
 node scripts/set-platform.mjs --url https://cfp.example.org
+GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email admin@example.org
+GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email owner@example.org --role owner
 ```
 
 Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
-and the platform's own settings. Both take the emulator env vars from their own
-headers. There is no bootstrap-admin script any more: whoever creates a CFP is
-written as its owner in the same transaction.
+the platform's own settings, an administrator, and the first global owner. The seeding scripts
+take emulator env vars from their own headers. There is no CFP-owner bootstrap:
+an approved creator is written as owner in the creation transaction. Platform
+owners are different and deliberately bootstrapped out of band; they delegate
+platform admins, and owners or admins delegate creator access.
 
 ## Layout
 
 ```
 shared/      enums, types, zod schema, email copy, pure parsers — BOTH bundles
 src/         the app: pages/ (submit, admin, review), lib/ (data access), i18n/
-functions/   callables: submit, withdraw, roles, window, aggregates, sessionize,
-             emailQueue — plus the sendQueuedEmail Firestore trigger
-scripts/     dev.mjs (npm start), seed-cfp.mjs, set-platform.mjs, with-java.mjs
+functions/   callables: submit, withdraw, event/platform roles, window,
+             aggregates, sessionize, emailQueue — plus email delivery
+scripts/     dev.mjs, seed-cfp.mjs, set-platform.mjs,
+             set-platform-admin.mjs, with-java.mjs
 tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 ```
 
 **It is a platform: everything hangs under `cfps/{cfpId}`, where the id is the
 slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
-the account), `signInLinks` (a platform-wide throttle) and `config/platform` sit
-outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
+the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
+creator access), `signInLinks` (a platform-wide throttle) and `config/platform`
+sit outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
 
 Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
-to start one, `/me` the speaker's own profile, then `/c/{cfpId}` the call's
-public page, `/c/{cfpId}/submit` the form, `/review` for any role-holder and
-`/admin/{tab}` for admins. Only
+to start one, `/platform` for global creator access, `/me` the speaker's own
+profile, then `/c/{cfpId}` the call's public page, `/c/{cfpId}/submit` the form,
+`/review` for any role-holder and `/admin/{tab}` for admins. Only
 `/c/{cfpId}` — one segment — is rewritten to the `cfpPage` function for its meta
 tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
 `owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
 until its holder first visits. Only an owner archives, deletes or is written by
 `createCfp`; `owner` is deliberately not grantable through `grantRole`.
+
+Platform roles are separate: `owner`, `admin` and `creator` answer who may
+delegate platform access and create a CFP. They grant no access to event data.
+Both global collections are callable-only; owners grant/revoke admins, while
+owners and admins grant/revoke creators. `scripts/set-platform-admin.mjs --role
+owner` is the only path for platform-owner changes and transactionally refuses
+to remove the last active owner. A disabled, deleted or unverified Auth account
+does not count as a fallback. Auth and Firestore cannot share a transaction, so
+there is an unavoidable narrow race if an account is disabled during that
+removal; the role-document check itself is transactional. `createCfp` checks
+the global role again inside its creation transaction.
 
 Every callable takes a `cfpId` and checks the caller's role against *that* id.
 It is never inferred from the caller's memberships — somebody on two CFPs would
@@ -245,10 +262,10 @@ collection — the rule names the two readable documents one at a time.
   must not import it, or the bundler puts it back in the main chunk and every
   visitor pays for it again.
 - **Analytics is off until somebody says yes, and off by default entirely.**
-  `VITE_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the module is
-  inert and the consent banner does not render, which is the state of the
-  emulators and of anyone else deploying this. With one, nothing loads until the
-  banner is answered — `firebase/analytics` is a dynamic import inside
+  `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the
+  module is inert and the consent banner does not render, which is the state of
+  the emulators and of anyone else deploying this. With one, nothing loads until
+  the banner is answered — `firebase/analytics` is a dynamic import inside
   `start()`, because a top-level import writes its cookie on init and would
   defeat the gate whatever the banner said. Law 25 and the GDPR also require
   refusing to be as easy as agreeing, which is why both buttons are the same
@@ -387,7 +404,7 @@ collection — the rule names the two readable documents one at a time.
   unequal review counts incomparable.
 - **Real Firebase config is in `.env.production.local`, not `.env.local`.** Next
   loads it for a production build only, so `npm start` stays on the emulators. In
-  the cloud it comes from Secret Manager via `apphosting.yaml`; the six secrets
+  the cloud it comes from Secret Manager via `apphosting.yaml`; the seven secrets
   are named `next-public-firebase-*`. `next.config.ts` fails the build if the
   projectId starts with `demo-`, because the tracked `.env` holds exactly that and
   Next reads `.env` in every mode.
@@ -396,7 +413,7 @@ collection — the rule names the two readable documents one at a time.
   destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
-- Project `devfest-mtl-2026-cfp`; Firestore and the 27 functions both in
+- Project `devfest-mtl-2026-cfp`; Firestore and the 37 functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
 - **App Hosting runs in `us-east4`, and there was no choice.** The API offers six
   regions and no Canadian one. Firestore and every callable stay in Montréal, so

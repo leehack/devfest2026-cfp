@@ -1,7 +1,9 @@
 # A call-for-proposals platform
 
-Anyone signed in starts a call for proposals and owns it. Submission form,
-Firestore write path, security rules. `SPEC.md` is the design;
+An approved creator starts a call for proposals and owns it. Platform owners
+delegate administrators, and administrators control creator access, without
+either inheriting access to an event. Submission form, Firestore write path,
+security rules. `SPEC.md` is the design;
 [`AGENTS.md`](AGENTS.md) is the working conventions.
 
 It began as one event's CFP — DevFest Montréal 2026 — which is still the shape
@@ -23,17 +25,18 @@ Everything hangs under `cfps/{cfpId}`, where the id is the slug — `proposals`,
 one call. The document id being the slug means creating one *is* the uniqueness
 check: there is no second index to keep honest, and no window in which two people
 both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
-account, not to any one talk), `signInLinks` (a platform-wide throttle) and
-`config/platform` sit outside.
+account, not to any one talk), `platformMembers/{uid}` and
+`platformRoleGrants/{email}` (global creator access), `signInLinks` (a
+platform-wide throttle) and `config/platform` sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
-and then `/c/{cfpId}` is that call's public page, `/submit` the form, `/review`
-for anyone holding a role on it and `/admin/{tab}` for its admins. The public
-page is server-rendered by its Next App Router segment, which puts the call's
-own title and description into the HTML — a crawler and a link preview never
-run the script, so `document.title` alone buys nothing. Everyone may submit a
-talk, reviewers and admins included — they simply never get their own in the
-queue.
+`/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
+public page, `/submit` the form, `/review` for anyone holding a role on it and
+`/admin/{tab}` for its admins. The public page is server-rendered by its Next
+App Router segment, which puts the call's own title and description into the
+HTML — a crawler and a link preview never run the script, so `document.title`
+alone buys nothing. Everyone may submit a talk, reviewers and admins included —
+they simply never get their own in the queue.
 
 A call is **public** (listed on the home page) or **private** (unlisted, but
 readable by anyone with the link — private means unlisted, not secret). Its owner
@@ -75,6 +78,38 @@ module load and nothing renders at all.
 embedded webviews, so under the emulators the sign-in panel grows a **"Sign in as
 a test speaker"** button ([`src/lib/devAuth.ts`](src/lib/devAuth.ts)). It is not
 rendered against a real project.
+
+Creation is restricted even locally. After signing in as the test speaker,
+grant that account platform-admin access through the emulators:
+
+```bash
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
+GCLOUD_PROJECT=demo-devfest-cfp \
+node scripts/set-platform-admin.mjs --email test.speaker@example.org
+```
+
+For a deployed project, deploy the Functions that understand the `owner` role
+before running the script with its project id and application default
+credentials. A verified existing account becomes active immediately; otherwise
+the grant waits for that address's first verified sign-in. Existing
+administrators keep working unchanged. Promote the first owner explicitly:
+
+```bash
+env -u FIRESTORE_EMULATOR_HOST \
+  -u FIREBASE_AUTH_EMULATOR_HOST \
+  -u FIREBASE_STORAGE_EMULATOR_HOST \
+  GCLOUD_PROJECT=devfest-mtl-2026-cfp \
+  GOOGLE_CLOUD_PROJECT=devfest-mtl-2026-cfp \
+  node scripts/set-platform-admin.mjs --email owner@example.org --role owner
+```
+
+Owners delegate administrators from `/platform`; owners and administrators
+manage CFP creators there. Owner changes stay out of band, and the script
+transactionally refuses to remove the last active owner. Disabled, deleted and
+unverified accounts do not count as a safe replacement; have the replacement
+open `/platform` successfully before removing the previous owner. Deploy the web
+app only after that first owner can open `/platform`.
 
 ## Verify
 
@@ -165,6 +200,15 @@ in the same transaction. `owner` is deliberately not grantable through
 out from under its owner. The callables call the same `grant()` the
 callable does, so "what granting means" cannot drift between them.
 
+**Platform access is separate from event roles.** `platformMembers` answers who
+may delegate access and create a new CFP; a platform owner or admin cannot read
+or administer an event unless that CFP separately grants them a role. Owners
+delegate admins, and owners or admins approve creators, from `/platform`. The
+two global collections are unreadable and unwritable from every browser, so the
+directory and every change go through verified, role-checked callables. The
+first platform owner is deliberately bootstrapped out of band with
+`scripts/set-platform-admin.mjs --role owner`.
+
 **A reviewer who is also a speaker must never read the reviews of their own
 proposal.** §6 outranks any role, so the block is on reads and writes alike,
 admins included, and holds through the moment `reviewsVisible` flips. Six rules
@@ -237,7 +281,7 @@ npm run deploy:backend                          # callables and both rule sets
 npm run smoke:production                        # edge headers, public routes and Auth handler
 ```
 
-The six public Firebase values reach a cloud build from Secret Manager, named
+The seven public Firebase values reach a cloud build from Secret Manager, named
 `next-public-firebase-*`, wired up in `apphosting.yaml`. Production builds also
 require credential-free HTTPS values for `NEXT_PUBLIC_COC_URL` and `SITE_ORIGIN`;
 the checked-in hosting config pins both for the Montréal deployment.
@@ -247,6 +291,15 @@ Real config lives in `.env.production.local` (gitignored) rather than
 only `demo-` placeholders. `next.config.ts` refuses to build if the projectId
 still starts with `demo-`, because Next reads `.env` in every mode and a build
 that picked those up would deploy a site that cannot sign anybody in.
+
+Google Analytics uses the Firebase web app's GA4 measurement ID. It remains
+consent-gated: the SDK is not downloaded until a visitor opts in, declining does
+not affect the CFP, and the footer lets a visitor change that choice later.
+The linked property keeps automatic page views, Google signals, advertising
+personalization and granular location/device collection off. User and event data
+retention is two months without an activity reset; URL query values are redacted.
+`cfp_id`, `category`, `format` and `delivery_language` are event-scoped custom
+dimensions for the explicit events the app sends.
 
 The App Hosting backend is pinned to `nodejs22` in its Settings tab, matching
 both package manifests and keeping automatic base-image security updates
@@ -267,10 +320,11 @@ the app — it is where every mailed link points, sign-in links included, and th
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
 
 Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
-window and organisers are managed from `/admin`. The ordinary `createCfp` flow
-writes the CFP and its owner in one transaction; `scripts/seed-cfp.mjs` is the
-outside-the-app option for a fresh environment. `scripts/set-platform.mjs` sets
-the platform-wide public origin.
+window and organisers are managed from `/admin`. An approved creator's
+`createCfp` flow writes the CFP and its owner in one transaction;
+`scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment.
+`scripts/set-platform-admin.mjs` bootstraps global owners or administrators, and
+`scripts/set-platform.mjs` sets the platform-wide public origin.
 
 ## Email
 
@@ -348,6 +402,12 @@ readable. The rules suite exercises every boundary and is mutation-checked.
   caller's role for that CFP server-side. `createCfp` writes its owner in the
   creation transaction. `claimRole` trusts only the verified auth token's email,
   and requires `email_verified === true` rather than merely "not false".
+- **Creator access cannot be self-served either.** `platformMembers` and
+  `platformRoleGrants` are closed to every client. `createCfp` rechecks the
+  caller's platform role in its creation transaction, so a stale screen or a
+  concurrent revocation cannot bypass it. Owners may delegate admins; owners
+  and admins may delegate creators. Owner changes stay with the guarded
+  bootstrap script, and nobody may remove their own platform access.
 - **Every callable authorises before it acts** — `requireUid`, `requireAdmin`, or
   ownership via `readOwnProposal`, which reports `not-found` for someone else's
   proposal so a prober learns nothing either way.

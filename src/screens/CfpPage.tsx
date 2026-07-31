@@ -70,9 +70,21 @@ export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
 
         <div className="cfp-hero__topline">
           <p className="cfp-hero__eyebrow">{t.cfpPage.eyebrow}</p>
-          <span className={`cfp-hero__status cfp-hero__status--${cfp.state}`}>
-            {stateLabel}
-          </span>
+          <div className="cfp-hero__actions">
+            <span className={`cfp-hero__status cfp-hero__status--${cfp.state}`}>
+              {stateLabel}
+            </span>
+            {open && (
+              <Link className="btn btn--primary btn--compact" to={href({ route: 'form', cfpId })}>
+                {t.cfpPage.submitAction}
+              </Link>
+            )}
+            {!open && cfp.state !== 'before' && (
+              <Link className="btn btn--compact" to={href({ route: 'form', cfpId })}>
+                {t.cfpPage.manageAction}
+              </Link>
+            )}
+          </div>
         </div>
 
         <div className="cfp-hero__body">

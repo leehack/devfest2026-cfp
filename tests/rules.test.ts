@@ -198,6 +198,27 @@ describe('applicants read and write only their own proposal', () => {
     expect(snap.docs.map((d) => d.id)).toEqual(['p-anna']);
   });
 
+  it('can find its own proposals across CFPs without listing anyone else’s', async () => {
+    const q = query(
+      collectionGroup(asApplicant(), 'proposals'),
+      where('speakerIds', 'array-contains', APPLICANT),
+    );
+    const snap = await assertSucceeds(getDocs(q));
+    expect(snap.docs.map((d) => d.id)).toEqual(['p-anna']);
+  });
+
+  it('cannot use the cross-CFP query to find another speaker’s proposals', async () => {
+    await assertFails(
+      getDocs(
+        query(
+          collectionGroup(asApplicant(), 'proposals'),
+          where('speakerIds', 'array-contains', OTHER_APPLICANT),
+        ),
+      ),
+    );
+    await assertFails(getDocs(collectionGroup(asApplicant(), 'proposals')));
+  });
+
   it('cannot scope a query to someone else', async () => {
     const q = query(
       collection(asApplicant(), `${CFP}/proposals`),
@@ -1176,6 +1197,73 @@ describe('finding a CFP', () => {
     await assertFails(setDoc(doc(asApplicant(), 'cfps/mine'), { ...CFP_BASE, ownerUids: [APPLICANT] }));
     await assertFails(updateDoc(doc(asApplicant(), CFP), { name: 'Mine now' }));
     await assertFails(deleteDoc(doc(asApplicant(), CFP)));
+  });
+});
+
+describe('platform access is callable-only', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'platformMembers', REVIEWER), {
+        uid: REVIEWER,
+        email: 'chen@example.org',
+        role: 'admin',
+        grantedBy: 'bootstrap',
+      });
+      await setDoc(doc(db, 'platformRoleGrants', 'creator@example.org'), {
+        email: 'creator@example.org',
+        role: 'creator',
+        createdBy: REVIEWER,
+      });
+    });
+  });
+
+  it('does not turn a platform admin into a client-readable user directory', async () => {
+    await assertFails(getDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
+    await assertFails(getDocs(collection(asReviewer(), 'platformMembers')));
+    await assertFails(getDocs(collection(asReviewer(), 'platformRoleGrants')));
+  });
+
+  it('does not expose grants to signed-out or ordinary signed-in visitors', async () => {
+    await assertFails(
+      getDoc(
+        doc(
+          env.unauthenticatedContext().firestore(),
+          'platformRoleGrants',
+          'creator@example.org',
+        ),
+      ),
+    );
+    await assertFails(
+      getDoc(doc(asApplicant(), 'platformRoleGrants', 'creator@example.org')),
+    );
+  });
+
+  it('never lets a client grant, promote, revoke, or delete platform access', async () => {
+    await assertFails(
+      setDoc(doc(asApplicant(), 'platformMembers', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        role: 'admin',
+      }),
+    );
+    await assertFails(
+      setDoc(doc(asApplicant(), 'platformMembers', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        role: 'owner',
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'creator' }),
+    );
+    await assertFails(deleteDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
+    await assertFails(
+      setDoc(doc(asReviewer(), 'platformRoleGrants', 'friend@example.org'), {
+        email: 'friend@example.org',
+        role: 'creator',
+      }),
+    );
   });
 });
 

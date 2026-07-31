@@ -230,6 +230,7 @@ test.describe('the admin editor', () => {
   test('changing admin tabs does not discard an unsaved form edit', async ({ page }) => {
     const admin = await createAccount(ADMIN);
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await page.setViewportSize({ width: 390, height: 844 });
     await signInAs(page, ADMIN, at('/admin/submission'));
 
     const label = page.getByRole('textbox', { name: 'English label for App Dev' });
@@ -239,7 +240,9 @@ test.describe('the admin editor', () => {
       expect(dialog.message()).toContain('Unsaved');
       await dialog.dismiss();
     });
-    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    const menu = page.locator('.admin-section-menu');
+    await menu.locator('summary').click();
+    await menu.getByRole('link', { name: 'Committee', exact: true }).click();
 
     await expect(page).toHaveURL(new RegExp('/admin/submission$'));
     await expect(
@@ -247,7 +250,7 @@ test.describe('the admin editor', () => {
     ).toHaveValue('Building apps');
 
     page.once('dialog', (dialog) => dialog.accept());
-    await page.getByRole('link', { name: 'Committee', exact: true }).click();
+    await menu.getByRole('link', { name: 'Committee', exact: true }).click();
     await expect(page).toHaveURL(new RegExp('/admin/committee$'));
   });
 

@@ -107,6 +107,7 @@ describe('pageShape', () => {
   it('leaves the platform’s own pages alone — they have no id in them', () => {
     expect(pageShape('/')).toBe('/');
     expect(pageShape('/new')).toBe('/new');
+    expect(pageShape('/platform')).toBe('/platform');
     expect(pageShape('/me')).toBe('/me');
   });
 

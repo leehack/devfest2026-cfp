@@ -88,9 +88,7 @@ export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/c/${cf
 const configDoc = (db: Firestore, cfpId: string) => db.doc(`cfps/${cfpId}/config/email`);
 
 /** Env is the fallback, so a fresh project sends nothing until someone says so. */
-export async function loadSettings(db: Firestore, cfpId: string): Promise<EmailSettings> {
-  const snap = await configDoc(db, cfpId).get();
-  const stored = snap.data() ?? {};
+export function settingsFromConfig(stored: Record<string, unknown>): EmailSettings {
   return {
     from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
     replyTo: (stored.replyTo as string) || process.env.CFP_REPLY_TO || '',
@@ -98,6 +96,11 @@ export async function loadSettings(db: Firestore, cfpId: string): Promise<EmailS
     // renderer needs both halves and one object is easier to pass than two.
     publicUrl: '',
   };
+}
+
+export async function loadSettings(db: Firestore, cfpId: string): Promise<EmailSettings> {
+  const snap = await configDoc(db, cfpId).get();
+  return settingsFromConfig(snap.data() ?? {});
 }
 
 /** Organiser-written copy, if any. Absent means the built-in wording is used. */

@@ -24,10 +24,10 @@ export const firebaseConfig = {
    * which is also what keeps the consent banner off a deployment that has no
    * analytics to consent to.
    */
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID?.trim(),
 };
 
-export const MEASUREMENT_ID = process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID;
+export const MEASUREMENT_ID = process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID?.trim();
 
 /**
  * Whether this bundle is talking to the emulator suite. One literal read, so the

@@ -128,7 +128,7 @@ export function EmailPreview({
   }
 
   return (
-    <div>
+    <div className="email-editor">
       <div className="grid grid--3">
         <SelectField
           label={t.admin.emailKind}
@@ -261,7 +261,13 @@ export function EmailPreview({
       </button>
       {!configured && <p className="field__help">{t.admin.emailTestNeedsSetup}</p>}
 
-      {note && <p className="note note--inline">{note}</p>}
+      <div
+        className={note ? 'note note--inline' : undefined}
+        role="status"
+        aria-atomic="true"
+      >
+        {note}
+      </div>
       {error && (
         <p className="field__error" role="alert">
           {error}

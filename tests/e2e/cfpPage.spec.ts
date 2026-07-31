@@ -41,15 +41,28 @@ test.describe('a call’s front page', () => {
     // A fresh context: no account, no session, nothing this browser knows.
     const stranger = await browser.newContext();
     const visitor = await stranger.newPage();
+    const browserCfpReads: string[] = [];
+    visitor.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/v1/projects/') && url.includes('/documents/cfps/')) {
+        browserCfpReads.push(url);
+      }
+    });
     await visitor.goto(at(''));
 
     await expect(visitor.getByText(/A day of talks about building/)).toBeVisible();
     await expect(visitor.getByText('Palais des congrès, Montréal, QC')).toBeVisible();
     await expect(visitor.getByRole('link', { name: 'gdgmontreal.com' })).toBeVisible();
     await expect(visitor.getByText(/14 November 2026|November 14, 2026/)).toBeVisible();
+    // The server already read this document for the page. Hydration must not
+    // make the anonymous browser fetch the same CFP again before rendering it.
+    expect(browserCfpReads).toEqual([]);
 
     // And the way onwards is a link, so it can be opened in a new tab.
-    await visitor.getByRole('link', { name: 'Submit a talk' }).click();
+    await visitor
+      .locator('.cfp-hero')
+      .getByRole('link', { name: 'Submit a talk', exact: true })
+      .click();
     await expect(visitor).toHaveURL(at());
     await expect(visitor.locator('#main-content')).toBeFocused();
     await stranger.close();
@@ -86,10 +99,18 @@ test.describe('a call’s front page', () => {
       page.getByText('Organisers will contact speakers about the next steps.'),
     ).toBeVisible();
     await expect(page.getByRole('link', { name: 'Submit a talk', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: 'View your proposals' })).toHaveAttribute(
-      'href',
-      `/c/${CFP_ID}/submit`,
-    );
+    await expect(
+      page.locator('.cfp-hero').getByRole('link', {
+        name: 'View your proposals',
+        exact: true,
+      }),
+    ).toHaveAttribute('href', `/c/${CFP_ID}/submit`);
+    await expect(
+      page.getByRole('region', { name: 'Your proposals' }).getByRole('link', {
+        name: 'View your proposals',
+        exact: true,
+      }),
+    ).toHaveAttribute('href', `/c/${CFP_ID}/submit`);
   });
 
   test('the details survive a reload of the admin panel', async ({ page }) => {
@@ -144,6 +165,10 @@ test.describe('what leaves the server', () => {
     const html = await (await request.get(at(''))).text();
     expect(html).toContain('<title>DevFest Montréal 2026</title>');
     expect(html).toContain(BLURB.slice(0, 60));
+    const main = html.match(/<main[^>]*id="main-content"[^>]*>([\s\S]*?)<\/main>/)?.[1];
+    expect(main).toContain('cfp-landing');
+    expect(main).not.toContain('<template');
+    expect(main).not.toContain('Loading');
 
     // Open Graph and Twitter say the same thing as each other. A preview that
     // disagrees with the page is worse than no preview.

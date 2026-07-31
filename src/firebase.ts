@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { connectAuthEmulator, getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore';
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore/lite';
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions';
 
 import { firebaseConfig, USE_EMULATORS } from './lib/env';

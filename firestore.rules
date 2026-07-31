@@ -375,12 +375,36 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ------------------------------------------------------ platform access
+
+    // Global creator access is not a global directory. Even a platform admin
+    // reaches it through narrowly scoped callables, so no browser can enumerate
+    // verified addresses or promote itself by writing a membership.
+    match /platformMembers/{memberUid} {
+      allow read, write: if false;
+    }
+
+    match /platformRoleGrants/{email} {
+      allow read, write: if false;
+    }
+
     // ------------------------------------------------------- platform config
 
     // `config/platform` holds the site's own URL, which only the functions need
     // in order to build links. Nothing here is client-readable.
     match /config/{docId} {
       allow read, write: if false;
+    }
+
+    // A returning speaker's home page deliberately spans CFPs so a private or
+    // archived draft does not become unreachable when its original link is
+    // lost. Collection-group queries need a recursive wildcard in rules v2;
+    // the tenant-specific proposal match above cannot authorise the group.
+    //
+    // The query still has to carry `array-contains uid()`. Rules are not
+    // filters, so asking for another speaker or for the whole group is denied.
+    match /{path=**}/proposals/{proposalId} {
+      allow list: if signedIn() && uid() in resource.data.speakerIds;
     }
 
     // Anything not matched above is denied.

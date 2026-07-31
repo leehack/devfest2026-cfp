@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { collection, collectionGroup, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import {
+  collection,
+  collectionGroup,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+} from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
@@ -11,6 +19,10 @@ import type { TemplateOverrides } from '@shared/emailTemplates';
 import type { ConfirmField } from '@shared/confirmForm';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp, CfpMember, Proposal, RoleGrant } from '@shared/types';
+import type {
+  PlatformAccessDirectory,
+  PlatformAccessStatus,
+} from '@shared/platform';
 
 /**
  * Every callable below takes a `cfpId`, and the server checks the caller's role
@@ -21,6 +33,74 @@ type In<T = unknown> = T & { cfpId: string };
 
 /** The ones whose only argument is which CFP. */
 type Just = { cfpId: string };
+
+export const platformAccess = httpsCallable<Record<string, never>, PlatformAccessStatus>(
+  functions,
+  'platformAccess',
+);
+export const listPlatformUsers = httpsCallable<
+  Record<string, never>,
+  { ok: boolean } & PlatformAccessDirectory
+>(functions, 'listPlatformUsers');
+export const grantCfpCreator = httpsCallable<
+  { email: string },
+  { email: string; applied: boolean }
+>(functions, 'grantCfpCreator');
+export const revokeCfpCreator = httpsCallable<{ email: string }, { email: string }>(
+  functions,
+  'revokeCfpCreator',
+);
+export const grantPlatformAdmin = httpsCallable<
+  { email: string },
+  { email: string; applied: boolean }
+>(functions, 'grantPlatformAdmin');
+export const revokePlatformAdmin = httpsCallable<{ email: string }, { email: string }>(
+  functions,
+  'revokePlatformAdmin',
+);
+
+export function usePlatformAccess(user: User | null): {
+  status: PlatformAccessStatus | null;
+  ready: boolean;
+  error: boolean;
+  retry: () => void;
+} {
+  const uid = user?.uid ?? null;
+  const [lookup, setLookup] = useState<{
+    uid: string;
+    status: PlatformAccessStatus | null;
+    ready: boolean;
+    error: boolean;
+  } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((current) => current + 1), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!uid) {
+      setLookup(null);
+      return;
+    }
+
+    setLookup({ uid, status: null, ready: false, error: false });
+    platformAccess({})
+      .then(({ data }) => {
+        if (!cancelled) setLookup({ uid, status: data, ready: true, error: false });
+      })
+      .catch(() => {
+        if (!cancelled) setLookup({ uid, status: null, ready: true, error: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, uid]);
+
+  if (!uid) return { status: null, ready: true, error: false, retry };
+  if (!lookup || lookup.uid !== uid) {
+    return { status: null, ready: false, error: false, retry };
+  }
+  return { status: lookup.status, ready: lookup.ready, error: lookup.error, retry };
+}
 
 export const claimRole = httpsCallable<Just, { role: CfpRole | null }>(functions, 'claimRole');
 export const grantRole = httpsCallable<
@@ -87,15 +167,22 @@ export const deleteCfp = httpsCallable<In<{ confirm: string }>, { ok: boolean }>
 );
 
 export interface HeldEmail {
+  logId: string;
   kind: string;
   to: string;
   title?: string;
 }
 export const emailQueue = httpsCallable<
-  In<{ action: 'preview' | 'release' | 'retry' | 'resend'; logId?: string }>,
+  In<{
+    action: 'readiness' | 'summary' | 'preview' | 'release' | 'retry' | 'resend';
+    logId?: string;
+    logIds?: string[];
+  }>,
   {
     ok: boolean;
-    tally: Record<string, number>;
+    /** Sendable decision emails, without returning their recipient data. */
+    waiting?: number;
+    tally?: Record<string, number>;
     held?: HeldEmail[];
     /** Held rows whose proposal no longer has that decision. */
     staleHeld?: number;
@@ -205,54 +292,60 @@ export function useRole(
   user: User | null,
   cfpId: string | null,
 ): { role: CfpRole | null; ready: boolean; error: boolean; retry: () => void } {
-  const [role, setRole] = useState<CfpRole | null>(null);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState(false);
+  const uid = user?.uid ?? null;
+  const [lookup, setLookup] = useState<{
+    uid: string;
+    cfpId: string;
+    role: CfpRole | null;
+    ready: boolean;
+    error: boolean;
+  } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((current) => current + 1), []);
 
   useEffect(() => {
     let cancelled = false;
-    if (!user || !cfpId) {
-      setRole(null);
-      setError(false);
-      setReady(true);
+    if (!uid || !cfpId) {
+      setLookup(null);
       return;
     }
 
-    setRole(null);
-    setError(false);
-    setReady(false);
+    const scope = { uid, cfpId };
+    setLookup({ ...scope, role: null, ready: false, error: false });
     (async () => {
+      let role: CfpRole | null = null;
+      let error = false;
       try {
-        const mine = await getDoc(doc(db, 'cfps', cfpId, 'members', user.uid));
+        const mine = await getDoc(doc(db, 'cfps', cfpId, 'members', uid));
         if (cancelled) return;
         if (mine.exists()) {
-          setRole((mine.data() as CfpMember).role);
-          return;
+          role = (mine.data() as CfpMember).role;
+        } else {
+          const { data } = await claimRole({ cfpId });
+          if (cancelled) return;
+          role = data.role;
         }
-        const { data } = await claimRole({ cfpId });
-        if (!cancelled) setRole(data.role);
       } catch {
         // A missing membership is an ordinary speaker and is answered by
         // `claimRole` with `{role:null}`. Reaching here means neither read nor
         // claim completed, so calling it "forbidden" would turn an outage into a
         // false statement about the person's account.
-        if (!cancelled) {
-          setRole(null);
-          setError(true);
-        }
+        error = true;
       } finally {
-        if (!cancelled) setReady(true);
+        if (!cancelled) setLookup({ ...scope, role, ready: true, error });
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [user, cfpId, attempt]);
+  }, [uid, cfpId, attempt]);
 
-  return { role, ready, error, retry };
+  if (!uid || !cfpId) return { role: null, ready: true, error: false, retry };
+  if (!lookup || lookup.uid !== uid || lookup.cfpId !== cfpId) {
+    return { role: null, ready: false, error: false, retry };
+  }
+  return { role: lookup.role, ready: lookup.ready, error: lookup.error, retry };
 }
 
 export interface Person extends CfpMember {
@@ -331,6 +424,15 @@ export interface CfpSummary extends Cfp {
   id: string;
 }
 
+export interface CfpMembershipSummary extends CfpSummary {
+  role: CfpRole;
+}
+
+export interface CfpProposalActivity extends CfpSummary {
+  proposalStatuses: ProposalStatus[];
+  activityUpdatedAt: unknown;
+}
+
 /**
  * The public directory.
  *
@@ -369,15 +471,68 @@ export async function loadMyCfps(uid: string): Promise<CfpSummary[]> {
  * exactly the access needed here. Without this, somebody invited to review a
  * private call could only ever reach it through the link in their invitation.
  */
-export async function loadMyMemberships(uid: string): Promise<CfpSummary[]> {
+export async function loadMyMemberships(uid: string): Promise<CfpMembershipSummary[]> {
   const snap = await getDocs(query(collectionGroup(db, 'members'), where('uid', '==', uid)));
-  const ids = [...new Set(snap.docs.map((d) => (d.data() as CfpMember).cfpId).filter(Boolean))];
+  const roles = new Map(
+    snap.docs
+      .map((d) => d.data() as CfpMember)
+      .filter((member) => member.cfpId)
+      .map((member) => [member.cfpId, member.role] as const),
+  );
 
   const found = await Promise.all(
-    ids.map(async (id) => {
+    [...roles].map(async ([id, role]) => {
       const cfp = await getDoc(doc(db, 'cfps', id));
-      return cfp.exists() ? ({ id, ...(cfp.data() as Cfp) } as CfpSummary) : null;
+      return cfp.exists()
+        ? ({ id, role, ...(cfp.data() as Cfp) } as CfpMembershipSummary)
+        : null;
     }),
   );
-  return found.filter((cfp): cfp is CfpSummary => cfp !== null);
+  return found.filter((cfp): cfp is CfpMembershipSummary => cfp !== null);
+}
+
+/**
+ * Every CFP where this account has written a proposal, including private,
+ * closed and archived ones. The direct collection-group query is why proposals
+ * carry `cfpId` and why `speakerIds` has a collection-group index.
+ */
+export async function loadMyProposalCfps(uid: string): Promise<CfpProposalActivity[]> {
+  const snap = await getDocs(
+    query(collectionGroup(db, 'proposals'), where('speakerIds', 'array-contains', uid)),
+  );
+  const grouped = new Map<
+    string,
+    { statuses: ProposalStatus[]; updatedAt: unknown; updatedMillis: number }
+  >();
+
+  for (const proposalDoc of snap.docs) {
+    const proposal = proposalDoc.data() as Proposal;
+    if (!proposal.cfpId) continue;
+    const updatedMillis =
+      (proposal.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+    const current = grouped.get(proposal.cfpId);
+    grouped.set(proposal.cfpId, {
+      statuses: [...(current?.statuses ?? []), proposal.status],
+      updatedAt:
+        !current || updatedMillis >= current.updatedMillis
+          ? proposal.updatedAt
+          : current.updatedAt,
+      updatedMillis: Math.max(updatedMillis, current?.updatedMillis ?? 0),
+    });
+  }
+
+  const found = await Promise.all(
+    [...grouped].map(async ([id, activity]) => {
+      const cfp = await getDoc(doc(db, 'cfps', id));
+      return cfp.exists()
+        ? ({
+            id,
+            ...(cfp.data() as Cfp),
+            proposalStatuses: activity.statuses,
+            activityUpdatedAt: activity.updatedAt,
+          } as CfpProposalActivity)
+        : null;
+    }),
+  );
+  return found.filter((cfp): cfp is CfpProposalActivity => cfp !== null);
 }

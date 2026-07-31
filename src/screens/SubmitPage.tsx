@@ -120,7 +120,7 @@ function TalkPicker({
         disabled={busy}
         onClick={() => onOpen(talk.id)}
       >
-        {title}
+        <span className="talks__title">{title}</span>
         {talk.status !== 'draft' && (
           <span className="talks__status">{t.enums.status[talk.status]}</span>
         )}
@@ -132,7 +132,11 @@ function TalkPicker({
     <nav className="talks" aria-label={t.form.yourTalks}>
       <span className="talks__label">{t.form.yourTalks}</span>
       {currentTalks.map(renderTab)}
-      {isNew && <span className="talks__tab talks__tab--on">{currentTitle || t.form.newTalk}</span>}
+      {isNew && (
+        <span className="talks__tab talks__tab--on">
+          <span className="talks__title">{currentTitle || t.form.newTalk}</span>
+        </span>
+      )}
       {canAdd && !isNew && (
         <button type="button" className="talks__add" disabled={busy} onClick={onAdd}>
           {t.form.addTalk}
@@ -148,7 +152,7 @@ function TalkPicker({
           <div className="talks__past-list">{pastTalks.map(renderTab)}</div>
         </details>
       )}
-      {atCap && <span className="talks__status">{t.form.talkCap(LIMITS.maxTalksPerSpeaker)}</span>}
+      {atCap && <span className="talks__limit">{t.form.talkCap(LIMITS.maxTalksPerSpeaker)}</span>}
     </nav>
   );
 }
@@ -247,12 +251,12 @@ function Questions({
             <div key={field.key} className="field">
               <Checkbox
                 label={label}
+                help={help}
                 checked={value === true}
                 onChange={(next) => onAnswer(field.key, next)}
                 disabled={busy}
                 error={message(field.key)}
               />
-              {help && <p className="field__help">{help}</p>}
             </div>
           );
         }

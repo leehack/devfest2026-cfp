@@ -62,6 +62,10 @@ describe('reading a path', () => {
   it('reads /new as itself and not as a CFP', () => {
     expect(placeOf('/new')).toMatchObject({ route: 'new', cfpId: null });
   });
+
+  it('reads /platform as the global administration workspace', () => {
+    expect(placeOf('/platform')).toMatchObject({ route: 'platform', cfpId: null });
+  });
 });
 
 describe('writing a path', () => {
@@ -69,6 +73,7 @@ describe('writing a path', () => {
     const places = [
       { route: 'home' as const, cfpId: null },
       { route: 'new' as const, cfpId: null },
+      { route: 'platform' as const, cfpId: null },
       { route: 'cfp' as const, cfpId: 'devfest-mtl-2026' },
       { route: 'form' as const, cfpId: 'devfest-mtl-2026' },
       { route: 'review' as const, cfpId: 'devfest-mtl-2026' },

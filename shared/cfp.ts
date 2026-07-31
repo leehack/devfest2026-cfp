@@ -42,7 +42,7 @@ export const CFP_LIMITS = {
   venueMax: 160,
   locationMax: 120,
   websiteMax: 200,
-  /** Per account. A platform anyone can create on needs a ceiling somewhere. */
+  /** Per approved creator account. The shared platform still needs a ceiling. */
   perOwner: 10,
 } as const;
 

@@ -57,6 +57,10 @@ function assertPublicEnv(): void {
   if (process.env.NEXT_PUBLIC_USE_EMULATORS === 'true') {
     throw new Error('next build: NEXT_PUBLIC_USE_EMULATORS=true would ship the emulator sign-in.');
   }
+  const measurementId = process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID?.trim();
+  if (measurementId && !/^G-[A-Z0-9]+$/.test(measurementId)) {
+    throw new Error('next build: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID is not a GA4 measurement ID.');
+  }
   requireHttpsUrl('NEXT_PUBLIC_COC_URL');
   requireHttpsOrigin('SITE_ORIGIN');
 }

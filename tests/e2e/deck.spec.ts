@@ -175,6 +175,57 @@ test.describe('the review deck', () => {
     await expect(page.getByText('Score, and move to the next one')).toHaveCount(0);
   });
 
+  test('the queue can jump back to any named proposal and shows its review state', async ({
+    page,
+  }) => {
+    await stage(page);
+    await page.keyboard.press('3');
+    await expect(page.getByText('1 of 3 scored')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Review queue', exact: true }).click();
+    const queue = page.getByRole('region', { name: 'Review queue' });
+    await expect(queue).toBeVisible();
+    const first = queue.getByRole('button', { name: /Alpha on caching/ });
+    await expect(first).toContainText('Scored');
+    await first.click();
+
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await expect(page.getByRole('button', { name: '4 — Strong yes' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    await expect(page.getByRole('button', { name: '3 — Yes' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  test('the queue identifies the current talk without creating a focus-losing action', async ({
+    page,
+  }) => {
+    await stage(page);
+
+    const toggle = page.locator('button[aria-controls="review-queue"]');
+    await expect(toggle).toHaveAccessibleName('Review queue');
+    await expect(toggle).toHaveAttribute('aria-controls', 'review-queue');
+    await toggle.click();
+    await expect(toggle).toBeFocused();
+
+    const current = page.locator('#review-queue [aria-current="true"]');
+    await expect(current).toContainText('Current · Not scored');
+    await expect(current.getByRole('button')).toHaveCount(0);
+  });
+
+  test('says plainly when every talk in the current view is scored', async ({ page }) => {
+    await stage(page);
+
+    for (const count of [1, 2, 3]) {
+      await page.keyboard.press('3');
+      await expect(page.getByText(`${count} of 3 scored`)).toBeVisible();
+    }
+    await expect(page.getByText('Every talk in this view has a score.')).toBeVisible();
+  });
+
   /*
    * The applicant answers all of this and none of it used to reach the card, so
    * a talk could be scored without anyone seeing that its speaker needs a visa

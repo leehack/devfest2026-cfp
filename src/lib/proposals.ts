@@ -10,7 +10,7 @@ import {
   setDoc,
   Timestamp,
   where,
-} from 'firebase/firestore';
+} from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 

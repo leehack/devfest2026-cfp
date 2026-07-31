@@ -39,11 +39,14 @@ export const fr: Dictionary = {
   },
 
   nav: {
-    form: 'Votre proposition',
-    review: 'Évaluation',
-    admin: 'Administration',
+    cfp: 'Événement',
+    form: 'Mes propositions',
+    review: 'Évaluer',
+    admin: 'Gérer l’événement',
+    breadcrumb: 'Fil d’Ariane',
+    eventSections: 'Sections de l’événement',
     forbidden: 'Cette page n’est pas accessible avec votre compte.',
-    backToForm: 'Aller à votre proposition',
+    backToForm: 'Aller à mes propositions',
   },
 
   platform: {
@@ -60,7 +63,19 @@ export const fr: Dictionary = {
     yoursHelp: 'Vos appels publics, privés et archivés, réunis au même endroit.',
     helping: 'Où vous prêtez main-forte',
     helpingHelp: 'Les appels tenus par une autre équipe où vous faites partie du comité.',
-    view: 'Voir l’appel',
+    activity: 'Votre activité',
+    activityHelp:
+      'Reprenez un brouillon, une file d’évaluation ou un espace événement là où vous l’avez laissé.',
+    submissions: 'Vos propositions',
+    submissionsHelp:
+      'Brouillons, conférences soumises et décisions dans tous les appels.',
+    continueDraft: 'Continuer le brouillon',
+    viewProposals: 'Voir les propositions',
+    respondToDecision: 'Répondre à la décision',
+    viewDecision: 'Voir la décision',
+    reviewTalks: 'Évaluer',
+    manageEvent: 'Gérer l’événement',
+    view: 'Voir l’événement',
     cardLabel: '{name}. {status}. Adresse {path}.{details}',
     status: {
       open: 'Ouvert',
@@ -72,6 +87,7 @@ export const fr: Dictionary = {
     create: 'Lancer un appel à conférences',
     createEyebrow: 'Pour les organisateurs',
     createTitle: 'Créez votre appel à conférences',
+    createDetailsTitle: 'Détails de l’événement',
     createHelp:
       'Commencez par l’essentiel. Vous passerez ensuite directement à la configuration des détails et du formulaire.',
     createStep: 'Étape {step} sur 3',
@@ -132,6 +148,66 @@ export const fr: Dictionary = {
     } as Record<string, string>,
   },
 
+  platformAdmin: {
+    title: 'Administration de la plateforme',
+    accountLink: 'Accès à la plateforme',
+    eyebrow: 'Contrôles de la plateforme',
+    intro:
+      'Les propriétaires délèguent l’administration de la plateforme, puis les administrateurs approuvent les personnes pouvant créer des espaces d’appel. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations, ni courriels.',
+    accessTitle: 'Accès à la plateforme',
+    accessHelp:
+      'Les propriétaires, les administrateurs et les créateurs approuvés peuvent lancer un appel. Le retrait de cet accès ne supprime jamais les appels que la personne possède déjà.',
+    addTitle: 'Approuver une personne',
+    addHelp:
+      'Utilisez l’adresse qu’elle vérifiera lors de sa connexion. L’accès attend en toute sécurité si son compte n’existe pas encore.',
+    emailLabel: 'Adresse courriel',
+    grant: 'Ajouter',
+    granting: 'Ajout…',
+    activeTitle: 'Personnes approuvées',
+    activeHelp:
+      'Les propriétaires sont gérés par le script d’amorçage. Ils peuvent déléguer l’administration; propriétaires et administrateurs peuvent approuver les créateurs d’appels.',
+    pending: 'En attente d’une connexion vérifiée',
+    roles: {
+      owner: 'Propriétaire de la plateforme',
+      admin: 'Administrateur de la plateforme',
+      creator: 'Créateur d’appels',
+    },
+    isYou: 'vous',
+    revoke: 'Retirer l’accès de création',
+    revoking: 'Retrait…',
+    revokeConfirm: (email: string) => `Retirer à ${email} l’accès à la création d’appels?`,
+    empty: 'Aucun créateur d’appels n’a encore été approuvé.',
+    grantedActive: (email: string) => `${email} peut maintenant créer des appels.`,
+    grantedPending: (email: string) =>
+      `${email} recevra l’accès après une connexion vérifiée.`,
+    revoked: (email: string) => `${email} ne peut plus créer de nouveaux appels.`,
+    adminAddTitle: 'Déléguer l’administration',
+    adminAddHelp:
+      'Les administrateurs peuvent approuver les créateurs d’appels, mais ne peuvent ni nommer d’autres administrateurs ni accéder aux données des événements.',
+    adminEmailLabel: 'Adresse courriel de l’administrateur',
+    adminGrant: 'Ajouter comme administrateur',
+    adminGranting: 'Ajout…',
+    adminRevoke: 'Retirer l’administration',
+    adminRevoking: 'Retrait…',
+    adminRevokeConfirm: (email: string) =>
+      `Retirer à ${email} l’accès d’administration de la plateforme?`,
+    adminGrantedActive: (email: string) =>
+      `${email} est maintenant administrateur de la plateforme.`,
+    adminGrantedPending: (email: string) =>
+      `${email} deviendra administrateur après une connexion vérifiée.`,
+    adminRevoked: (email: string) =>
+      `${email} n’est plus administrateur de la plateforme.`,
+    loadError: 'Impossible de charger les accès à la plateforme.',
+    badEmail: 'Saisissez une adresse courriel valide.',
+    adminManaged:
+      'Cet accès est protégé. Les propriétaires gèrent les administrateurs, leur propre accès reste géré par le script d’amorçage et personne ne peut retirer son propre accès.',
+    accessRequiredTitle: 'La création d’appels est restreinte',
+    accessRequiredHelp:
+      'Un administrateur de la plateforme doit approuver votre compte avant que vous puissiez lancer un nouvel appel.',
+    checkAgain: 'Vérifier l’accès de nouveau',
+    retry: 'Réessayer',
+  },
+
   cfpPage: {
     eyebrow: 'Appel à conférences',
     status: {
@@ -164,6 +240,7 @@ export const fr: Dictionary = {
     link: 'Votre profil',
     eyebrow: 'Compte de conférencier',
     title: 'Votre profil',
+    editorTitle: 'Renseignements du conférencier',
     help:
       'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Le modifier ici le change partout, y compris sur les conférences déjà soumises que personne n’a encore commencé à lire.',
     complete: 'Prêt à utiliser',
@@ -439,14 +516,15 @@ export const fr: Dictionary = {
 
   admin: {
     sections: 'Sections d’administration',
-    workspace: 'Espace organisateur',
+    sectionPicker: 'Section',
+    workspace: 'Gestion de l’événement',
     tabs: {
-      overview: 'Aperçu',
+      overview: 'Tableau de bord',
       proposals: 'Propositions',
       committee: 'Comité',
-      settings: 'Paramètres',
+      settings: 'Configuration',
       submission: 'Formulaire',
-      confirmation: 'Confirmation',
+      confirmation: 'Formulaire de confirmation',
       email: 'Courriel',
     },
     setupTitle: 'Terminez l’essentiel avant de partager',
@@ -616,6 +694,7 @@ export const fr: Dictionary = {
       temporary_failure: 'Échec temporaire — nouvel essai prévu',
     } as Record<string, string>,
     emailDnsHelp: 'Ajoutez ceci à votre DNS, puis vérifiez de nouveau.',
+    emailDnsRecords: 'Enregistrements DNS à ajouter',
     emailDnsType: 'Type',
     emailDnsName: 'Nom',
     emailDnsValue: 'Valeur',
@@ -670,8 +749,27 @@ export const fr: Dictionary = {
       unreachable: 'Impossible de joindre Resend. Réessayez dans un instant.',
     },
     emailQueue: 'File d’attente',
+    emailDecisionQueue: 'Courriels de décision',
     emailHelp:
       'Les décisions sont retenues jusqu’à ce que vous les libériez, afin que tout le monde soit informé le même jour. Vérifiez la liste ci-dessous avant l’envoi — c’est irréversible.',
+    emailQueueEmpty:
+      'Aucun courriel de décision n’attend. Les nouvelles décisions apparaîtront ici avant tout envoi.',
+    emailQueueSetupNeeded:
+      'Ces courriels sont retenus en toute sécurité. Terminez la configuration de l’envoi ci-dessous avant de les libérer.',
+    pendingEmailEyebrow: 'Notifications aux conférenciers',
+    pendingEmailShort: 'en attente',
+    pendingEmailTitle: (count: number) =>
+      count === 1
+        ? '1 courriel de décision attend d’être envoyé.'
+        : `${count} courriels de décision attendent d’être envoyés.`,
+    pendingEmailHelp:
+      'L’enregistrement d’une décision retient son courriel pour vérification. Vérifiez le lot complet, puis envoyez tous les résultats ensemble.',
+    pendingEmailReview: 'Vérifier et envoyer',
+    pendingEmailTabLabel: (count: number) =>
+      `Courriel, ${count} courriel${count === 1 ? '' : 's'} de décision en attente`,
+    pendingEmailUnknownTitle: 'État de la file de courriels indisponible',
+    pendingEmailUnknownHelp:
+      'La décision est enregistrée, mais son courriel n’a pas pu être vérifié. Ouvrez Courriel pour contrôler la file avant d’aviser les conférenciers.',
     emailStatus: {
       held: 'En attente de libération',
       queued: 'En file',
@@ -706,27 +804,30 @@ export const fr: Dictionary = {
       'Aucune adresse de réponse n’est définie : une réponse n’arriverait à personne. Définissez-en une ci-dessus avant d’écrire.',
     messageNoTalks: 'Rien à écrire pour l’instant — aucune proposition n’a été soumise.',
     emailRefresh: 'Actualiser',
-    emailRelease: 'Envoyer {count} décisions',
+    emailRelease: (count: number) =>
+      `Envoyer ${count} courriel${count === 1 ? '' : 's'} de décision`,
     emailNothing: 'Rien à envoyer',
     emailStaleHeld:
       'Courriels de décision antérieurs conservés : {count}. Ils ne redeviendront envoyables que si ces décisions sont rétablies.',
     emailStaleStatus: 'Conservé — décision modifiée',
     emailConfirm: 'Envoyer {count} courriels de décision maintenant ? C’est irréversible.',
     emailRetry: 'Renvoyer {count} non envoyés',
-    emailSent: '{count} messages mis en file.',
+    emailSent: (count: number) =>
+      `${count} courriel${count === 1 ? '' : 's'} mis en file.`,
     emailLog: 'Ce qui a été envoyé',
     emailLogEmpty: 'Rien n’a encore été mis en file.',
     emailLogFilter: 'Afficher',
     emailLogAll: 'Tout',
     emailStatusColumn: 'Résultat',
     emailSentAt: 'Envoyé',
+    emailActions: 'Actions',
     emailResend: 'Renvoyer',
     emailResendConfirm:
       'Renvoyer ce message à {to} ? La personne en recevra une seconde copie.',
     emailResent: 'Remis en file pour {to}.',
     emailLogTruncated: '{count} messages plus anciens ne sont pas affichés.',
 
-    proposals: 'Propositions',
+    proposals: 'Décisions sur les propositions',
     proposalsHelp:
       'Les notes se mettent à jour automatiquement à chaque évaluation. Trouvez les conférences qui demandent votre attention, puis prenez une décision explicite à la fois.',
     overview: 'La ronde en un coup d’œil',
@@ -768,6 +869,7 @@ export const fr: Dictionary = {
     savingDecision: 'Enregistrement…',
     decisionChanged: (title: string, from: string, to: string) =>
       `« ${title} » est passée de ${from} à ${to}.`,
+    decisionEmailHeld: 'Décision enregistrée. Cette action n’envoie aucun courriel.',
     decisionUndone: (title: string) => `Le statut précédent de « ${title} » est rétabli.`,
     undo: 'Annuler',
     untitled: 'Proposition sans titre',
@@ -939,6 +1041,14 @@ export const fr: Dictionary = {
     position: (n: number, total: number) => `${n} sur ${total}`,
     previous: 'Proposition précédente',
     next: 'Proposition suivante',
+    queue: 'File d’évaluation',
+    queueHelp: 'Passez à n’importe quelle conférence et voyez lesquelles restent à noter.',
+    queueClose: 'Fermer la file',
+    nextUnscored: 'Prochaine sans note',
+    queueCurrent: 'En cours',
+    queueScored: 'Évaluée',
+    queueWaiting: 'Sans note',
+    complete: 'Toutes les conférences de cette vue ont une note.',
     shortcuts: 'Raccourcis',
     shortcutScore: 'Noter, puis passer à la suivante',
     shortcutMove: 'Reculer et avancer sans noter',

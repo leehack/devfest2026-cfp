@@ -236,13 +236,18 @@ export function EmailSetup({
             {!verified && active.records.length > 0 && (
               <>
                 <p className="field__help">{t.admin.emailDnsHelp}</p>
-                <div className="table__scroll">
-                  <table className="table">
+                <div
+                  className="table__scroll"
+                  role="region"
+                  aria-label={t.admin.emailDnsRecords}
+                  tabIndex={0}
+                >
+                  <table className="table table--dns">
                     <thead>
                       <tr>
-                        <th>{t.admin.emailDnsType}</th>
-                        <th>{t.admin.emailDnsName}</th>
-                        <th>{t.admin.emailDnsValue}</th>
+                        <th scope="col">{t.admin.emailDnsType}</th>
+                        <th scope="col">{t.admin.emailDnsName}</th>
+                        <th scope="col">{t.admin.emailDnsValue}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -297,7 +302,13 @@ export function EmailSetup({
         )}
       </Step>
 
-      {note && <p className="note note--inline">{note}</p>}
+      <div
+        className={note ? 'note note--inline' : undefined}
+        role="status"
+        aria-atomic="true"
+      >
+        {note}
+      </div>
       {error && (
         <p className="field__error" role="alert">
           {error}

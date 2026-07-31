@@ -42,11 +42,14 @@ export const en = {
   },
 
   nav: {
-    form: 'Your proposal',
-    review: 'Review',
-    admin: 'Admin',
+    cfp: 'Event',
+    form: 'My proposals',
+    review: 'Review talks',
+    admin: 'Manage event',
+    breadcrumb: 'Breadcrumb',
+    eventSections: 'Event sections',
     forbidden: 'That page is not available to your account.',
-    backToForm: 'Go to your proposal',
+    backToForm: 'Go to my proposals',
   },
 
   platform: {
@@ -62,7 +65,17 @@ export const en = {
     yoursHelp: 'Your public, private, and archived calls — all in one place.',
     helping: 'Where you help out',
     helpingHelp: 'Calls run by another organiser where you have a committee role.',
-    view: 'View call',
+    activity: 'Your activity',
+    activityHelp: 'Pick up a draft, review queue, or event workspace where you left off.',
+    submissions: 'Your proposals',
+    submissionsHelp: 'Drafts, submitted talks, and decisions across every call.',
+    continueDraft: 'Continue draft',
+    viewProposals: 'View proposals',
+    respondToDecision: 'Respond to decision',
+    viewDecision: 'View decision',
+    reviewTalks: 'Review talks',
+    manageEvent: 'Manage event',
+    view: 'View event',
     cardLabel: '{name}. {status}. Address {path}.{details}',
     status: {
       open: 'Open',
@@ -74,6 +87,7 @@ export const en = {
     create: 'Start a call for proposals',
     createEyebrow: 'For organisers',
     createTitle: 'Create your call for proposals',
+    createDetailsTitle: 'Event details',
     createHelp:
       'Start with the essentials. You will move straight into setup to add event details and shape the submission form.',
     createStep: 'Step {step} of 3',
@@ -133,6 +147,63 @@ export const en = {
     } as Record<string, string>,
   },
 
+  platformAdmin: {
+    title: 'Platform administration',
+    accountLink: 'Platform access',
+    eyebrow: 'Platform controls',
+    intro:
+      'Owners delegate platform administration, and administrators approve who may create CFP workspaces. Event roles stay separate: platform access does not reveal proposals, speakers, reviews, or email.',
+    accessTitle: 'Platform access',
+    accessHelp:
+      'Platform owners, administrators, and approved creators can start a call for proposals. Revoking access never removes CFPs the person already owns.',
+    addTitle: 'Approve a creator',
+    addHelp:
+      'Use the address they will verify when signing in. Access waits safely if they do not have an account yet.',
+    emailLabel: 'Email address',
+    grant: 'Add creator',
+    granting: 'Adding…',
+    activeTitle: 'Approved people',
+    activeHelp:
+      'Owners are bootstrap-managed. Owners can delegate administrators; owners and administrators can approve CFP creators.',
+    pending: 'Pending verified sign-in',
+    roles: {
+      owner: 'Platform owner',
+      admin: 'Platform admin',
+      creator: 'CFP creator',
+    },
+    isYou: 'you',
+    revoke: 'Remove creator access',
+    revoking: 'Removing…',
+    revokeConfirm: (email: string) => `Remove CFP creator access from ${email}?`,
+    empty: 'No CFP creators have been approved yet.',
+    grantedActive: (email: string) => `${email} can create CFPs now.`,
+    grantedPending: (email: string) =>
+      `${email} will receive creator access after a verified sign-in.`,
+    revoked: (email: string) => `${email} can no longer create new CFPs.`,
+    adminAddTitle: 'Delegate an administrator',
+    adminAddHelp:
+      'Administrators can approve CFP creators but cannot appoint other administrators or access event data.',
+    adminEmailLabel: 'Administrator email',
+    adminGrant: 'Add platform admin',
+    adminGranting: 'Adding…',
+    adminRevoke: 'Remove admin access',
+    adminRevoking: 'Removing…',
+    adminRevokeConfirm: (email: string) => `Remove platform administrator access from ${email}?`,
+    adminGrantedActive: (email: string) => `${email} is now a platform administrator.`,
+    adminGrantedPending: (email: string) =>
+      `${email} will become a platform administrator after a verified sign-in.`,
+    adminRevoked: (email: string) => `${email} is no longer a platform administrator.`,
+    loadError: 'Platform access could not be loaded.',
+    badEmail: 'Enter a valid email address.',
+    adminManaged:
+      'That access is protected. Owners manage administrators, owner access stays with the bootstrap script, and nobody can remove their own access.',
+    accessRequiredTitle: 'CFP creation is restricted',
+    accessRequiredHelp:
+      'A platform administrator must approve your account before you can start a new call for proposals.',
+    checkAgain: 'Check access again',
+    retry: 'Try again',
+  },
+
   cfpPage: {
     eyebrow: 'Call for proposals',
     status: {
@@ -165,6 +236,7 @@ export const en = {
     link: 'Your profile',
     eyebrow: 'Speaker account',
     title: 'Your profile',
+    editorTitle: 'Speaker details',
     help:
       'This belongs to your account, not to any one call for proposals. Editing it here changes it everywhere, including talks you have already submitted but that nobody has started reading.',
     complete: 'Ready to use',
@@ -449,14 +521,15 @@ export const en = {
 
   admin: {
     sections: 'Admin sections',
-    workspace: 'Organiser workspace',
+    sectionPicker: 'Section',
+    workspace: 'Event management',
     tabs: {
-      overview: 'Overview',
+      overview: 'Dashboard',
       proposals: 'Proposals',
       committee: 'Committee',
-      settings: 'Settings',
+      settings: 'Event setup',
       submission: 'Submission form',
-      confirmation: 'Confirmation',
+      confirmation: 'Confirmation form',
       email: 'Email',
     },
     setupTitle: 'Finish the essentials before you share',
@@ -623,6 +696,7 @@ export const en = {
       temporary_failure: 'Temporarily failed — will retry',
     } as Record<string, string>,
     emailDnsHelp: 'Add these to your DNS, then check again.',
+    emailDnsRecords: 'DNS records to add',
     emailDnsType: 'Type',
     emailDnsName: 'Name',
     emailDnsValue: 'Value',
@@ -676,8 +750,27 @@ export const en = {
       unreachable: 'Could not reach Resend. Try again shortly.',
     },
     emailQueue: 'Queue',
+    emailDecisionQueue: 'Decision emails',
     emailHelp:
       'Decisions are held until you release them, so everyone hears on the same day. Check the list below before sending — it cannot be taken back.',
+    emailQueueEmpty:
+      'No decision emails are waiting. New decisions will appear here before anything is sent.',
+    emailQueueSetupNeeded:
+      'These emails are safely held. Finish the delivery setup below before releasing them.',
+    pendingEmailEyebrow: 'Speaker notifications',
+    pendingEmailShort: 'pending',
+    pendingEmailTitle: (count: number) =>
+      count === 1
+        ? '1 decision email is waiting to be sent.'
+        : `${count} decision emails are waiting to be sent.`,
+    pendingEmailHelp:
+      'Saving a decision holds its email for review. Check the full batch, then send everyone’s result together.',
+    pendingEmailReview: 'Review and send',
+    pendingEmailTabLabel: (count: number) =>
+      `Email, ${count} decision ${count === 1 ? 'email' : 'emails'} waiting`,
+    pendingEmailUnknownTitle: 'Email queue status unavailable',
+    pendingEmailUnknownHelp:
+      'The decision is saved, but we could not verify its email. Open Email to check the queue before notifying speakers.',
     emailStatus: {
       held: 'Waiting for release',
       queued: 'Queued',
@@ -712,27 +805,29 @@ export const en = {
       'No reply-to address is set, so a speaker who replies will reach nobody. Set one above before writing.',
     messageNoTalks: 'Nothing to write about yet — no proposal has been submitted.',
     emailRefresh: 'Refresh',
-    emailRelease: 'Send {count} decisions',
+    emailRelease: (count: number) =>
+      `Send ${count} decision ${count === 1 ? 'email' : 'emails'}`,
     emailNothing: 'Nothing to send',
     emailStaleHeld:
       'Earlier decision emails retained: {count}. They become sendable only if those decisions are restored.',
     emailStaleStatus: 'Retained — decision changed',
     emailConfirm: 'Send {count} decision emails now? This cannot be undone.',
     emailRetry: 'Retry {count} unsent',
-    emailSent: '{count} messages queued.',
+    emailSent: (count: number) => `${count} ${count === 1 ? 'email' : 'emails'} queued.`,
     emailLog: 'What was sent',
     emailLogEmpty: 'Nothing has been queued yet.',
     emailLogFilter: 'Show',
     emailLogAll: 'Everything',
     emailStatusColumn: 'Outcome',
     emailSentAt: 'Sent',
+    emailActions: 'Actions',
     emailResend: 'Send again',
     emailResendConfirm:
       'Send this message to {to} again? They will receive a second copy of it.',
     emailResent: 'Queued again for {to}.',
     emailLogTruncated: '{count} older messages are not shown.',
 
-    proposals: 'Proposals',
+    proposals: 'Proposal decisions',
     proposalsHelp:
       'Scores update automatically as reviews are saved. Find the talks that need attention, then make one explicit decision at a time.',
     overview: 'The round at a glance',
@@ -772,6 +867,7 @@ export const en = {
     savingDecision: 'Saving…',
     decisionChanged: (title: string, from: string, to: string) =>
       `“${title}” moved from ${from} to ${to}.`,
+    decisionEmailHeld: 'Decision saved. This action does not send an email.',
     decisionUndone: (title: string) => `Restored the previous status for “${title}”.`,
     undo: 'Undo',
     untitled: 'Untitled proposal',
@@ -939,6 +1035,14 @@ export const en = {
     position: (n: number, total: number) => `${n} of ${total}`,
     previous: 'Previous proposal',
     next: 'Next proposal',
+    queue: 'Review queue',
+    queueHelp: 'Jump to any talk and see what still needs a score.',
+    queueClose: 'Close queue',
+    nextUnscored: 'Next unscored',
+    queueCurrent: 'Current',
+    queueScored: 'Scored',
+    queueWaiting: 'Not scored',
+    complete: 'Every talk in this view has a score.',
     shortcuts: 'Shortcuts',
     shortcutScore: 'Score, and move to the next one',
     shortcutMove: 'Back and forward without scoring',

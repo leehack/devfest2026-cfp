@@ -86,7 +86,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         loadCommittee(cfpId),
         loadSubmissionForm(cfpId),
         loadConfirmForm(cfpId),
-        emailQueue({ cfpId, action: 'preview' })
+        emailQueue({ cfpId, action: 'readiness' })
           .then(async ({ data: snapshot }) => {
             const domains =
               snapshot.keyHint && snapshot.domainId

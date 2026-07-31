@@ -1,4 +1,4 @@
-import { ADMIN_TABS, type AdminTab } from './adminTabs';
+import type { AdminTab } from './adminTabs';
 
 /**
  * Every URL this app can name, built in one place.
@@ -10,6 +10,7 @@ import { ADMIN_TABS, type AdminTab } from './adminTabs';
 export const paths = {
   home: () => '/',
   new: () => '/new',
+  platform: () => '/platform',
   me: () => '/me',
   cfp: (cfpId: string) => `/c/${cfpId}`,
   submit: (cfpId: string) => `/c/${cfpId}/submit`,
@@ -18,5 +19,3 @@ export const paths = {
   admin: (cfpId: string, tab?: AdminTab) =>
     tab ? `/c/${cfpId}/admin/${tab}` : `/c/${cfpId}/admin`,
 } as const;
-
-export const DEFAULT_ADMIN_TAB: AdminTab = ADMIN_TABS[0];

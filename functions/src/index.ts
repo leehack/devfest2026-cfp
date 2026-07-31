@@ -14,6 +14,7 @@ import {
   FieldValue,
   getFirestore,
   Timestamp,
+  type DocumentSnapshot,
   type QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
@@ -62,7 +63,16 @@ import {
   type CfpRole,
 } from '../../shared/cfp';
 import type { SpeakerSnapshot } from '../../shared/types';
+import type { PlatformRole } from '../../shared/platform';
 import { claim, grant, revoke, RoleError } from './roles';
+import {
+  claimPlatformRole,
+  grantCfpCreator as grantPlatformCreator,
+  grantPlatformAdmin as grantPlatformAdministrator,
+  listPlatformAccess,
+  revokeCfpCreator as revokePlatformCreator,
+  revokePlatformAdmin as revokePlatformAdministrator,
+} from './platform';
 import {
   cfpUrl,
   deliver,
@@ -71,6 +81,7 @@ import {
   loadTemplates,
   queueEmail,
   sendViaResend,
+  settingsFromConfig,
   type EmailStatus,
 } from './email';
 import { keyHint, readResendKey, writeResendKey } from './secrets';
@@ -173,6 +184,27 @@ function requireUid(request: { auth?: { uid: string } }, action: string): string
   return uid;
 }
 
+function requireVerifiedPlatformIdentity(
+  request: {
+    auth?: {
+      uid: string;
+      token: { email?: unknown; email_verified?: unknown; name?: unknown };
+    };
+  },
+  action: string,
+): { uid: string; email: string; name?: string } {
+  const uid = requireUid(request, action);
+  const token = request.auth!.token;
+  if (token.email_verified !== true || typeof token.email !== 'string') {
+    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  }
+  return {
+    uid,
+    email: token.email,
+    ...(typeof token.name === 'string' && token.name ? { name: token.name } : {}),
+  };
+}
+
 /** The caller's role on one CFP, or undefined if they hold none. */
 async function roleOn(cfpId: string, uid: string): Promise<CfpRole | undefined> {
   const snap = await db.doc(`cfps/${cfpId}/members/${uid}`).get();
@@ -211,6 +243,49 @@ function asHttpsError(error: unknown): HttpsError {
   if (error instanceof RoleError) return new HttpsError(error.code, error.message);
   logger.error('unexpected role failure', { error: String(error) });
   return new HttpsError('internal', 'Could not complete that change.');
+}
+
+async function requirePlatformAdmin(
+  request: {
+    auth?: {
+      uid: string;
+      token: { email?: unknown; email_verified?: unknown; name?: unknown };
+    };
+  },
+  action: string,
+): Promise<{ uid: string; email: string; name?: string }> {
+  const identity = requireVerifiedPlatformIdentity(request, action);
+  try {
+    const role = await claimPlatformRole(db, identity);
+    if (role !== 'owner' && role !== 'admin') {
+      throw new HttpsError('permission-denied', `Only a platform admin can ${action}.`);
+    }
+    return identity;
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    throw asHttpsError(error);
+  }
+}
+
+async function requirePlatformOwner(
+  request: {
+    auth?: {
+      uid: string;
+      token: { email?: unknown; email_verified?: unknown; name?: unknown };
+    };
+  },
+  action: string,
+): Promise<{ uid: string; email: string; name?: string }> {
+  const identity = requireVerifiedPlatformIdentity(request, action);
+  try {
+    if ((await claimPlatformRole(db, identity)) !== 'owner') {
+      throw new HttpsError('permission-denied', `Only a platform owner can ${action}.`);
+    }
+    return identity;
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    throw asHttpsError(error);
+  }
 }
 
 /** An ISO date from the request body, or a legible refusal. */
@@ -357,6 +432,63 @@ async function currentDecisionEmails(
   });
   const sendableIds = new Set(sendable.map((doc) => doc.id));
   return { sendable, stale: docs.filter((doc) => !sendableIds.has(doc.id)) };
+}
+
+/** Prevents concurrent releases from re-queuing a row the sender already claimed. */
+async function advanceEmailQueue(
+  cfpId: string,
+  candidates: DocumentSnapshot[],
+  from: EmailStatus[],
+): Promise<{ released: number; stale: number }> {
+  let released = 0;
+  let stale = 0;
+  const CHUNK = 200;
+
+  for (let i = 0; i < candidates.length; i += CHUNK) {
+    const result = await db.runTransaction(async (tx) => {
+      const rows = await tx.getAll(...candidates.slice(i, i + CHUNK).map((doc) => doc.ref));
+      const proposalIds = [
+        ...new Set(
+          rows
+            .filter((row) => DECISION_STILL_TRUE[row.get('kind') as string])
+            .map((row) => row.get('proposalId') as string)
+            .filter(Boolean),
+        ),
+      ];
+      const proposals =
+        proposalIds.length > 0
+          ? await tx.getAll(
+              ...proposalIds.map((proposalId) =>
+                db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+              ),
+            )
+          : [];
+      const proposalStatuses = new Map(
+        proposals.map((proposal) => [proposal.id, proposal.get('status') as string]),
+      );
+
+      let advanced = 0;
+      let superseded = 0;
+      for (const row of rows) {
+        if (!row.exists || !from.includes(row.get('status') as EmailStatus)) continue;
+        const holds = DECISION_STILL_TRUE[row.get('kind') as string];
+        if (
+          holds &&
+          !holds.includes(proposalStatuses.get(row.get('proposalId') as string) ?? '')
+        ) {
+          superseded += 1;
+          continue;
+        }
+        tx.update(row.ref, { status: 'queued' satisfies EmailStatus });
+        advanced += 1;
+      }
+      return { advanced, superseded };
+    });
+    released += result.advanced;
+    stale += result.superseded;
+  }
+
+  return { released, stale };
 }
 
 /**
@@ -1269,6 +1401,94 @@ export const importSessionizeProfile = onCall(
 );
 
 
+// ------------------------------------------------------------ platform access
+
+/** Claims any pending platform grant and reports only the caller's own access. */
+export const platformAccess = onCall(CALLABLE, async (request) => {
+  const identity = requireVerifiedPlatformIdentity(request, 'check platform access');
+  try {
+    const role = await claimPlatformRole(db, identity);
+    return {
+      role,
+      canCreateCfp: role === 'owner' || role === 'admin' || role === 'creator',
+      isPlatformAdmin: role === 'owner' || role === 'admin',
+      isPlatformOwner: role === 'owner',
+    };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Platform administrators see delegated access, not the Firebase Auth directory. */
+export const listPlatformUsers = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'list CFP creators');
+  return { ok: true, ...(await listPlatformAccess(db)) };
+});
+
+/** Platform owners and admins grant creator access. */
+export const grantCfpCreator = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformAdmin(request, 'grant CFP creator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await grantPlatformCreator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('CFP creator access granted', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Revocation affects future CFP creation, never ownership of existing CFPs. */
+export const revokeCfpCreator = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformAdmin(request, 'revoke CFP creator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await revokePlatformCreator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('CFP creator access revoked', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Platform owners may delegate administration without delegating ownership. */
+export const grantPlatformAdmin = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformOwner(request, 'grant platform administrator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await grantPlatformAdministrator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('platform administrator access granted', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Owners cannot remove themselves, and owner records remain out of band. */
+export const revokePlatformAdmin = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformOwner(request, 'revoke platform administrator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await revokePlatformAdministrator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('platform administrator access revoked', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
 // ------------------------------------------------------------------- the CFP
 
 /**
@@ -1284,11 +1504,25 @@ export const importSessionizeProfile = onCall(
  * nobody able to administer it.
  */
 export const createCfp = onCall(CALLABLE, async (request) => {
-  const uid = requireUid(request, 'create a call for proposals');
-  const token = request.auth!.token;
-  if (token.email_verified !== true) {
-    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  const identity = requireVerifiedPlatformIdentity(request, 'create a call for proposals');
+  const { uid } = identity;
+  let creatorRole: PlatformRole | null;
+  try {
+    creatorRole = await claimPlatformRole(db, identity);
+  } catch (error) {
+    throw asHttpsError(error);
   }
+  if (
+    creatorRole !== 'owner' &&
+    creatorRole !== 'admin' &&
+    creatorRole !== 'creator'
+  ) {
+    throw new HttpsError(
+      'permission-denied',
+      'A platform admin must grant creator access first.',
+    );
+  }
+  const token = request.auth!.token;
 
   const data = (request.data ?? {}) as Record<string, unknown>;
   const input = {
@@ -1305,20 +1539,37 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'The window closes before it opens.');
   }
 
-  // A platform anyone can create on needs a ceiling somewhere, and the cheapest
-  // honest one is per account.
-  const mine = await db
+  const mine = db
     .collection('cfps')
     .where('ownerUids', 'array-contains', uid)
-    .count()
-    .get();
-  if (mine.data().count >= CFP_LIMITS.perOwner) {
-    throw new HttpsError('resource-exhausted', 'You have reached the limit on calls for proposals.');
-  }
+    .limit(CFP_LIMITS.perOwner);
 
   const ref = db.doc(`cfps/${input.id}`);
+  const platformMemberRef = db.doc(`platformMembers/${uid}`);
   await db.runTransaction(async (tx) => {
-    if ((await tx.get(ref)).exists) {
+    // Keep the ceiling in this transaction. A count done before it lets two
+    // simultaneous tenth calls both pass and commit.
+    const owned = await tx.get(mine);
+    const member = await tx.get(platformMemberRef);
+    const currentRole = member.get('role');
+    if (
+      currentRole !== 'owner' &&
+      currentRole !== 'admin' &&
+      currentRole !== 'creator'
+    ) {
+      throw new HttpsError(
+        'permission-denied',
+        'A platform admin must grant creator access first.',
+      );
+    }
+    if (owned.size >= CFP_LIMITS.perOwner) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'You have reached the limit on calls for proposals.',
+      );
+    }
+    const existing = await tx.get(ref);
+    if (existing.exists) {
       throw new HttpsError('already-exists', 'That address is taken.');
     }
     tx.set(ref, {
@@ -1601,15 +1852,33 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
  *
  * §8 asks for a dry run before the first real batch, so `preview` is the
  * default and nothing leaves without an explicit `release`. Every action is a
- * status flip on `emailLog`; the trigger does the sending.
+ * status flip on `emailLog`; the trigger does the sending. Release names the
+ * reviewed rows so a decision added after preview waits for the next batch.
  */
 export const emailQueue = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'manage the email queue');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const action = String(data.action ?? 'preview');
-  if (!['preview', 'release', 'retry', 'resend'].includes(action)) {
+  if (!['readiness', 'summary', 'preview', 'release', 'retry', 'resend'].includes(action)) {
     throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
+  }
+
+  /*
+   * The overview needs only setup state. Keeping this ahead of the queue read
+   * avoids loading an event's entire delivery history just to draw one setup
+   * checklist item.
+   */
+  if (action === 'readiness') {
+    const configSnap = await db.doc(`cfps/${cfpId}/config/email`).get();
+    const emailConfig = configSnap.data() ?? {};
+    return {
+      ok: true,
+      settings: settingsFromConfig(emailConfig),
+      keyHint: (emailConfig.keyHint as string) ?? '',
+      domainId: (emailConfig.domainId as string) ?? '',
+      domain: (emailConfig.domain as string) ?? '',
+    };
   }
 
   /*
@@ -1630,9 +1899,15 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       const snap = await tx.get(ref);
       if (!snap.exists) throw new HttpsError('not-found', 'No such message.');
 
-      // In-flight rows are the trigger's, not ours: re-queueing one mid-send is
-      // how the same person gets it twice in the same minute.
+      // Held decisions belong to the reviewed batch, while in-flight rows belong
+      // to the trigger. Neither may be turned into a one-off resend.
       const current = snap.get('status') as EmailStatus;
+      if (current === 'held') {
+        throw new HttpsError(
+          'failed-precondition',
+          'That message is still held for batch review.',
+        );
+      }
       if (current === 'queued' || current === 'sending') {
         throw new HttpsError('failed-precondition', `That message is already ${current}.`);
       }
@@ -1655,11 +1930,14 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     return { ok: true, logId };
   }
 
-  const [snap, configSnap] = await Promise.all([
-    db.collection(`cfps/${cfpId}/emailLog`).get(),
-    db.doc(`cfps/${cfpId}/config/email`).get(),
-  ]);
-  const emailConfig = configSnap.data() ?? {};
+  const log = db.collection(`cfps/${cfpId}/emailLog`);
+  if (action === 'summary') {
+    const held = await log.where('status', '==', 'held').get();
+    const pending = await currentDecisionEmails(cfpId, held.docs);
+    return { ok: true, waiting: pending.sendable.length };
+  }
+
+  const snap = await log.get();
   const pendingDocs = snap.docs.filter((doc) =>
     ['held', 'failed', 'dry_run'].includes(doc.get('status') as string),
   );
@@ -1705,6 +1983,8 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0) || a.to.localeCompare(b.to));
 
   if (action === 'preview') {
+    const configSnap = await db.doc(`cfps/${cfpId}/config/email`).get();
+    const emailConfig = configSnap.data() ?? {};
     return {
       ok: true,
       tally,
@@ -1720,7 +2000,12 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       // Enough to check the copy and the addresses before committing to a send.
       held: pendingState.sendable
         .filter((d) => d.get('status') === 'held')
-        .map((d) => ({ kind: d.get('kind'), to: d.get('to'), title: d.get('data')?.title })),
+        .map((d) => ({
+          logId: d.id,
+          kind: d.get('kind'),
+          to: d.get('to'),
+          title: d.get('data')?.title,
+        })),
       staleHeld: pendingState.stale.length,
       /*
        * Who was written to, and what happened. The panel used to show counts by
@@ -1740,32 +2025,28 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   // was rendered while no sender was configured. Retrying picks those up once
   // the domain is, so a receipt written during setup still reaches its speaker.
   const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
-  const due = pendingState.sendable.filter((d) => from.includes(d.get('status')));
-
-  /*
-   * A decision reversed after it was queued must not go out anyway.
-   *
-   * Holding decisions so they release together buys the committee a window to
-   * change its mind — and the whole point is lost if the row queued during that
-   * window sends regardless. Nothing else re-reads the proposal: `held` was
-   * written when the status changed, and a later change does not revisit it.
-   *
-   * Stale rows stay `held` rather than being deleted, so restoring the decision
-   * releases them normally on the next pass.
-   */
-  const stale = pendingState.stale.filter((d) => from.includes(d.get('status'))).length;
-
-  const CHUNK = 400;
-  for (let i = 0; i < due.length; i += CHUNK) {
-    const batch = db.batch();
-    for (const doc of due.slice(i, i + CHUNK)) {
-      batch.update(doc.ref, { status: 'queued' satisfies EmailStatus });
+  let candidates: DocumentSnapshot[];
+  if (action === 'release') {
+    const rawLogIds = data.logIds;
+    if (
+      !Array.isArray(rawLogIds) ||
+      rawLogIds.length === 0 ||
+      rawLogIds.some((id) => typeof id !== 'string' || !id || id.includes('/')) ||
+      new Set(rawLogIds).size !== rawLogIds.length
+    ) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Release requires the unique message ids from the reviewed preview.',
+      );
     }
-    await batch.commit();
+    candidates = await db.getAll(...rawLogIds.map((id) => log.doc(id as string)));
+  } else {
+    candidates = snap.docs.filter((doc) => from.includes(doc.get('status') as EmailStatus));
   }
+  const { released, stale } = await advanceEmailQueue(cfpId, candidates, from);
 
-  logger.info('email queue advanced', { byUid, action, count: due.length, stale });
-  return { ok: true, tally, released: due.length, stale };
+  logger.info('email queue advanced', { byUid, action, count: released, stale });
+  return { ok: true, tally, released, stale };
 });
 
 /*

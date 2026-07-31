@@ -23,7 +23,8 @@ const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'A
 const REVIEWER: Identity = { sub: 'reviewer-sub', email: 'reviewer@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 
-const tab = (page: Page, name: string) => page.getByRole('link', { name, exact: true });
+const tab = (page: Page, name: string) =>
+  page.locator('.nav, .subnav').getByRole('link', { name, exact: true });
 
 /** One person's line on the committee list, found by whatever it calls them. */
 const row = (page: Page, who: string) => page.locator('.people__row', { hasText: who });
@@ -38,8 +39,8 @@ const inviteRoleField = (page: Page) => page.locator('.grid--2').getByRole('comb
 const SECTIONS = {
   proposals: 'Proposals',
   committee: 'Committee',
-  settings: 'Settings',
-  confirmation: 'Confirmation',
+  settings: 'Event setup',
+  confirmation: 'Confirmation form',
   email: 'Email',
 } as const;
 
@@ -64,14 +65,14 @@ test.describe('roles', () => {
   test('a speaker sees no committee tabs and cannot open the admin page', async ({ page }) => {
     await signInAs(page, SPEAKER, at('/admin'));
     await expect(page.getByText('That page is not available to your account.')).toBeVisible();
-    await expect(tab(page, 'Admin')).toHaveCount(0);
-    await expect(tab(page, 'Review')).toHaveCount(0);
+    await expect(tab(page, 'Manage event')).toHaveCount(0);
+    await expect(tab(page, 'Review talks')).toHaveCount(0);
   });
 
   test('the bootstrap grant becomes a role on first sign-in', async ({ page }) => {
     await asAdmin(page);
     await expect(row(page, ADMIN.name)).toBeVisible();
-    await expect(tab(page, 'Admin')).toBeVisible();
+    await expect(tab(page, 'Manage event')).toBeVisible();
   });
 
   test('an invited reviewer picks up the role on first sign-in', async ({ page }) => {
@@ -88,9 +89,9 @@ test.describe('roles', () => {
     await expect(page.getByText('Invited — has not signed in yet')).toBeVisible();
 
     await signInAs(page, REVIEWER, at('/review'));
-    await expect(tab(page, 'Review')).toBeVisible();
+    await expect(tab(page, 'Review talks')).toBeVisible();
     // A reviewer is not an admin.
-    await expect(tab(page, 'Admin')).toHaveCount(0);
+    await expect(tab(page, 'Manage event')).toHaveCount(0);
   });
 
   test('an admin cannot revoke the last admin', async ({ page }) => {
@@ -116,7 +117,7 @@ test.describe('roles', () => {
     await page.reload();
     await expect(row(page, REVIEWER.email).getByRole('combobox')).toHaveValue('admin');
     await signInAs(page, REVIEWER, at('/admin/committee'));
-    await expect(tab(page, 'Admin')).toBeVisible();
+    await expect(tab(page, 'Manage event')).toBeVisible();
   });
 
   test('the last admin cannot demote themselves', async ({ page }) => {
@@ -127,7 +128,7 @@ test.describe('roles', () => {
     // The refusal has to reach the control as well — a select left showing
     // "Reviewer" says the change went through.
     await expect(row(page, 'Ada').getByRole('combobox')).toHaveValue('admin');
-    await expect(tab(page, 'Admin')).toBeVisible();
+    await expect(tab(page, 'Manage event')).toBeVisible();
   });
 
   test('the owner’s row offers neither control, and the callable refuses both', async ({ page }) => {
@@ -243,7 +244,7 @@ test.describe('roles', () => {
 
     await asAdmin(page, 'proposals');
     const proposals = page.locator('.decision-panel', {
-      has: page.getByRole('heading', { name: 'Proposals' }),
+      has: page.getByRole('heading', { name: 'Proposal decisions' }),
     });
     await expect(proposals.getByText('Current talk')).toBeVisible();
     await expect(proposals.getByText('Withdrawn talk')).toHaveCount(0);
@@ -295,6 +296,8 @@ test.describe('roles', () => {
           '.subnav__tab[aria-current="page"]',
         );
         const subnav = document.querySelector<HTMLElement>('.subnav');
+        const sectionMenu =
+          document.querySelector<HTMLElement>('.admin-section-menu summary');
         return {
           documentOverflow:
             document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -305,6 +308,8 @@ test.describe('roles', () => {
           status: rect('.decision-control select'),
           activeTab: activeTab?.getBoundingClientRect() ?? null,
           subnav: subnav?.getBoundingClientRect() ?? null,
+          sectionMenu: sectionMenu?.getBoundingClientRect() ?? null,
+          sectionText: sectionMenu?.textContent ?? '',
           scrollerOverflow: scroller ? scroller.scrollWidth - scroller.clientWidth : 999,
           viewportWidth: window.innerWidth,
           chartWidths: [
@@ -328,7 +333,13 @@ test.describe('roles', () => {
         expect(layout.status!.right).toBeLessThanOrEqual(layout.viewportWidth);
       }
 
-      if (width === 390) {
+      if (width < 1024) {
+        expect(layout.sectionMenu).not.toBeNull();
+        expect(layout.sectionMenu!.width).toBeGreaterThan(0);
+        expect(layout.sectionMenu!.left).toBeGreaterThanOrEqual(0);
+        expect(layout.sectionMenu!.right).toBeLessThanOrEqual(layout.viewportWidth);
+        expect(layout.sectionText).toContain('Proposals');
+      } else {
         expect(layout.activeTab).not.toBeNull();
         expect(layout.subnav).not.toBeNull();
         expect(layout.activeTab!.left).toBeGreaterThanOrEqual(layout.subnav!.left);

@@ -1,25 +1,32 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 
 import { auth, googleProvider } from './firebase';
 import { dictionaries, formatDate, type Locale } from './i18n';
 import { detectLocale, I18nContext, SERVER_LOCALE, useI18n } from './i18n/context';
 import { GoogleButton } from './components/GoogleButton';
-import { Link } from './components/Link';
-import { SubmitPage } from './screens/SubmitPage';
-import { AdminPage } from './screens/AdminPage';
-import { ReviewPage } from './screens/ReviewPage';
-import { HomePage } from './screens/HomePage';
+import {
+  AppBreadcrumb,
+  documentTitle,
+  EventNavigation,
+  headerTitle,
+} from './components/AppNavigation';
 import { CfpPage } from './screens/CfpPage';
-import { ProfilePage } from './screens/ProfilePage';
-import { NewCfpPage } from './screens/NewCfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
-import { useRole } from './lib/roles';
-import { href, navigate, usePlace, type Place, type Route } from './lib/router';
+import { usePlatformAccess, useRole } from './lib/roles';
+import { navigate, usePlace, type Place } from './lib/router';
 import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
-import { consent, forgetConsent } from './lib/consent';
+import { consent, type Consent } from './lib/consent';
 import {
   arrivingFromLink,
   completeSignInFromLink,
@@ -34,8 +41,39 @@ import { AccountMenu } from './components/AccountMenu';
 import { ThemeSwitch } from './components/ThemeSwitch';
 import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
+import type { PlatformAccessStatus } from '@shared/platform';
 
-export function App({ initialPath }: { initialPath?: string } = {}) {
+const SubmitPage = lazy(() =>
+  import('./screens/SubmitPage').then(({ SubmitPage }) => ({ default: SubmitPage })),
+);
+const AdminPage = lazy(() =>
+  import('./screens/AdminPage').then(({ AdminPage }) => ({ default: AdminPage })),
+);
+const ReviewPage = lazy(() =>
+  import('./screens/ReviewPage').then(({ ReviewPage }) => ({ default: ReviewPage })),
+);
+const HomePage = lazy(() =>
+  import('./screens/HomePage').then(({ HomePage }) => ({ default: HomePage })),
+);
+const ProfilePage = lazy(() =>
+  import('./screens/ProfilePage').then(({ ProfilePage }) => ({ default: ProfilePage })),
+);
+const NewCfpPage = lazy(() =>
+  import('./screens/NewCfpPage').then(({ NewCfpPage }) => ({ default: NewCfpPage })),
+);
+const PlatformAdminPage = lazy(() =>
+  import('./screens/PlatformAdminPage').then(({ PlatformAdminPage }) => ({
+    default: PlatformAdminPage,
+  })),
+);
+
+export function App({
+  initialPath,
+  initialCfp,
+}: {
+  initialPath?: string;
+  initialCfp?: { id: string; value: CfpWindow | null };
+} = {}) {
   /*
    * Starts at the locale the server rendered, then settles to the real one after
    * mount. Calling `detectLocale` in the initialiser read `localStorage` during a
@@ -44,10 +82,14 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   const [locale, setLocale] = useState<Locale>(SERVER_LOCALE);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [cfp, setCfp] = useState<CfpWindow | null>(null);
-  const [cfpReady, setCfpReady] = useState(false);
+  const [cfp, setCfp] = useState<CfpWindow | null>(initialCfp?.value ?? null);
+  const [loadedCfpId, setLoadedCfpId] = useState<string | null>(initialCfp?.id ?? null);
+  const [cfpReady, setCfpReady] = useState(initialCfp !== undefined);
   const [cfpError, setCfpError] = useState(false);
   const [cfpAttempt, setCfpAttempt] = useState(0);
+  const seededCfp = useRef(
+    initialCfp ? { id: initialCfp.id, stillOnInitialRoute: true } : null,
+  );
   const place = usePlace(initialPath);
   /*
    * Owned here rather than inside the banner, so the footer control can put the
@@ -59,6 +101,7 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
    * who already answered — a hydration mismatch that also asks twice.
    */
   const [askConsent, setAskConsent] = useState(false);
+  const [analyticsConsent, setAnalyticsConsent] = useState<Consent>('unasked');
   const { route, cfpId } = place;
   const placeKey = `${route}:${cfpId ?? ''}:${place.tab}`;
   const focusedPlace = useRef(placeKey);
@@ -68,8 +111,16 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
     error: roleError,
     retry: retryRole,
   } = useRole(user, cfpId);
+  const {
+    status: platformStatus,
+    ready: platformReady,
+    error: platformError,
+    retry: retryPlatform,
+  } = usePlatformAccess(user);
 
   const t = dictionaries[locale];
+  const visibleCfp = loadedCfpId === cfpId ? cfp : null;
+  const signedOutProtectedRoute = !user && (route === 'review' || route === 'admin');
 
   const [localeSettled, setLocaleSettled] = useState(false);
   useEffect(() => {
@@ -91,10 +142,11 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   }, [locale, localeSettled]);
 
   // The tab is how someone finds this among twenty others, so it names the CFP
-  // they are actually on rather than whichever one the HTML was written for.
+  // and the task they are actually on rather than whichever screen the HTML
+  // was written for.
   useEffect(() => {
-    document.title = cfp?.name ? `${cfp.name} — ${t.app.title}` : t.app.title;
-  }, [cfp, t]);
+    document.title = documentTitle(place, visibleCfp?.name ?? null, t);
+  }, [place, t, visibleCfp?.name]);
 
   /*
    * Starts the SDK for somebody who agreed on an earlier visit. A no-op for
@@ -104,8 +156,10 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
    * answer lives in storage, and storage does not exist until this runs.
    */
   useEffect(() => {
+    const current = consent();
+    setAnalyticsConsent(current);
     applyConsent();
-    if (consent() === 'unasked') setAskConsent(true);
+    if (current === 'unasked') setAskConsent(true);
   }, []);
 
   /*
@@ -156,8 +210,22 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   useEffect(() => {
     let cancelled = false;
 
+    const seeded = seededCfp.current;
+    if (
+      seeded?.stillOnInitialRoute &&
+      seeded.id === cfpId &&
+      route === 'cfp' &&
+      cfpAttempt === 0
+    ) {
+      setCfpError(false);
+      setCfpReady(true);
+      return;
+    }
+    if (seeded) seeded.stillOnInitialRoute = false;
+
     if (!cfpId) {
       setCfp(null);
+      setLoadedCfpId(null);
       setCfpReady(true);
       setCfpError(false);
       return;
@@ -166,11 +234,15 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
     setCfpError(false);
     loadCfpWindow(cfpId)
       .then((next) => {
-        if (!cancelled) setCfp(next);
+        if (!cancelled) {
+          setCfp(next);
+          setLoadedCfpId(cfpId);
+        }
       })
       .catch(() => {
         if (!cancelled) {
           setCfp(null);
+          setLoadedCfpId(cfpId);
           setCfpError(true);
         }
       })
@@ -205,16 +277,10 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                 <span />
               </span>
               <div>
-                {/* The way back out, everywhere but the page it leads to. The home
-                    page needs no eyebrow: it would only repeat its own title. */}
-                {route !== 'home' && (
-                  <p className="header__event">
-                    <Link className="header__home" to={href({ route: 'home' })}>
-                      {t.platform.back}
-                    </Link>
-                  </p>
-                )}
-                <h1 className="header__title">{cfp?.name ?? t.app.title}</h1>
+                <AppBreadcrumb place={place} cfpName={visibleCfp?.name ?? null} />
+                <h1 className="header__title">
+                  {headerTitle(place, visibleCfp?.name ?? null, t)}
+                </h1>
               </div>
             </div>
             <div className="header__right">
@@ -233,6 +299,9 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                   <AccountMenu
                     user={user}
                     showProfile={route !== 'me'}
+                    showPlatformAdmin={
+                      platformStatus?.isPlatformAdmin === true && route !== 'platform'
+                    }
                     onSignOut={() => signOut(auth)}
                   />
                 ) : (
@@ -244,6 +313,8 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
                       if (signIn) {
                         signIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         signIn.focus({ preventScroll: true });
+                      } else if (cfpId) {
+                        navigate('form', { cfpId });
                       } else {
                         navigate('me');
                       }
@@ -255,7 +326,9 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
             </div>
           </header>
 
-          {role && cfpId && <Nav route={route} cfpId={cfpId} role={role} />}
+          {cfpId && visibleCfp && !signedOutProtectedRoute && (
+            <EventNavigation place={place} cfpName={visibleCfp.name} role={role} />
+          )}
 
           {/* Long-form routes set their own readable measure. The submission
               workspace also needs room for its progress rail, so it uses the
@@ -265,55 +338,52 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
             id="main-content"
             tabIndex={-1}
           >
-            {!authReady || !cfpReady ? (
+            {!cfpReady || (!authReady && route !== 'cfp') ? (
               <p className="muted">{t.app.loading}</p>
             ) : (
-              <Routed
-                place={place}
-                user={user}
-                cfp={cfp}
-                role={role}
-                roleReady={roleReady}
-                roleError={roleError}
-                retryRole={retryRole}
-                cfpError={cfpError}
-                retryCfp={retryCfp}
-              />
+              <Suspense fallback={<p className="muted">{t.app.loading}</p>}>
+                <Routed
+                  place={place}
+                  user={user}
+                  cfp={visibleCfp}
+                  role={role}
+                  roleReady={roleReady}
+                  roleError={roleError}
+                  retryRole={retryRole}
+                  platformStatus={platformStatus}
+                  platformReady={platformReady}
+                  platformError={platformError}
+                  retryPlatform={retryPlatform}
+                  cfpError={cfpError}
+                  retryCfp={retryCfp}
+                />
+              </Suspense>
             )}
           </main>
 
           <footer className="footer">
             <ConsentControl
-              onReopen={() => {
-                forgetConsent();
-                setAskConsent(true);
-              }}
+              answer={analyticsConsent}
+              open={askConsent}
+              onReopen={() => setAskConsent(true)}
             />
           </footer>
         </div>
-        <ConsentBanner open={askConsent} onAnswered={() => setAskConsent(false)} />
+        <ConsentBanner
+          open={askConsent}
+          onAnswered={(choice) => {
+            const wasGranted = analyticsConsent === 'granted';
+            setAnalyticsConsent(choice);
+            setAskConsent(false);
+            // The initial page-view attempt was suppressed while consent was
+            // unanswered. Count this visit now that the visitor opted in.
+            if (choice === 'granted' && !wasGranted) {
+              trackPageView(window.location.pathname, cfpId || null);
+            }
+          }}
+        />
       </ToastProvider>
     </I18nContext.Provider>
-  );
-}
-
-function Nav({ route, cfpId, role }: { route: Route; cfpId: string; role: CfpRole }) {
-  const { t } = useI18n();
-  const tabs: Route[] = role === 'reviewer' ? ['form', 'review'] : ['form', 'review', 'admin'];
-
-  return (
-    <nav className="nav" aria-label={t.app.title}>
-      {tabs.map((tab) => (
-        <Link
-          key={tab}
-          to={href({ route: tab, cfpId })}
-          className={`nav__tab${tab === route ? ' nav__tab--on' : ''}`}
-          aria-current={tab === route ? 'page' : undefined}
-        >
-          {t.nav[tab as 'form' | 'review' | 'admin']}
-        </Link>
-      ))}
-    </nav>
   );
 }
 
@@ -325,6 +395,10 @@ interface RoutedProps {
   roleReady: boolean;
   roleError: boolean;
   retryRole: () => void;
+  platformStatus: PlatformAccessStatus | null;
+  platformReady: boolean;
+  platformError: boolean;
+  retryPlatform: () => void;
   cfpError: boolean;
   retryCfp: () => void;
 }
@@ -341,19 +415,51 @@ function Routed({
   roleReady,
   roleError,
   retryRole,
+  platformStatus,
+  platformReady,
+  platformError,
+  retryPlatform,
   cfpError,
   retryCfp,
 }: RoutedProps) {
   const { t } = useI18n();
   const { route, cfpId, tab } = place;
 
-  if (route === 'home') return <HomePage user={user} />;
-  if (route === 'new') {
-    return user ? (
-      <NewCfpPage user={user} />
-    ) : (
-      <SignIn cfp={null} cfpId={null} purpose="organising" />
+  if (route === 'home') {
+    return (
+      <HomePage
+        user={user}
+        platformStatus={platformStatus}
+        platformReady={platformReady}
+        platformError={platformError}
+        retryPlatform={retryPlatform}
+      />
     );
+  }
+  if (route === 'new') {
+    if (!user) return <SignIn cfp={null} cfpId={null} purpose="organising" />;
+    if (!platformReady) return <p className="muted">{t.app.loading}</p>;
+    if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
+    if (!platformStatus?.canCreateCfp) {
+      return <PlatformCreationRestricted onRetry={retryPlatform} />;
+    }
+    return <NewCfpPage user={user} />;
+  }
+  if (route === 'platform') {
+    if (!user) return <SignIn cfp={null} cfpId={null} purpose="account" />;
+    if (!platformReady) return <p className="muted">{t.app.loading}</p>;
+    if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
+    if (!platformStatus?.isPlatformAdmin) {
+      return (
+        <div className="panel">
+          <p>{t.nav.forbidden}</p>
+          <button type="button" className="btn btn--primary" onClick={() => navigate('home')}>
+            {t.platform.back}
+          </button>
+        </div>
+      );
+    }
+    return <PlatformAdminPage user={user} />;
   }
   if (route === 'me') {
     return user ? (
@@ -365,7 +471,17 @@ function Routed({
 
   // Every route below is inside a CFP, and `currentPlace` will not produce one
   // without an id — but the narrowing has to be written down for the compiler.
-  if (!cfpId) return <HomePage user={user} />;
+  if (!cfpId) {
+    return (
+      <HomePage
+        user={user}
+        platformStatus={platformStatus}
+        platformReady={platformReady}
+        platformError={platformError}
+        retryPlatform={retryPlatform}
+      />
+    );
+  }
 
   if (cfpError) {
     return (
@@ -449,8 +565,52 @@ function Routed({
   );
 }
 
+function PlatformAccessFailure({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="panel">
+      <p className="field__error" role="alert">
+        {t.platformAdmin.loadError}
+      </p>
+      <button type="button" className="btn" onClick={onRetry}>
+        {t.platformAdmin.retry}
+      </button>
+    </div>
+  );
+}
+
+function PlatformCreationRestricted({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="panel platform-access-gate">
+      <p className="platform-admin__eyebrow">{t.platformAdmin.eyebrow}</p>
+      <h2>{t.platformAdmin.accessRequiredTitle}</h2>
+      <p>{t.platformAdmin.accessRequiredHelp}</p>
+      <div className="platform-access-gate__actions">
+        <button type="button" className="btn btn--primary" onClick={onRetry}>
+          {t.platformAdmin.checkAgain}
+        </button>
+        <button type="button" className="btn" onClick={() => navigate('home')}>
+          {t.platform.back}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function WindowNotice({ cfp }: { cfp: CfpWindow }) {
   const { t, locale } = useI18n();
+
+  if (cfp.state === 'before') {
+    return (
+      <div className="panel">
+        <p>{t.window.notOpen}</p>
+        <p>
+          {t.window.opensAt} <strong>{formatDate(cfp.opensAt, locale)}</strong>
+        </p>
+      </div>
+    );
+  }
 
   if (cfp.state === 'paused') {
     return <div className="panel">{t.window.paused}</div>;
@@ -471,19 +631,6 @@ function WindowNotice({ cfp }: { cfp: CfpWindow }) {
 }
 
 function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cfpId: string }) {
-  const { t, locale } = useI18n();
-
-  if (cfp.state === 'before') {
-    return (
-      <div className="panel">
-        <p>{t.window.notOpen}</p>
-        <p>
-          {t.window.opensAt} <strong>{formatDate(cfp.opensAt, locale)}</strong>
-        </p>
-      </div>
-    );
-  }
-
   if (!user) {
     return (
       <>
@@ -492,6 +639,8 @@ function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cf
       </>
     );
   }
+
+  if (cfp.state === 'before') return <WindowNotice cfp={cfp} />;
 
   // A closed call blocks creating a proposal, not opening one that already
   // belongs to this account. SubmitPage decides which case this is after its
@@ -625,9 +774,9 @@ export function SignIn({
         </p>
       )}
 
-      <h3 className="card__subtitle">
+      <h2 className="card__subtitle">
         {askingWhose ? t.app.linkWhose : t.app.signInEmailTitle}
-      </h3>
+      </h2>
       <p className="field__help">{askingWhose ? t.app.linkWhoseHelp : t.app.signInEmailHint}</p>
 
       {sent && (

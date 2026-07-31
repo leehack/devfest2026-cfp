@@ -54,6 +54,18 @@ async function stage(options: { locale?: 'en' | 'fr' } = {}) {
   return { chair, author };
 }
 
+function heldLogIds(preview: { held?: Array<{ logId: string }> }): string[] {
+  return (preview.held ?? []).map((row) => row.logId);
+}
+
+async function releaseCurrentBatch(idToken: string) {
+  const preview = await callJson(idToken, 'emailQueue', { action: 'preview' });
+  return callJson(idToken, 'emailQueue', {
+    action: 'release',
+    logIds: heldLogIds(preview),
+  });
+}
+
 test.describe('email pipeline', () => {
   test('a decision is held until it is released', async () => {
     const { chair } = await stage();
@@ -71,14 +83,35 @@ test.describe('email pipeline', () => {
     expect(held[0].to).toBe(speaker.email);
     expect(held[0].status).toBe('held');
 
+    // Resend is only for a message that has already left the reviewed batch.
+    // A direct call must not turn one held decision into an early notification.
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: 'accepted__talk-1',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect((await readEmailLog())[0].status).toBe('held');
+
     // Give the trigger a chance to misbehave before asserting that it did not.
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect((await readEmailLog())[0].status).toBe('held');
 
-    const preview = await callAs(chair.idToken, 'emailQueue', { action: 'preview' });
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(preview.ok).toBe(true);
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
+      ok: true,
+      waiting: 1,
+    });
+    expect(await callAs(chair.idToken, 'emailQueue', { action: 'release' })).toMatchObject({
+      ok: false,
+      code: 'INVALID_ARGUMENT',
+    });
 
-    const released = await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    const released = await callAs(chair.idToken, 'emailQueue', {
+      action: 'release',
+      logIds: heldLogIds(preview),
+    });
     expect(released.ok).toBe(true);
 
     const sent = await waitForEmail(
@@ -87,6 +120,10 @@ test.describe('email pipeline', () => {
     );
     expect(sent[0].status).toBe('dry_run');
     expect(sent[0].attempts).toBe(1);
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
+      ok: true,
+      waiting: 0,
+    });
   });
 
   /*
@@ -112,6 +149,10 @@ test.describe('email pipeline', () => {
     expect(preview).toMatchObject({ ok: true, held: [], staleHeld: 1 });
     expect(preview.tally['held:accepted']).toBeUndefined();
     expect(preview.rows[0]).toMatchObject({ status: 'held', stale: true });
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
+      ok: true,
+      waiting: 0,
+    });
 
     await signInAs(page, admin, at('/admin/email'));
     await expect(page.getByRole('button', { name: 'Nothing to send' })).toBeDisabled();
@@ -127,7 +168,10 @@ test.describe('email pipeline', () => {
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 
-    const released = await callJson(chair.idToken, 'emailQueue', { action: 'release' });
+    const released = await callJson(chair.idToken, 'emailQueue', {
+      action: 'release',
+      logIds: ['accepted__talk-1'],
+    });
     expect(released).toMatchObject({ ok: true, released: 0, stale: 1 });
 
     // Still held, not sent and not destroyed: re-accepting must be able to
@@ -136,7 +180,7 @@ test.describe('email pipeline', () => {
     expect((await readEmailLog())[0].status).toBe('held');
 
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
-    expect(await callJson(chair.idToken, 'emailQueue', { action: 'release' })).toMatchObject({
+    expect(await releaseCurrentBatch(chair.idToken)).toMatchObject({
       released: 1,
       stale: 0,
     });
@@ -155,12 +199,80 @@ test.describe('email pipeline', () => {
     expect((await readEmailLog())[0].status).toBe('dry_run');
   });
 
+  test('two admins releasing the same batch still send each email once', async () => {
+    const { chair } = await stage();
+
+    await callAs(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await waitForEmail((rows) => rows[0]?.status === 'held', 'the held acceptance');
+
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    const release = { action: 'release', logIds: heldLogIds(preview) };
+    const releases = await Promise.all([
+      callJson(chair.idToken, 'emailQueue', release),
+      callJson(chair.idToken, 'emailQueue', release),
+    ]);
+    expect(releases.reduce((total, result) => total + result.released, 0)).toBe(1);
+
+    const rows = await waitForEmail(
+      (all) => all[0]?.status === 'dry_run',
+      'the single release attempt',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].attempts).toBe(1);
+  });
+
+  test('a decision added after preview stays held for the next reviewed batch', async () => {
+    const { chair, author } = await stage();
+
+    await callAs(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await waitForEmail((rows) => rows[0]?.status === 'held', 'the reviewed acceptance');
+    const reviewed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(heldLogIds(reviewed)).toEqual(['accepted__talk-1']);
+
+    await seedProposal('talk-2', {
+      speakerUid: author.uid,
+      title: 'Computing Bernoulli Numbers',
+      status: 'submitted',
+      speaker: { name: speaker.name },
+    });
+    await callAs(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-2',
+      status: 'rejected',
+    });
+    await waitForEmail((rows) => rows.length === 2, 'the later decision');
+
+    expect(
+      await callJson(chair.idToken, 'emailQueue', {
+        action: 'release',
+        logIds: heldLogIds(reviewed),
+      }),
+    ).toMatchObject({ released: 1, stale: 0 });
+
+    const rows = await waitForEmail(
+      (emailRows) =>
+        emailRows.some((row) => row.id === 'accepted__talk-1' && row.status === 'dry_run') &&
+        emailRows.some((row) => row.id === 'rejected__talk-2' && row.status === 'held'),
+      'only the reviewed decision to be sent',
+    );
+    expect(rows.find((row) => row.id === 'rejected__talk-2')?.attempts ?? 0).toBe(0);
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
+      ok: true,
+      waiting: 1,
+    });
+  });
+
   test('re-deciding after the send does not send again', async () => {
     const { chair } = await stage();
 
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
     await waitForEmail((r) => r.length > 0, 'the acceptance');
-    await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    await releaseCurrentBatch(chair.idToken);
     await waitForEmail((r) => r[0]?.status === 'dry_run', 'the acceptance to go out');
 
     // An admin flipping a decision back and forth must not re-arm a row that
@@ -201,9 +313,10 @@ test.describe('email pipeline', () => {
     expect(submitted.ok).toBe(true);
 
     // Never `held` — a receipt that waited for the decision batch would arrive
-    // weeks after the thing it acknowledges.
+    // weeks after the thing it acknowledges. Wait through the trigger's
+    // short-lived `sending` state before asserting its terminal result.
     const rows = await waitForEmail(
-      (r) => r.some((x) => x.kind === 'submission_received' && x.status !== 'queued'),
+      (r) => r.some((x) => x.kind === 'submission_received' && x.status === 'dry_run'),
       'the receipt',
     );
     const receipt = rows.find((r) => r.kind === 'submission_received')!;
@@ -256,18 +369,79 @@ test.describe('email pipeline', () => {
       .getByRole('row', { name: new RegExp(speaker.email) });
     await expect(queued).toBeVisible();
     await expect(queued).toContainText('Not selected');
+    const heldLog = panel
+      .locator('.email-log-table')
+      .getByRole('row', { name: new RegExp(speaker.email) });
+    await expect(heldLog.getByRole('button', { name: 'Send again' })).toBeDisabled();
 
-    const send = panel.getByRole('button', { name: /^Send 1 decision/ });
+    const send = panel.getByRole('button', { name: 'Send 1 decision email' });
     await expect(send).toBeEnabled();
 
     page.once('dialog', (d) => d.accept());
     await send.click();
 
-    await expect(panel.getByText('1 messages queued.')).toBeVisible();
+    await expect(panel.getByText('1 email queued.')).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Nothing to send' })).toBeDisabled();
 
     const rows = await waitForEmail((r) => r[0]?.status === 'dry_run', 'the send');
     expect(rows[0].kind).toBe('rejected');
+  });
+
+  test('a saved decision is visibly pending until an admin reviews the email batch', async ({
+    page,
+  }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/proposals'));
+
+    await page
+      .getByLabel('Status: Notes on the Analytical Engine')
+      .selectOption('accepted');
+
+    await expect(page.getByText('Decision saved. This action does not send an email.')).toBeVisible();
+    const notice = page.locator('.pending-email-notice');
+    await expect(notice).toContainText('1 decision email is waiting');
+    await expect(
+      page.getByRole('link', { name: 'Email, 1 decision email waiting' }),
+    ).toBeVisible();
+
+    await notice.getByRole('link', { name: 'Review and send' }).click();
+    await expect(page).toHaveURL(new RegExp('/admin/email$'));
+
+    const queue = page.locator('.email-queue-card');
+    await expect(queue.getByRole('heading', { name: 'Decision emails' })).toBeVisible();
+    await expect(queue.getByRole('row', { name: new RegExp(speaker.email) })).toContainText(
+      'Accepted',
+    );
+
+    const send = queue.getByRole('button', { name: 'Send 1 decision email' });
+    page.once('dialog', (dialog) => dialog.accept());
+    await send.click();
+
+    await expect(queue.getByText('1 email queued.')).toBeVisible();
+    await expect(page.getByRole('link', { name: /Email, 1 decision email waiting/ })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
+    await expect(page.locator('.pending-email-notice')).toHaveCount(0);
+  });
+
+  test('a failed queue refresh still guides the admin after a saved decision', async ({ page }) => {
+    await stage();
+    const initialSummary = page.waitForResponse(
+      (response) =>
+        response.url().includes('/emailQueue') &&
+        response.request().postData()?.includes('"summary"') === true,
+    );
+    await signInAs(page, admin, at('/admin/proposals'));
+    await initialSummary;
+
+    await page.route('**/emailQueue', (route) => route.abort());
+    await page
+      .getByLabel('Status: Notes on the Analytical Engine')
+      .selectOption('accepted');
+
+    await expect(page.getByText('Decision saved. This action does not send an email.')).toBeVisible();
+    const notice = page.locator('.pending-email-notice--unknown');
+    await expect(notice).toContainText('Email queue status unavailable');
+    await expect(notice.getByRole('link', { name: 'Review and send' })).toBeVisible();
   });
 
   test('a message rendered before the sender was configured can be recovered', async () => {
@@ -346,7 +520,7 @@ test.describe('email pipeline', () => {
     // And it reaches the sender: still no API key here, so this gets as far as
     // `dry_run` — but through the stored settings rather than the environment.
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
-    await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    await releaseCurrentBatch(chair.idToken);
     const rows = await waitForEmail((r) => r[0]?.status === 'dry_run', 'the send');
     expect(rows).toHaveLength(1);
   });
@@ -536,17 +710,46 @@ test.describe('email pipeline', () => {
   test('only an admin may work the queue', async () => {
     const { author } = await stage();
 
-    for (const action of ['preview', 'release', 'retry', 'resend'] as const) {
+    for (const action of [
+      'readiness',
+      'summary',
+      'preview',
+      'release',
+      'retry',
+      'resend',
+    ] as const) {
       const result = await callAs(author.idToken, 'emailQueue', { action, logId: 'x' });
       expect(result.ok, action).toBe(false);
       expect(result.code, action).toBe('PERMISSION_DENIED');
     }
   });
 
+  test('the setup checklist reads configuration without returning delivery history', async () => {
+    const { chair } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+
+    const readiness = await callJson(chair.idToken, 'emailQueue', {
+      action: 'readiness',
+    });
+    expect(readiness).toMatchObject({
+      ok: true,
+      keyHint: '',
+      domainId: '',
+      domain: '',
+    });
+    expect(readiness).toHaveProperty('settings');
+    expect(readiness).not.toHaveProperty('rows');
+    expect(readiness).not.toHaveProperty('held');
+    expect(readiness).not.toHaveProperty('tally');
+  });
+
   test('the queue says who was written to, and what came of it', async () => {
     const { chair } = await stage();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
-    await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    await releaseCurrentBatch(chair.idToken);
     await waitForEmail((r) => r[0]?.status === 'dry_run', 'the send');
 
     const { rows } = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
@@ -563,7 +766,7 @@ test.describe('email pipeline', () => {
   test('a sent message can be sent again, deliberately', async () => {
     const { chair } = await stage();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
-    await callAs(chair.idToken, 'emailQueue', { action: 'release' });
+    await releaseCurrentBatch(chair.idToken);
     await waitForEmail((r) => r[0]?.status === 'dry_run', 'the first send');
     expect((await readEmailLog())[0].attempts).toBe(1);
 
@@ -587,9 +790,9 @@ test.describe('email pipeline', () => {
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
 
     /*
-     * `held` is fair game; an in-flight row belongs to the trigger, and
-     * re-queueing one mid-send is how the same person gets two copies in the
-     * same minute.
+     * A held row belongs to the batch-release path and is covered above. An
+     * in-flight row belongs to the trigger, and re-queueing one mid-send is how
+     * the same person gets two copies in the same minute.
      *
      * Tested at `sending` rather than `queued`: the guard treats them alike,
      * but writing `queued` wakes the very trigger this is trying to out-race,
@@ -622,6 +825,35 @@ test.describe('email pipeline', () => {
  */
 test.describe('a message to one speaker', () => {
   const message = { subject: 'About your room', body: 'Hi {speakerName}, quick question.' };
+
+  test('keeps the composer closed until a failed proposal load is retried', async ({ page }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/committee'));
+    // Finish the role and committee reads before isolating the composer's
+    // proposal query; otherwise the outage would stop the admin page itself.
+    await expect(page.getByRole('combobox', { name: `Role for ${admin.name}` })).toBeVisible();
+    let unavailable = true;
+    await page.route('http://127.0.0.1:8080/**', (route) => {
+      const proposalQuery = (route.request().postData() ?? '').includes(
+        '"collectionId":"proposals"',
+      );
+      return unavailable && proposalQuery ? route.abort() : route.continue();
+    });
+
+    await page.getByRole('link', { name: 'Email', exact: true }).click();
+
+    const panel = page.getByRole('region', { name: 'Write to a speaker' });
+    await expect(
+      panel.getByText('That service is unavailable right now. Please try again shortly.'),
+    ).toBeVisible();
+    await expect(panel.getByLabel('Talk')).toHaveCount(0);
+
+    unavailable = false;
+    await panel.getByRole('button', { name: 'Reload' }).click();
+    await expect(panel.getByLabel('Talk')).toContainText(
+      `Notes on the Analytical Engine — ${speaker.name}`,
+    );
+  });
 
   test('is queued, sent, and carries the copy that was typed', async () => {
     const { chair } = await stage();
