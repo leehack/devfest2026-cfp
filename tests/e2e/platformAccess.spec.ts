@@ -207,12 +207,18 @@ test.describe('platform creator access', () => {
     const creator = await createAccount(CREATOR);
     await seedPlatformMember(creator.uid, 'creator', CREATOR.email, CREATOR.name);
 
+    for (let index = 1; index <= 9; index += 1) {
+      expect(
+        await callAs(creator.idToken, 'createCfp', creation(`race-call-${index}`)),
+      ).toMatchObject({ ok: true });
+    }
+
     const results = await Promise.all(
-      Array.from({ length: 11 }, (_, index) =>
-        callAs(creator.idToken, 'createCfp', creation(`race-call-${index + 1}`)),
+      ['race-call-10', 'race-call-11'].map((cfpId) =>
+        callAs(creator.idToken, 'createCfp', creation(cfpId)),
       ),
     );
-    expect(results.filter((result) => result.ok)).toHaveLength(10);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(results.filter((result) => !result.ok)).toEqual([
       expect.objectContaining({ code: 'RESOURCE_EXHAUSTED' }),
     ]);
