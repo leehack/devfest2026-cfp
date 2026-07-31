@@ -82,6 +82,9 @@ describe('analytics startup', () => {
     applyConsent();
     await vi.waitFor(() => expect(mocks.isSupported).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(mocks.initializeAnalytics).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(mocks.setAnalyticsCollectionEnabled).toHaveBeenLastCalledWith(mocks.analytics, true),
+    );
   });
 
   it('re-enables the existing instance when consent is granted again', async () => {
@@ -125,6 +128,9 @@ describe('analytics startup', () => {
 
     applyConsent();
     await vi.waitFor(() => expect(mocks.initializeAnalytics).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(mocks.setAnalyticsCollectionEnabled).toHaveBeenLastCalledWith(mocks.analytics, true),
+    );
     expect(mocks.isSupported).toHaveBeenCalledTimes(2);
   });
 });
