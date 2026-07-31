@@ -313,9 +313,10 @@ test.describe('email pipeline', () => {
     expect(submitted.ok).toBe(true);
 
     // Never `held` — a receipt that waited for the decision batch would arrive
-    // weeks after the thing it acknowledges.
+    // weeks after the thing it acknowledges. Wait through the trigger's
+    // short-lived `sending` state before asserting its terminal result.
     const rows = await waitForEmail(
-      (r) => r.some((x) => x.kind === 'submission_received' && x.status !== 'queued'),
+      (r) => r.some((x) => x.kind === 'submission_received' && x.status === 'dry_run'),
       'the receipt',
     );
     const receipt = rows.find((r) => r.kind === 'submission_received')!;
