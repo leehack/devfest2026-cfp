@@ -1,4 +1,4 @@
-import { ADMIN_TABS, type AdminTab } from './adminTabs';
+import type { AdminTab } from './adminTabs';
 
 /**
  * Every URL this app can name, built in one place.
@@ -19,5 +19,3 @@ export const paths = {
   admin: (cfpId: string, tab?: AdminTab) =>
     tab ? `/c/${cfpId}/admin/${tab}` : `/c/${cfpId}/admin`,
 } as const;
-
-export const DEFAULT_ADMIN_TAB: AdminTab = ADMIN_TABS[0];

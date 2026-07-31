@@ -246,17 +246,3 @@ export interface Review {
   comment?: string;
   updatedAt: unknown;
 }
-
-/**
- * The submission window, which lives on the CFP document itself — it used to be
- * a singleton `config/cfp`, and a singleton is the one thing a tenant cannot be.
- * Read by firestore.rules and by submitProposal; never client-writable.
- *
- * `reviewsVisible` gates cross-reviewer visibility of scores (§7 — reviewers
- * must not see each other's until the round closes, to avoid anchoring), and is
- * enforced in the rules rather than only in the review UI.
- */
-export type CfpConfig = Pick<
-  Cfp,
-  'opensAt' | 'closesAt' | 'paused' | 'reviewsVisible' | 'archivedAt'
->;

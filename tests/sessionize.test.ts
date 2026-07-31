@@ -6,11 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  normalizeSessionizeHandle,
-  parseSessionizeProfile,
-  parseSessionizeUrl,
-} from '@shared/sessionize';
+import { parseSessionizeProfile, parseSessionizeUrl } from '@shared/sessionize';
 
 const fixture = readFileSync(
   join(__dirname, 'fixtures', 'sessionize-profile.html'),
@@ -19,31 +15,35 @@ const fixture = readFileSync(
 
 describe('handle normalisation is the SSRF guard', () => {
   it('accepts a full profile URL, a bare host path, and a bare handle', () => {
-    expect(normalizeSessionizeHandle('https://sessionize.com/rene-tremblay/')).toBe('rene-tremblay');
-    expect(normalizeSessionizeHandle('sessionize.com/rene-tremblay')).toBe('rene-tremblay');
-    expect(normalizeSessionizeHandle('rene-tremblay')).toBe('rene-tremblay');
-    expect(normalizeSessionizeHandle('  RENE-TREMBLAY  ')).toBe('rene-tremblay');
+    expect(parseSessionizeUrl('https://sessionize.com/rene-tremblay/')).toEqual({
+      handle: 'rene-tremblay',
+    });
+    expect(parseSessionizeUrl('sessionize.com/rene-tremblay')).toEqual({
+      handle: 'rene-tremblay',
+    });
+    expect(parseSessionizeUrl('rene-tremblay')).toEqual({ handle: 'rene-tremblay' });
+    expect(parseSessionizeUrl('  RENE-TREMBLAY  ')).toEqual({ handle: 'rene-tremblay' });
   });
 
   it('rejects any other host', () => {
-    expect(normalizeSessionizeHandle('https://evil.example/x')).toBeNull();
+    expect(parseSessionizeUrl('https://evil.example/x')).toBeNull();
     // The classic suffix trick — sessionize.com is a *prefix* of this hostname.
-    expect(normalizeSessionizeHandle('https://sessionize.com.evil.example/a')).toBeNull();
-    expect(normalizeSessionizeHandle('http://localhost/admin')).toBeNull();
-    expect(normalizeSessionizeHandle('http://169.254.169.254/latest/meta-data')).toBeNull();
+    expect(parseSessionizeUrl('https://sessionize.com.evil.example/a')).toBeNull();
+    expect(parseSessionizeUrl('http://localhost/admin')).toBeNull();
+    expect(parseSessionizeUrl('http://169.254.169.254/latest/meta-data')).toBeNull();
   });
 
   it('rejects anything that is not a single path segment', () => {
-    expect(normalizeSessionizeHandle('https://sessionize.com/a/b')).toBeNull();
-    expect(normalizeSessionizeHandle('https://sessionize.com/')).toBeNull();
-    expect(normalizeSessionizeHandle('../../etc/passwd')).toBeNull();
-    expect(normalizeSessionizeHandle('')).toBeNull();
-    expect(normalizeSessionizeHandle('a b')).toBeNull();
+    expect(parseSessionizeUrl('https://sessionize.com/a/b')).toBeNull();
+    expect(parseSessionizeUrl('https://sessionize.com/')).toBeNull();
+    expect(parseSessionizeUrl('../../etc/passwd')).toBeNull();
+    expect(parseSessionizeUrl('')).toBeNull();
+    expect(parseSessionizeUrl('a b')).toBeNull();
   });
 
   it('rejects reserved Sessionize paths that are not speaker profiles', () => {
-    expect(normalizeSessionizeHandle('https://sessionize.com/developers')).toBeNull();
-    expect(normalizeSessionizeHandle('app')).toBeNull();
+    expect(parseSessionizeUrl('https://sessionize.com/developers')).toBeNull();
+    expect(parseSessionizeUrl('app')).toBeNull();
   });
 });
 
@@ -135,13 +135,6 @@ describe('session links resolve to a profile handle', () => {
 
   it('rejects a session path on another host', () => {
     expect(parseSessionizeUrl('https://evil.example/s/leehack/x/1')).toBeNull();
-  });
-
-  it('normalizeSessionizeHandle still refuses session links', () => {
-    // The profile-only helper must not quietly accept a talk link.
-    expect(
-      normalizeSessionizeHandle('https://sessionize.com/s/leehack/flight-mode/163127'),
-    ).toBeNull();
   });
 });
 

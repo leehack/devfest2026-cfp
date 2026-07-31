@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { collection, collectionGroup, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import {
+  collection,
+  collectionGroup,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+} from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
@@ -41,6 +49,14 @@ export const grantCfpCreator = httpsCallable<
 export const revokeCfpCreator = httpsCallable<{ email: string }, { email: string }>(
   functions,
   'revokeCfpCreator',
+);
+export const grantPlatformAdmin = httpsCallable<
+  { email: string },
+  { email: string; applied: boolean }
+>(functions, 'grantPlatformAdmin');
+export const revokePlatformAdmin = httpsCallable<{ email: string }, { email: string }>(
+  functions,
+  'revokePlatformAdmin',
 );
 
 export function usePlatformAccess(user: User | null): {
@@ -158,7 +174,7 @@ export interface HeldEmail {
 }
 export const emailQueue = httpsCallable<
   In<{
-    action: 'summary' | 'preview' | 'release' | 'retry' | 'resend';
+    action: 'readiness' | 'summary' | 'preview' | 'release' | 'retry' | 'resend';
     logId?: string;
     logIds?: string[];
   }>,

@@ -1,4 +1,4 @@
-export const PLATFORM_ROLES = ['admin', 'creator'] as const;
+export const PLATFORM_ROLES = ['owner', 'admin', 'creator'] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
 export interface PlatformMember {
@@ -7,7 +7,10 @@ export interface PlatformMember {
   name?: string;
   role: PlatformRole;
   createdAt?: unknown;
+  createdBy?: string;
   grantedBy: string;
+  roleUpdatedAt?: unknown;
+  roleUpdatedBy?: string;
 }
 
 export interface PlatformRoleGrant {
@@ -15,12 +18,15 @@ export interface PlatformRoleGrant {
   role: PlatformRole;
   createdAt?: unknown;
   createdBy: string;
+  roleUpdatedAt?: unknown;
+  roleUpdatedBy?: string;
 }
 
 export interface PlatformAccessStatus {
   role: PlatformRole | null;
   canCreateCfp: boolean;
   isPlatformAdmin: boolean;
+  isPlatformOwner: boolean;
 }
 
 export interface PlatformAccessDirectory {

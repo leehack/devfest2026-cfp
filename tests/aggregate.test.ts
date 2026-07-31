@@ -11,7 +11,9 @@ import {
   aggregateReviews,
   byDisagreement,
   byNormalizedScore,
+  compareNormalizedScores,
   reviewerCalibration,
+  type Aggregate,
   type ReviewRecord,
 } from '@shared/aggregate';
 
@@ -95,6 +97,33 @@ describe('normalisation reorders the ranking', () => {
   it('marks the generous reviewer’s weakest pick as below their own average', () => {
     expect(agg.get('alpha')!.normalizedScore).toBeLessThan(0);
     expect(agg.get('beta')!.normalizedScore).toBeGreaterThan(0);
+  });
+});
+
+describe('selection ranking order', () => {
+  const aggregate = (normalizedScore: number, avgScore: number): Aggregate => ({
+    normalizedScore,
+    avgScore,
+    reviewCount: 2,
+    stdDev: 0,
+  });
+
+  it('uses raw average only to break a normalized-score tie', () => {
+    const lowerRaw = aggregate(0.75, 2);
+    const higherRaw = aggregate(0.75, 3);
+
+    expect(compareNormalizedScores(lowerRaw, higherRaw)).toBeGreaterThan(0);
+    expect(compareNormalizedScores(higherRaw, lowerRaw)).toBeLessThan(0);
+  });
+
+  it('puts proposals without a countable score after every scored proposal', () => {
+    // A z-score may legitimately be below -1, so a numeric sentinel would put
+    // an unscored proposal ahead of a harshly calibrated one.
+    const belowAverage = aggregate(-2, 1);
+
+    expect(compareNormalizedScores(undefined, belowAverage)).toBeGreaterThan(0);
+    expect(compareNormalizedScores(belowAverage, undefined)).toBeLessThan(0);
+    expect(compareNormalizedScores(undefined, undefined)).toBe(0);
   });
 });
 

@@ -1,8 +1,9 @@
 # A call-for-proposals platform
 
-An approved creator starts a call for proposals and owns it. Platform admins
-control that creator access without inheriting access to any event. Submission
-form, Firestore write path, security rules. `SPEC.md` is the design;
+An approved creator starts a call for proposals and owns it. Platform owners
+delegate administrators, and administrators control creator access, without
+either inheriting access to an event. Submission form, Firestore write path,
+security rules. `SPEC.md` is the design;
 [`AGENTS.md`](AGENTS.md) is the working conventions.
 
 It began as one event's CFP — DevFest Montréal 2026 — which is still the shape
@@ -29,7 +30,7 @@ account, not to any one talk), `platformMembers/{uid}` and
 platform-wide throttle) and `config/platform` sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
-`/platform` manages approved creators, and then `/c/{cfpId}` is that call's
+`/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
 public page, `/submit` the form, `/review` for anyone holding a role on it and
 `/admin/{tab}` for its admins. The public page is server-rendered by its Next
 App Router segment, which puts the call's own title and description into the
@@ -88,11 +89,27 @@ GCLOUD_PROJECT=demo-devfest-cfp \
 node scripts/set-platform-admin.mjs --email test.speaker@example.org
 ```
 
-For a deployed project, run the same script with its project id and application
-default credentials. A verified existing account becomes active immediately;
-otherwise the grant waits for that address's first verified sign-in. The app
-cannot grant or revoke platform admins, and the script refuses to remove the
-last active one.
+For a deployed project, deploy the Functions that understand the `owner` role
+before running the script with its project id and application default
+credentials. A verified existing account becomes active immediately; otherwise
+the grant waits for that address's first verified sign-in. Existing
+administrators keep working unchanged. Promote the first owner explicitly:
+
+```bash
+env -u FIRESTORE_EMULATOR_HOST \
+  -u FIREBASE_AUTH_EMULATOR_HOST \
+  -u FIREBASE_STORAGE_EMULATOR_HOST \
+  GCLOUD_PROJECT=devfest-mtl-2026-cfp \
+  GOOGLE_CLOUD_PROJECT=devfest-mtl-2026-cfp \
+  node scripts/set-platform-admin.mjs --email owner@example.org --role owner
+```
+
+Owners delegate administrators from `/platform`; owners and administrators
+manage CFP creators there. Owner changes stay out of band, and the script
+transactionally refuses to remove the last active owner. Disabled, deleted and
+unverified accounts do not count as a safe replacement; have the replacement
+open `/platform` successfully before removing the previous owner. Deploy the web
+app only after that first owner can open `/platform`.
 
 ## Verify
 
@@ -183,13 +200,14 @@ in the same transaction. `owner` is deliberately not grantable through
 out from under its owner. The callables call the same `grant()` the
 callable does, so "what granting means" cannot drift between them.
 
-**Platform access is separate from event roles.** `platformMembers` answers only
-who may create a new CFP; a platform admin cannot read or administer an event
-unless that CFP separately grants them a role. Admins approve and revoke
-creators from `/platform`. The two global collections are unreadable and
-unwritable from every browser, including an admin's, so the directory and every
-change go through callables. The first platform admin is deliberately
-bootstrapped out of band with `scripts/set-platform-admin.mjs`.
+**Platform access is separate from event roles.** `platformMembers` answers who
+may delegate access and create a new CFP; a platform owner or admin cannot read
+or administer an event unless that CFP separately grants them a role. Owners
+delegate admins, and owners or admins approve creators, from `/platform`. The
+two global collections are unreadable and unwritable from every browser, so the
+directory and every change go through verified, role-checked callables. The
+first platform owner is deliberately bootstrapped out of band with
+`scripts/set-platform-admin.mjs --role owner`.
 
 **A reviewer who is also a speaker must never read the reviews of their own
 proposal.** §6 outranks any role, so the block is on reads and writes alike,
@@ -305,7 +323,7 @@ Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
 window and organisers are managed from `/admin`. An approved creator's
 `createCfp` flow writes the CFP and its owner in one transaction;
 `scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment.
-`scripts/set-platform-admin.mjs` bootstraps global admins, and
+`scripts/set-platform-admin.mjs` bootstraps global owners or administrators, and
 `scripts/set-platform.mjs` sets the platform-wide public origin.
 
 ## Email
@@ -387,8 +405,9 @@ readable. The rules suite exercises every boundary and is mutation-checked.
 - **Creator access cannot be self-served either.** `platformMembers` and
   `platformRoleGrants` are closed to every client. `createCfp` rechecks the
   caller's platform role in its creation transaction, so a stale screen or a
-  concurrent revocation cannot bypass it. App callables grant only `creator`;
-  platform-admin changes stay with the guarded bootstrap script.
+  concurrent revocation cannot bypass it. Owners may delegate admins; owners
+  and admins may delegate creators. Owner changes stay with the guarded
+  bootstrap script, and nobody may remove their own platform access.
 - **Every callable authorises before it acts** — `requireUid`, `requireAdmin`, or
   ownership via `readOwnProposal`, which reports `not-found` for someone else's
   proposal so a prober learns nothing either way.

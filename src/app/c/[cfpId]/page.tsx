@@ -5,6 +5,7 @@ import { readCfp } from '../../../server/publicCfps';
 import { SITE_NAME } from '../../../server/site';
 import { paths } from '../../../lib/paths';
 import { localised } from '@shared/confirmForm';
+import { cfpState } from '@shared/cfpWindow';
 import { summarise } from '@shared/seo';
 
 /**
@@ -72,5 +73,14 @@ export async function generateMetadata({
 
 export default async function CfpFrontPage({ params }: { params: Promise<{ cfpId: string }> }) {
   const { cfpId } = await params;
-  return <ClientApp initialPath={paths.cfp(cfpId)} />;
+  const cfp = await readCfp(cfpId);
+  return (
+    <ClientApp
+      initialPath={paths.cfp(cfpId)}
+      initialCfp={{
+        id: cfpId,
+        cfp: cfp ? { ...cfp, state: cfpState(cfp, Date.now()) } : null,
+      }}
+    />
+  );
 }

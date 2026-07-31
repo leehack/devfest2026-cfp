@@ -20,7 +20,6 @@ export const FORMATS = ['session_40', 'lightning_15', 'workshop_90'] as const;
 export type Format = (typeof FORMATS)[number];
 
 export const LEVELS = ['beginner', 'intermediate', 'advanced', 'all'] as const;
-export type Level = (typeof LEVELS)[number];
 
 /**
  * How the session is delivered. One field — slide language was dropped from the

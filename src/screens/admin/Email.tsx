@@ -268,11 +268,11 @@ export function Email({
     return (
       <section className="section">
         <h2>{t.admin.email}</h2>
-        {busy ? (
+        {!error ? (
           <p className="muted">{t.app.loading}</p>
         ) : (
           <>
-            <Result ok="" error={error || t.errors.unavailable} />
+            <Result ok="" error={error} />
             <button
               type="button"
               className="btn"
@@ -448,13 +448,17 @@ export function Email({
         onDirtyChange={setWordingDirty}
       />
 
-      <h3 className="card__subtitle">{t.admin.messageTitle}</h3>
-      <WriteToSpeaker
-        cfpId={cfpId}
-        replyTo={settings.replyTo}
-        onSent={() => run('preview')}
-        onDirtyChange={setMessageDirty}
-      />
+      <section className="email-message" aria-labelledby="email-message-title">
+        <h3 className="card__subtitle" id="email-message-title">
+          {t.admin.messageTitle}
+        </h3>
+        <WriteToSpeaker
+          cfpId={cfpId}
+          replyTo={settings.replyTo}
+          onSent={() => run('preview')}
+          onDirtyChange={setMessageDirty}
+        />
+      </section>
 
       {/*
         The record of what was actually sent to whom. Counts alone could not

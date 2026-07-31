@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 
 import { auth, googleProvider } from './firebase';
@@ -11,14 +19,7 @@ import {
   EventNavigation,
   headerTitle,
 } from './components/AppNavigation';
-import { SubmitPage } from './screens/SubmitPage';
-import { AdminPage } from './screens/AdminPage';
-import { ReviewPage } from './screens/ReviewPage';
-import { HomePage } from './screens/HomePage';
 import { CfpPage } from './screens/CfpPage';
-import { ProfilePage } from './screens/ProfilePage';
-import { NewCfpPage } from './screens/NewCfpPage';
-import { PlatformAdminPage } from './screens/PlatformAdminPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { usePlatformAccess, useRole } from './lib/roles';
 import { navigate, usePlace, type Place } from './lib/router';
@@ -42,7 +43,37 @@ import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
 import type { PlatformAccessStatus } from '@shared/platform';
 
-export function App({ initialPath }: { initialPath?: string } = {}) {
+const SubmitPage = lazy(() =>
+  import('./screens/SubmitPage').then(({ SubmitPage }) => ({ default: SubmitPage })),
+);
+const AdminPage = lazy(() =>
+  import('./screens/AdminPage').then(({ AdminPage }) => ({ default: AdminPage })),
+);
+const ReviewPage = lazy(() =>
+  import('./screens/ReviewPage').then(({ ReviewPage }) => ({ default: ReviewPage })),
+);
+const HomePage = lazy(() =>
+  import('./screens/HomePage').then(({ HomePage }) => ({ default: HomePage })),
+);
+const ProfilePage = lazy(() =>
+  import('./screens/ProfilePage').then(({ ProfilePage }) => ({ default: ProfilePage })),
+);
+const NewCfpPage = lazy(() =>
+  import('./screens/NewCfpPage').then(({ NewCfpPage }) => ({ default: NewCfpPage })),
+);
+const PlatformAdminPage = lazy(() =>
+  import('./screens/PlatformAdminPage').then(({ PlatformAdminPage }) => ({
+    default: PlatformAdminPage,
+  })),
+);
+
+export function App({
+  initialPath,
+  initialCfp,
+}: {
+  initialPath?: string;
+  initialCfp?: { id: string; value: CfpWindow | null };
+} = {}) {
   /*
    * Starts at the locale the server rendered, then settles to the real one after
    * mount. Calling `detectLocale` in the initialiser read `localStorage` during a
@@ -51,11 +82,14 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   const [locale, setLocale] = useState<Locale>(SERVER_LOCALE);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [cfp, setCfp] = useState<CfpWindow | null>(null);
-  const [loadedCfpId, setLoadedCfpId] = useState<string | null>(null);
-  const [cfpReady, setCfpReady] = useState(false);
+  const [cfp, setCfp] = useState<CfpWindow | null>(initialCfp?.value ?? null);
+  const [loadedCfpId, setLoadedCfpId] = useState<string | null>(initialCfp?.id ?? null);
+  const [cfpReady, setCfpReady] = useState(initialCfp !== undefined);
   const [cfpError, setCfpError] = useState(false);
   const [cfpAttempt, setCfpAttempt] = useState(0);
+  const seededCfp = useRef(
+    initialCfp ? { id: initialCfp.id, stillOnInitialRoute: true } : null,
+  );
   const place = usePlace(initialPath);
   /*
    * Owned here rather than inside the banner, so the footer control can put the
@@ -176,6 +210,19 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
   useEffect(() => {
     let cancelled = false;
 
+    const seeded = seededCfp.current;
+    if (
+      seeded?.stillOnInitialRoute &&
+      seeded.id === cfpId &&
+      route === 'cfp' &&
+      cfpAttempt === 0
+    ) {
+      setCfpError(false);
+      setCfpReady(true);
+      return;
+    }
+    if (seeded) seeded.stillOnInitialRoute = false;
+
     if (!cfpId) {
       setCfp(null);
       setLoadedCfpId(null);
@@ -291,24 +338,26 @@ export function App({ initialPath }: { initialPath?: string } = {}) {
             id="main-content"
             tabIndex={-1}
           >
-            {!authReady || !cfpReady ? (
+            {!cfpReady || (!authReady && route !== 'cfp') ? (
               <p className="muted">{t.app.loading}</p>
             ) : (
-              <Routed
-                place={place}
-                user={user}
-                cfp={visibleCfp}
-                role={role}
-                roleReady={roleReady}
-                roleError={roleError}
-                retryRole={retryRole}
-                platformStatus={platformStatus}
-                platformReady={platformReady}
-                platformError={platformError}
-                retryPlatform={retryPlatform}
-                cfpError={cfpError}
-                retryCfp={retryCfp}
-              />
+              <Suspense fallback={<p className="muted">{t.app.loading}</p>}>
+                <Routed
+                  place={place}
+                  user={user}
+                  cfp={visibleCfp}
+                  role={role}
+                  roleReady={roleReady}
+                  roleError={roleError}
+                  retryRole={retryRole}
+                  platformStatus={platformStatus}
+                  platformReady={platformReady}
+                  platformError={platformError}
+                  retryPlatform={retryPlatform}
+                  cfpError={cfpError}
+                  retryCfp={retryCfp}
+                />
+              </Suspense>
             )}
           </main>
 

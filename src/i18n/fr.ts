@@ -153,10 +153,10 @@ export const fr: Dictionary = {
     accountLink: 'Accès à la plateforme',
     eyebrow: 'Contrôles de la plateforme',
     intro:
-      'Approuvez les personnes pouvant créer de nouveaux espaces d’appel à conférences. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations, ni courriels.',
-    accessTitle: 'Accès à la création d’appels',
+      'Les propriétaires délèguent l’administration de la plateforme, puis les administrateurs approuvent les personnes pouvant créer des espaces d’appel. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations, ni courriels.',
+    accessTitle: 'Accès à la plateforme',
     accessHelp:
-      'Les administrateurs de la plateforme et les créateurs approuvés peuvent lancer un appel. Le retrait de cet accès ne supprime jamais les appels que la personne possède déjà.',
+      'Les propriétaires, les administrateurs et les créateurs approuvés peuvent lancer un appel. Le retrait de cet accès ne supprime jamais les appels que la personne possède déjà.',
     addTitle: 'Approuver une personne',
     addHelp:
       'Utilisez l’adresse qu’elle vérifiera lors de sa connexion. L’accès attend en toute sécurité si son compte n’existe pas encore.',
@@ -165,9 +165,10 @@ export const fr: Dictionary = {
     granting: 'Ajout…',
     activeTitle: 'Personnes approuvées',
     activeHelp:
-      'Les administrateurs de la plateforme sont affichés à titre informatif et ne peuvent être modifiés qu’avec le script d’amorçage.',
+      'Les propriétaires sont gérés par le script d’amorçage. Ils peuvent déléguer l’administration; propriétaires et administrateurs peuvent approuver les créateurs d’appels.',
     pending: 'En attente d’une connexion vérifiée',
     roles: {
+      owner: 'Propriétaire de la plateforme',
       admin: 'Administrateur de la plateforme',
       creator: 'Créateur d’appels',
     },
@@ -180,10 +181,26 @@ export const fr: Dictionary = {
     grantedPending: (email: string) =>
       `${email} recevra l’accès après une connexion vérifiée.`,
     revoked: (email: string) => `${email} ne peut plus créer de nouveaux appels.`,
+    adminAddTitle: 'Déléguer l’administration',
+    adminAddHelp:
+      'Les administrateurs peuvent approuver les créateurs d’appels, mais ne peuvent ni nommer d’autres administrateurs ni accéder aux données des événements.',
+    adminEmailLabel: 'Adresse courriel de l’administrateur',
+    adminGrant: 'Ajouter comme administrateur',
+    adminGranting: 'Ajout…',
+    adminRevoke: 'Retirer l’administration',
+    adminRevoking: 'Retrait…',
+    adminRevokeConfirm: (email: string) =>
+      `Retirer à ${email} l’accès d’administration de la plateforme?`,
+    adminGrantedActive: (email: string) =>
+      `${email} est maintenant administrateur de la plateforme.`,
+    adminGrantedPending: (email: string) =>
+      `${email} deviendra administrateur après une connexion vérifiée.`,
+    adminRevoked: (email: string) =>
+      `${email} n’est plus administrateur de la plateforme.`,
     loadError: 'Impossible de charger les accès à la plateforme.',
     badEmail: 'Saisissez une adresse courriel valide.',
     adminManaged:
-      'Les administrateurs de la plateforme ne peuvent être modifiés qu’avec le script d’amorçage.',
+      'Cet accès est protégé. Les propriétaires gèrent les administrateurs, leur propre accès reste géré par le script d’amorçage et personne ne peut retirer son propre accès.',
     accessRequiredTitle: 'La création d’appels est restreinte',
     accessRequiredHelp:
       'Un administrateur de la plateforme doit approuver votre compte avant que vous puissiez lancer un nouvel appel.',
@@ -748,7 +765,6 @@ export const fr: Dictionary = {
     pendingEmailHelp:
       'L’enregistrement d’une décision retient son courriel pour vérification. Vérifiez le lot complet, puis envoyez tous les résultats ensemble.',
     pendingEmailReview: 'Vérifier et envoyer',
-    pendingEmailTabOption: (count: number) => `Courriel (${count} en attente)`,
     pendingEmailTabLabel: (count: number) =>
       `Courriel, ${count} courriel${count === 1 ? '' : 's'} de décision en attente`,
     pendingEmailUnknownTitle: 'État de la file de courriels indisponible',

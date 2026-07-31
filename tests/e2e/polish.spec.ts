@@ -3,9 +3,11 @@ import { expect, test } from '@playwright/test';
 import {
   callAs,
   createAccount,
+  readProposals,
   reset,
   seedMember,
   seedProposal,
+  seedReview,
   seedSpeaker,
   setSubmissionFormDirect,
   waitForEmail,
@@ -141,6 +143,81 @@ test('proposal decisions use cards at exactly 768px and keep the results separat
   expect(layout.rowDisplay).toBe('grid');
   expect(layout.sectionGap).toBeGreaterThanOrEqual(16);
   expect(layout.documentOverflow).toBe(0);
+});
+
+test('proposal decisions and selected speakers follow normalized ranking', async ({ page }) => {
+  const admin = await createAccount(ADMIN);
+  await seedMember(admin.uid, 'admin', undefined, ADMIN.email);
+  const proposals = [
+    ['alpha', 'Raw average leader', 'accepted'],
+    ['beta', 'Calibrated leader', 'accepted'],
+    ['gamma', 'Generous 4 one', 'submitted'],
+    ['delta', 'Generous 4 two', 'submitted'],
+    ['epsilon', 'Generous 4 three', 'submitted'],
+    ['zeta', 'Harsh 1 one', 'submitted'],
+    ['eta', 'Harsh 1 two', 'submitted'],
+    ['theta', 'Harsh 1 three', 'submitted'],
+  ] as const;
+  for (const [id, title, status] of proposals) {
+    await seedProposal(id, { speakerUid: 'ranking-speaker', title, status });
+  }
+  await seedProposal('not-scored', {
+    speakerUid: 'ranking-speaker',
+    title: 'Not scored yet',
+    status: 'accepted',
+  });
+
+  for (const [proposalId, reviewerUid, score] of [
+    ['alpha', 'generous', 3],
+    ['gamma', 'generous', 4],
+    ['delta', 'generous', 4],
+    ['epsilon', 'generous', 4],
+    ['beta', 'harsh', 2],
+    ['zeta', 'harsh', 1],
+    ['eta', 'harsh', 1],
+    ['theta', 'harsh', 1],
+  ] as const) {
+    await seedReview(proposalId, reviewerUid, score);
+  }
+
+  await expect
+    .poll(async () => {
+      const stored = await readProposals();
+      const alpha = stored.find((proposal) => proposal.title === 'Raw average leader')?.aggregate;
+      const beta = stored.find((proposal) => proposal.title === 'Calibrated leader')?.aggregate;
+      return Boolean(
+        alpha &&
+          beta &&
+          alpha.reviewCount === 1 &&
+          beta.reviewCount === 1 &&
+          alpha.avgScore > beta.avgScore,
+      );
+    }, { timeout: 15_000 })
+    .toBe(true);
+
+  await signInAs(page, ADMIN, at('/admin/proposals'));
+
+  const decisions = page.locator('.section', {
+    has: page.getByRole('heading', { name: 'Proposal decisions' }),
+  });
+  await expect(decisions.locator('.decision-table tbody tr')).toHaveCount(9);
+  const decisionTitles = await decisions
+    .locator('.decision-table tbody tr td:first-child strong')
+    .allInnerTexts();
+  expect(decisionTitles.indexOf('Calibrated leader')).toBeLessThan(
+    decisionTitles.indexOf('Raw average leader'),
+  );
+  expect(decisionTitles.at(-1)).toBe('Not scored yet');
+
+  const selected = page.locator('.section', {
+    has: page.getByRole('heading', { name: 'Selected speakers' }),
+  });
+  await expect(selected.locator('.people__row')).toHaveCount(3);
+  expect(
+    (await selected.locator('.people__meta').allInnerTexts()).map(
+      (summary) => summary.split(' · ')[0],
+    ),
+  ).toEqual(['Calibrated leader', 'Raw average leader', 'Not scored yet']);
 });
 
 test('wide form editors keep a readable measure and sign-in methods stay separated', async ({

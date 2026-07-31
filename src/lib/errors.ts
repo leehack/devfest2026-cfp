@@ -29,6 +29,8 @@ export function friendlyError(error: unknown, t: Dictionary): string {
       return t.errors.notFound;
     case 'invalid-argument':
       return t.errors.incomplete;
+    // Firestore Lite reports a fetch failure with no HTTP status as `unknown`.
+    case 'unknown':
     case 'unavailable':
     case 'internal':
       return t.errors.unavailable;
@@ -54,7 +56,7 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
-/** Platform creator controls have their own input and admin-bootstrap guard. */
+/** Global access controls have their own input and protected-role guard. */
 export function platformAdminError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {
     case 'invalid-argument':

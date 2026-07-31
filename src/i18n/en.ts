@@ -152,10 +152,10 @@ export const en = {
     accountLink: 'Platform access',
     eyebrow: 'Platform controls',
     intro:
-      'Approve who may create new CFP workspaces. Event roles stay separate: platform access does not reveal proposals, speakers, reviews, or email.',
-    accessTitle: 'CFP creator access',
+      'Owners delegate platform administration, and administrators approve who may create CFP workspaces. Event roles stay separate: platform access does not reveal proposals, speakers, reviews, or email.',
+    accessTitle: 'Platform access',
     accessHelp:
-      'Platform admins and approved creators can start a call for proposals. Revoking access never removes CFPs the person already owns.',
+      'Platform owners, administrators, and approved creators can start a call for proposals. Revoking access never removes CFPs the person already owns.',
     addTitle: 'Approve a creator',
     addHelp:
       'Use the address they will verify when signing in. Access waits safely if they do not have an account yet.',
@@ -163,9 +163,11 @@ export const en = {
     grant: 'Add creator',
     granting: 'Adding…',
     activeTitle: 'Approved people',
-    activeHelp: 'Platform admins are shown for context and can only be changed with the bootstrap script.',
+    activeHelp:
+      'Owners are bootstrap-managed. Owners can delegate administrators; owners and administrators can approve CFP creators.',
     pending: 'Pending verified sign-in',
     roles: {
+      owner: 'Platform owner',
       admin: 'Platform admin',
       creator: 'CFP creator',
     },
@@ -178,9 +180,23 @@ export const en = {
     grantedPending: (email: string) =>
       `${email} will receive creator access after a verified sign-in.`,
     revoked: (email: string) => `${email} can no longer create new CFPs.`,
+    adminAddTitle: 'Delegate an administrator',
+    adminAddHelp:
+      'Administrators can approve CFP creators but cannot appoint other administrators or access event data.',
+    adminEmailLabel: 'Administrator email',
+    adminGrant: 'Add platform admin',
+    adminGranting: 'Adding…',
+    adminRevoke: 'Remove admin access',
+    adminRevoking: 'Removing…',
+    adminRevokeConfirm: (email: string) => `Remove platform administrator access from ${email}?`,
+    adminGrantedActive: (email: string) => `${email} is now a platform administrator.`,
+    adminGrantedPending: (email: string) =>
+      `${email} will become a platform administrator after a verified sign-in.`,
+    adminRevoked: (email: string) => `${email} is no longer a platform administrator.`,
     loadError: 'Platform access could not be loaded.',
     badEmail: 'Enter a valid email address.',
-    adminManaged: 'Platform administrators can only be changed with the bootstrap script.',
+    adminManaged:
+      'That access is protected. Owners manage administrators, owner access stays with the bootstrap script, and nobody can remove their own access.',
     accessRequiredTitle: 'CFP creation is restricted',
     accessRequiredHelp:
       'A platform administrator must approve your account before you can start a new call for proposals.',
@@ -750,7 +766,6 @@ export const en = {
     pendingEmailHelp:
       'Saving a decision holds its email for review. Check the full batch, then send everyone’s result together.',
     pendingEmailReview: 'Review and send',
-    pendingEmailTabOption: (count: number) => `Email (${count} pending)`,
     pendingEmailTabLabel: (count: number) =>
       `Email, ${count} decision ${count === 1 ? 'email' : 'emails'} waiting`,
     pendingEmailUnknownTitle: 'Email queue status unavailable',

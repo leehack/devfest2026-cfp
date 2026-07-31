@@ -2,6 +2,7 @@ import 'server-only';
 
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { cache } from 'react';
 
 import type { Localised } from '@shared/confirmForm';
 
@@ -47,8 +48,10 @@ export interface PublicCfp {
   /** Epoch millis, because a Timestamp does not survive the trip to a browser. */
   opensAtMs: number;
   closesAtMs: number;
-  eventDateMs: number | null;
+  /** A calendar day, not an instant — the CFP document stores `YYYY-MM-DD`. */
+  eventDate: string | null;
   updatedAtMs: number | null;
+  paused: boolean;
   archived: boolean;
   visibility: 'public' | 'private';
 }
@@ -68,8 +71,9 @@ function shape(id: string, data: Record<string, unknown>): PublicCfp {
     location: (data.location as string) ?? null,
     opensAtMs: ms(data.opensAt) ?? 0,
     closesAtMs: ms(data.closesAt) ?? 0,
-    eventDateMs: ms(data.eventDate),
+    eventDate: typeof data.eventDate === 'string' ? data.eventDate : null,
     updatedAtMs: ms(data.updatedAt),
+    paused: data.paused === true,
     archived: data.archived === true,
     visibility: data.visibility === 'private' ? 'private' : 'public',
   };
@@ -80,11 +84,10 @@ function shape(id: string, data: Record<string, unknown>): PublicCfp {
  * not secret, which is the rules' own position. Whether it may be *indexed* is a
  * separate question, answered by the caller.
  */
-export async function readCfp(cfpId: string): Promise<PublicCfp | null> {
+export const readCfp = cache(async (cfpId: string): Promise<PublicCfp | null> => {
   const snap = await db().doc(`cfps/${cfpId}`).get();
-  if (!snap.exists) return null;
-  return shape(snap.id, snap.data() as Record<string, unknown>);
-}
+  return snap.exists ? shape(snap.id, snap.data() as Record<string, unknown>) : null;
+});
 
 /**
  * The directory. One function for both the listing and the sitemap, because two
@@ -103,5 +106,3 @@ export async function listPublicCfps(): Promise<PublicCfp[]> {
     .get();
   return snap.docs.map((doc) => shape(doc.id, doc.data() as Record<string, unknown>));
 }
-
-

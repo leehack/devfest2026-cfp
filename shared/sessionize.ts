@@ -111,12 +111,6 @@ export function parseSessionizeUrl(input: string): SessionizeTarget | null {
   return sessionId ? { handle: candidate, sessionId } : { handle: candidate };
 }
 
-/** Profile-only convenience kept for callers that cannot accept a session link. */
-export function normalizeSessionizeHandle(input: string): string | null {
-  const target = parseSessionizeUrl(input);
-  return target && !target.sessionId ? target.handle : null;
-}
-
 // ---------------------------------------------------------------- html utils
 
 const ENTITIES: Record<string, string> = {

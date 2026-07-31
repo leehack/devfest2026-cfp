@@ -6,8 +6,10 @@ import { useI18n } from '../i18n/context';
 import { platformAdminError } from '../lib/errors';
 import {
   grantCfpCreator,
+  grantPlatformAdmin,
   listPlatformUsers,
   revokeCfpCreator,
+  revokePlatformAdmin,
 } from '../lib/roles';
 import { useLatest } from '../lib/useLatest';
 import type { PlatformAccessDirectory } from '@shared/platform';
@@ -18,6 +20,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
   const tRef = useLatest(t);
   const [directory, setDirectory] = useState<PlatformAccessDirectory | null>(null);
   const [email, setEmail] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
@@ -42,6 +45,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
     generation.current += 1;
     setDirectory(null);
     setEmail('');
+    setAdminEmail('');
     setBusy('');
     setError('');
     setNote('');
@@ -53,7 +57,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
 
   async function grant() {
     const target = email.trim();
-    setBusy(target);
+    setBusy(`creator:${target}`);
     setError('');
     setNote('');
     try {
@@ -74,7 +78,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
 
   async function revoke(target: string) {
     if (!window.confirm(t.platformAdmin.revokeConfirm(target))) return;
-    setBusy(target);
+    setBusy(`creator:${target}`);
     setError('');
     setNote('');
     try {
@@ -88,12 +92,52 @@ export function PlatformAdminPage({ user }: { user: User }) {
     }
   }
 
+  async function grantAdmin() {
+    const target = adminEmail.trim();
+    setBusy(`admin:${target}`);
+    setError('');
+    setNote('');
+    try {
+      const { data } = await grantPlatformAdmin({ email: target });
+      setNote(
+        data.applied
+          ? tRef.current.platformAdmin.adminGrantedActive(data.email)
+          : tRef.current.platformAdmin.adminGrantedPending(data.email),
+      );
+      setAdminEmail('');
+      await refresh(false);
+    } catch (caught) {
+      setError(platformAdminError(caught, tRef.current));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function revokeAdmin(target: string) {
+    if (!window.confirm(t.platformAdmin.adminRevokeConfirm(target))) return;
+    setBusy(`admin:${target}`);
+    setError('');
+    setNote('');
+    try {
+      const { data } = await revokePlatformAdmin({ email: target });
+      setNote(tRef.current.platformAdmin.adminRevoked(data.email));
+      await refresh(false);
+    } catch (caught) {
+      setError(platformAdminError(caught, tRef.current));
+    } finally {
+      setBusy('');
+    }
+  }
+
   const members = directory?.members ?? [];
   const pending = directory?.pending ?? [];
+  const owners = members.filter((member) => member.role === 'owner');
   const creators = members.filter((member) => member.role === 'creator');
   const admins = members.filter((member) => member.role === 'admin');
+  const pendingOwners = pending.filter((grant) => grant.role === 'owner');
   const pendingCreators = pending.filter((grant) => grant.role === 'creator');
   const pendingAdmins = pending.filter((grant) => grant.role === 'admin');
+  const isOwner = owners.some((owner) => owner.uid === user.uid);
 
   return (
     <div className="platform-admin">
@@ -118,11 +162,11 @@ export function PlatformAdminPage({ user }: { user: User }) {
                 {t.app.loading}
               </p>
             )
-          ) : admins.length + creators.length + pending.length === 0 ? (
+          ) : owners.length + admins.length + creators.length + pending.length === 0 ? (
             <p className="muted">{t.platformAdmin.empty}</p>
           ) : (
             <ul className="people">
-              {[...admins, ...creators].map((person) => (
+              {[...owners, ...admins, ...creators].map((person) => (
                 <li key={person.uid} className="people__row">
                   <span>
                     <strong>{person.name || person.email}</strong>
@@ -135,22 +179,33 @@ export function PlatformAdminPage({ user }: { user: User }) {
                     <span className="people__meta people__meta--plain">
                       {t.platformAdmin.roles[person.role]}
                     </span>
-                    {person.role === 'creator' && (
+                    {person.role === 'creator' ? (
                       <button
                         type="button"
                         className="btn btn--ghost"
                         disabled={Boolean(busy)}
                         onClick={() => void revoke(person.email)}
                       >
-                        {busy === person.email
+                        {busy === `creator:${person.email}`
                           ? t.platformAdmin.revoking
                           : t.platformAdmin.revoke}
                       </button>
-                    )}
+                    ) : person.role === 'admin' && isOwner ? (
+                      <button
+                        type="button"
+                        className="btn btn--ghost"
+                        disabled={Boolean(busy)}
+                        onClick={() => void revokeAdmin(person.email)}
+                      >
+                        {busy === `admin:${person.email}`
+                          ? t.platformAdmin.adminRevoking
+                          : t.platformAdmin.adminRevoke}
+                      </button>
+                    ) : null}
                   </span>
                 </li>
               ))}
-              {[...pendingAdmins, ...pendingCreators].map((grant) => (
+              {[...pendingOwners, ...pendingAdmins, ...pendingCreators].map((grant) => (
                 <li key={grant.email} className="people__row">
                   <span>
                     <strong>{grant.email}</strong>
@@ -160,18 +215,29 @@ export function PlatformAdminPage({ user }: { user: User }) {
                     <span className="people__meta people__meta--plain">
                       {t.platformAdmin.roles[grant.role]}
                     </span>
-                    {grant.role === 'creator' && (
+                    {grant.role === 'creator' ? (
                       <button
                         type="button"
                         className="btn btn--ghost"
                         disabled={Boolean(busy)}
                         onClick={() => void revoke(grant.email)}
                       >
-                        {busy === grant.email
+                        {busy === `creator:${grant.email}`
                           ? t.platformAdmin.revoking
                           : t.platformAdmin.revoke}
                       </button>
-                    )}
+                    ) : grant.role === 'admin' && isOwner ? (
+                      <button
+                        type="button"
+                        className="btn btn--ghost"
+                        disabled={Boolean(busy)}
+                        onClick={() => void revokeAdmin(grant.email)}
+                      >
+                        {busy === `admin:${grant.email}`
+                          ? t.platformAdmin.adminRevoking
+                          : t.platformAdmin.adminRevoke}
+                      </button>
+                    ) : null}
                   </span>
                 </li>
               ))}
@@ -179,34 +245,67 @@ export function PlatformAdminPage({ user }: { user: User }) {
           )}
         </section>
 
-        <section className="section platform-admin__grant">
-          <h3>{t.platformAdmin.addTitle}</h3>
-          <p className="section__help">{t.platformAdmin.addHelp}</p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void grant();
-            }}
-          >
-            <TextField
-              label={t.platformAdmin.emailLabel}
-              type="email"
-              value={email}
-              onChange={setEmail}
-              required
-              disabled={Boolean(busy) || directory === null}
-            />
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={Boolean(busy) || directory === null || !email.trim()}
+        <div className="platform-admin__controls">
+          <section className="section platform-admin__grant">
+            <h3>{t.platformAdmin.addTitle}</h3>
+            <p className="section__help">{t.platformAdmin.addHelp}</p>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void grant();
+              }}
             >
-              {busy && busy === email.trim()
-                ? t.platformAdmin.granting
-                : t.platformAdmin.grant}
-            </button>
-          </form>
-        </section>
+              <TextField
+                label={t.platformAdmin.emailLabel}
+                type="email"
+                value={email}
+                onChange={setEmail}
+                required
+                disabled={Boolean(busy) || directory === null}
+              />
+              <button
+                type="submit"
+                className="btn btn--primary"
+                disabled={Boolean(busy) || directory === null || !email.trim()}
+              >
+                {busy === `creator:${email.trim()}`
+                  ? t.platformAdmin.granting
+                  : t.platformAdmin.grant}
+              </button>
+            </form>
+          </section>
+
+          {isOwner && (
+            <section className="section platform-admin__grant">
+              <h3>{t.platformAdmin.adminAddTitle}</h3>
+              <p className="section__help">{t.platformAdmin.adminAddHelp}</p>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void grantAdmin();
+                }}
+              >
+                <TextField
+                  label={t.platformAdmin.adminEmailLabel}
+                  type="email"
+                  value={adminEmail}
+                  onChange={setAdminEmail}
+                  required
+                  disabled={Boolean(busy) || directory === null}
+                />
+                <button
+                  type="submit"
+                  className="btn btn--primary"
+                  disabled={Boolean(busy) || directory === null || !adminEmail.trim()}
+                >
+                  {busy === `admin:${adminEmail.trim()}`
+                    ? t.platformAdmin.adminGranting
+                    : t.platformAdmin.adminGrant}
+                </button>
+              </form>
+            </section>
+          )}
+        </div>
       </div>
 
       <p className="platform-admin__boundary">{t.platformAdmin.accessHelp}</p>

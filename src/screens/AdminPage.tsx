@@ -1,18 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { Link } from '../components/Link';
 import { useI18n } from '../i18n/context';
 import { ADMIN_TABS, goTo, href, type AdminTab } from '../lib/router';
 import { emailQueue } from '../lib/roles';
-import { Committee } from './admin/Committee';
-import { Confirmation } from './admin/Confirmation';
-import { Submission } from './admin/Submission';
-import { Email } from './admin/Email';
-import { Overview } from './admin/Overview';
-import { Proposals } from './admin/Proposals';
-import { Settings } from './admin/Settings';
 import type { CfpRole } from '@shared/cfp';
+
+const Committee = lazy(() =>
+  import('./admin/Committee').then(({ Committee }) => ({ default: Committee })),
+);
+const Confirmation = lazy(() =>
+  import('./admin/Confirmation').then(({ Confirmation }) => ({ default: Confirmation })),
+);
+const Submission = lazy(() =>
+  import('./admin/Submission').then(({ Submission }) => ({ default: Submission })),
+);
+const Email = lazy(() => import('./admin/Email').then(({ Email }) => ({ default: Email })));
+const Overview = lazy(() =>
+  import('./admin/Overview').then(({ Overview }) => ({ default: Overview })),
+);
+const Proposals = lazy(() =>
+  import('./admin/Proposals').then(({ Proposals }) => ({ default: Proposals })),
+);
+const Settings = lazy(() =>
+  import('./admin/Settings').then(({ Settings }) => ({ default: Settings })),
+);
 
 interface PendingEmailState {
   cfpId: string;
@@ -335,29 +348,31 @@ export function AdminPage({
           </section>
         )}
 
-      {tab === 'overview' && <Overview cfpId={cfpId} />}
-      {tab === 'proposals' && (
-        <Proposals
-          cfpId={cfpId}
-          pendingEmailCount={pendingEmailCount}
-          pendingEmailCheckFailed={pendingEmailCheckFailed}
-          onEmailQueueChange={refreshPendingEmails}
-        />
-      )}
-      {tab === 'committee' && <Committee user={user} cfpId={cfpId} />}
-      {tab === 'settings' && (
-        <Settings cfpId={cfpId} role={role} onDirtyChange={setDirty} />
-      )}
-      {tab === 'submission' && <Submission cfpId={cfpId} onDirtyChange={setDirty} />}
-      {tab === 'confirmation' && <Confirmation cfpId={cfpId} onDirtyChange={setDirty} />}
-      {tab === 'email' && (
-        <Email
-          cfpId={cfpId}
-          cfpName={cfpName}
-          onDirtyChange={setDirty}
-          onPendingChange={publishPendingEmailCount}
-        />
-      )}
+      <Suspense fallback={<p className="muted">{t.app.loading}</p>}>
+        {tab === 'overview' && <Overview cfpId={cfpId} />}
+        {tab === 'proposals' && (
+          <Proposals
+            cfpId={cfpId}
+            pendingEmailCount={pendingEmailCount}
+            pendingEmailCheckFailed={pendingEmailCheckFailed}
+            onEmailQueueChange={refreshPendingEmails}
+          />
+        )}
+        {tab === 'committee' && <Committee user={user} cfpId={cfpId} />}
+        {tab === 'settings' && (
+          <Settings cfpId={cfpId} role={role} onDirtyChange={setDirty} />
+        )}
+        {tab === 'submission' && <Submission cfpId={cfpId} onDirtyChange={setDirty} />}
+        {tab === 'confirmation' && <Confirmation cfpId={cfpId} onDirtyChange={setDirty} />}
+        {tab === 'email' && (
+          <Email
+            cfpId={cfpId}
+            cfpName={cfpName}
+            onDirtyChange={setDirty}
+            onPendingChange={publishPendingEmailCount}
+          />
+        )}
+      </Suspense>
     </>
   );
 }

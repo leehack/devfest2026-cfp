@@ -65,6 +65,7 @@ describe('adminError', () => {
     expect(adminError(failed('functions/invalid-argument'), en)).toBe(en.admin.badInput);
     expect(adminError(failed('permission-denied'), en)).toBe(en.nav.forbidden);
     expect(adminError(failed('unavailable'), en)).toBe(en.errors.unavailable);
+    expect(friendlyError(failed('unknown'), en)).toBe(en.errors.unavailable);
     expect(adminError(new Error('boom'), en)).toBe(en.errors.generic);
   });
 

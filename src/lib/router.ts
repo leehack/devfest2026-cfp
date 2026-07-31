@@ -107,11 +107,6 @@ export function navigate(
   goTo(href({ route, ...options }));
 }
 
-/** Within the CFP already open, which is what every in-page link wants. */
-export function goInCfp(cfpId: string, route: Route, tab?: AdminTab): void {
-  navigate(route, { cfpId, tab });
-}
-
 /**
  * `initialPath` comes from the server, which knows the URL it rendered. Without
  * it the first client render would read `window` and disagree with HTML built

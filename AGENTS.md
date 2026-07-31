@@ -19,14 +19,15 @@ Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules
 node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
 node scripts/set-platform.mjs --url https://cfp.example.org
 GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email admin@example.org
+GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email owner@example.org --role owner
 ```
 
 Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
-the platform's own settings, and the first global admin. The seeding scripts
+the platform's own settings, an administrator, and the first global owner. The seeding scripts
 take emulator env vars from their own headers. There is no CFP-owner bootstrap:
 an approved creator is written as owner in the creation transaction. Platform
-admins are different and deliberately bootstrapped out of band; the app can
-grant only creator access.
+owners are different and deliberately bootstrapped out of band; they delegate
+platform admins, and owners or admins delegate creator access.
 
 ## Layout
 
@@ -57,12 +58,16 @@ tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId
 until its holder first visits. Only an owner archives, deletes or is written by
 `createCfp`; `owner` is deliberately not grantable through `grantRole`.
 
-Platform roles are separate: `admin` and `creator` answer only who may create a
-CFP. They grant no access to event data. Both global collections are
-callable-only; app admins may grant/revoke creators, while
-`scripts/set-platform-admin.mjs` is the only path for platform-admin changes and
-refuses to remove the last active admin. `createCfp` checks the global role
-again inside its creation transaction.
+Platform roles are separate: `owner`, `admin` and `creator` answer who may
+delegate platform access and create a CFP. They grant no access to event data.
+Both global collections are callable-only; owners grant/revoke admins, while
+owners and admins grant/revoke creators. `scripts/set-platform-admin.mjs --role
+owner` is the only path for platform-owner changes and transactionally refuses
+to remove the last active owner. A disabled, deleted or unverified Auth account
+does not count as a fallback. Auth and Firestore cannot share a transaction, so
+there is an unavoidable narrow race if an account is disabled during that
+removal; the role-document check itself is transactional. `createCfp` checks
+the global role again inside its creation transaction.
 
 Every callable takes a `cfpId` and checks the caller's role against *that* id.
 It is never inferred from the caller's memberships — somebody on two CFPs would
@@ -408,7 +413,7 @@ collection — the rule names the two readable documents one at a time.
   destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
-- Project `devfest-mtl-2026-cfp`; Firestore and the 27 functions both in
+- Project `devfest-mtl-2026-cfp`; Firestore and the 37 functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
 - **App Hosting runs in `us-east4`, and there was no choice.** The API offers six
   regions and no Canadian one. Firestore and every callable stay in Montréal, so

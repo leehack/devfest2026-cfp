@@ -68,8 +68,10 @@ import { claim, grant, revoke, RoleError } from './roles';
 import {
   claimPlatformRole,
   grantCfpCreator as grantPlatformCreator,
+  grantPlatformAdmin as grantPlatformAdministrator,
   listPlatformAccess,
   revokeCfpCreator as revokePlatformCreator,
+  revokePlatformAdmin as revokePlatformAdministrator,
 } from './platform';
 import {
   cfpUrl,
@@ -79,6 +81,7 @@ import {
   loadTemplates,
   queueEmail,
   sendViaResend,
+  settingsFromConfig,
   type EmailStatus,
 } from './email';
 import { keyHint, readResendKey, writeResendKey } from './secrets';
@@ -254,8 +257,29 @@ async function requirePlatformAdmin(
   const identity = requireVerifiedPlatformIdentity(request, action);
   try {
     const role = await claimPlatformRole(db, identity);
-    if (role !== 'admin') {
+    if (role !== 'owner' && role !== 'admin') {
       throw new HttpsError('permission-denied', `Only a platform admin can ${action}.`);
+    }
+    return identity;
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    throw asHttpsError(error);
+  }
+}
+
+async function requirePlatformOwner(
+  request: {
+    auth?: {
+      uid: string;
+      token: { email?: unknown; email_verified?: unknown; name?: unknown };
+    };
+  },
+  action: string,
+): Promise<{ uid: string; email: string; name?: string }> {
+  const identity = requireVerifiedPlatformIdentity(request, action);
+  try {
+    if ((await claimPlatformRole(db, identity)) !== 'owner') {
+      throw new HttpsError('permission-denied', `Only a platform owner can ${action}.`);
     }
     return identity;
   } catch (error) {
@@ -1386,21 +1410,22 @@ export const platformAccess = onCall(CALLABLE, async (request) => {
     const role = await claimPlatformRole(db, identity);
     return {
       role,
-      canCreateCfp: role === 'admin' || role === 'creator',
-      isPlatformAdmin: role === 'admin',
+      canCreateCfp: role === 'owner' || role === 'admin' || role === 'creator',
+      isPlatformAdmin: role === 'owner' || role === 'admin',
+      isPlatformOwner: role === 'owner',
     };
   } catch (error) {
     throw asHttpsError(error);
   }
 });
 
-/** Platform admins see creator access, not the Firebase Auth user directory. */
+/** Platform administrators see delegated access, not the Firebase Auth directory. */
 export const listPlatformUsers = onCall(CALLABLE, async (request) => {
   await requirePlatformAdmin(request, 'list CFP creators');
   return { ok: true, ...(await listPlatformAccess(db)) };
 });
 
-/** Platform admins grant only creator access; admin bootstrap stays out of band. */
+/** Platform owners and admins grant creator access. */
 export const grantCfpCreator = onCall(CALLABLE, async (request) => {
   const { uid } = await requirePlatformAdmin(request, 'grant CFP creator access');
   const data = (request.data ?? {}) as { email?: unknown };
@@ -1421,8 +1446,43 @@ export const revokeCfpCreator = onCall(CALLABLE, async (request) => {
   const { uid } = await requirePlatformAdmin(request, 'revoke CFP creator access');
   const data = (request.data ?? {}) as { email?: unknown };
   try {
-    const result = await revokePlatformCreator(db, getAuth(), { email: data.email });
+    const result = await revokePlatformCreator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
     logger.info('CFP creator access revoked', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Platform owners may delegate administration without delegating ownership. */
+export const grantPlatformAdmin = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformOwner(request, 'grant platform administrator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await grantPlatformAdministrator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('platform administrator access granted', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+/** Owners cannot remove themselves, and owner records remain out of band. */
+export const revokePlatformAdmin = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformOwner(request, 'revoke platform administrator access');
+  const data = (request.data ?? {}) as { email?: unknown };
+  try {
+    const result = await revokePlatformAdministrator(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('platform administrator access revoked', { ...result, byUid: uid });
     return result;
   } catch (error) {
     throw asHttpsError(error);
@@ -1452,7 +1512,11 @@ export const createCfp = onCall(CALLABLE, async (request) => {
   } catch (error) {
     throw asHttpsError(error);
   }
-  if (creatorRole !== 'admin' && creatorRole !== 'creator') {
+  if (
+    creatorRole !== 'owner' &&
+    creatorRole !== 'admin' &&
+    creatorRole !== 'creator'
+  ) {
     throw new HttpsError(
       'permission-denied',
       'A platform admin must grant creator access first.',
@@ -1488,7 +1552,11 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     const owned = await tx.get(mine);
     const member = await tx.get(platformMemberRef);
     const currentRole = member.get('role');
-    if (currentRole !== 'admin' && currentRole !== 'creator') {
+    if (
+      currentRole !== 'owner' &&
+      currentRole !== 'admin' &&
+      currentRole !== 'creator'
+    ) {
       throw new HttpsError(
         'permission-denied',
         'A platform admin must grant creator access first.',
@@ -1792,8 +1860,25 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   const byUid = await requireAdmin(request, cfpId, 'manage the email queue');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const action = String(data.action ?? 'preview');
-  if (!['summary', 'preview', 'release', 'retry', 'resend'].includes(action)) {
+  if (!['readiness', 'summary', 'preview', 'release', 'retry', 'resend'].includes(action)) {
     throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
+  }
+
+  /*
+   * The overview needs only setup state. Keeping this ahead of the queue read
+   * avoids loading an event's entire delivery history just to draw one setup
+   * checklist item.
+   */
+  if (action === 'readiness') {
+    const configSnap = await db.doc(`cfps/${cfpId}/config/email`).get();
+    const emailConfig = configSnap.data() ?? {};
+    return {
+      ok: true,
+      settings: settingsFromConfig(emailConfig),
+      keyHint: (emailConfig.keyHint as string) ?? '',
+      domainId: (emailConfig.domainId as string) ?? '',
+      domain: (emailConfig.domain as string) ?? '',
+    };
   }
 
   /*

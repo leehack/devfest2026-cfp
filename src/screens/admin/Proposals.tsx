@@ -30,6 +30,7 @@ import {
 import { downloadSelectedSpeakersCsv } from './proposalExport';
 import { Result } from './Result';
 import { DECISION_KINDS } from '@shared/emailTemplates';
+import { compareNormalizedScores } from '@shared/aggregate';
 
 const HIGH_DISAGREEMENT = 1;
 const ADMIN_PROPOSAL_STATUSES = ['submitted', ...STATUS_SETS.decidable] as const;
@@ -755,7 +756,7 @@ export function Proposals({
       if (sort === 'status') {
         return t.enums.status[a.status].localeCompare(t.enums.status[b.status], locale);
       }
-      return (b.aggregate?.avgScore ?? -1) - (a.aggregate?.avgScore ?? -1);
+      return compareNormalizedScores(a.aggregate, b.aggregate);
     });
   }, [
     categoryFilter,
@@ -778,8 +779,8 @@ export function Proposals({
 
   // Best first for the accepted-speaker summary, regardless of how the table is
   // currently filtered or sorted.
-  const ranked = [...scopedRows].sort(
-    (a, b) => (b.aggregate?.avgScore ?? -1) - (a.aggregate?.avgScore ?? -1),
+  const ranked = [...scopedRows].sort((a, b) =>
+    compareNormalizedScores(a.aggregate, b.aggregate),
   );
   const accepted = ranked.filter((row) => row.status === 'accepted' || row.status === 'confirmed');
   const decidable = ranked.filter((row) => row.status !== 'draft' && row.status !== 'withdrawn');

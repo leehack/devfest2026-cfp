@@ -1248,6 +1248,13 @@ describe('platform access is callable-only', () => {
       }),
     );
     await assertFails(
+      setDoc(doc(asApplicant(), 'platformMembers', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        role: 'owner',
+      }),
+    );
+    await assertFails(
       updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'creator' }),
     );
     await assertFails(deleteDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));

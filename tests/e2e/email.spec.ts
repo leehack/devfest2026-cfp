@@ -709,11 +709,40 @@ test.describe('email pipeline', () => {
   test('only an admin may work the queue', async () => {
     const { author } = await stage();
 
-    for (const action of ['summary', 'preview', 'release', 'retry', 'resend'] as const) {
+    for (const action of [
+      'readiness',
+      'summary',
+      'preview',
+      'release',
+      'retry',
+      'resend',
+    ] as const) {
       const result = await callAs(author.idToken, 'emailQueue', { action, logId: 'x' });
       expect(result.ok, action).toBe(false);
       expect(result.code, action).toBe('PERMISSION_DENIED');
     }
+  });
+
+  test('the setup checklist reads configuration without returning delivery history', async () => {
+    const { chair } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+
+    const readiness = await callJson(chair.idToken, 'emailQueue', {
+      action: 'readiness',
+    });
+    expect(readiness).toMatchObject({
+      ok: true,
+      keyHint: '',
+      domainId: '',
+      domain: '',
+    });
+    expect(readiness).toHaveProperty('settings');
+    expect(readiness).not.toHaveProperty('rows');
+    expect(readiness).not.toHaveProperty('held');
+    expect(readiness).not.toHaveProperty('tally');
   });
 
   test('the queue says who was written to, and what came of it', async () => {
@@ -802,17 +831,23 @@ test.describe('a message to one speaker', () => {
     // Finish the role and committee reads before isolating the composer's
     // proposal query; otherwise the outage would stop the admin page itself.
     await expect(page.getByRole('combobox', { name: `Role for ${admin.name}` })).toBeVisible();
+    let unavailable = true;
+    await page.route('http://127.0.0.1:8080/**', (route) => {
+      const proposalQuery = (route.request().postData() ?? '').includes(
+        '"collectionId":"proposals"',
+      );
+      return unavailable && proposalQuery ? route.abort() : route.continue();
+    });
 
-    await page.context().setOffline(true);
     await page.getByRole('link', { name: 'Email', exact: true }).click();
 
-    const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
+    const panel = page.getByRole('region', { name: 'Write to a speaker' });
     await expect(
       panel.getByText('That service is unavailable right now. Please try again shortly.'),
     ).toBeVisible();
     await expect(panel.getByLabel('Talk')).toHaveCount(0);
 
-    await page.context().setOffline(false);
+    unavailable = false;
     await panel.getByRole('button', { name: 'Reload' }).click();
     await expect(panel.getByLabel('Talk')).toContainText(
       `Notes on the Analytical Engine — ${speaker.name}`,

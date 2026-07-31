@@ -89,7 +89,9 @@ test('browser Back waits for a dirty draft to save before leaving', async ({ pag
     markWriteStarted = resolve;
   });
   let firstWrite = true;
-  await page.route('**/google.firestore.v1.Firestore/Write/channel**', async (route) => {
+  // Firestore Lite writes through the REST commit endpoint. Holding that
+  // request proves the navigation guard waits for the actual persisted write.
+  await page.route('**/documents:commit**', async (route) => {
     if (firstWrite) {
       firstWrite = false;
       markWriteStarted();

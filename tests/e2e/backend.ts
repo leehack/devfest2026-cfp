@@ -194,7 +194,7 @@ export async function seedMember(
 /** Platform access is independent from every CFP membership. */
 export async function seedPlatformMember(
   uid: string,
-  role: 'admin' | 'creator',
+  role: 'owner' | 'admin' | 'creator',
   email = `${uid}@example.org`,
   name = '',
 ) {
@@ -210,7 +210,7 @@ export async function seedPlatformMember(
 /** Waits for a verified account to claim platform access on its first check. */
 export async function invitePlatformRole(
   email: string,
-  role: 'admin' | 'creator',
+  role: 'owner' | 'admin' | 'creator',
 ) {
   await patch(`platformRoleGrants/${email.toLowerCase()}`, {
     email: { stringValue: email.toLowerCase() },
@@ -268,6 +268,21 @@ export async function createUnverifiedAccount(who: {
   await expectOk(response, 'createUnverifiedAccount');
   const { localId, idToken } = await response.json();
   return { uid: localId, idToken };
+}
+
+export async function disableAccount(uid: string): Promise<void> {
+  const response = await fetch(
+    `${AUTH}/identitytoolkit.googleapis.com/v1/accounts:update?key=fake-api-key`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer owner',
+      },
+      body: JSON.stringify({ localId: uid, disableUser: true }),
+    },
+  );
+  await expectOk(response, 'disableAccount');
 }
 
 /**

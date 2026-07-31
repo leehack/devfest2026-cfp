@@ -134,10 +134,17 @@ export function byDisagreement(
 }
 
 /** Ranking order for selection: normalised score descending, never the raw average. */
+export function compareNormalizedScores(
+  a: Aggregate | undefined,
+  b: Aggregate | undefined,
+): number {
+  if (!a) return b ? 1 : 0;
+  if (!b) return -1;
+  return b.normalizedScore - a.normalizedScore || b.avgScore - a.avgScore;
+}
+
 export function byNormalizedScore(
   entries: Array<[string, Aggregate]>,
 ): Array<[string, Aggregate]> {
-  return [...entries].sort(
-    (a, b) => b[1].normalizedScore - a[1].normalizedScore || b[1].avgScore - a[1].avgScore,
-  );
+  return [...entries].sort((a, b) => compareNormalizedScores(a[1], b[1]));
 }
