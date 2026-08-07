@@ -13,9 +13,10 @@
       },
       {
         "//": "301, not 302: this is permanent, and a search engine holding the .web.app copy should transfer it to the canonical origin rather than keep both.",
-        "//2": "Firebase glob captures are named — :rest* is the multi-segment one. :splat is Netlify's and would be emitted literally, sending every visitor to a path called ':splat*'.",
-        "source": "/:rest*",
-        "destination": "https://cfp.gdgmontreal.com/:rest*",
+        "//2": "Everything except /__/. A plain /:rest* catch-all also swallowed /__/firebase/init.json, which the email-link action handler fetches from its own origin at runtime — it 301'd cross-origin, failed CORS, and every sign-in link died on 'Error encountered'. Only /__/auth/* is served ahead of user config; the rest of the reserved namespace is not.",
+        "//3": "RE2, so no lookahead: the alternation spells out 'first character is not _' or '_ not followed by _'. Single-underscore paths like /_next/... still redirect.",
+        "regex": "^/(?P<rest>[^_].*|_[^_].*|_)$",
+        "destination": "https://cfp.gdgmontreal.com/:rest",
         "type": 301
       }
     ]

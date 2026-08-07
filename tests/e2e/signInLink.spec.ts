@@ -19,10 +19,15 @@ import {
   reset,
   setPublicUrlDirect,
 } from './backend';
-import { at } from './form';
+import { at, signInAs, type Identity } from './form';
 
 const ADDRESS = 'nogoogle@example.test';
 const COMMITTEE_ADDRESS = 'committee-link@example.test';
+const EXISTING_USER: Identity = {
+  sub: 'already-signed-in-sub',
+  email: 'already-signed-in@example.test',
+  name: 'Existing User',
+};
 
 /**
  * The server builds the link, so it decides where the link comes back to. Said
@@ -81,6 +86,70 @@ test.describe('signing in by email link', () => {
     await expect(page).toHaveURL(at('/admin/proposals'));
     await expect(page.getByRole('heading', { name: 'Proposals' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+  });
+
+  /*
+   * `cfpId: null` rather than an omitted key, because `withCfp` in `backend.ts`
+   * fills the seeded tenant in for any call that does not name one — which is
+   * why `request()` above tests the CFP-scoped path too, and why nothing here
+   * saw this until a link minted outside a CFP was opened by hand.
+   */
+  test('a link asked for outside a CFP still signs the person in', async ({ page }) => {
+    const email = 'platform-link@example.test';
+    expect((await callPublic('requestSignInLink', { email, locale: 'en', cfpId: null })).ok).toBe(
+      true,
+    );
+
+    // No CFP to return to, so the server sends it to the root — the one route
+    // that renders no sign-in panel of its own.
+    const link = await latestLink(email);
+    expect(new URL(link).searchParams.get('continueUrl')).toBe(`${HERE}/`);
+
+    await page.goto(link);
+    await expect(page.getByText('One more thing')).toBeVisible();
+    await page.getByRole('textbox', { name: /^Email/ }).fill(email);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    // Signed in, and left on the listing rather than on a sign-in panel.
+    await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe('/');
+    expect(new URL(page.url()).search).toBe('');
+  });
+
+  test('a link replaces an existing signed-in account instead of being ignored', async ({ page }) => {
+    await signInAs(page, EXISTING_USER);
+    await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+
+    // Requested outside the browser, so the address must be confirmed even
+    // though a different Firebase user is already active in this tab.
+    await request(ADDRESS);
+    await page.goto(await latestLink(ADDRESS));
+    await expect(page.getByText('One more thing')).toBeVisible();
+    await page.getByRole('textbox', { name: /^Email/ }).fill(ADDRESS);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+    await page.getByRole('button', { name: 'Account' }).click();
+    await expect(page.getByText(ADDRESS, { exact: true })).toBeVisible();
+    expect(new URL(page.url()).search).toBe('');
+  });
+
+  test('a refused link offers a new one instead of a dead Continue', async ({ page }) => {
+    // Asked for over the callable, so this browser never stored the address and
+    // the panel confirms whose link it is first. The failure then has to land
+    // somewhere that can still act on it.
+    await request(ADDRESS);
+    const spoiled = (await latestLink(ADDRESS)).replace(/oobCode=[^&]+/, 'oobCode=nonsense');
+
+    await page.goto(spoiled);
+    await expect(page.getByText('One more thing')).toBeVisible();
+    await page.getByRole('textbox', { name: /^Email/ }).fill(ADDRESS);
+    await page.getByRole('button', { name: 'Continue' }).click();
+
+    await expect(page.getByText(/link did not work/)).toBeVisible();
+    // The error names a control, so the control has to be on screen.
+    await expect(page.getByRole('button', { name: 'Email me a link' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /^Email/ })).toHaveValue(ADDRESS);
   });
 
   test('a caller cannot turn the return destination into an open redirect', async ({ page }) => {

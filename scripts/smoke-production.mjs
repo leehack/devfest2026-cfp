@@ -2,7 +2,10 @@ const origin = (process.env.CFP_SMOKE_ORIGIN ?? 'https://cfp.gdgmontreal.com').r
 const cfpId = process.env.CFP_SMOKE_ID ?? 'devfest-mtl-2026';
 const authHandler =
   process.env.CFP_SMOKE_AUTH_HANDLER ??
-  'https://devfest-mtl-2026-cfp.firebaseapp.com/__/auth/handler';
+  'https://devfest-mtl-2026-cfp.web.app/__/auth/handler';
+const authInit =
+  process.env.CFP_SMOKE_AUTH_INIT ??
+  'https://devfest-mtl-2026-cfp.web.app/__/firebase/init.json';
 const timeoutMs = Number(process.env.CFP_SMOKE_TIMEOUT_MS ?? 10_000);
 
 function assert(condition, message) {
@@ -66,6 +69,7 @@ const cfpUrl = `${origin}/c/${encodeURIComponent(cfpId)}`;
 check(sitemap.includes(cfpUrl), `${origin}/sitemap.xml: ${cfpUrl} is missing`);
 
 await response(authHandler);
+await response(authInit);
 if (failures.length) {
   throw new Error(`Production smoke failed:\n- ${failures.join('\n- ')}`);
 }

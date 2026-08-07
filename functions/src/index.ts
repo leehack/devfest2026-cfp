@@ -93,6 +93,7 @@ import {
   ResendError,
   verifyDomain,
 } from './domains';
+import { useFreshHostingOrigin } from './authLinks';
 
 export { sendQueuedEmail } from './email';
 
@@ -2140,8 +2141,6 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'That does not look like an email address.');
   }
 
-  await takeLinkAllowance(email);
-
   const [apiKey, platform] = await Promise.all([readResendKey(), loadPlatform(db)]);
   // Named CFP or not, the sender is looked up server-side. Nothing about who
   // this mail comes from is taken from the caller.
@@ -2151,7 +2150,7 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   ]);
   const event = (cfpSnap?.get('name') as string) || platform.name;
 
-  const link = await getAuth().generateSignInWithEmailLink(email, {
+  const generatedLink = await getAuth().generateSignInWithEmailLink(email, {
     // Must be one of Auth's authorized domains, or Firebase refuses to mint it.
     // The origin is platform config, never a per-CFP field: an organiser who
     // could edit it could aim other people's sign-in mail at a host they own.
@@ -2162,6 +2161,15 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
       : `${platform.publicUrl}/`,
     handleCodeInApp: true,
   });
+  const link = useFreshHostingOrigin(
+    generatedLink,
+    process.env.GCLOUD_PROJECT,
+    Boolean(process.env.FUNCTIONS_EMULATOR),
+  );
+
+  // Configuration failures above must not spend somebody's request allowance.
+  // Take it immediately before the only external side effect: sending mail.
+  await takeLinkAllowance(email);
 
   const outcome = await sendViaResend(
     email,

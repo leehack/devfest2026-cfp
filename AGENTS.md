@@ -328,6 +328,22 @@ collection — the rule names the two readable documents one at a time.
   `requestSignInLink` renders it and hands it to `sendViaResend` in the one
   request — no queue row, no retry, nothing to read back. That is also why it
   cannot reuse the `queueEmail` path everything else goes through.
+- **A link is redeemed ahead of the route, not by it.** `SignIn` is the only
+  thing that calls `completeSignInFromLink`, and it used to be reachable only
+  where a route happened to render it — so a link asked for on `/me`, `/new` or
+  `/platform` (all of which send no `cfpId`, leaving the server nowhere to
+  return to but `/`) landed on the one route with no sign-in panel, and the code
+  sat unredeemed in the address bar until the first click threw it away. `Routed`
+  now answers `emailLink` before any route branch, so this cannot come back for
+  a route added later. Two things follow: the check is *not* conditional on
+  being signed out — a one-time link names the account that should own the
+  session, so it overrides whoever is already in it — and `emailLink` is settled
+  in an effect keyed on `[placeKey, user]`, because a server render cannot see a
+  query string and completing the link is what releases the destination.
+- **`withCfp` in `tests/e2e/backend.ts` fills in the seeded tenant.** So a spec
+  that omits `cfpId` is testing the CFP-*scoped* path, not the platform one —
+  which is exactly how a dead CFP-less sign-in link sat there fully "covered".
+  Pass `cfpId: null` to mean no CFP.
 - **Both forms are data.** `config/confirmForm` is what a speaker is asked once
   they accept, readable signed in; `config/submissionForm` is what the call
   itself asks — its categories, formats, levels, languages, consents and any
@@ -430,6 +446,23 @@ collection — the rule names the two readable documents one at a time.
   the canonical origin; `hosting-redirect/` is that release and explains the rest,
   including why App Hosting's domain reconciler will report a CNAME that no
   nameserver serves.
+- **The redirect release must not touch `/__/`.** Email-link sign-in goes through
+  `/__/auth/action`, and that handler fetches `/__/firebase/init.json` from its own
+  origin at runtime. A `/:rest*` catch-all swallows it, the cross-origin XHR fails
+  CORS, and every link dies on `Error encountered` — while Google sign-in, which
+  uses `/__/auth/handler`, keeps working and hides it. Only `/__/auth/*` is served
+  ahead of user config, so the exclusion has to be in the config: it is the RE2
+  `regex` in `hosting-redirect/firebase.json`, not a glob, because RE2 has no
+  lookahead. After any change there, check `/__/firebase/init.json` returns 200
+  rather than 301 — the handler answering 200 does not prove sign-in works.
+- **New email links deliberately use the `.web.app` action handler.** The bad
+  catch-all was a 301, so browsers that reached the broken
+  `.firebaseapp.com/__/firebase/init.json` may keep replaying that redirect after
+  Hosting is fixed. `requestSignInLink` moves the Admin SDK's generated URL onto
+  the project's equivalent `.web.app` origin; do not use `linkDomain` for this —
+  Firebase rejects default `web.app` and `firebaseapp.com` domains there. Leave
+  Google popup auth on the configured `.firebaseapp.com` `authDomain`. An old
+  mailed link cannot be rewritten — its recipient needs a newly issued one.
 - **`next dev` does not apply `headers()` from `next.config.ts`.** So no e2e test
   can see a header — assert on the config instead, as `tests/headers.test.ts`
   does, and confirm the real thing with `curl -sI` after a deploy. App Hosting
