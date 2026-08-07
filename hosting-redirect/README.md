@@ -25,15 +25,42 @@ It is `/__/auth/*` specifically that Firebase serves ahead of user config, not
 `/__/*`. Measured against the deployed release: `/__/auth/handler`,
 `/__/auth/iframe` and `/__/auth/experiments.js` all answer 200, while
 `/__/firebase/init.js`, `/__/firebase/init.json` and `/__/hosting/verification`
-are caught by the catch-all and 301 away. That is harmless here — the served
-handler references no `/__/` URL of its own, and this app passes Firebase config
-explicitly from the environment rather than fetching the auto-config — but it
-means the reserved namespace is narrower than it looks, and a project relying on
-`/__/firebase/init.js` would break.
+are caught by the catch-all and 301 away.
 
-Verify after deploying, not before:
+**That was called harmless here, and it was not.** The reasoning was that the
+served handler references no `/__/` URL of its own — true of `/__/auth/handler`,
+which is what Google sign-in uses and what was tested. It is false of
+`/__/auth/action`, which every email sign-in link goes through: `action.js`
+fetches `/__/firebase/init.json` from its own origin at runtime. The catch-all
+301'd that to `cfp.gdgmontreal.com`, the cross-origin XHR failed CORS preflight,
+and the handler rendered `Error encountered` instead of forwarding to
+`continueUrl`. Google sign-in kept working the whole time, which is what made it
+look like a mail problem: the link was minted and delivered fine, and died on
+the hop before the app.
 
-    curl -sI https://devfest-mtl-2026-cfp.firebaseapp.com/__/auth/handler | head -1
+So the catch-all excludes `/__/` — see the `regex` in `firebase.json`. Do not
+put a plain `/:rest*` back.
+
+Verify after deploying, not before. **Both**, because the first passes with the
+second broken:
+
+    curl -sI https://devfest-mtl-2026-cfp.firebaseapp.com/__/auth/handler | head -1        # 200
+    curl -s -o /dev/null -w '%{http_code}\n' \
+      https://devfest-mtl-2026-cfp.firebaseapp.com/__/firebase/init.json                   # 200, NOT 301
+
+A 200 on the handler proves the namespace survived. Only the second proves a
+sign-in link still completes. `npm run smoke:production` checks both endpoints
+along with the canonical site.
+
+The broken redirect was permanent, so repairing Hosting does not repair a
+browser that cached the old 301. New email links therefore explicitly use the
+equivalent `devfest-mtl-2026-cfp.web.app` action handler; that origin was never in
+the previously mailed links and avoids the stale cache. Google popup sign-in
+continues to use the configured `.firebaseapp.com` `authDomain`. The Admin SDK's
+`linkDomain` option cannot do this — Firebase rejects default Hosting domains —
+so `requestSignInLink` rewrites only the matching generated hostname. Do not
+expect an already mailed link to change; issue a new one after the Functions
+deploy.
 
 ## The reconciler lags. Wait it out; do not go looking for a cause
 

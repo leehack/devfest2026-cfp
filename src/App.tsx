@@ -104,6 +104,7 @@ export function App({
   const [analyticsConsent, setAnalyticsConsent] = useState<Consent>('unasked');
   const { route, cfpId } = place;
   const placeKey = `${route}:${cfpId ?? ''}:${place.tab}`;
+  const [emailLink, setEmailLink] = useState(false);
   const focusedPlace = useRef(placeKey);
   const {
     role,
@@ -127,6 +128,15 @@ export function App({
     setLocale(detectLocale());
     setLocaleSettled(true);
   }, []);
+
+  /*
+   * The server cannot see the query string, so settle this after mount. Recheck
+   * when auth changes: completing the link replaces the URL and signs in its
+   * owner, which is what hands the destination back to the ordinary route.
+   */
+  useEffect(() => {
+    setEmailLink(arrivingFromLink());
+  }, [placeKey, user]);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -345,6 +355,7 @@ export function App({
                 <Routed
                   place={place}
                   user={user}
+                  emailLink={emailLink}
                   cfp={visibleCfp}
                   role={role}
                   roleReady={roleReady}
@@ -390,6 +401,7 @@ export function App({
 interface RoutedProps {
   place: Place;
   user: User | null;
+  emailLink: boolean;
   cfp: CfpWindow | null;
   role: CfpRole | null;
   roleReady: boolean;
@@ -410,6 +422,7 @@ interface RoutedProps {
 function Routed({
   place,
   user,
+  emailLink,
   cfp,
   role,
   roleReady,
@@ -424,6 +437,33 @@ function Routed({
 }: RoutedProps) {
   const { t } = useI18n();
   const { route, cfpId, tab } = place;
+
+  /*
+   * A one-time link names the account that should own this session. Process it
+   * even when another account is already signed in; otherwise reviewers and
+   * admins who use Google day-to-day silently keep the wrong identity and the
+   * code remains stranded in the address bar.
+   */
+  if (emailLink) {
+    const destination: SignInDestination | undefined =
+      route === 'admin' ? `admin/${tab}` : route === 'review' ? 'review' : undefined;
+    const purpose =
+      route === 'admin' || route === 'review'
+        ? 'committee'
+        : route === 'new'
+          ? 'organising'
+          : route === 'form' || route === 'cfp'
+            ? 'speaker'
+            : 'account';
+    return (
+      <SignIn
+        cfp={cfpId ? cfp : null}
+        cfpId={cfpId}
+        purpose={purpose}
+        destination={destination}
+      />
+    );
+  }
 
   if (route === 'home') {
     return (
@@ -735,7 +775,22 @@ export function SignIn({
     setSending(true);
     setLinkError('');
     const outcome = await completeSignInFromLink(email);
-    if (outcome !== 'signedIn') setLinkError(t.app.linkFailed);
+    if (outcome === 'needsEmail') {
+      // The address is malformed, so the link itself is still good. Stay here
+      // and let them correct what they typed.
+      setLinkError(t.app.linkBadEmail);
+    } else if (outcome === 'failed') {
+      /*
+       * Spent, expired, or simply not this address — Firebase reports all three
+       * as one code, so the recoverable reading is the one worth offering.
+       * Dropping out of `askingWhose` puts "Email me a link" back under the
+       * error, which is the control the error tells them to use; without it the
+       * button still read "Continue" and there was nothing on screen to press.
+       * The address they typed stays in the field, so a new link is one click.
+       */
+      setAskingWhose(false);
+      setLinkError(t.app.linkFailed);
+    }
     setSending(false);
   }
 

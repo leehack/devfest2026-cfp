@@ -54,8 +54,15 @@ function forgetPendingEmail() {
   }
 }
 
-/** True when this page load is a link being opened, rather than an ordinary visit. */
+/**
+ * True when this page load is a link being opened, rather than an ordinary visit.
+ *
+ * Answers false on a server rather than reading `window`, because the routes
+ * that ask are reachable from a render that has none — and there the honest
+ * answer is "not yet", not a crash.
+ */
 export function arrivingFromLink(): boolean {
+  if (typeof window === 'undefined') return false;
   return isSignInWithEmailLink(auth, window.location.href);
 }
 
