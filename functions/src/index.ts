@@ -37,6 +37,7 @@ import {
   EMAIL_KINDS,
   EMAIL_LOCALES,
   MESSAGE_KIND,
+  SCHEDULE_EMAIL_KINDS,
   renderSignInEmail,
   validateTemplate,
   type EmailKind,
@@ -51,11 +52,13 @@ import {
   normaliseForm,
   validateAnswers,
   validateForm,
+  localised,
   type Answers,
   type ConfirmForm,
 } from '../../shared/confirmForm';
 import {
   CFP_LIMITS,
+  calendarDate,
   validateCfp,
   validateCfpId,
   validateProfile,
@@ -79,6 +82,7 @@ import {
   loadPlatform,
   loadSettings,
   loadTemplates,
+  logId,
   queueEmail,
   sendViaResend,
   settingsFromConfig,
@@ -94,6 +98,17 @@ import {
   verifyDomain,
 } from './domains';
 import { useFreshHostingOrigin } from './authLinks';
+import {
+  SCHEDULE_LIMITS,
+  resolvedScheduleLanguage,
+  scheduleConflicts,
+  validateScheduleConfig,
+  validateScheduleEntry,
+  type ScheduleConfig,
+  type ScheduleDay,
+  type ScheduleEntry,
+  type ScheduleRoom,
+} from '../../shared/schedule';
 
 export { sendQueuedEmail } from './email';
 
@@ -406,6 +421,22 @@ const DECISION_STILL_TRUE: Record<string, readonly string[]> = {
   waitlisted: ['waitlisted'],
   rejected: ['rejected'],
 };
+const CARRY_SCHEDULE_EMAIL_STATUSES = new Set<EmailStatus>(['held', 'failed', 'dry_run']);
+
+function isScheduleEmail(kind: unknown): kind is EmailKind {
+  return SCHEDULE_EMAIL_KINDS.includes(kind as EmailKind);
+}
+
+function scheduleEmailStillTrue(
+  kind: string,
+  rowReleaseId: string,
+  currentReleaseId: string,
+  entry: DocumentSnapshot | undefined,
+): boolean {
+  if (!currentReleaseId || rowReleaseId !== currentReleaseId || !entry) return false;
+  if (kind === 'schedule_cancelled') return !entry.exists || entry.get('cancelled') === true;
+  return entry.exists && entry.get('cancelled') !== true;
+}
 
 /**
  * Splits unsent decision rows by whether the proposal still has that decision.
@@ -426,8 +457,37 @@ async function currentDecisionEmails(
     ...proposalIds.map((proposalId) => db.doc(`cfps/${cfpId}/proposals/${proposalId}`)),
   );
   const current = new Map(proposals.map((proposal) => [proposal.id, proposal.get('status') as string]));
+  const scheduleDocs = docs.filter((doc) => isScheduleEmail(doc.get('kind')));
+  const cfp = scheduleDocs.length ? await db.doc(`cfps/${cfpId}`).get() : null;
+  const currentReleaseId = (cfp?.get('publishedScheduleId') as string | undefined) ?? '';
+  const scheduleEntryIds = [
+    ...new Set(
+      scheduleDocs
+        .filter((doc) => doc.get('dedupeKey') === currentReleaseId)
+        .map((doc) => doc.get('data')?.scheduleEntryId as string)
+        .filter(Boolean),
+    ),
+  ];
+  const scheduleEntries = scheduleEntryIds.length
+    ? await db.getAll(
+        ...scheduleEntryIds.map((entryId) =>
+          db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
+        ),
+      )
+    : [];
+  const scheduleEntryMap = new Map(scheduleEntries.map((entry) => [entry.id, entry]));
   const sendable = docs.filter((doc) => {
-    const holds = DECISION_STILL_TRUE[doc.get('kind') as string];
+    const kind = doc.get('kind') as string;
+    const holds = DECISION_STILL_TRUE[kind];
+    if (isScheduleEmail(kind)) {
+      const entryId = doc.get('data')?.scheduleEntryId as string;
+      return scheduleEmailStillTrue(
+        kind,
+        String(doc.get('dedupeKey') ?? ''),
+        currentReleaseId,
+        scheduleEntryMap.get(entryId),
+      );
+    }
     // A kind with no entry is not a decision at all, so nothing to check.
     return !holds || holds.includes(current.get(doc.get('proposalId') as string) ?? '');
   });
@@ -467,12 +527,45 @@ async function advanceEmailQueue(
       const proposalStatuses = new Map(
         proposals.map((proposal) => [proposal.id, proposal.get('status') as string]),
       );
+      const scheduleRows = rows.filter((row) => isScheduleEmail(row.get('kind')));
+      const cfp = scheduleRows.length ? await tx.get(db.doc(`cfps/${cfpId}`)) : null;
+      const currentReleaseId = (cfp?.get('publishedScheduleId') as string | undefined) ?? '';
+      const scheduleEntryIds = [
+        ...new Set(
+          scheduleRows
+            .filter((row) => row.get('dedupeKey') === currentReleaseId)
+            .map((row) => row.get('data')?.scheduleEntryId as string)
+            .filter(Boolean),
+        ),
+      ];
+      const scheduleEntries = scheduleEntryIds.length
+        ? await tx.getAll(
+            ...scheduleEntryIds.map((entryId) =>
+              db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
+            ),
+          )
+        : [];
+      const scheduleEntryMap = new Map(scheduleEntries.map((entry) => [entry.id, entry]));
 
       let advanced = 0;
       let superseded = 0;
       for (const row of rows) {
         if (!row.exists || !from.includes(row.get('status') as EmailStatus)) continue;
         const holds = DECISION_STILL_TRUE[row.get('kind') as string];
+        if (isScheduleEmail(row.get('kind'))) {
+          const entryId = row.get('data')?.scheduleEntryId as string;
+          if (
+            !scheduleEmailStillTrue(
+              row.get('kind') as string,
+              String(row.get('dedupeKey') ?? ''),
+              currentReleaseId,
+              scheduleEntryMap.get(entryId),
+            )
+          ) {
+            superseded += 1;
+            continue;
+          }
+        }
         if (
           holds &&
           !holds.includes(proposalStatuses.get(row.get('proposalId') as string) ?? '')
@@ -1613,7 +1706,9 @@ function readProfile(data: Record<string, unknown>): CfpProfile {
   const description = (data.description ?? {}) as Record<string, unknown>;
   return {
     description: { en: text(description.en), fr: text(description.fr) },
-    eventDate: text(data.eventDate),
+    eventStartDate: text(data.eventStartDate || data.eventDate),
+    eventEndDate: text(data.eventEndDate || data.eventStartDate || data.eventDate),
+    timeZone: text(data.timeZone),
     venue: text(data.venue),
     location: text(data.location),
     website: text(data.website),
@@ -1635,7 +1730,11 @@ function writableProfile(profile: CfpProfile): Record<string, unknown> {
     description: anyDescription
       ? { en: description!.en, ...(description!.fr ? { fr: description!.fr } : {}) }
       : FieldValue.delete(),
-    eventDate: profile.eventDate || FieldValue.delete(),
+    eventStartDate: profile.eventStartDate || profile.eventDate || FieldValue.delete(),
+    eventEndDate:
+      profile.eventEndDate || profile.eventStartDate || profile.eventDate || FieldValue.delete(),
+    timeZone: profile.timeZone || FieldValue.delete(),
+    eventDate: FieldValue.delete(),
     venue: profile.venue || FieldValue.delete(),
     location: profile.location || FieldValue.delete(),
     website: profile.website || FieldValue.delete(),
@@ -1923,6 +2022,29 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
           );
         }
       }
+      if (isScheduleEmail(snap.get('kind'))) {
+        const cfp = await tx.get(db.doc(`cfps/${cfpId}`));
+        const currentReleaseId = (cfp.get('publishedScheduleId') as string | undefined) ?? '';
+        const entryId = snap.get('data')?.scheduleEntryId as string;
+        const entry = currentReleaseId && entryId
+          ? await tx.get(
+              db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
+            )
+          : undefined;
+        if (
+          !scheduleEmailStillTrue(
+            snap.get('kind') as string,
+            String(snap.get('dedupeKey') ?? ''),
+            currentReleaseId,
+            entry,
+          )
+        ) {
+          throw new HttpsError(
+            'failed-precondition',
+            'That schedule changed, so this message is no longer sendable.',
+          );
+        }
+      }
       tx.update(ref, { status: 'queued' satisfies EmailStatus });
       return current;
     });
@@ -2069,6 +2191,7 @@ const SIGN_IN_DESTINATIONS = new Set([
   'review',
   'admin/overview',
   'admin/proposals',
+  'admin/schedule',
   'admin/committee',
   'admin/settings',
   'admin/submission',
@@ -2534,3 +2657,586 @@ export const setCfpWindow = onCall(CALLABLE, async (request) => {
   logger.info('cfp window changed', { byUid, ...patch });
   return { ok: true };
 });
+
+// --------------------------------------------------------------- schedule
+
+const scheduleConfigRef = (cfpId: string) => db.doc(`cfps/${cfpId}/config/schedule`);
+const scheduleDraft = (cfpId: string) => db.collection(`cfps/${cfpId}/scheduleDraft`);
+
+function scheduleConfigFrom(value: unknown): ScheduleConfig {
+  const data = (value ?? {}) as Record<string, unknown>;
+  const days = Array.isArray(data.days) ? data.days : [];
+  const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+  return {
+    timeZone: String(data.timeZone ?? '').trim(),
+    days: days.map((item) => {
+      const day = item as Record<string, unknown>;
+      return {
+        date: String(day.date ?? '').trim(),
+        startsAt: String(day.startsAt ?? '').trim(),
+        endsAt: String(day.endsAt ?? '').trim(),
+      } satisfies ScheduleDay;
+    }),
+    rooms: rooms.map((item) => {
+      const room = item as Record<string, unknown>;
+      const name = (room.name ?? {}) as Record<string, unknown>;
+      return {
+        id: String(room.id ?? '').trim(),
+        name: { en: String(name.en ?? '').trim(), fr: String(name.fr ?? '').trim() },
+      } satisfies ScheduleRoom;
+    }),
+    revision: Number(data.revision ?? 0),
+  };
+}
+
+function scheduleEntryFrom(value: unknown): ScheduleEntry {
+  const data = (value ?? {}) as Record<string, unknown>;
+  const base = {
+    id: String(data.id ?? '').trim(),
+    date: String(data.date ?? '').trim(),
+    startsAt: String(data.startsAt ?? '').trim(),
+    durationMinutes: Number(data.durationMinutes),
+    roomId: String(data.roomId ?? '').trim(),
+  };
+  if (data.kind === 'proposal') {
+    const assigned = String(data.assignedLanguage ?? '');
+    return {
+      ...base,
+      kind: 'proposal',
+      proposalId: String(data.proposalId ?? '').trim(),
+      ...(assigned === 'en' || assigned === 'fr' ? { assignedLanguage: assigned } : {}),
+    };
+  }
+  const title = (data.title ?? {}) as Record<string, unknown>;
+  const description = (data.description ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    kind: 'custom',
+    customType: String(data.customType ?? '') as ScheduleEntry & never,
+    title: { en: String(title.en ?? '').trim(), fr: String(title.fr ?? '').trim() },
+    description: {
+      en: String(description.en ?? '').trim(),
+      fr: String(description.fr ?? '').trim(),
+    },
+  } as ScheduleEntry;
+}
+
+function assertScheduleRevision(current: number, expected: unknown): void {
+  if (!Number.isInteger(expected) || expected !== current) {
+    throw new HttpsError(
+      'aborted',
+      'The schedule changed in another tab. Reload it before making this change.',
+    );
+  }
+}
+
+export const setScheduleConfig = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'configure the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const config = scheduleConfigFrom(input.config);
+  const problem = validateScheduleConfig(config);
+  if (problem) throw new HttpsError('invalid-argument', problem);
+
+  const revision = await db.runTransaction(async (tx) => {
+    const ref = scheduleConfigRef(cfpId);
+    const [snap, draftEntries] = await Promise.all([
+      tx.get(ref),
+      tx.get(scheduleDraft(cfpId)),
+    ]);
+    const current = Number(snap.get('revision') ?? 0);
+    assertScheduleRevision(current, input.expectedRevision);
+    for (const doc of draftEntries.docs) {
+      const entryProblem = validateScheduleEntry(
+        scheduleEntryFrom({ id: doc.id, ...doc.data() }),
+        config,
+      );
+      if (entryProblem) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Move or remove entries that do not fit the new schedule setup.',
+        );
+      }
+    }
+    const next = current + 1;
+    tx.set(ref, {
+      ...config,
+      revision: next,
+      needsAttention: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return next;
+  });
+  logger.info('schedule configured', { cfpId, byUid, revision });
+  return { ok: true, revision };
+});
+
+export const upsertScheduleEntry = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'edit the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const entry = scheduleEntryFrom(input.entry);
+
+  const revision = await db.runTransaction(async (tx) => {
+    const configRef = scheduleConfigRef(cfpId);
+    const [configSnap, entriesSnap] = await Promise.all([
+      tx.get(configRef),
+      tx.get(scheduleDraft(cfpId)),
+    ]);
+    if (!configSnap.exists) throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+    const config = scheduleConfigFrom(configSnap.data());
+    const current = Number(configSnap.get('revision') ?? 0);
+    assertScheduleRevision(current, input.expectedRevision);
+    const problem = validateScheduleEntry(entry, config);
+    if (problem) throw new HttpsError('invalid-argument', problem);
+
+    const entries = entriesSnap.docs
+      .filter((doc) => doc.id !== entry.id)
+      .map((doc) => scheduleEntryFrom({ id: doc.id, ...doc.data() }));
+    if (entries.length >= SCHEDULE_LIMITS.entries) {
+      throw new HttpsError('resource-exhausted', 'This schedule has reached its entry limit.');
+    }
+    entries.push(entry);
+    const proposalIds = entries
+      .filter((item): item is Extract<ScheduleEntry, { kind: 'proposal' }> => item.kind === 'proposal')
+      .map((item) => item.proposalId);
+    const proposalSnaps = proposalIds.length
+      ? await tx.getAll(...proposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`)))
+      : [];
+    const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap.data()]));
+    for (const item of entries) {
+      if (item.kind !== 'proposal') continue;
+      const proposal = proposals.get(item.proposalId);
+      if (!proposal || !['accepted', 'confirmed'].includes(String(proposal.status))) {
+        throw new HttpsError('failed-precondition', 'Only accepted or confirmed talks can be scheduled.');
+      }
+    }
+    const speakers = new Map(
+      proposalSnaps.map((snap) => [snap.id, (snap.get('speakerIds') ?? []) as string[]]),
+    );
+    if (scheduleConflicts(entries, speakers).length) {
+      throw new HttpsError('already-exists', 'That placement conflicts with another session.');
+    }
+
+    const next = current + 1;
+    const { id, ...stored } = entry;
+    tx.set(scheduleDraft(cfpId).doc(id), { ...stored, updatedAt: FieldValue.serverTimestamp() });
+    tx.update(configRef, {
+      revision: next,
+      needsAttention: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return next;
+  });
+  logger.info('schedule entry saved', { cfpId, entryId: entry.id, byUid, revision });
+  return { ok: true, revision, entryId: entry.id };
+});
+
+export const removeScheduleEntry = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'edit the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const entryId = String(input.entryId ?? '');
+  if (!/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(entryId)) {
+    throw new HttpsError('invalid-argument', 'entryId is required.');
+  }
+  const revision = await db.runTransaction(async (tx) => {
+    const configRef = scheduleConfigRef(cfpId);
+    const snap = await tx.get(configRef);
+    if (!snap.exists) throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+    const current = Number(snap.get('revision') ?? 0);
+    assertScheduleRevision(current, input.expectedRevision);
+    const next = current + 1;
+    tx.delete(scheduleDraft(cfpId).doc(entryId));
+    tx.update(configRef, {
+      revision: next,
+      needsAttention: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return next;
+  });
+  logger.info('schedule entry removed', { cfpId, entryId, byUid, revision });
+  return { ok: true, revision, entryId };
+});
+
+export const publishSchedule = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'publish the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const [configSnap, entriesSnap, cfpBefore] = await Promise.all([
+    scheduleConfigRef(cfpId).get(),
+    scheduleDraft(cfpId).get(),
+    db.doc(`cfps/${cfpId}`).get(),
+  ]);
+  if (!configSnap.exists) throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+  const current = Number(configSnap.get('revision') ?? 0);
+  assertScheduleRevision(current, input.expectedRevision);
+  if (configSnap.get('needsAttention') !== true) {
+    throw new HttpsError('failed-precondition', 'There are no unpublished schedule changes.');
+  }
+  const config = scheduleConfigFrom(configSnap.data());
+  const configProblem = validateScheduleConfig(config);
+  if (configProblem) throw new HttpsError('invalid-argument', configProblem);
+  const entries = entriesSnap.docs.map((doc) => scheduleEntryFrom({ id: doc.id, ...doc.data() }));
+  if (!entries.length) throw new HttpsError('failed-precondition', 'Add at least one schedule item first.');
+
+  const proposalEntries = entries.filter(
+    (entry): entry is Extract<ScheduleEntry, { kind: 'proposal' }> => entry.kind === 'proposal',
+  );
+  const proposalSnaps = proposalEntries.length
+    ? await db.getAll(
+        ...proposalEntries.map((entry) => db.doc(`cfps/${cfpId}/proposals/${entry.proposalId}`)),
+      )
+    : [];
+  const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap]));
+  const speakers = new Map(
+    proposalSnaps.map((snap) => [snap.id, (snap.get('speakerIds') ?? []) as string[]]),
+  );
+  if (scheduleConflicts(entries, speakers).length) {
+    throw new HttpsError('already-exists', 'Resolve every schedule conflict before publishing.');
+  }
+
+  const publicEntries = entries.map((entry) => {
+    const problem = validateScheduleEntry(entry, config);
+    if (problem) throw new HttpsError('invalid-argument', problem);
+    if (entry.kind === 'custom') return entry;
+    const snap = proposals.get(entry.proposalId);
+    if (!snap?.exists || snap.get('status') !== 'confirmed') {
+      throw new HttpsError('failed-precondition', 'Every proposal session must be confirmed before publishing.');
+    }
+    const data = snap.data()!;
+    const language = resolvedScheduleLanguage(data.deliveryLanguage, entry.assignedLanguage);
+    if (!language) {
+      throw new HttpsError('failed-precondition', 'Assign a language to every flexible session.');
+    }
+    return {
+      ...entry,
+      proposalId: entry.proposalId,
+      session: {
+        proposalId: entry.proposalId,
+        title: String(data.title ?? ''),
+        abstract: String(data.abstract ?? ''),
+        category: String(data.category ?? ''),
+        format: String(data.format ?? ''),
+        level: String(data.level ?? ''),
+        language,
+        speakers: (data.speakerSnapshot ?? []) as SpeakerSnapshot[],
+      },
+    };
+  });
+
+  const previousReleaseId = cfpBefore.get('publishedScheduleId') as string | undefined;
+  const [previousRelease, previousEntriesSnap] = previousReleaseId
+    ? await Promise.all([
+        db.doc(`cfps/${cfpId}/scheduleReleases/${previousReleaseId}`).get(),
+        db.collection(`cfps/${cfpId}/scheduleReleases/${previousReleaseId}/entries`).get(),
+      ])
+    : [null, null];
+  const previousEntries = new Map(
+    (previousEntriesSnap?.docs ?? [])
+      .filter((doc) => doc.get('kind') === 'proposal')
+      .map((doc) => [doc.get('proposalId') as string, { id: doc.id, ...doc.data() }]),
+  );
+  const previousRooms = new Map(
+    (((previousRelease?.get('rooms') as ScheduleRoom[] | undefined) ?? []).map((room) => [
+      room.id,
+      room,
+    ])),
+  );
+  const currentRooms = new Map(config.rooms.map((room) => [room.id, room]));
+  type ScheduleEmailChange = {
+    kind: Extract<EmailKind, 'schedule_assigned' | 'schedule_changed' | 'schedule_cancelled'>;
+    proposalId: string;
+    entryId: string;
+    title: string;
+    date: string;
+    startsAt: string;
+    room: ScheduleRoom | undefined;
+  };
+  const changes: ScheduleEmailChange[] = [];
+  const unchanged: { proposalId: string; entryId: string }[] = [];
+  const currentProposalIds = new Set<string>();
+  for (const entry of publicEntries) {
+    if (entry.kind !== 'proposal') continue;
+    currentProposalIds.add(entry.proposalId);
+    const previous = previousEntries.get(entry.proposalId) as
+      | (Record<string, any> & { id: string })
+      | undefined;
+    const moved =
+      previous &&
+      (previous.date !== entry.date ||
+        previous.startsAt !== entry.startsAt ||
+        previous.durationMinutes !== entry.durationMinutes ||
+        previous.roomId !== entry.roomId ||
+        previous.session?.language !== entry.session.language ||
+        previous.cancelled === true);
+    if (!previous || moved) {
+      changes.push({
+        kind: previous ? 'schedule_changed' : 'schedule_assigned',
+        proposalId: entry.proposalId,
+        entryId: entry.id,
+        title: entry.session.title,
+        date: entry.date,
+        startsAt: entry.startsAt,
+        room: currentRooms.get(entry.roomId),
+      });
+    } else {
+      unchanged.push({ proposalId: entry.proposalId, entryId: entry.id });
+    }
+  }
+  for (const [proposalId, previous] of previousEntries) {
+    if (currentProposalIds.has(proposalId)) continue;
+    const old = previous as Record<string, any> & { id: string };
+    changes.push({
+      kind: 'schedule_cancelled',
+      proposalId,
+      entryId: old.id,
+      title: String(old.session?.title ?? ''),
+      date: String(old.date ?? ''),
+      startsAt: String(old.startsAt ?? ''),
+      room: previousRooms.get(String(old.roomId ?? '')),
+    });
+  }
+  const changeProposalIds = [...new Set(changes.map((change) => change.proposalId))];
+  const changeProposalSnaps = changeProposalIds.length
+    ? await db.getAll(
+        ...changeProposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`)),
+      )
+    : [];
+
+  const releaseRef = db.collection(`cfps/${cfpId}/scheduleReleases`).doc();
+  const carryCandidates = previousReleaseId
+    ? unchanged.flatMap(({ proposalId, entryId }) =>
+        (['schedule_assigned', 'schedule_changed'] as const).map((kind) => ({
+          entryId,
+          sourceRef: db.doc(
+            `cfps/${cfpId}/emailLog/${logId(kind, proposalId, previousReleaseId)}`,
+          ),
+          targetRef: db.doc(
+            `cfps/${cfpId}/emailLog/${logId(kind, proposalId, releaseRef.id)}`,
+          ),
+        })),
+      )
+    : [];
+  const version = Number(configSnap.get('publishedVersion') ?? 0) + 1;
+  const batch = db.batch();
+  batch.set(releaseRef, {
+    version,
+    timeZone: config.timeZone,
+    days: config.days,
+    rooms: config.rooms,
+    publishedAt: FieldValue.serverTimestamp(),
+  });
+  for (const publicEntry of publicEntries) {
+    const { id, ...stored } = publicEntry;
+    batch.set(releaseRef.collection('entries').doc(id), stored);
+  }
+  await batch.commit();
+
+  const revision = await db.runTransaction(async (tx) => {
+    const allProposalIds = [...new Set([...proposalEntries.map((entry) => entry.proposalId), ...changes.map((change) => change.proposalId)])];
+    const proposalRefs = allProposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`));
+    const speakerIds = [
+      ...new Set(changeProposalSnaps.flatMap((snap) => (snap.get('speakerIds') ?? []) as string[])),
+    ];
+    const speakerRefs = speakerIds.map((id) => db.doc(`speakers/${id}`));
+    const emailRefs = changes.map((change) =>
+      db.doc(`cfps/${cfpId}/emailLog/${logId(change.kind, change.proposalId, releaseRef.id)}`),
+    );
+    const carrySourceRefs = carryCandidates.map((candidate) => candidate.sourceRef);
+    const carryTargetRefs = carryCandidates.map((candidate) => candidate.targetRef);
+    const snapshots = await tx.getAll(
+      scheduleConfigRef(cfpId),
+      db.doc(`cfps/${cfpId}`),
+      ...proposalRefs,
+      ...speakerRefs,
+      ...emailRefs,
+      ...carrySourceRefs,
+      ...carryTargetRefs,
+    );
+    const freshConfig = snapshots[0];
+    const cfpSnap = snapshots[1];
+    const freshProposals = snapshots.slice(2, 2 + proposalRefs.length);
+    const freshSpeakers = snapshots.slice(
+      2 + proposalRefs.length,
+      2 + proposalRefs.length + speakerRefs.length,
+    );
+    const emailStart = 2 + proposalRefs.length + speakerRefs.length;
+    const existingEmails = snapshots.slice(emailStart, emailStart + emailRefs.length);
+    const carrySources = snapshots.slice(
+      emailStart + emailRefs.length,
+      emailStart + emailRefs.length + carrySourceRefs.length,
+    );
+    const carryTargets = snapshots.slice(
+      emailStart + emailRefs.length + carrySourceRefs.length,
+    );
+    if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    assertScheduleRevision(Number(freshConfig.get('revision') ?? 0), input.expectedRevision);
+    if (freshConfig.get('needsAttention') !== true) {
+      throw new HttpsError('failed-precondition', 'There are no unpublished schedule changes.');
+    }
+    const currentScheduled = new Set(proposalEntries.map((entry) => entry.proposalId));
+    if (
+      freshProposals.some(
+        (snap) => currentScheduled.has(snap.id) && (!snap.exists || snap.get('status') !== 'confirmed'),
+      )
+    ) {
+      throw new HttpsError('failed-precondition', 'A speaker response changed before publication.');
+    }
+    const next = current + 1;
+    tx.update(scheduleConfigRef(cfpId), {
+      revision: next,
+      publishedVersion: version,
+      publishedRevision: current,
+      needsAttention: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.update(db.doc(`cfps/${cfpId}`), {
+      publishedScheduleId: releaseRef.id,
+      publishedScheduleAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    for (const entry of proposalEntries) {
+      if (entry.assignedLanguage) {
+        tx.update(db.doc(`cfps/${cfpId}/proposals/${entry.proposalId}`), {
+          assignedLanguage: entry.assignedLanguage,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    }
+    const freshProposalMap = new Map(freshProposals.map((snap) => [snap.id, snap]));
+    const freshSpeakerMap = new Map(freshSpeakers.map((snap) => [snap.id, snap]));
+    for (const [index, change] of changes.entries()) {
+      if (existingEmails[index]?.exists) continue;
+      const proposal = freshProposalMap.get(change.proposalId);
+      const speakerId = ((proposal?.get('speakerIds') ?? []) as string[])[0];
+      const speaker = speakerId ? freshSpeakerMap.get(speakerId) : undefined;
+      const to = speaker?.get('email') as string | undefined;
+      if (!to) continue;
+      const locale = speaker?.get('locale') === 'fr' ? 'fr' : 'en';
+      const date = calendarDate(change.date);
+      const scheduleDate = date
+        ? new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
+            dateStyle: 'full',
+            timeZone: 'UTC',
+          }).format(date)
+        : change.date;
+      tx.create(emailRefs[index], {
+        kind: change.kind,
+        proposalId: change.proposalId,
+        dedupeKey: releaseRef.id,
+        to,
+        locale,
+        data: {
+          speakerName: (speaker?.get('name') as string) || to,
+          title: change.title || (proposal?.get('title') as string) || '',
+          needsVisa: proposal?.get('attendance')?.needsVisa === true,
+          scheduleDate,
+          scheduleTime: change.startsAt,
+          scheduleRoom: change.room ? localised(change.room.name, locale) : '',
+          scheduleEntryId: change.entryId,
+        },
+        status: 'held' satisfies EmailStatus,
+        attempts: 0,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+    for (const [index, candidate] of carryCandidates.entries()) {
+      const source = carrySources[index];
+      const sourceStatus = source?.exists
+        ? (source.get('status') as EmailStatus | undefined)
+        : undefined;
+      if (
+        !source?.exists ||
+        !sourceStatus ||
+        !CARRY_SCHEDULE_EMAIL_STATUSES.has(sourceStatus) ||
+        carryTargets[index]?.exists
+      ) {
+        continue;
+      }
+      const sourceData = source.data()!;
+      tx.create(candidate.targetRef, {
+        ...sourceData,
+        dedupeKey: releaseRef.id,
+        data: {
+          ...(sourceData.data as Record<string, unknown>),
+          scheduleEntryId: candidate.entryId,
+        },
+        status: sourceStatus,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+    return next;
+  });
+  logger.info('schedule published', {
+    cfpId,
+    releaseId: releaseRef.id,
+    version,
+    entries: publicEntries.length,
+    byUid,
+  });
+  return { ok: true, releaseId: releaseRef.id, version, revision };
+});
+
+export const cancelPublishedSession = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+  },
+  async (event) => {
+    if (event.data?.before.get('status') !== 'confirmed') return;
+    if (event.data?.after.get('status') === 'confirmed') return;
+    const { cfpId, proposalId } = event.params;
+    const cfpSnap = await db.doc(`cfps/${cfpId}`).get();
+    const releaseId = cfpSnap.get('publishedScheduleId') as string | undefined;
+    if (!releaseId) return;
+    const matching = await db
+      .collection(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries`)
+      .where('proposalId', '==', proposalId)
+      .get();
+    if (matching.empty) return;
+    const batch = db.batch();
+    for (const snap of matching.docs) {
+      batch.update(snap.ref, { cancelled: true, cancelledAt: FieldValue.serverTimestamp() });
+    }
+    batch.set(
+      scheduleConfigRef(cfpId),
+      { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true },
+    );
+    await batch.commit();
+    const entry = matching.docs[0];
+    const release = await db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`).get();
+    const room = ((release.get('rooms') ?? []) as ScheduleRoom[]).find(
+      (candidate) => candidate.id === entry.get('roomId'),
+    );
+    await db.runTransaction(async (tx) => {
+      const proposal = event.data?.after.data();
+      if (!proposal) return;
+      const context = await emailContext(tx, proposal);
+      if (!context) return;
+      const date = calendarDate(String(entry.get('date') ?? ''));
+      const scheduleDate = date
+        ? new Intl.DateTimeFormat(context.locale === 'fr' ? 'fr-CA' : 'en-CA', {
+            dateStyle: 'full',
+            timeZone: 'UTC',
+          }).format(date)
+        : String(entry.get('date') ?? '');
+      await queueEmail(db, tx, cfpId, {
+        kind: 'schedule_cancelled',
+        proposalId,
+        dedupeKey: releaseId,
+        ...context,
+        data: {
+          ...context.data,
+          scheduleDate,
+          scheduleTime: String(entry.get('startsAt') ?? ''),
+          scheduleRoom: room ? localised(room.name, context.locale) : '',
+          scheduleEntryId: entry.id,
+        },
+      });
+    });
+    logger.info('published session cancelled', { cfpId, proposalId, releaseId });
+  },
+);

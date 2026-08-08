@@ -15,5 +15,6 @@ export function pageShape(path: string): string {
   if (parts[0] !== 'c' || parts.length < 2) return `/${parts.join('/')}`;
   const rest = parts.slice(2);
   if (rest[0] === 'admin') return '/c/{cfpId}/admin/{tab}';
+  if (rest[0] === 'schedule' && rest.length > 1) return '/c/{cfpId}/schedule/{entryId}';
   return rest.length ? `/c/{cfpId}/${rest.join('/')}` : '/c/{cfpId}';
 }

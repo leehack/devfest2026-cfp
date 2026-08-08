@@ -5,6 +5,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { cache } from 'react';
 
 import type { Localised } from '@shared/confirmForm';
+import type { PublishedSchedule, PublishedScheduleEntry } from '@shared/schedule';
 
 /**
  * The only server-side reads in this application, and deliberately the only
@@ -50,6 +51,10 @@ export interface PublicCfp {
   closesAtMs: number;
   /** A calendar day, not an instant — the CFP document stores `YYYY-MM-DD`. */
   eventDate: string | null;
+  eventStartDate: string | null;
+  eventEndDate: string | null;
+  timeZone: string | null;
+  publishedScheduleId: string | null;
   updatedAtMs: number | null;
   paused: boolean;
   archived: boolean;
@@ -72,6 +77,23 @@ function shape(id: string, data: Record<string, unknown>): PublicCfp {
     opensAtMs: ms(data.opensAt) ?? 0,
     closesAtMs: ms(data.closesAt) ?? 0,
     eventDate: typeof data.eventDate === 'string' ? data.eventDate : null,
+    eventStartDate:
+      typeof data.eventStartDate === 'string'
+        ? data.eventStartDate
+        : typeof data.eventDate === 'string'
+          ? data.eventDate
+          : null,
+    eventEndDate:
+      typeof data.eventEndDate === 'string'
+        ? data.eventEndDate
+        : typeof data.eventStartDate === 'string'
+          ? data.eventStartDate
+          : typeof data.eventDate === 'string'
+            ? data.eventDate
+            : null,
+    timeZone: typeof data.timeZone === 'string' ? data.timeZone : null,
+    publishedScheduleId:
+      typeof data.publishedScheduleId === 'string' ? data.publishedScheduleId : null,
     updatedAtMs: ms(data.updatedAt),
     paused: data.paused === true,
     archived: data.archived === true,
@@ -106,3 +128,35 @@ export async function listPublicCfps(): Promise<PublicCfp[]> {
     .get();
   return snap.docs.map((doc) => shape(doc.id, doc.data() as Record<string, unknown>));
 }
+
+export interface ServerPublishedSchedule {
+  schedule: PublishedSchedule;
+  entries: PublishedScheduleEntry[];
+}
+
+/** Reads only the release named by the public CFP document. */
+export const readPublishedSchedule = cache(
+  async (cfpId: string): Promise<ServerPublishedSchedule | null> => {
+    const cfp = await readCfp(cfpId);
+    if (!cfp?.publishedScheduleId) return null;
+    const ref = db().doc(`cfps/${cfpId}/scheduleReleases/${cfp.publishedScheduleId}`);
+    const [release, entries] = await Promise.all([ref.get(), ref.collection('entries').get()]);
+    if (!release.exists) return null;
+    return {
+      schedule: {
+        id: release.id,
+        ...(release.data() as Omit<PublishedSchedule, 'id'>),
+        publishedAt: ms(release.get('publishedAt')) ?? 0,
+      },
+      entries: entries.docs.map((entry) => {
+        // Trigger audit timestamps are intentionally not part of the public
+        // model. Firestore Timestamps are class instances and cannot cross the
+        // Server Component boundary; the boolean is the attendee-facing fact.
+        const data = Object.fromEntries(
+          Object.entries(entry.data()).filter(([key]) => key !== 'cancelledAt' && key !== 'updatedAt'),
+        );
+        return { id: entry.id, ...data } as PublishedScheduleEntry;
+      }),
+    };
+  },
+);

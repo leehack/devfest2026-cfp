@@ -149,7 +149,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
   const windowValid = Boolean(opens && closes && closes.getTime() > opens.getTime() && !cfp.archived);
   const detailsReady = Boolean(
     cfp.description?.en?.trim() &&
-      cfp.eventDate &&
+      (cfp.eventStartDate ?? cfp.eventDate) &&
       cfp.location?.trim() &&
       cfp.website?.trim(),
   );

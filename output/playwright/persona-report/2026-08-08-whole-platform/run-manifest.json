@@ -1,0 +1,74 @@
+{
+  "run_id": "2026-08-08-whole-platform",
+  "branch": "schedule-feature",
+  "base_commit": "535267bf75082da0c86fcf563c6a39b154b3b281",
+  "source_state": "working tree with the schedule and UX changes under review",
+  "working_tree_dirty": true,
+  "environment": "Firebase emulator suite and Next.js development server",
+  "browser_runner": "Playwright 1.62.0, Desktop Chrome project",
+  "locale": "en-CA unless a flow explicitly changes locale",
+  "started_at": "2026-08-08T14:58:34.827Z",
+  "duration_ms": 311304.883,
+  "automated_browser_results": {
+    "passed": 264,
+    "failed": 0,
+    "skipped": 0,
+    "flaky": 0,
+    "screenshots": 195
+  },
+  "follow_up_verification": {
+    "result": "PASS",
+    "release_gate": "npm run verify",
+    "browser_results": {
+      "passed": 266,
+      "failed": 0,
+      "duration": "4.8m"
+    },
+    "canonical_flows": {
+      "REV-06": "a failed score save keeps its exact proposal, note, and score for retry",
+      "SPK-09": "an accepted speaker confirms and follows their published session into its calendar file"
+    },
+    "native_voiceover": {
+      "flow": "A11Y-02",
+      "result": "PASS",
+      "browser": "Safari 26.5.2",
+      "voiceover_restored_off": true,
+      "screenshots": 2,
+      "transcript": "curated/reviewer/a11y-02--spoken-state--desktop-1440x1000.txt"
+    }
+  },
+  "reviewer_failure_recovery_probe": {
+    "flow": "REV-06",
+    "result": "PASS",
+    "failure_injection": "one aborted **/documents:commit** request",
+    "screenshots": 3
+  },
+  "curated_release_flows": [
+    "PUB-01",
+    "AUTH-01",
+    "SPK-02",
+    "SPK-03",
+    "SPK-05",
+    "SPK-07",
+    "SPK-09",
+    "REV-02",
+    "REV-05",
+    "REV-06",
+    "ADM-05",
+    "ADM-06",
+    "ADM-07",
+    "OWN-01",
+    "PLT-02",
+    "PLT-03",
+    "PLT-04",
+    "MOB-01",
+    "A11Y-02",
+    "LOC-01"
+  ],
+  "curated_screenshots": 46,
+  "curated_screenshots_scope": "original Chrome release selection",
+  "current_curated_pngs": 48,
+  "current_voiceover_transcripts": 1,
+  "production_data_used": false,
+  "production_writes": false
+}

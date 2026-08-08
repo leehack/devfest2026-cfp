@@ -26,6 +26,9 @@ const Proposals = lazy(() =>
 const Settings = lazy(() =>
   import('./admin/Settings').then(({ Settings }) => ({ default: Settings })),
 );
+const Schedule = lazy(() =>
+  import('./admin/Schedule').then(({ Schedule }) => ({ default: Schedule })),
+);
 
 interface PendingEmailState {
   cfpId: string;
@@ -357,6 +360,9 @@ export function AdminPage({
             pendingEmailCheckFailed={pendingEmailCheckFailed}
             onEmailQueueChange={refreshPendingEmails}
           />
+        )}
+        {tab === 'schedule' && (
+          <Schedule cfpId={cfpId} onPublished={refreshPendingEmails} />
         )}
         {tab === 'committee' && <Committee user={user} cfpId={cfpId} />}
         {tab === 'settings' && (

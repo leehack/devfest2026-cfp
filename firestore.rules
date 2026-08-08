@@ -152,8 +152,33 @@ service cloud.firestore {
       // is public — the form has to render its own state before anyone signs in.
       match /config/{docId} {
         allow read: if docId == 'submissionForm'
-          || (docId == 'confirmForm' && signedIn());
+          || (docId == 'confirmForm' && signedIn())
+          || (docId == 'schedule' && isAdmin(cfpId));
         allow write: if false;
+      }
+
+      // The working programme is operational data. Organisers may read it,
+      // while every mutation goes through revision-checked callables.
+      match /scheduleDraft/{entryId} {
+        allow read: if isAdmin(cfpId);
+        allow write: if false;
+      }
+
+      // A release is staged in full before `publishedScheduleId` changes. Only
+      // that current version is public, so an abandoned or superseded release
+      // cannot be reached by guessing its id.
+      match /scheduleReleases/{releaseId} {
+        function isCurrentRelease() {
+          return cfp(cfpId).get('publishedScheduleId', '') == releaseId;
+        }
+
+        allow get: if isCurrentRelease() || isAdmin(cfpId);
+        allow list, write: if false;
+
+        match /entries/{entryId} {
+          allow get, list: if isCurrentRelease() || isAdmin(cfpId);
+          allow write: if false;
+        }
       }
 
       // ----------------------------------------------------------- proposals

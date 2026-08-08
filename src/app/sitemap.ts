@@ -1,6 +1,6 @@
 import type { MetadataRoute } from 'next';
 
-import { listPublicCfps } from '../server/publicCfps';
+import { listPublicCfps, readPublishedSchedule } from '../server/publicCfps';
 import { paths } from '../lib/paths';
 import { SITE_ORIGIN } from '../server/site';
 
@@ -24,6 +24,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   } catch {
     cfps = [];
   }
+  const schedules = await Promise.all(
+    cfps.map(async (cfp) => ({ cfp, bundle: await readPublishedSchedule(cfp.id).catch(() => null) })),
+  );
   return [
     { url: `${origin}${paths.home()}`, changeFrequency: 'daily' as const },
     ...cfps.map((cfp) => ({
@@ -33,5 +36,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         ? { lastModified: new Date(cfp.updatedAtMs).toISOString().slice(0, 10) }
         : {}),
     })),
+    ...schedules.flatMap(({ cfp, bundle }) =>
+      bundle
+        ? [
+            { url: `${origin}${paths.schedule(cfp.id)}` },
+            ...bundle.entries.map((entry) => ({
+              url: `${origin}${paths.session(cfp.id, entry.id)}`,
+            })),
+          ]
+        : [],
+    ),
   ];
 }

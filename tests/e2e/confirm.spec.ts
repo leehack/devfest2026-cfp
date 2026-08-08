@@ -46,10 +46,13 @@ test.describe('answering an acceptance', () => {
     });
 
     await signInAs(page, SPEAKER);
+    await expect(page.getByText(/organisers can plan a slot/)).toBeVisible();
+    await expect(page.getByText(/published programme/)).toHaveCount(0);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
 
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
-    await expect(page.getByText('See you in Montréal')).toBeVisible();
+    await expect(page.getByText(/Schedule details will appear here after organisers publish them/)).toBeVisible();
+    await expect(page.getByText(/published programme/)).toHaveCount(0);
     expect(await statusOf('p-yes')).toBe('confirmed');
 
     // The answer is a status, not a bit of page state.

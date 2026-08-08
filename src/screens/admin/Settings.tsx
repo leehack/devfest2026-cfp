@@ -27,6 +27,8 @@ export function Settings({
   const [descriptionEn, setDescriptionEn] = useState('');
   const [descriptionFr, setDescriptionFr] = useState('');
   const [eventDate, setEventDate] = useState('');
+  const [eventEndDate, setEventEndDate] = useState('');
+  const [eventTimeZone, setEventTimeZone] = useState('America/Toronto');
   const [venue, setVenue] = useState('');
   const [place, setPlace] = useState('');
   const [website, setWebsite] = useState('');
@@ -58,6 +60,8 @@ export function Settings({
     descriptionEn,
     descriptionFr,
     eventDate,
+    eventEndDate,
+    eventTimeZone,
     venue,
     place,
     website,
@@ -96,7 +100,9 @@ export function Settings({
       const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
       const nextDescriptionEn = cfp.description?.en ?? '';
       const nextDescriptionFr = cfp.description?.fr ?? '';
-      const nextEventDate = cfp.eventDate ?? '';
+      const nextEventDate = cfp.eventStartDate ?? cfp.eventDate ?? '';
+      const nextEventEndDate = cfp.eventEndDate ?? nextEventDate;
+      const nextEventTimeZone = cfp.timeZone ?? 'America/Toronto';
       const nextVenue = cfp.venue ?? '';
       const nextPlace = cfp.location ?? '';
       const nextWebsite = cfp.website ?? '';
@@ -108,6 +114,8 @@ export function Settings({
       setDescriptionEn(nextDescriptionEn);
       setDescriptionFr(nextDescriptionFr);
       setEventDate(nextEventDate);
+      setEventEndDate(nextEventEndDate);
+      setEventTimeZone(nextEventTimeZone);
       setVenue(nextVenue);
       setPlace(nextPlace);
       setWebsite(nextWebsite);
@@ -123,6 +131,8 @@ export function Settings({
           nextDescriptionEn,
           nextDescriptionFr,
           nextEventDate,
+          nextEventEndDate,
+          nextEventTimeZone,
           nextVenue,
           nextPlace,
           nextWebsite,
@@ -214,6 +224,8 @@ export function Settings({
       descriptionEn: descriptionEn.trim(),
       descriptionFr: descriptionFr.trim(),
       eventDate: eventDate.trim(),
+      eventEndDate: eventEndDate.trim(),
+      eventTimeZone: eventTimeZone.trim(),
       venue: venue.trim(),
       place: place.trim(),
       website: website.trim(),
@@ -225,7 +237,9 @@ export function Settings({
           name: next.name,
           visibility: next.visibility,
           description: { en: next.descriptionEn, fr: next.descriptionFr },
-          eventDate: next.eventDate,
+          eventStartDate: next.eventDate,
+          eventEndDate: next.eventEndDate,
+          timeZone: next.eventTimeZone,
           venue: next.venue,
           location: next.place,
           website: next.website,
@@ -236,6 +250,8 @@ export function Settings({
         setDescriptionEn(next.descriptionEn);
         setDescriptionFr(next.descriptionFr);
         setEventDate(next.eventDate);
+        setEventEndDate(next.eventEndDate);
+        setEventTimeZone(next.eventTimeZone);
         setVenue(next.venue);
         setPlace(next.place);
         setWebsite(next.website);
@@ -246,6 +262,8 @@ export function Settings({
             next.descriptionEn,
             next.descriptionFr,
             next.eventDate,
+            next.eventEndDate,
+            next.eventTimeZone,
             next.venue,
             next.place,
             next.website,
@@ -348,10 +366,26 @@ export function Settings({
 
         <div className="grid grid--2">
           <TextField
-            label={t.admin.eventDate}
+            label={t.admin.eventStartDate}
             type="date"
             value={eventDate}
             onChange={setEventDate}
+            disabled={busy}
+          />
+          <TextField
+            label={t.admin.eventEndDate}
+            type="date"
+            value={eventEndDate}
+            onChange={setEventEndDate}
+            min={eventDate || undefined}
+            disabled={busy}
+          />
+          <TextField
+            label={t.admin.eventTimeZone}
+            value={eventTimeZone}
+            onChange={setEventTimeZone}
+            placeholder="America/Toronto"
+            maxLength={CFP_LIMITS.timeZoneMax}
             disabled={busy}
           />
           <TextField

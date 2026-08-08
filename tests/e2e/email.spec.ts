@@ -156,8 +156,8 @@ test.describe('email pipeline', () => {
 
     await signInAs(page, admin, at('/admin/email'));
     await expect(page.getByRole('button', { name: 'Nothing to send' })).toBeDisabled();
-    await expect(page.getByText(/Earlier decision emails retained: 1/)).toBeVisible();
-    await expect(page.getByText('Retained — decision changed')).toBeVisible();
+    await expect(page.getByText(/Superseded notifications retained: 1/)).toBeVisible();
+    await expect(page.getByText('Retained — superseded')).toBeVisible();
     // The audit row keeps the action in place so the reason it cannot be used
     // is visible, but the UI calls that action “Send again”.
     await expect(page.getByRole('button', { name: 'Send again' })).toBeDisabled();
@@ -374,7 +374,7 @@ test.describe('email pipeline', () => {
       .getByRole('row', { name: new RegExp(speaker.email) });
     await expect(heldLog.getByRole('button', { name: 'Send again' })).toBeDisabled();
 
-    const send = panel.getByRole('button', { name: 'Send 1 decision email' });
+    const send = panel.getByRole('button', { name: 'Send 1 notification' });
     await expect(send).toBeEnabled();
 
     page.once('dialog', (d) => d.accept());
@@ -399,26 +399,26 @@ test.describe('email pipeline', () => {
 
     await expect(page.getByText('Decision saved. This action does not send an email.')).toBeVisible();
     const notice = page.locator('.pending-email-notice');
-    await expect(notice).toContainText('1 decision email is waiting');
+    await expect(notice).toContainText('1 speaker notification is waiting');
     await expect(
-      page.getByRole('link', { name: 'Email, 1 decision email waiting' }),
+      page.getByRole('link', { name: 'Email, 1 speaker notification waiting' }),
     ).toBeVisible();
 
     await notice.getByRole('link', { name: 'Review and send' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/email$'));
 
     const queue = page.locator('.email-queue-card');
-    await expect(queue.getByRole('heading', { name: 'Decision emails' })).toBeVisible();
+    await expect(queue.getByRole('heading', { name: 'Held speaker notifications' })).toBeVisible();
     await expect(queue.getByRole('row', { name: new RegExp(speaker.email) })).toContainText(
       'Accepted',
     );
 
-    const send = queue.getByRole('button', { name: 'Send 1 decision email' });
+    const send = queue.getByRole('button', { name: 'Send 1 notification' });
     page.once('dialog', (dialog) => dialog.accept());
     await send.click();
 
     await expect(queue.getByText('1 email queued.')).toBeVisible();
-    await expect(page.getByRole('link', { name: /Email, 1 decision email waiting/ })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /Email, 1 speaker notification waiting/ })).toHaveCount(0);
     await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
     await expect(page.locator('.pending-email-notice')).toHaveCount(0);
   });

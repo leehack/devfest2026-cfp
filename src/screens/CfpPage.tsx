@@ -23,10 +23,14 @@ import { localised } from '@shared/confirmForm';
 
 export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
   const { t, locale } = useI18n();
-  const { description, eventDate, venue, location, website } = cfp.profile;
+  const { description, eventDate, eventStartDate, eventEndDate, venue, location, website } =
+    cfp.profile;
 
   const blurb = localised(description, locale);
-  const day = eventDate ? calendarDate(eventDate) : null;
+  const starts = eventStartDate ?? eventDate;
+  const ends = eventEndDate ?? starts;
+  const day = starts ? calendarDate(starts) : null;
+  const endDay = ends && ends !== starts ? calendarDate(ends) : null;
 
   const facts: { label: string; value: ReactNode }[] = [];
   // `formatCalendarDay`, not `formatDate`: this is a day, and the deadline below
@@ -36,7 +40,15 @@ export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
   if (day) {
     facts.push({
       label: t.cfpPage.when,
-      value: <time dateTime={eventDate}>{formatCalendarDay(day, locale)}</time>,
+      value: endDay ? (
+        <>
+          <time dateTime={starts}>{formatCalendarDay(day, locale)}</time>
+          {' – '}
+          <time dateTime={ends}>{formatCalendarDay(endDay, locale)}</time>
+        </>
+      ) : (
+        <time dateTime={starts}>{formatCalendarDay(day, locale)}</time>
+      ),
     });
   }
   if (venue || location) {

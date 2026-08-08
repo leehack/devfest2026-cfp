@@ -415,6 +415,13 @@ collection — the rule names the two readable documents one at a time.
   *next* card and clicked again, scoring the whole queue. Use `click()`. The
   control is a button with `aria-pressed` rather than a radio for the same
   reason: radios are expected to stay put.
+- **The schedule draft and the public programme are different data.** Admins
+  edit `config/schedule` and `scheduleDraft` through revision-checked callables;
+  publishing writes an immutable `scheduleReleases/{releaseId}` and only then
+  flips `cfps/{id}.publishedScheduleId`. Anonymous rules open only that release.
+  A later status change marks its session cancelled rather than deleting it, so
+  attendee links and calendar UIDs remain stable. Schedule emails are held for
+  admin release and dedupe by release id.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.
@@ -429,7 +436,7 @@ collection — the rule names the two readable documents one at a time.
   destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
-- Project `devfest-mtl-2026-cfp`; Firestore and the 37 functions both in
+- Project `devfest-mtl-2026-cfp`; Firestore and the 42 functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
 - **App Hosting runs in `us-east4`, and there was no choice.** The API offers six
   regions and no Canadian one. Firestore and every callable stay in Montréal, so

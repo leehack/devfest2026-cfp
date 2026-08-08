@@ -19,6 +19,7 @@ import { logger } from 'firebase-functions';
 
 import {
   DECISION_KINDS,
+  SCHEDULE_EMAIL_KINDS,
   MESSAGE_KIND,
   renderEmail,
   renderTemplate,
@@ -117,14 +118,19 @@ export interface QueueRequest {
   to: string;
   locale: EmailLocale;
   /** The link and the event name are filled in at send time — see `deliver`. */
-  data: Omit<EmailData, 'proposalUrl' | 'event'>;
+  data: Omit<EmailData, 'proposalUrl' | 'event' | 'scheduleUrl'> & {
+    scheduleEntryId?: string;
+  };
+  /** Schedule releases need one row per version rather than one row forever. */
+  dedupeKey?: string;
 }
 
 /**
  * One document per (kind, proposal). Two acceptances for the same talk collapse
  * into one row, and therefore one email.
  */
-export const logId = (kind: EmailKind, proposalId: string) => `${kind}__${proposalId}`;
+export const logId = (kind: EmailKind, proposalId: string, dedupeKey?: string) =>
+  [kind, proposalId, dedupeKey].filter(Boolean).join('__');
 
 /**
  * Queues inside the caller's transaction, so an email is never recorded for a
@@ -137,7 +143,9 @@ export async function queueEmail(
   cfpId: string,
   request: QueueRequest,
 ): Promise<void> {
-  const ref = db.doc(`cfps/${cfpId}/emailLog/${logId(request.kind, request.proposalId)}`);
+  const ref = db.doc(
+    `cfps/${cfpId}/emailLog/${logId(request.kind, request.proposalId, request.dedupeKey)}`,
+  );
   const existing = await tx.get(ref);
   if (existing.exists) return;
 
@@ -149,7 +157,11 @@ export async function queueEmail(
   tx.create(ref, {
     ...request,
     // Held decisions wait for an admin to release the whole batch.
-    status: (DECISION_KINDS.includes(request.kind) ? 'held' : 'queued') satisfies EmailStatus,
+    status: (
+      DECISION_KINDS.includes(request.kind) || SCHEDULE_EMAIL_KINDS.includes(request.kind)
+        ? 'held'
+        : 'queued'
+    ) satisfies EmailStatus,
     attempts: 0,
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -227,6 +239,7 @@ export async function deliver(
   const data = {
     ...(row.data as Omit<EmailData, 'proposalUrl' | 'event'>),
     proposalUrl: cfpUrl(cfp.publicUrl, cfp.id),
+    scheduleUrl: claimedScheduleUrl(row, cfp),
     event: cfp.name,
   };
 
@@ -239,6 +252,15 @@ export async function deliver(
       : renderEmail(row.kind as EmailKind, locale, data, templates);
 
   return sendViaResend(row.to as string, email, apiKey, settings);
+}
+
+function claimedScheduleUrl(
+  row: FirebaseFirestore.DocumentData,
+  cfp: { id: string; publicUrl: string },
+): string {
+  const entryId = row.data?.scheduleEntryId as string | undefined;
+  const root = `${cfp.publicUrl}/c/${cfp.id}/schedule`;
+  return entryId ? `${root}/${encodeURIComponent(entryId)}` : root;
 }
 
 /**

@@ -15,8 +15,8 @@ drift apart.
 
 ```
 shared/       enums, types, schema, pure parsers — compiled into both bundles
-src/          screens/ the form, the admin screen, the review screen
-functions/    submit, withdraw, roles, window, aggregates, sessionize import
+src/          screens/ submission, review, administration and public programme
+functions/    proposal, role, email, aggregate and schedule operations
 firestore.rules   the enforcement boundary (§6)
 ```
 
@@ -32,7 +32,8 @@ platform-wide throttle) and `config/platform` sit outside.
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
 `/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
 public page, `/submit` the form, `/review` for anyone holding a role on it and
-`/admin/{tab}` for its admins. The public page is server-rendered by its Next
+`/schedule` the published agenda, `/schedule/{entryId}` a session, and
+`/admin/{tab}` for its admins. The public pages are server-rendered by their Next
 App Router segment, which puts the call's own title and description into the
 HTML — a crawler and a link preview never run the script, so `document.title`
 alone buys nothing. Everyone may submit a talk, reviewers and admins included —
@@ -122,6 +123,11 @@ npm run verify   # lint, build, unit, rules, end-to-end
 | `npm test` | node | schema, scoring, parser, import merge, message translation |
 | `npm run test:rules` | Firestore emulator, JVM | `firestore.rules` |
 | `npm run test:e2e` | the full stack | every applicant, reviewer and admin flow |
+
+For release-level exploratory testing, the reusable persona, seed-state,
+mutation-budget, screenshot, accessibility, and flow catalog lives in
+[`docs/qa/persona-flow-handbook.md`](docs/qa/persona-flow-handbook.md). Keep it
+in sync when a route, role, lifecycle state, or user-facing transition changes.
 
 The end-to-end suite drives the same stack `npm start` brings up, reusing it if
 it is already running. It resets the emulators between tests through their REST
@@ -326,6 +332,32 @@ window and organisers are managed from `/admin`. An approved creator's
 `scripts/set-platform-admin.mjs` bootstraps global owners or administrators, and
 `scripts/set-platform.mjs` sets the platform-wide public origin.
 
+## Schedule
+
+The Schedule tab in `/admin` is a private planning board. Set the event time
+zone, day hours and rooms, then drag accepted or confirmed talks into 15-minute
+slots. A form behind every card provides the keyboard/touch fallback and edits
+the exact start, duration, room and resolved language. Custom programme items
+cover breaks, meals, opening/closing remarks, keynotes and social events.
+
+Draft writes are admin-only callables with an optimistic `revision`; a stale tab
+must reload instead of overwriting another organiser. The server rejects room,
+speaker and duplicate-proposal overlaps. Accepted talks may be planned, but
+publication is blocked until every scheduled proposal is still `confirmed` and
+every `either` language has been resolved.
+
+Publishing creates a new immutable `scheduleReleases/{releaseId}` snapshot and
+only then moves `cfps/{cfpId}.publishedScheduleId`. Anonymous readers can read
+that one release and no older release or draft. This keeps the public agenda,
+session metadata, sitemap and `.ics` downloads consistent while organisers work
+on the next version. CSV export is available from the private planner.
+
+Assignment, move and cancellation notices enter `emailLog` as `held`, so an
+admin reviews and releases them from Email like decision messages. If a
+confirmed talk later becomes declined, withdrawn or otherwise non-confirmed, a
+trigger marks the published session cancelled immediately and flags the draft
+for attention; it does not silently remove an attendee's saved calendar item.
+
 ## Email
 
 Resend, called over its REST API from a Firestore trigger. Every message is a
@@ -335,9 +367,9 @@ already exists, so a decision reversed and reinstated does not mail anyone
 twice. The trigger claims a row by moving it `queued → sending` in a
 transaction, which is what makes at-least-once trigger delivery safe.
 
-Decisions are queued **`held`**. They sit there until an admin releases the
-batch from `/admin`, so acceptances and rejections go out together rather than
-trickling out alphabetically over an afternoon. Receipts do not wait.
+Decisions and schedule changes are queued **`held`**. They sit there until an
+admin releases the batch from `/admin`, so sensitive results and programme
+changes are reviewed before delivery. Receipts do not wait.
 
 With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
@@ -449,14 +481,9 @@ Still open, in rough order of how much they would matter on the day:
 
 ## Open items
 
-- **`functions/src` has no tests.** The guards it repeated are now extracted and
-  pure, but the transaction bodies are only covered indirectly, through the
-  rules suite and by hand. They need an emulator-backed suite of their own.
 - **`importSessionizeProfile` has no per-user rate limit.** `maxInstances` caps
   the bill and the outbound fan-out at Sessionize, but one authenticated user
   can still call it in a loop.
-- Auth is Google sign-in only. Fine for a Google event, but it turns "no Google
-  account" into "cannot submit".
 - **No domain is verified with Resend yet**, so the pipeline is in dry-run. Every
   other part of it is built and tested; see [Email](#email) for the four steps.
 - **No confirmation reminder or waitlist-promotion job.** An acceptance sets no

@@ -17,7 +17,7 @@ import {
   seedSpeaker,
   seedSubmittedProposal,
 } from './backend';
-import { at, signInAs, type Identity } from './form';
+import { alerts, at, signInAs, type Identity } from './form';
 
 const REVIEWER: Identity = { sub: 'deck-reviewer', email: 'rey@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'deck-speaker', email: 'sam@example.org', name: 'Sam' };
@@ -140,6 +140,65 @@ test.describe('the review deck', () => {
     const reviews = await readReviews('deck-0');
     expect(reviews[0]).toMatchObject({ score: 3, comment: 'Wants a tighter close.' });
     expect(await readReviews('deck-1')).toHaveLength(0);
+  });
+
+  test('a failed score save keeps its exact proposal, note, and score for retry', async ({
+    page,
+  }) => {
+    await stage(page);
+
+    const title = TITLES[0];
+    const comment = 'Keep this exact note through a failed save.';
+    const note = page.getByRole('textbox', { name: /^Notes for the committee/ });
+    await note.fill(comment);
+
+    let failNextCommit = true;
+    await page.route('**/documents:commit**', async (route) => {
+      if (!failNextCommit) {
+        await route.continue();
+        return;
+      }
+      failNextCommit = false;
+      await route.abort('failed');
+    });
+    await page.getByRole('button', { name: '3 — Yes' }).click();
+
+    const recovery = alerts(page).filter({
+      has: page.getByRole('heading', { name: 'Some reviews did not save' }),
+    });
+    await expect(recovery).toBeVisible();
+    await expect(recovery.getByText(title, { exact: true })).toBeVisible();
+    expect(failNextCommit).toBe(false);
+    expect(await readReviews('deck-0')).toHaveLength(0);
+
+    await page.unroute('**/documents:commit**');
+    await recovery.getByRole('button', { name: 'Open proposal' }).click();
+    await expect(heading(page, title)).toBeVisible();
+    await expect(note).toHaveValue(comment);
+    await expect(page.getByRole('button', { name: '3 — Yes' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    await recovery.getByRole('button', { name: 'Retry save' }).click();
+    await expect(recovery).toHaveCount(0);
+    await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+    const reviews = await readReviews('deck-0');
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({ score: 3, comment });
+  });
+
+  test('an unscored note survives leaving and returning to review', async ({ page }) => {
+    await stage(page);
+
+    const note = 'Compare the evidence in the final section before scoring.';
+    await page.getByRole('textbox', { name: /^Notes for the committee/ }).fill(note);
+    await page.goto(at('/schedule'));
+    await page.getByRole('link', { name: 'Review talks', exact: true }).click();
+
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /^Notes for the committee/ })).toHaveValue(note);
+    expect(await readReviews('deck-0')).toHaveLength(0);
   });
 
   test('a conflict can be saved without choosing a numeric score', async ({ page }) => {

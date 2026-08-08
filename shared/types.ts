@@ -77,6 +77,10 @@ export interface Cfp extends CfpProfile {
   paused: boolean;
   reviewsVisible: boolean;
 
+  /** Opaque id of the stable public programme version, absent until published. */
+  publishedScheduleId?: string;
+  publishedScheduleAt?: unknown;
+
   createdBy: string;
   createdAt: unknown;
   updatedAt: unknown;

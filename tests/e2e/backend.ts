@@ -770,6 +770,22 @@ export async function readProposalById(
   return unwrap(fields ?? {});
 }
 
+/** One immutable public schedule entry, read as the backend for trigger assertions. */
+export async function readScheduleEntry(
+  releaseId: string,
+  entryId: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/scheduleReleases/${releaseId}/entries/${entryId}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readScheduleEntry');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
 /** Firestore REST wraps every value in a type tag; this is the inverse. */
 function unwrap(fields: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};

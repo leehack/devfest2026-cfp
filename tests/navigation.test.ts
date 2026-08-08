@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { documentTitle, headerTitle } from '../src/components/AppNavigation';
+import {
+  documentTitle,
+  headerTitle,
+  sessionDocumentTitle,
+} from '../src/components/AppNavigation';
 import { en } from '../src/i18n/en';
 import type { Place } from '../src/lib/router';
 
@@ -40,6 +44,16 @@ describe('navigation labels', () => {
       `Review talks — ${cfp} — Call for Proposals`,
     ],
     [
+      { route: 'schedule', cfpId: 'devfest-mtl-2026', tab: 'overview' },
+      cfp,
+      `Programme — ${cfp}`,
+    ],
+    [
+      { route: 'session', cfpId: 'devfest-mtl-2026', tab: 'overview', entryId: 'one' },
+      cfp,
+      `Programme — ${cfp}`,
+    ],
+    [
       { route: 'admin', cfpId: 'devfest-mtl-2026', tab: 'email' },
       cfp,
       `Email — ${cfp} — Call for Proposals`,
@@ -49,5 +63,11 @@ describe('navigation labels', () => {
   it.each(cases)('names %j as a page and browser task', (place, heading, title) => {
     expect(headerTitle(place, place.cfpId ? cfp : null, en)).toBe(heading);
     expect(documentTitle(place, place.cfpId ? cfp : null, en)).toBe(title);
+  });
+
+  it('uses the session title once a public detail is loaded', () => {
+    expect(sessionDocumentTitle('Building reliable systems', cfp)).toBe(
+      `Building reliable systems — ${cfp}`,
+    );
   });
 });

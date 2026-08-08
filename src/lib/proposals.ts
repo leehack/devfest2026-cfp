@@ -40,6 +40,7 @@ export interface CfpWindow {
    */
   profile: CfpProfile;
   visibility: Visibility;
+  publishedScheduleId?: string;
 }
 
 /**
@@ -77,10 +78,14 @@ export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
     profile: {
       description: data.description,
       eventDate: data.eventDate,
+      eventStartDate: data.eventStartDate ?? data.eventDate,
+      eventEndDate: data.eventEndDate ?? data.eventStartDate ?? data.eventDate,
+      timeZone: data.timeZone,
       venue: data.venue,
       location: data.location,
       website: data.website,
     },
+    publishedScheduleId: data.publishedScheduleId,
   };
 }
 

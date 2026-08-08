@@ -9,6 +9,7 @@
 export const ADMIN_TABS = [
   'overview',
   'proposals',
+  'schedule',
   'committee',
   'settings',
   'submission',

@@ -278,6 +278,18 @@ reviewers/{uid}
 
 emailLog/{logId}
   proposalId, template, to, sentAt, providerId
+
+config/schedule
+  timeZone, days[], rooms[], revision, publishedVersion, needsAttention
+
+scheduleDraft/{entryId}
+  kind, date, startsAt, durationMinutes, roomId
+  proposalId, assignedLanguage             // proposal item
+  customType, title, description            // custom item
+
+scheduleReleases/{releaseId}
+  version, timeZone, days[], rooms[], publishedAt
+  entries/{entryId}                         // immutable attendee-facing snapshot
 ```
 
 ### Indexes
@@ -368,13 +380,34 @@ Every send goes through `emailLog` to prevent duplicates. Build a dry-run/previe
 
 ---
 
-## 9. Build order
+## 9. Public programme and schedule
+
+Organisers build the programme privately from accepted and confirmed talks.
+Room, speaker and duplicate-talk overlaps are hard publication errors. An
+`either` proposal must be assigned `en` or `fr`; accepted-but-unconfirmed talks
+may be placed tentatively but cannot be published.
+
+Publication is versioned: a complete immutable release is written first, then
+one pointer on the CFP document makes it public atomically. Only the pointed-to
+release is anonymously readable. The public agenda supports day, room and
+language filters, stable session URLs, bilingual labels, and whole-event or
+per-session iCalendar downloads in the event time zone.
+
+Schedule assignment, movement and cancellation messages use the held email
+queue. A confirmed proposal that later leaves `confirmed` remains visible as
+cancelled in the current release and calendar feed until an organiser publishes
+a replacement, avoiding a silent disappearance for attendees.
+
+---
+
+## 10. Build order
 
 1. **Submission form + Firestore write + security rules.** Conditional fields (GDE guidance, funding source, language preference) are the fiddly part.
 2. **Review interface.** Prototype exists; needs auth, real data binding, and per-reviewer assignment.
 3. **Aggregation function.** z-score normalisation, std dev, conflict exclusion.
 4. **Selection dashboard.** Sorted by disagreement, with balance counters.
 5. **Email pipeline.** Domain auth first, then templates, then the scheduled confirmation job.
+6. **Programme.** Private conflict-aware planner, versioned publication, calendar export and schedule notifications.
 
 Items 1 and 5 have the longest lead time — domain authentication in particular should be set up early, since deliverability problems only appear under real volume.
 
