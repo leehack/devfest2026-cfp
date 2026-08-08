@@ -24,7 +24,17 @@ export { pageShape } from './pageShape';
  * The links mailed before the move are handled by the inline script in
  * `shared/legacyHash.ts`, which has to run before the first paint.
  */
-export type Route = 'home' | 'new' | 'platform' | 'me' | 'cfp' | 'form' | 'admin' | 'review';
+export type Route =
+  | 'home'
+  | 'new'
+  | 'platform'
+  | 'me'
+  | 'cfp'
+  | 'form'
+  | 'admin'
+  | 'review'
+  | 'schedule'
+  | 'session';
 
 export interface Place {
   route: Route;
@@ -37,9 +47,10 @@ export interface Place {
   cfpId: string | null;
   /** Only meaningful on `admin`; the first tab is the default. */
   tab: AdminTab;
+  entryId?: string | null;
 }
 
-const HOME: Place = { route: 'home', cfpId: null, tab: ADMIN_TABS[0] };
+const HOME: Place = { route: 'home', cfpId: null, tab: ADMIN_TABS[0], entryId: null };
 
 /**
  * Anything unrecognised reads as home rather than as a blank screen, because a
@@ -52,7 +63,7 @@ export function placeOf(path: string): Place {
   if (trimmed === 'platform') return { ...HOME, route: 'platform' };
   if (trimmed === 'me') return { ...HOME, route: 'me' };
 
-  const [prefix, cfpId = '', section = '', tab = ''] = trimmed.split('/');
+  const [prefix, cfpId = '', section = '', detail = ''] = trimmed.split('/');
   if (prefix !== 'c' || validateCfpId(cfpId) !== null) return HOME;
 
   // Anything unrecognised under a CFP is its front page, for the same reason
@@ -60,12 +71,21 @@ export function placeOf(path: string): Place {
   const route: Route =
     section === 'admin'
       ? 'admin'
+      : section === 'schedule'
+        ? detail
+          ? 'session'
+          : 'schedule'
       : section === 'review'
         ? 'review'
         : section === 'submit'
           ? 'form'
           : 'cfp';
-  return { route, cfpId, tab: isAdminTab(tab) ? tab : ADMIN_TABS[0] };
+  return {
+    route,
+    cfpId,
+    tab: section === 'admin' && isAdminTab(detail) ? detail : ADMIN_TABS[0],
+    entryId: route === 'session' ? decodeURIComponent(detail) : null,
+  };
 }
 
 /**
@@ -79,7 +99,12 @@ export function currentPlace(): Place {
 }
 
 /** The path for a place, so links and `navigate` cannot drift apart. */
-export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTab }): string {
+export function href(place: {
+  route: Route;
+  cfpId?: string | null;
+  tab?: AdminTab;
+  entryId?: string;
+}): string {
   if (place.route === 'home') return paths.home();
   if (place.route === 'new') return paths.new();
   if (place.route === 'platform') return paths.platform();
@@ -87,6 +112,8 @@ export function href(place: { route: Route; cfpId?: string | null; tab?: AdminTa
   const cfpId = place.cfpId ?? '';
   if (place.route === 'cfp') return paths.cfp(cfpId);
   if (place.route === 'form') return paths.submit(cfpId);
+  if (place.route === 'schedule') return paths.schedule(cfpId);
+  if (place.route === 'session') return paths.session(cfpId, place.entryId ?? '');
   if (place.route === 'admin') return paths.admin(cfpId, place.tab);
   return paths.review(cfpId);
 }
@@ -102,7 +129,7 @@ export function goTo(path: string): void {
 
 export function navigate(
   route: Route,
-  options: { cfpId?: string | null; tab?: AdminTab } = {},
+  options: { cfpId?: string | null; tab?: AdminTab; entryId?: string } = {},
 ): void {
   goTo(href({ route, ...options }));
 }
@@ -126,7 +153,12 @@ export function usePlace(initialPath?: string): Place {
     // re-render the whole tree for nothing, and a re-render mid-edit is how a
     // form loses what somebody just typed.
     setPlace((was) =>
-      was.route === now.route && was.cfpId === now.cfpId && was.tab === now.tab ? was : now,
+      was.route === now.route &&
+      was.cfpId === now.cfpId &&
+      was.tab === now.tab &&
+      was.entryId === now.entryId
+        ? was
+        : now,
     );
     const onChange = () => {
       // Navigation guards run on the same event and may synchronously restore

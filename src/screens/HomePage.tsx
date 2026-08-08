@@ -382,7 +382,10 @@ function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
   const state = cardState(cfp, Date.now());
   const stateLabel = t.platform.status[state];
   const relevantDate = state === 'upcoming' ? opensAt : closesAt;
-  const eventDay = cfp.eventDate ? calendarDate(cfp.eventDate) : null;
+  const eventStartValue = cfp.eventStartDate ?? cfp.eventDate;
+  const eventEndValue = cfp.eventEndDate ?? eventStartValue;
+  const eventDay = eventStartValue ? calendarDate(eventStartValue) : null;
+  const eventEnd = eventEndValue ? calendarDate(eventEndValue) : null;
 
   const when =
     state === 'upcoming' && opensAt
@@ -427,8 +430,11 @@ function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
         {(eventDay || cfp.location) && (
           <span className="cfp-card__event">
             {eventDay && (
-              <time className="cfp-card__event-date" dateTime={cfp.eventDate}>
+              <time className="cfp-card__event-date" dateTime={eventStartValue}>
                 {formatCalendarDay(eventDay, locale)}
+                {eventEnd && eventEndValue !== eventStartValue
+                  ? ` – ${formatCalendarDay(eventEnd, locale)}`
+                  : ''}
               </time>
             )}
             {eventDay && cfp.location && (

@@ -10,6 +10,7 @@ import {
 } from '@shared/submissionForm';
 
 import { useToast } from '../components/Toast';
+import { Link } from '../components/Link';
 import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../components/fields';
 import { FormProgress, type FormProgressItem } from '../components/FormProgress';
 import { Reveal } from '../components/Reveal';
@@ -19,14 +20,15 @@ import {
   SpeakerProfileSummary,
   speakerProfileComplete,
 } from '../components/SpeakerFields';
-import { formatDate, type Dictionary } from '../i18n';
+import { formatCalendarDay, formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { COC_URL } from '../lib/env';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
 import { editScope, type EditScope } from '../lib/lifecycle';
-import { goTo } from '../lib/router';
+import { goTo, href } from '../lib/router';
+import { loadPublishedSchedule, type PublishedScheduleBundle } from '../lib/schedule';
 import {
   clearTalk,
   emptyForm,
@@ -48,6 +50,8 @@ import {
   type LoadedProposal,
 } from '../lib/proposals';
 import type { ProposalStatus } from '@shared/enums';
+import { calendarDate } from '@shared/cfp';
+import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
 import { HeadshotField } from '../components/HeadshotField';
 import {
   EMPTY_FORM,
@@ -318,6 +322,13 @@ interface StatusBannerProps {
   onCancelAsk: () => void;
   /** Present once confirmed, so an answer can still be corrected afterwards. */
   onSaveAnswers?: () => void;
+  schedule?: {
+    date: string;
+    time: string;
+    room: string;
+    language: string;
+    href: string;
+  };
 }
 
 /** Where the talk stands, and what is still theirs to change about it. */
@@ -332,6 +343,7 @@ function StatusBanner({
   onAsk,
   onCancelAsk,
   onSaveAnswers,
+  schedule,
 }: StatusBannerProps) {
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
@@ -342,7 +354,28 @@ function StatusBanner({
   return (
     <div className={`panel submission-status${good ? ' panel--good' : ''}`}>
       <h2>{t.enums.status[status]}</h2>
-      <p>{t.form.statusHelp[status] ?? t.form.submittedHelp}</p>
+      <p>
+        {status === 'confirmed' && schedule
+          ? t.form.scheduledHelp
+          : (t.form.statusHelp[status] ?? t.form.submittedHelp)}
+      </p>
+
+      {status === 'confirmed' && schedule && (
+        <aside className="submission-schedule" aria-labelledby="submission-schedule-title">
+          <div className="submission-schedule__heading">
+            <h3 id="submission-schedule-title">{t.form.scheduleDetails}</h3>
+            <Link className="btn btn--primary" to={schedule.href}>
+              {t.form.viewScheduledSession}
+            </Link>
+          </div>
+          <dl>
+            <div><dt>{t.schedule.date}</dt><dd>{schedule.date}</dd></div>
+            <div><dt>{t.schedule.time}</dt><dd>{schedule.time}</dd></div>
+            <div><dt>{t.schedule.room}</dt><dd>{schedule.room}</dd></div>
+            <div><dt>{t.schedule.language}</dt><dd>{schedule.language}</dd></div>
+          </dl>
+        </aside>
+      )}
 
       {/*
         The whole point of the acceptance email's link. Both answers are here
@@ -478,6 +511,8 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   /** What this call asks for. Defaults until the config comes back, so the
       dropdowns are never momentarily empty. */
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
+  const [publishedSchedule, setPublishedSchedule] =
+    useState<PublishedScheduleBundle | null>(null);
   const [answers, setAnswers] = useState<Answers>({});
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
   const [answerSaveState, setAnswerSaveState] =
@@ -566,10 +601,13 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked] = await Promise.all([
+        const [{ talks: found, speaker: profile }, questions, asked, schedule] = await Promise.all([
           loadMyProposals(cfpId, user),
           loadConfirmForm(cfpId),
           loadSubmissionForm(cfpId),
+          cfp.publishedScheduleId
+            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId).catch(() => null)
+            : Promise.resolve(null),
         ]);
         if (cancelled) return;
         setTalks(found);
@@ -578,6 +616,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         speakerRef.current = profile;
         setConfirmForm(questions);
         setShape(asked);
+        setPublishedSchedule(schedule);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
@@ -624,7 +663,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [cfp.state, cfpId, loadAttempt, user]);
+  }, [cfp.publishedScheduleId, cfp.state, cfpId, loadAttempt, user]);
 
   // ----------------------------------------------------------------- autosave
 
@@ -1336,6 +1375,32 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   const withdrawable = status !== 'draft' && inStatusSet('withdrawable', status);
+  const publishedEntry: PublishedScheduleEntry | undefined =
+    proposalId && publishedSchedule
+      ? publishedSchedule.entries.find(
+          (entry) =>
+            entry.kind === 'proposal' &&
+            entry.proposalId === proposalId &&
+            !entry.cancelled,
+        )
+      : undefined;
+  const publishedRoom = publishedEntry?.kind === 'proposal'
+    ? publishedSchedule?.schedule.rooms.find((room) => room.id === publishedEntry.roomId)
+    : undefined;
+  const publishedDate =
+    publishedEntry?.kind === 'proposal' ? calendarDate(publishedEntry.date) : null;
+  const speakerSchedule =
+    publishedEntry?.kind === 'proposal' && publishedDate
+      ? {
+          date: formatCalendarDay(publishedDate, locale),
+          time: `${publishedEntry.startsAt}–${scheduleEndTime(publishedEntry)}`,
+          room: publishedRoom
+            ? localised(publishedRoom.name, locale)
+            : publishedEntry.roomId,
+          language: t.enums.deliveryLanguage[publishedEntry.session.language],
+          href: href({ route: 'session', cfpId, entryId: publishedEntry.id }),
+        }
+      : undefined;
   const profileOnly = scope === 'none';
   const liveErrorKeys = Object.keys(liveErrors);
   const hasAny = (keys: string[]) => keys.some((key) => liveErrorKeys.includes(key));
@@ -1458,6 +1523,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               ? () => void saveConfirmationAnswers('manual')
               : undefined
           }
+          schedule={speakerSchedule}
         />
       )}
 

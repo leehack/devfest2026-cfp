@@ -1,0 +1,29 @@
+{
+  "command": "npm run verify",
+  "result": "PASS",
+  "observed_in_task": true,
+  "checks": {
+    "lint": "PASS",
+    "typecheck": "PASS",
+    "production_build": "PASS",
+    "bundle_check": "PASS",
+    "unit_tests": {
+      "passed": 397,
+      "failed": 0
+    },
+    "firestore_rules_tests": {
+      "passed": 129,
+      "failed": 0
+    },
+    "playwright_e2e": {
+      "passed": 266,
+      "failed": 0
+    }
+  },
+  "follow_up_flows": {
+    "REV-06": "PASS — canonical failed-save recovery E2E",
+    "SPK-09": "PASS — canonical acceptance-to-published-ICS E2E",
+    "A11Y-02": "PASS — native Safari and VoiceOver baseline"
+  },
+  "note": "The expanded release gate passed 266/266. The earlier screenshot-enabled run remains preserved as the original 264/264 playwright-results.json artifact."
+}

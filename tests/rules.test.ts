@@ -31,6 +31,7 @@ const APPLICANT = 'applicant-anna';
 const OTHER_APPLICANT = 'applicant-bruno';
 const REVIEWER = 'reviewer-chen';
 const OTHER_REVIEWER = 'reviewer-dara';
+const OWNER = 'owner-olive';
 
 /**
  * Two tenants throughout, not one.
@@ -123,6 +124,11 @@ beforeEach(async () => {
       cfpId: CFP_ID,
       uid: REVIEWER,
     });
+    await setDoc(doc(db, `${CFP}/members`, OWNER), {
+      ...member('owner', 'Olive'),
+      cfpId: CFP_ID,
+      uid: OWNER,
+    });
     await setDoc(doc(db, `${CFP}/members`, OTHER_REVIEWER), {
       ...member('reviewer', 'Dara'),
       cfpId: CFP_ID,
@@ -178,6 +184,79 @@ const asOther = () => env.authenticatedContext(OTHER_APPLICANT, VERIFIED).firest
 const asReviewer = () => env.authenticatedContext(REVIEWER, VERIFIED).firestore();
 const asOtherReviewer = () => env.authenticatedContext(OTHER_REVIEWER, VERIFIED).firestore();
 const asUnverified = () => env.authenticatedContext(APPLICANT, {}).firestore();
+const asOwner = () => env.authenticatedContext(OWNER, VERIFIED).firestore();
+
+describe('schedule drafts and published releases', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await updateDoc(doc(db, CFP), { publishedScheduleId: 'release-current' });
+      await setDoc(doc(db, `${CFP}/config/schedule`), {
+        revision: 2,
+        timeZone: 'America/Toronto',
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room' } }],
+      });
+      await setDoc(doc(db, `${CFP}/scheduleDraft/talk-one`), {
+        kind: 'proposal',
+        proposalId: 'p-anna',
+        date: '2026-11-14',
+        startsAt: '09:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      });
+      for (const releaseId of ['release-current', 'release-old']) {
+        await setDoc(doc(db, `${CFP}/scheduleReleases/${releaseId}`), {
+          version: releaseId === 'release-current' ? 2 : 1,
+          timeZone: 'America/Toronto',
+          days: [],
+          rooms: [],
+        });
+        await setDoc(doc(db, `${CFP}/scheduleReleases/${releaseId}/entries/talk-one`), {
+          kind: 'proposal',
+          proposalId: 'p-anna',
+          date: '2026-11-14',
+          startsAt: '09:00',
+          durationMinutes: 40,
+          roomId: 'main',
+        });
+      }
+    });
+  });
+
+  it('lets only event admins read the draft', async () => {
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/config/schedule`)));
+    await assertSucceeds(getDocs(collection(asOwner(), `${CFP}/scheduleDraft`)));
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/config/schedule`)));
+    await assertFails(getDocs(collection(asApplicant(), `${CFP}/scheduleDraft`)));
+  });
+
+  it('makes every draft mutation callable-only, including for an owner', async () => {
+    await assertFails(updateDoc(doc(asOwner(), `${CFP}/config/schedule`), { revision: 3 }));
+    await assertFails(deleteDoc(doc(asOwner(), `${CFP}/scheduleDraft/talk-one`)));
+    await assertFails(
+      setDoc(doc(asOwner(), `${CFP}/scheduleDraft/talk-two`), { kind: 'custom' }),
+    );
+  });
+
+  it('publishes only the release selected by the CFP document', async () => {
+    const anon = env.unauthenticatedContext().firestore();
+    await assertSucceeds(getDoc(doc(anon, `${CFP}/scheduleReleases/release-current`)));
+    await assertSucceeds(
+      getDocs(collection(anon, `${CFP}/scheduleReleases/release-current/entries`)),
+    );
+    await assertFails(getDoc(doc(anon, `${CFP}/scheduleReleases/release-old`)));
+    await assertFails(getDocs(collection(anon, `${CFP}/scheduleReleases/release-old/entries`)));
+  });
+
+  it('never lets a browser change a public release', async () => {
+    await assertFails(
+      updateDoc(doc(asOwner(), `${CFP}/scheduleReleases/release-current/entries/talk-one`), {
+        startsAt: '10:00',
+      }),
+    );
+  });
+});
 
 describe('applicants read and write only their own proposal', () => {
   it('reads its own proposal', async () => {

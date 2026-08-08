@@ -42,6 +42,7 @@ import { ThemeSwitch } from './components/ThemeSwitch';
 import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
 import type { PlatformAccessStatus } from '@shared/platform';
+import type { PublishedScheduleBundle } from './lib/schedule';
 
 const SubmitPage = lazy(() =>
   import('./screens/SubmitPage').then(({ SubmitPage }) => ({ default: SubmitPage })),
@@ -51,6 +52,9 @@ const AdminPage = lazy(() =>
 );
 const ReviewPage = lazy(() =>
   import('./screens/ReviewPage').then(({ ReviewPage }) => ({ default: ReviewPage })),
+);
+const SchedulePage = lazy(() =>
+  import('./screens/SchedulePage').then(({ SchedulePage }) => ({ default: SchedulePage })),
 );
 const HomePage = lazy(() =>
   import('./screens/HomePage').then(({ HomePage }) => ({ default: HomePage })),
@@ -70,9 +74,11 @@ const PlatformAdminPage = lazy(() =>
 export function App({
   initialPath,
   initialCfp,
+  initialSchedule,
 }: {
   initialPath?: string;
   initialCfp?: { id: string; value: CfpWindow | null };
+  initialSchedule?: { releaseId: string; value: PublishedScheduleBundle | null };
 } = {}) {
   /*
    * Starts at the locale the server rendered, then settles to the real one after
@@ -103,7 +109,7 @@ export function App({
   const [askConsent, setAskConsent] = useState(false);
   const [analyticsConsent, setAnalyticsConsent] = useState<Consent>('unasked');
   const { route, cfpId } = place;
-  const placeKey = `${route}:${cfpId ?? ''}:${place.tab}`;
+  const placeKey = `${route}:${cfpId ?? ''}:${place.tab}:${place.entryId ?? ''}`;
   const [emailLink, setEmailLink] = useState(false);
   const focusedPlace = useRef(placeKey);
   const {
@@ -155,6 +161,9 @@ export function App({
   // and the task they are actually on rather than whichever screen the HTML
   // was written for.
   useEffect(() => {
+    // The session screen owns its loaded entry title. Leaving its server title
+    // alone also keeps a direct request and an in-app navigation identical.
+    if (place.route === 'session') return;
     document.title = documentTitle(place, visibleCfp?.name ?? null, t);
   }, [place, t, visibleCfp?.name]);
 
@@ -287,7 +296,11 @@ export function App({
                 <span />
               </span>
               <div>
-                <AppBreadcrumb place={place} cfpName={visibleCfp?.name ?? null} />
+                <AppBreadcrumb
+                  place={place}
+                  cfpName={visibleCfp?.name ?? null}
+                  canAccessAdmin={role === 'admin' || role === 'owner'}
+                />
                 <h1 className="header__title">
                   {headerTitle(place, visibleCfp?.name ?? null, t)}
                 </h1>
@@ -337,7 +350,12 @@ export function App({
           </header>
 
           {cfpId && visibleCfp && !signedOutProtectedRoute && (
-            <EventNavigation place={place} cfpName={visibleCfp.name} role={role} />
+            <EventNavigation
+              place={place}
+              cfpName={visibleCfp.name}
+              role={role}
+              hasSchedule={Boolean(visibleCfp.publishedScheduleId)}
+            />
           )}
 
           {/* Long-form routes set their own readable measure. The submission
@@ -348,7 +366,7 @@ export function App({
             id="main-content"
             tabIndex={-1}
           >
-            {!cfpReady || (!authReady && route !== 'cfp') ? (
+            {!cfpReady || (!authReady && !['cfp', 'schedule', 'session'].includes(route)) ? (
               <p className="muted">{t.app.loading}</p>
             ) : (
               <Suspense fallback={<p className="muted">{t.app.loading}</p>}>
@@ -367,6 +385,7 @@ export function App({
                   retryPlatform={retryPlatform}
                   cfpError={cfpError}
                   retryCfp={retryCfp}
+                  initialSchedule={initialSchedule}
                 />
               </Suspense>
             )}
@@ -413,6 +432,7 @@ interface RoutedProps {
   retryPlatform: () => void;
   cfpError: boolean;
   retryCfp: () => void;
+  initialSchedule?: { releaseId: string; value: PublishedScheduleBundle | null };
 }
 
 /**
@@ -434,6 +454,7 @@ function Routed({
   retryPlatform,
   cfpError,
   retryCfp,
+  initialSchedule,
 }: RoutedProps) {
   const { t } = useI18n();
   const { route, cfpId, tab } = place;
@@ -554,6 +575,22 @@ function Routed({
   // would be asking in the wrong order.
   if (route === 'cfp') return <CfpPage cfp={cfp} cfpId={cfpId} />;
 
+  if (route === 'schedule' || route === 'session') {
+    return (
+      <SchedulePage
+        cfpId={cfpId}
+        cfpName={cfp.name}
+        releaseId={cfp.publishedScheduleId ?? null}
+        entryId={place.entryId ?? null}
+        initialBundle={
+          initialSchedule && initialSchedule.releaseId === cfp.publishedScheduleId
+            ? initialSchedule.value
+            : undefined
+        }
+      />
+    );
+  }
+
   if (route === 'form') return <FormRoute user={user} cfp={cfp} cfpId={cfpId} />;
 
   if (!user) {
@@ -584,15 +621,16 @@ function Routed({
 
   const allowed = route === 'admin' ? role === 'admin' || role === 'owner' : role !== null;
   if (!allowed) {
+    const reviewerRecovery = role !== null;
     return (
       <div className="panel">
         <p>{t.nav.forbidden}</p>
         <button
           type="button"
           className="btn btn--primary"
-          onClick={() => navigate('form', { cfpId })}
+          onClick={() => navigate(reviewerRecovery ? 'review' : 'cfp', { cfpId })}
         >
-          {t.nav.backToForm}
+          {reviewerRecovery ? t.nav.review : t.nav.cfp}
         </button>
       </div>
     );

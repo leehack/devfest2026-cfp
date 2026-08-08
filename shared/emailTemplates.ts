@@ -21,11 +21,19 @@ export const EMAIL_KINDS = [
   'accepted',
   'waitlisted',
   'rejected',
+  'schedule_assigned',
+  'schedule_changed',
+  'schedule_cancelled',
 ] as const;
 export type EmailKind = (typeof EMAIL_KINDS)[number];
 
 /** Decisions go out together or not at all — see the queue's `held` status. */
 export const DECISION_KINDS: readonly EmailKind[] = ['accepted', 'waitlisted', 'rejected'];
+export const SCHEDULE_EMAIL_KINDS: readonly EmailKind[] = [
+  'schedule_assigned',
+  'schedule_changed',
+  'schedule_cancelled',
+];
 
 /**
  * A one-off an organiser writes themselves — a question, a correction, a
@@ -50,6 +58,10 @@ export interface EmailData {
   event: string;
   /** Drives the `{visa}` paragraph on an acceptance (§5). */
   needsVisa?: boolean;
+  scheduleDate?: string;
+  scheduleTime?: string;
+  scheduleRoom?: string;
+  scheduleUrl?: string;
 }
 
 export interface RenderedEmail {
@@ -63,7 +75,17 @@ export interface RenderedEmail {
  * paragraph consisting only of it disappears when the speaker does not need a
  * visa, which is how one template serves both cases.
  */
-export const PLACEHOLDERS = ['speakerName', 'title', 'proposalUrl', 'event', 'visa'] as const;
+export const PLACEHOLDERS = [
+  'speakerName',
+  'title',
+  'proposalUrl',
+  'event',
+  'visa',
+  'scheduleDate',
+  'scheduleTime',
+  'scheduleRoom',
+  'scheduleUrl',
+] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
 
 export interface Template {
@@ -124,6 +146,35 @@ const EN: Record<EmailKind, Template> = {
       'Thank you for taking the time. It matters more than a form can convey.',
     ),
   },
+  schedule_assigned: {
+    subject: 'Your {event} session is scheduled',
+    body: p(
+      'Hi {speakerName},',
+      '“{title}” is scheduled for {scheduleDate} at {scheduleTime}, in {scheduleRoom}.',
+      'You can see the published programme here:',
+      '{scheduleUrl}',
+      'Please tell the organising team promptly if this timing creates a problem.',
+    ),
+  },
+  schedule_changed: {
+    subject: 'Your {event} session time has changed',
+    body: p(
+      'Hi {speakerName},',
+      'The programme changed. “{title}” is now scheduled for {scheduleDate} at {scheduleTime}, in {scheduleRoom}.',
+      'The current programme is here:',
+      '{scheduleUrl}',
+    ),
+  },
+  schedule_cancelled: {
+    subject: '“{title}” is no longer scheduled at {event}',
+    body: p(
+      'Hi {speakerName},',
+      '“{title}” is no longer on the published programme.',
+      'The current programme is here:',
+      '{scheduleUrl}',
+      'If this is unexpected, please reply to the organising team.',
+    ),
+  },
 };
 
 const FR: Record<EmailKind, Template> = {
@@ -173,6 +224,35 @@ const FR: Record<EmailKind, Template> = {
       'Nous ne pouvons pas inscrire « {title} » au programme cette année. Les bonnes propositions étaient bien plus nombreuses que les places, et refuser des conférences qui nous plaisaient a été la partie difficile du processus.',
       'Ce n’est pas un jugement sur votre travail, et ce n’est pas une raison de passer votre tour l’an prochain : plusieurs conférences au programme viennent de personnes que nous avions refusées auparavant.',
       'Merci du temps que vous y avez consacré. Cela compte plus qu’un formulaire ne peut le dire.',
+    ),
+  },
+  schedule_assigned: {
+    subject: 'Votre séance à {event} est programmée',
+    body: p(
+      'Bonjour {speakerName},',
+      '« {title} » est programmée le {scheduleDate} à {scheduleTime}, dans {scheduleRoom}.',
+      'Vous pouvez consulter le programme publié ici :',
+      '{scheduleUrl}',
+      'Prévenez rapidement l’équipe organisatrice si cet horaire pose problème.',
+    ),
+  },
+  schedule_changed: {
+    subject: 'L’horaire de votre séance à {event} a changé',
+    body: p(
+      'Bonjour {speakerName},',
+      'Le programme a changé. « {title} » est maintenant prévue le {scheduleDate} à {scheduleTime}, dans {scheduleRoom}.',
+      'Le programme à jour se trouve ici :',
+      '{scheduleUrl}',
+    ),
+  },
+  schedule_cancelled: {
+    subject: '« {title} » n’est plus programmée à {event}',
+    body: p(
+      'Bonjour {speakerName},',
+      '« {title} » ne figure plus au programme publié.',
+      'Le programme à jour se trouve ici :',
+      '{scheduleUrl}',
+      'Si cela vous surprend, répondez à l’équipe organisatrice.',
     ),
   },
 };
@@ -291,6 +371,10 @@ function substitute(source: string, data: EmailData, locale: EmailLocale): strin
     proposalUrl: data.proposalUrl,
     event: data.event,
     visa: data.needsVisa ? VISA[locale] : '',
+    scheduleDate: data.scheduleDate ?? '',
+    scheduleTime: data.scheduleTime ?? '',
+    scheduleRoom: data.scheduleRoom ?? '',
+    scheduleUrl: data.scheduleUrl ?? '',
   };
   // An unknown name is left untouched rather than blanked: validateTemplate
   // rejects them on save, and a visible `{typo}` is easier to diagnose than a

@@ -42,6 +42,7 @@ export const CFP_LIMITS = {
   venueMax: 160,
   locationMax: 120,
   websiteMax: 200,
+  timeZoneMax: 80,
   /** Per approved creator account. The shared platform still needs a ceiling. */
   perOwner: 10,
 } as const;
@@ -59,6 +60,11 @@ export interface CfpProfile {
   description?: Localised;
   /** The event itself, not the deadline. `YYYY-MM-DD`: a day, not an instant. */
   eventDate?: string;
+  /** Inclusive event range. Old documents use `eventDate` for both ends. */
+  eventStartDate?: string;
+  eventEndDate?: string;
+  /** IANA identifier used by the programme and calendar exports. */
+  timeZone?: string;
   venue?: string;
   /** City and region — "Montréal, QC". Speakers plan travel from this. */
   location?: string;
@@ -84,7 +90,9 @@ export type CfpProblem =
   | 'locationLong'
   | 'websiteLong'
   | 'websiteScheme'
-  | 'eventDate';
+  | 'eventDate'
+  | 'eventDateRange'
+  | 'timeZone';
 
 export function validateCfpId(id: string): CfpProblem | null {
   if (id.length < CFP_LIMITS.idMin || id.length > CFP_LIMITS.idMax) return 'idLength';
@@ -123,11 +131,24 @@ export function validateProfile(profile: CfpProfile): CfpProblem | null {
     if (!/^https?:\/\/[^\s]+$/i.test(website)) return 'websiteScheme';
   }
 
-  const eventDate = (profile.eventDate ?? '').trim();
+  const eventDate = (profile.eventStartDate ?? profile.eventDate ?? '').trim();
+  const eventEndDate = (profile.eventEndDate ?? eventDate).trim();
   // The date input already produces this shape; the check is for everything
   // that does not come from the date input.
   if (eventDate && !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) return 'eventDate';
   if (eventDate && !calendarDate(eventDate)) return 'eventDate';
+  if (eventEndDate && (!calendarDate(eventEndDate) || !eventDate)) return 'eventDate';
+  if (eventDate && eventEndDate && eventEndDate < eventDate) return 'eventDateRange';
+
+  const timeZone = (profile.timeZone ?? '').trim();
+  if (timeZone.length > CFP_LIMITS.timeZoneMax) return 'timeZone';
+  if (timeZone) {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone }).format();
+    } catch {
+      return 'timeZone';
+    }
+  }
 
   return null;
 }

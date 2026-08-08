@@ -15,6 +15,8 @@ export const paths = {
   cfp: (cfpId: string) => `/c/${cfpId}`,
   submit: (cfpId: string) => `/c/${cfpId}/submit`,
   review: (cfpId: string) => `/c/${cfpId}/review`,
+  schedule: (cfpId: string) => `/c/${cfpId}/schedule`,
+  session: (cfpId: string, entryId: string) => `/c/${cfpId}/schedule/${entryId}`,
   /** No tab means the bare `/admin`, which the nav links to and the app defaults. */
   admin: (cfpId: string, tab?: AdminTab) =>
     tab ? `/c/${cfpId}/admin/${tab}` : `/c/${cfpId}/admin`,

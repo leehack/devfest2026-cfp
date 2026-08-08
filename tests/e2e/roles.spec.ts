@@ -67,6 +67,19 @@ test.describe('roles', () => {
     await expect(page.getByText('That page is not available to your account.')).toBeVisible();
     await expect(tab(page, 'Manage event')).toHaveCount(0);
     await expect(tab(page, 'Review talks')).toHaveCount(0);
+    await expect(page.locator('.breadcrumb').getByRole('link', { name: 'Manage event' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Event', exact: true }).click();
+    await expect(page).toHaveURL(at(''));
+  });
+
+  test('a reviewer denied an admin route returns to review without an admin breadcrumb', async ({ page }) => {
+    await inviteRole(REVIEWER.email, 'reviewer');
+    await signInAs(page, REVIEWER, at('/admin/settings'));
+
+    await expect(page.getByText('That page is not available to your account.')).toBeVisible();
+    await expect(page.locator('.breadcrumb').getByRole('link', { name: 'Manage event' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Review talks', exact: true }).click();
+    await expect(page).toHaveURL(at('/review'));
   });
 
   test('the bootstrap grant becomes a role on first sign-in', async ({ page }) => {

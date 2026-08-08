@@ -22,7 +22,7 @@ async function describeTheEvent(page: Page) {
   await signInAs(page, ADMIN, at('/admin/settings'));
 
   await page.getByRole('textbox', { name: /^Description \(English\)/ }).fill(BLURB);
-  await page.getByRole('textbox', { name: /^Date of the event/ }).fill('2026-11-14');
+  await page.getByRole('textbox', { name: /^First event day/ }).fill('2026-11-14');
   await page.getByRole('textbox', { name: /^Venue/ }).fill('Palais des congrès');
   await page.getByRole('textbox', { name: /^City/ }).fill('Montréal, QC');
   await page.getByRole('textbox', { name: /^Event website/ }).fill('https://gdgmontreal.com');
@@ -118,7 +118,7 @@ test.describe('a call’s front page', () => {
     await page.reload();
 
     await expect(page.getByRole('textbox', { name: /^Venue/ })).toHaveValue('Palais des congrès');
-    await expect(page.getByRole('textbox', { name: /^Date of the event/ })).toHaveValue(
+    await expect(page.getByRole('textbox', { name: /^First event day/ })).toHaveValue(
       '2026-11-14',
     );
   });

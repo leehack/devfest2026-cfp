@@ -26,6 +26,12 @@ import { friendlyError } from '../lib/errors';
 import { loadSubmissionForm } from '../lib/proposals';
 import { loadCfp, loadReviewQueue, type ProposalRow } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
+import {
+  clearReviewDraft,
+  keepReviewDraft,
+  loadReviewDrafts,
+  type ReviewDraft as Draft,
+} from '../lib/reviewDrafts';
 import { LIMITS, SCORES, type Score } from '@shared/enums';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -33,12 +39,6 @@ import {
   type SubmissionForm,
 } from '@shared/submissionForm';
 import type { Review, SpeakerSnapshot } from '@shared/types';
-
-interface Draft {
-  score: Score | null;
-  conflictOfInterest: boolean;
-  comment: string;
-}
 
 interface SaveFailure {
   id: string;
@@ -75,6 +75,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const draftsRef = useRef(drafts);
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -116,10 +117,18 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
       );
 
+      const recovered = loadReviewDrafts(cfpId, user.uid);
+      const loadedDrafts = new Map(
+        sorted.map((proposal) => [
+          proposal.id,
+          { ...draftOf(reviews.get(proposal.id)), ...recovered.get(proposal.id) },
+        ]),
+      );
+      draftsRef.current = loadedDrafts;
       setOrder(sorted);
       setOwn(loaded.own);
       setMine(reviews);
-      setDrafts(new Map(sorted.map((p) => [p.id, draftOf(reviews.get(p.id))])));
+      setDrafts(loadedDrafts);
       setReviewsVisible(visible);
       setShape(form);
       setIndex(0);
@@ -179,11 +188,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   );
 
   const patch = useCallback((id: string, part: Partial<Draft>) => {
-    setDrafts((prev) => {
-      const next = new Map(prev);
-      next.set(id, { ...draftOf(), ...prev.get(id), ...part });
-      return next;
-    });
+    const draft = { ...draftOf(), ...draftsRef.current.get(id), ...part };
+    const nextDrafts = new Map(draftsRef.current).set(id, draft);
+    draftsRef.current = nextDrafts;
+    setDrafts(nextDrafts);
+    keepReviewDraft(cfpId, user.uid, id, draft);
     // If this proposal already has a failed write, Retry must use the edits the
     // reviewer makes while recovering it rather than the older failed snapshot.
     setFailures((prev) => {
@@ -193,7 +202,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       next.set(id, { ...failed, draft: { ...failed.draft, ...part } });
       return next;
     });
-  }, []);
+  }, [cfpId, user.uid]);
 
   /**
    * `id` and `draft` are arguments rather than reads of current state: by the
@@ -226,6 +235,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }),
         );
         setSavedId(id);
+        clearReviewDraft(cfpId, user.uid, id, draft);
         setFailures((current) => {
           const updated = new Map(current);
           updated.delete(id);
