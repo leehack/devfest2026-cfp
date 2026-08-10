@@ -82,6 +82,35 @@ export async function setCfpWindow(
   });
 }
 
+export async function setCfpArchivedDirect(archived: boolean, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}`, { archived: { booleanValue: archived } });
+}
+
+/** Simulates an interrupted owner deletion after its transaction committed. */
+export async function reserveCfpDeletionDirect(uid: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}`, {
+    archived: { booleanValue: true },
+    deleting: { booleanValue: true },
+  });
+  await patch(`cfps/${cfpId}/members/${uid}`, {
+    deletionReserved: { booleanValue: true },
+  });
+}
+
+export async function clearSharedSchedulePointerDirect(cfpId = CFP_ID) {
+  await expectOk(
+    await fetch(
+      `${DOCS}/cfps/${cfpId}?updateMask.fieldPaths=sharedScheduleId&updateMask.fieldPaths=sharedScheduleAt`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+        body: JSON.stringify({ fields: {} }),
+      },
+    ),
+    'clearSharedSchedulePointerDirect',
+  );
+}
+
 /**
  * A whole CFP, written straight to Firestore.
  *
@@ -270,6 +299,29 @@ export async function createUnverifiedAccount(who: {
   return { uid: localId, idToken };
 }
 
+/** A malformed IdP identity: authenticated, but unusable for an address grant. */
+export async function createAccountWithoutEmail(who: {
+  sub: string;
+  name: string;
+}): Promise<{ uid: string; idToken: string }> {
+  const claims = { sub: who.sub, email_verified: true, name: who.name };
+  const response = await fetch(
+    `${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=fake-api-key`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        postBody: `id_token=${encodeURIComponent(JSON.stringify(claims))}&providerId=google.com`,
+        requestUri: 'http://localhost',
+        returnSecureToken: true,
+      }),
+    },
+  );
+  await expectOk(response, 'createAccountWithoutEmail');
+  const { localId, idToken } = await response.json();
+  return { uid: localId, idToken };
+}
+
 export async function disableAccount(uid: string): Promise<void> {
   const response = await fetch(
     `${AUTH}/identitytoolkit.googleapis.com/v1/accounts:update?key=fake-api-key`,
@@ -386,6 +438,28 @@ export async function readReviews(
 }
 
 /**
+ * Removes a seeded review through the emulator's owner surface.
+ *
+ * Clients deliberately cannot delete review history. This helper exercises the
+ * lifecycle invariant after an administrative repair or tenant cleanup: the
+ * proposal's content lock is monotonic and must not follow the current row
+ * count back to zero.
+ */
+export async function deleteReviewDirect(
+  proposalId: string,
+  reviewerUid: string,
+  cfpId = CFP_ID,
+): Promise<void> {
+  await expectOk(
+    await fetch(`${DOCS}/cfps/${cfpId}/proposals/${proposalId}/reviews/${reviewerUid}`, {
+      method: 'DELETE',
+      headers: { authorization: 'Bearer owner' },
+    }),
+    'deleteReviewDirect',
+  );
+}
+
+/**
  * The sign-in links the Auth emulator has minted.
  *
  * The callable deliberately never returns the link — it is a bearer credential
@@ -445,19 +519,23 @@ export async function readStoredObjects(prefix = ''): Promise<string[]> {
  * files everything as `application/octet-stream`, which is not what these tests
  * are about.
  */
-export async function storeObjectDirect(name: string, contentType: string, body = 'x') {
-  const parts = [
-    '--B\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n',
-    JSON.stringify({ name, contentType }),
-    `\r\n--B\r\nContent-Type: ${contentType}\r\n\r\n`,
-    body,
-    '\r\n--B--\r\n',
-  ].join('');
+export async function storeObjectDirect(
+  name: string,
+  contentType: string,
+  body: string | Uint8Array = 'x',
+) {
+  const parts = Buffer.concat([
+    Buffer.from('--B\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'),
+    Buffer.from(JSON.stringify({ name, contentType })),
+    Buffer.from(`\r\n--B\r\nContent-Type: ${contentType}\r\n\r\n`),
+    typeof body === 'string' ? Buffer.from(body) : Buffer.from(body),
+    Buffer.from('\r\n--B--\r\n'),
+  ]);
   await expectOk(
     await fetch(`${STORAGE}/upload/storage/v1/b/${BUCKET}/o?uploadType=multipart`, {
       method: 'POST',
       headers: { 'content-type': 'multipart/related; boundary=B' },
-      body: parts,
+      body: new Uint8Array(parts),
     }),
     'storeObjectDirect',
   );
@@ -500,20 +578,40 @@ export async function setSendingDomainDirect(domain: string, cfpId = CFP_ID) {
   });
 }
 
+/** Plants the private external-mutation fence for archive/provider race tests. */
+export async function seedExternalMutationLease(expiresAt: Date, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}/config/externalMutation`, {
+    id: { stringValue: 'seeded-external-mutation' },
+    kind: { stringValue: 'test' },
+    expiresAt: { timestampValue: expiresAt.toISOString() },
+  });
+}
+
+export async function readExternalMutationLease(
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/externalMutation`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readExternalMutationLease');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
 /** The organiser's confirmation questions, without going through the callable. */
-export async function setConfirmFormDirect(fields: unknown[], cfpId = CFP_ID) {
-  await expectOk(
-    await fetch(`${DOCS}/cfps/${cfpId}/config/confirmForm`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
-      // Written whole rather than through `patch`, which cannot express an
-      // array of maps in Firestore's REST encoding.
-      body: JSON.stringify({
-        fields: { fields: { arrayValue: { values: fields.map(encode) } } },
-      }),
+export async function setConfirmFormDirect(fields: unknown[], cfpId = CFP_ID): Promise<string> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/confirmForm`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+    // Written whole rather than through `patch`, which cannot express an
+    // array of maps in Firestore's REST encoding.
+    body: JSON.stringify({
+      fields: { fields: { arrayValue: { values: fields.map(encode) } } },
     }),
-    'setConfirmFormDirect',
-  );
+  });
+  await expectOk(response, 'setConfirmFormDirect');
+  return String(((await response.json()) as { updateTime?: unknown }).updateTime ?? '');
 }
 
 /**
@@ -524,22 +622,21 @@ export async function setConfirmFormDirect(fields: unknown[], cfpId = CFP_ID) {
 export async function setSubmissionFormDirect(
   form: Record<string, unknown[]>,
   cfpId = CFP_ID,
-) {
-  await expectOk(
-    await fetch(`${DOCS}/cfps/${cfpId}/config/submissionForm`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
-      body: JSON.stringify({
-        fields: Object.fromEntries(
-          Object.entries(form).map(([key, list]) => [
-            key,
-            { arrayValue: { values: list.map(encode) } },
-          ]),
-        ),
-      }),
+): Promise<string> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/submissionForm`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+    body: JSON.stringify({
+      fields: Object.fromEntries(
+        Object.entries(form).map(([key, list]) => [
+          key,
+          { arrayValue: { values: list.map(encode) } },
+        ]),
+      ),
     }),
-    'setSubmissionFormDirect',
-  );
+  });
+  await expectOk(response, 'setSubmissionFormDirect');
+  return String(((await response.json()) as { updateTime?: unknown }).updateTime ?? '');
 }
 
 /** The inverse of `unwrap`: enough of it for a form definition. */
@@ -557,6 +654,51 @@ function encode(value: unknown): Record<string, unknown> {
 /** Puts a queue row into a state the UI cannot reach, e.g. mid-send. */
 export async function setEmailStatusDirect(logId: string, status: string, cfpId = CFP_ID) {
   await patch(`cfps/${cfpId}/emailLog/${logId}`, { status: { stringValue: status } });
+}
+
+export async function seedEmailLog(
+  logId: string,
+  {
+    status,
+    kind = 'accepted',
+    proposalId = 'email-subject',
+    attempts = 0,
+    sendingStartedAt,
+    sendingClaimId,
+    providerAttemptId,
+  }: {
+    status: string;
+    kind?: string;
+    proposalId?: string;
+    attempts?: number;
+    sendingStartedAt?: Date;
+    sendingClaimId?: string;
+    providerAttemptId?: string;
+  },
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/emailLog/${logId}`, {
+    status: { stringValue: status },
+    kind: { stringValue: kind },
+    proposalId: { stringValue: proposalId },
+    to: { stringValue: 'speaker@example.org' },
+    locale: { stringValue: 'en' },
+    attempts: { integerValue: String(attempts) },
+    ...(sendingStartedAt
+      ? { sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() } }
+      : {}),
+    ...(sendingClaimId ? { sendingClaimId: { stringValue: sendingClaimId } } : {}),
+    ...(providerAttemptId ? { providerAttemptId: { stringValue: providerAttemptId } } : {}),
+    data: {
+      mapValue: {
+        fields: {
+          speakerName: { stringValue: 'Speaker' },
+          title: { stringValue: 'Archived email subject' },
+          needsVisa: { booleanValue: false },
+        },
+      },
+    },
+  });
 }
 
 /**
@@ -717,6 +859,46 @@ export async function seedSubmittedProposal(
   await seedProposal(id, { ...talk, status: 'submitted' });
 }
 
+/**
+ * Attempts the same proposal-document create that `saveDraft` performs, but
+ * keeps a caller-selected id so a denial can be checked without a browser-side
+ * auto-id. The request uses the speaker token and therefore goes through
+ * Firestore rules; it never uses the emulator owner credential.
+ */
+export async function createCompleteDraftAs(
+  idToken: string,
+  proposalId: string,
+  speakerUid: string,
+  cfpId = CFP_ID,
+): Promise<{ ok: boolean; status: number }> {
+  const draft = {
+    cfpId,
+    speakerIds: [speakerUid],
+    status: 'draft',
+    title: 'Closed-window draft probe',
+    abstract: 'x'.repeat(400),
+    category: 'ai_ml',
+    format: 'session_40',
+    level: 'intermediate',
+    deliveryLanguage: 'en',
+    acks: { noTravelSupport: true, coc: true, recording: true },
+    attendance: { status: 'local', needsVisa: false },
+  };
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals/${proposalId}`, {
+    method: 'PATCH',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({
+      fields: Object.fromEntries(
+        Object.entries(draft).map(([key, value]) => [key, encode(value)]),
+      ),
+    }),
+  });
+  return { ok: response.ok, status: response.status };
+}
+
 async function patch(path: string, fields: Record<string, unknown>) {
   const mask = Object.keys(fields)
     .map((key) => `updateMask.fieldPaths=${key}`)
@@ -742,6 +924,30 @@ export async function readSpeaker(uid: string): Promise<Record<string, any> | un
   return unwrap(fields ?? {});
 }
 
+/** The event root, including its transactional window and archive state. */
+export async function readCfp(cfpId = CFP_ID): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readCfp');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+export async function readMember(
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/members/${uid}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readMember');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
 /** Every proposal, for asserting what actually reached Firestore. */
 export async function readProposals(cfpId = CFP_ID): Promise<Record<string, any>[]> {
   const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals`, {
@@ -750,6 +956,24 @@ export async function readProposals(cfpId = CFP_ID): Promise<Record<string, any>
   await expectOk(response, 'readProposals');
   const { documents } = await response.json();
   return (documents ?? []).map((d: { fields: Record<string, any> }) => unwrap(d.fields));
+}
+
+/** Proposal ids for one speaker, used when the real browser save chose an auto-id. */
+export async function readProposalIdsForSpeaker(
+  speakerUid: string,
+  cfpId = CFP_ID,
+): Promise<string[]> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  await expectOk(response, 'readProposalIdsForSpeaker');
+  const { documents } = await response.json();
+  return (documents ?? [])
+    .filter((document: { fields: Record<string, any> }) =>
+      (unwrap(document.fields).speakerIds ?? []).includes(speakerUid),
+    )
+    .map((document: { name: string }) => String(document.name).split('/').pop()!)
+    .sort();
 }
 
 /** The first one, for the specs that only ever create a single proposal. */
@@ -768,6 +992,84 @@ export async function readProposalById(
   if (!response.ok) return null;
   const { fields } = await response.json();
   return unwrap(fields ?? {});
+}
+
+/** Firestore commit time, used to assert transaction serialization in races. */
+export async function readProposalUpdateTime(
+  id: string,
+  cfpId = CFP_ID,
+): Promise<string | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/proposals/${id}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readProposalUpdateTime');
+  return String(((await response.json()) as { updateTime?: unknown }).updateTime ?? '');
+}
+
+/** One immutable public schedule entry, read as the backend for trigger assertions. */
+export async function readScheduleEntry(
+  releaseId: string,
+  entryId: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/scheduleReleases/${releaseId}/entries/${entryId}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readScheduleEntry');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** Release ids, including private previews, for atomic-share assertions. */
+export async function readScheduleReleaseIds(cfpId = CFP_ID): Promise<string[]> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/scheduleReleases`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  await expectOk(response, 'readScheduleReleaseIds');
+  const body = (await response.json()) as { documents?: { name: string }[] };
+  return (body.documents ?? []).map((doc) => doc.name.split('/').at(-1)!).sort();
+}
+
+/** The release metadata exactly as an anonymous attendee may read it. */
+export async function readPublicScheduleRelease(
+  releaseId: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/scheduleReleases/${releaseId}`);
+  if (response.status === 404) return null;
+  await expectOk(response, 'readPublicScheduleRelease');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** One public entry through the same unauthenticated rules boundary as the app. */
+export async function readPublicScheduleEntry(
+  releaseId: string,
+  entryId: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/scheduleReleases/${releaseId}/entries/${entryId}`,
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readPublicScheduleEntry');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** Restores the pre-cancellation-trigger shape for a queue freshness regression. */
+export async function setScheduleEntryCancelledDirect(
+  releaseId: string,
+  entryId: string,
+  cancelled: boolean,
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries/${entryId}`, {
+    cancelled: { booleanValue: cancelled },
+  });
 }
 
 /** Firestore REST wraps every value in a type tag; this is the inverse. */

@@ -168,8 +168,9 @@ test('historical outcomes do not consume the live-talk cap', async ({ page }) =>
   }
 
   await signInAs(page, RETURNING);
-  await expect(page.getByText('New talk', { exact: true })).toBeVisible();
   await expect(page.getByText('Past talks (3)', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '+ Another talk', exact: true }).click();
+  await expect(page.getByText('New talk', { exact: true })).toBeVisible();
   await expect(field(page, 'Title')).toBeEditable();
 });
 

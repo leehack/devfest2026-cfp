@@ -1,0 +1,23 @@
+A11Y-02 native VoiceOver transcript
+macOS 26.5.2; Safari 26.5.2; 2026-08-08
+
+Review talks — DevFest Montréal 2026 — Call for Proposals, web content
+Skip to content, link
+Shortcuts, expanded, button
+1–4, Score, and move to the next one
+Left/right arrow (J/K), Back and forward without scoring
+Question mark, Show or hide this
+Notes for the committee, Optional, text area
+0 of 3 scored
+Beta on queues
+2 of 3; 1 of 3 scored
+Review queue, heading
+1, Alpha on caching, Scored, button
+2, Beta on queues, Current, Not scored
+3, Gamma on tracing, Not scored, button
+Alpha on caching
+1 of 3; 1 of 3 scored
+3 — Yes, toggle button, on
+
+Result: PASS. VoiceOver was restored to its original off state after the pass.
+Full method and limitations: docs/qa/voiceover-baseline.md

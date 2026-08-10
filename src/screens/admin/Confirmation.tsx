@@ -14,9 +14,11 @@ import type { ConfirmField } from '@shared/confirmForm';
  */
 export function Confirmation({
   cfpId,
+  readOnly = false,
   onDirtyChange,
 }: {
   cfpId: string;
+  readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -67,7 +69,12 @@ export function Confirmation({
       {loading ? (
         <p className="muted">{t.app.loading}</p>
       ) : fields ? (
-        <ConfirmFormEditor cfpId={cfpId} fields={fields} onDirtyChange={onDirtyChange} />
+        <ConfirmFormEditor
+          cfpId={cfpId}
+          fields={fields}
+          readOnly={readOnly}
+          onDirtyChange={onDirtyChange}
+        />
       ) : (
         <button type="button" className="btn" onClick={() => setAttempt((current) => current + 1)}>
           {t.errors.reload}

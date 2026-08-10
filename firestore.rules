@@ -152,8 +152,40 @@ service cloud.firestore {
       // is public — the form has to render its own state before anyone signs in.
       match /config/{docId} {
         allow read: if docId == 'submissionForm'
-          || (docId == 'confirmForm' && signedIn());
+          || (docId == 'confirmForm' && signedIn())
+          || (docId == 'schedule' && isAdmin(cfpId));
         allow write: if false;
+      }
+
+      // The working programme is operational data. Organisers may read it,
+      // while every mutation goes through revision-checked callables.
+      match /scheduleDraft/{entryId} {
+        allow read: if isAdmin(cfpId);
+        allow write: if false;
+      }
+
+      // Shared previews are disclosed through a role-filtering callable, never
+      // through browser reads. Only the public pointer opens a release; admins
+      // retain direct access to known ids for the schedule workspace.
+      match /scheduleReleases/{releaseId} {
+        function isPublicRelease() {
+          return cfp(cfpId).get('publishedScheduleId', '') == releaseId;
+        }
+
+        allow get: if isPublicRelease() || isAdmin(cfpId);
+        allow list, write: if false;
+
+        match /entries/{entryId} {
+          allow get, list: if isPublicRelease() || isAdmin(cfpId);
+          allow write: if false;
+        }
+
+        // Immutable release provenance supports stale checks and organiser
+        // audit, but is never attendee-facing data.
+        match /internal/{docId} {
+          allow read: if isAdmin(cfpId);
+          allow write: if false;
+        }
       }
 
       // ----------------------------------------------------------- proposals
@@ -197,7 +229,8 @@ service cloud.firestore {
           && request.resource.data.status == 'draft'
           && !request.resource.data.keys().hasAny([
                'aggregate', 'submittedAt', 'confirmDeadline',
-               'confirmedAt', 'assignedLanguage', 'speakerSnapshot'
+               'confirmedAt', 'assignedLanguage', 'speakerSnapshot',
+               'headshotUploads'
              ]);
 
         // Keys the client may never write, on create or update. `status` and
@@ -207,7 +240,8 @@ service cloud.firestore {
         function touchesProtected() {
           return request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'cfpId', 'status', 'aggregate', 'submittedAt', 'confirmDeadline',
-            'confirmedAt', 'assignedLanguage', 'confirmAnswers', 'speakerSnapshot'
+            'confirmedAt', 'assignedLanguage', 'confirmAnswers', 'speakerSnapshot',
+            'headshotUploads'
           ]);
         }
 
@@ -259,20 +293,14 @@ service cloud.firestore {
           // Reviewers and admins may also submit talks, which puts them on both
           // sides of this subcollection. §6 says an applicant must never read
           // the reviews of their own proposal, and that outranks any role — so
-          // this gate is applied to reads and writes alike, admins included.
+          // this gate applies to reads even for admins. Writes use the callable
+          // below and re-check the same conflict server-side.
           function proposal() {
             return get(/databases/$(database)/documents/cfps/$(cfpId)/proposals/$(proposalId)).data;
           }
 
           function speaksOnThis() {
             return signedIn() && uid() in proposal().speakerIds;
-          }
-
-          // Nothing to score on a draft nobody submitted, or on one its author
-          // took back. Without this a review could be attached to either, and
-          // would then count towards the aggregate.
-          function scorable() {
-            return proposal().status != 'draft' && proposal().status != 'withdrawn';
           }
 
           function ownReview() {
@@ -286,35 +314,11 @@ service cloud.firestore {
           allow list: if !speaksOnThis()
             && ((isReviewer(cfpId) && cfp(cfpId).reviewsVisible == true) || isAdmin(cfpId));
 
-          // Each reviewer writes only their own document, so nobody can
-          // overwrite a colleague's score.
-          //
-          // `cfpId` is pinned to the path for the same reason as on the
-          // proposal: `recomputeAggregates` reaches these through a
-          // collection-group query, which cannot be filtered by ancestor, so a
-          // review claiming another CFP would land in that CFP's totals.
-          // `hasOnly` is what makes the comment cap below mean anything. Without
-          // it the same text goes in under any other key — nothing would read it,
-          // but nothing would bound it either, and a document nobody polices is
-          // not a document anybody can reason about. These five are exactly what
-          // `saveReview` writes.
-          allow create, update: if ownReview()
-            && scorable()
-            && !archived(cfpId)
-            && request.resource.data.keys()
-                 .hasOnly(['cfpId', 'score', 'conflictOfInterest', 'comment', 'updatedAt'])
-            && request.resource.data.get('cfpId', '') == cfpId
-            && request.resource.data.score is int
-            && request.resource.data.score >= 1
-            && request.resource.data.score <= 4
-            && request.resource.data.conflictOfInterest is bool
-            // 2000 is LIMITS.reviewCommentMax. Rules cannot import it, so the two
-            // are pinned together by tests/reviewComment.test.ts.
-            && (!('comment' in request.resource.data)
-                || (request.resource.data.comment is string
-                    && request.resource.data.comment.size() <= 2000));
-
-          allow delete: if false;
+          // The callable writes the review and promotes submitted ->
+          // under_review atomically. A direct client write would acknowledge
+          // the score while leaving a window where the speaker could still
+          // edit the proposal underneath it.
+          allow create, update, delete: if false;
         }
       }
 

@@ -102,6 +102,10 @@ describe('pageShape', () => {
     expect(pageShape('/c/devfest-mtl-2026/review')).toBe('/c/{cfpId}/review');
     expect(pageShape('/c/devfest-mtl-2026/admin/email')).toBe('/c/{cfpId}/admin/{tab}');
     expect(pageShape('/c/devfest-mtl-2026/admin')).toBe('/c/{cfpId}/admin/{tab}');
+    expect(pageShape('/c/devfest-mtl-2026/schedule')).toBe('/c/{cfpId}/schedule');
+    expect(pageShape('/c/devfest-mtl-2026/schedule/session-one')).toBe(
+      '/c/{cfpId}/schedule/{entryId}',
+    );
   });
 
   it('leaves the platform’s own pages alone — they have no id in them', () => {

@@ -14,9 +14,11 @@ import type { SubmissionForm } from '@shared/submissionForm';
  */
 export function Submission({
   cfpId,
+  readOnly = false,
   onDirtyChange,
 }: {
   cfpId: string;
+  readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -67,7 +69,12 @@ export function Submission({
       {loading ? (
         <p className="muted">{t.app.loading}</p>
       ) : form ? (
-        <SubmissionFormEditor cfpId={cfpId} form={form} onDirtyChange={onDirtyChange} />
+        <SubmissionFormEditor
+          cfpId={cfpId}
+          form={form}
+          readOnly={readOnly}
+          onDirtyChange={onDirtyChange}
+        />
       ) : (
         <button type="button" className="btn" onClick={() => setAttempt((current) => current + 1)}>
           {t.errors.reload}

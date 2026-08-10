@@ -5,7 +5,10 @@ import {
   callAs,
   clearProposals,
   createAccount,
+  createAccountWithoutEmail,
+  disableAccount,
   inviteRole,
+  readMember,
   readProposals,
   readReviews,
   reset,
@@ -67,6 +70,19 @@ test.describe('roles', () => {
     await expect(page.getByText('That page is not available to your account.')).toBeVisible();
     await expect(tab(page, 'Manage event')).toHaveCount(0);
     await expect(tab(page, 'Review talks')).toHaveCount(0);
+    await expect(page.locator('.breadcrumb').getByRole('link', { name: 'Manage event' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Event', exact: true }).click();
+    await expect(page).toHaveURL(at(''));
+  });
+
+  test('a reviewer denied an admin route returns to review without an admin breadcrumb', async ({ page }) => {
+    await inviteRole(REVIEWER.email, 'reviewer');
+    await signInAs(page, REVIEWER, at('/admin/settings'));
+
+    await expect(page.getByText('That page is not available to your account.')).toBeVisible();
+    await expect(page.locator('.breadcrumb').getByRole('link', { name: 'Manage event' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Review talks', exact: true }).click();
+    await expect(page).toHaveURL(at('/review'));
   });
 
   test('the bootstrap grant becomes a role on first sign-in', async ({ page }) => {
@@ -92,6 +108,79 @@ test.describe('roles', () => {
     await expect(tab(page, 'Review talks')).toBeVisible();
     // A reviewer is not an admin.
     await expect(tab(page, 'Manage event')).toHaveCount(0);
+  });
+
+  test('a claim racing revocation cannot resurrect the pending grant', async () => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await inviteRole(REVIEWER.email, 'reviewer');
+    const reviewer = await createAccount(REVIEWER);
+
+    const [, revoked] = await Promise.all([
+      callAs(reviewer.idToken, 'claimRole', {}),
+      callAs(admin.idToken, 'revokeRole', { email: REVIEWER.email }),
+    ]);
+
+    expect(revoked).toMatchObject({ ok: true });
+    expect(await callAs(reviewer.idToken, 'claimRole', {})).toMatchObject({ ok: true });
+    expect(await readMember(reviewer.uid)).toBeNull();
+  });
+
+  test('a role edit racing first claim converges the grant and member on the newest role', async () => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await inviteRole(REVIEWER.email, 'reviewer');
+    const reviewer = await createAccount(REVIEWER);
+
+    await Promise.all([
+      callAs(reviewer.idToken, 'claimRole', {}),
+      callAs(admin.idToken, 'grantRole', { email: REVIEWER.email, role: 'admin' }),
+    ]);
+
+    expect(await readMember(reviewer.uid)).toMatchObject({ role: 'admin', email: REVIEWER.email });
+  });
+
+  test('concurrent removals cannot delete both remaining admins', async () => {
+    const first = await createAccount(ADMIN);
+    const second = await createAccount(REVIEWER);
+    await Promise.all([
+      seedMember(first.uid, 'admin', CFP_ID, ADMIN.email),
+      seedMember(second.uid, 'admin', CFP_ID, REVIEWER.email),
+    ]);
+
+    const results = await Promise.all([
+      callAs(first.idToken, 'revokeRole', { email: REVIEWER.email }),
+      callAs(second.idToken, 'revokeRole', { email: ADMIN.email }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toHaveLength(1);
+    expect([await readMember(first.uid), await readMember(second.uid)].filter(Boolean)).toHaveLength(1);
+  });
+
+  test('revocation removes a disabled account membership by its Auth email', async () => {
+    const admin = await createAccount(ADMIN);
+    const reviewer = await createAccount(REVIEWER);
+    await Promise.all([
+      seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
+      seedMember(reviewer.uid, 'reviewer', CFP_ID, REVIEWER.email),
+    ]);
+    await disableAccount(reviewer.uid);
+
+    expect(
+      await callAs(admin.idToken, 'revokeRole', { email: REVIEWER.email }),
+    ).toMatchObject({ ok: true });
+    expect(await readMember(reviewer.uid)).toBeNull();
+  });
+
+  test('a token without a verified email cannot retrieve an existing event role', async () => {
+    const account = await createAccountWithoutEmail({ sub: 'addressless', name: 'No Address' });
+    await seedMember(account.uid, 'reviewer', CFP_ID, 'legacy@example.org');
+
+    expect(await callAs(account.idToken, 'claimRole', {})).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
   });
 
   test('an admin cannot revoke the last admin', async ({ page }) => {
@@ -189,7 +278,7 @@ test.describe('roles', () => {
     }
   });
 
-  test('an admin can restore a decision to submitted', async ({ page }) => {
+  test('an admin can restore a decision to under review but never to submitted', async ({ page }) => {
     const speaker = await createAccount(SPEAKER);
     await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
     await asAdmin(page, 'proposals');
@@ -208,13 +297,21 @@ test.describe('roles', () => {
     // and on another device too.
     await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
     await page.reload();
-    await status().selectOption('submitted');
+    await status().selectOption('under_review');
     await expect
       .poll(
         async () =>
           (await readProposals()).find((proposal) => proposal.title === 'Sam on shipping')?.status,
       )
-      .toBe('submitted');
+      .toBe('under_review');
+
+    const admin = await createAccount(ADMIN);
+    expect(
+      await callAs(admin.idToken, 'setProposalStatus', {
+        proposalId: 'p-sam',
+        status: 'submitted',
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
   });
 
   test('withdrawn talks are hidden by default and never keep a score', async ({ page }) => {
@@ -360,7 +457,7 @@ test.describe('roles', () => {
     await seedSubmittedProposal('p-sam', { speakerUid: speaker.uid, title: 'Sam on shipping' });
 
     // `withdrawn` belongs to the applicant's flow, and arbitrary values never do.
-    for (const status of ['withdrawn', 'nonsense']) {
+    for (const status of ['submitted', 'withdrawn', 'nonsense']) {
       expect(
         await callAs(admin.idToken, 'setProposalStatus', { proposalId: 'p-sam', status }),
       ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
@@ -449,7 +546,7 @@ test.describe('roles', () => {
   test('the window controls reach the form', async ({ page }) => {
     await asAdmin(page, 'settings');
 
-    await expect(page.getByText(/^Your device time zone:/)).toBeVisible();
+    await expect(page.getByText(/^Proposal window times use the event time zone:/)).toBeVisible();
     await page.getByRole('checkbox', { name: /Pause submissions/ }).check();
     await page.getByRole('button', { name: 'Save window' }).click();
     await expect(page.getByText('Saved.')).toBeVisible();
@@ -492,12 +589,12 @@ test.describe('reviewing', () => {
 
   test('scores a proposal and keeps the score across a reload', async ({ page }) => {
     await expect(page.getByRole('heading', { name: 'Sam on shipping' })).toBeVisible();
-    await expect(page.getByText('0 of 1 scored')).toBeVisible();
+    await expect(page.getByText('0 of 1 responded')).toBeVisible();
 
     // Scoring saves on its own; Save is for coming back to add a note to a
     // talk you have already scored.
     await page.getByRole('button', { name: '3 — Yes' }).click();
-    await expect(page.getByText('1 of 1 scored')).toBeVisible();
+    await expect(page.getByText('1 of 1 responded')).toBeVisible();
 
     await page
       .getByRole('textbox', { name: /^Notes for the committee/ })
@@ -509,7 +606,7 @@ test.describe('reviewing', () => {
       .toBe('Solid, wants a tighter close.');
 
     await page.reload();
-    await expect(page.getByText('1 of 1 scored')).toBeVisible();
+    await expect(page.getByText('1 of 1 responded')).toBeVisible();
     await expect(page.getByRole('button', { name: '3 — Yes' })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -569,7 +666,7 @@ test.describe('reviewing', () => {
 
   test('other scores stay hidden until an admin opens the round', async ({ page }) => {
     await page.getByRole('button', { name: '4 — Strong yes' }).click();
-    await expect(page.getByText('1 of 1 scored')).toBeVisible();
+    await expect(page.getByText('1 of 1 responded')).toBeVisible();
 
     await expect(page.getByText(/scores stay hidden/)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Committee scores' })).toHaveCount(0);

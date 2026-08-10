@@ -1,25 +1,20 @@
 /**
  * One image answer on the confirmation form.
  *
- * The file goes straight to Cloud Storage from the browser rather than through
- * a callable: a callable would have to carry the bytes as base64 in a request
- * body, which is both a size limit and a bill for nothing.
- *
- * Nothing about the upload is reported to the server. `respondToDecision` asks
- * the bucket whether an object exists at the one path this speaker could have
- * written to, so there is no claim here for anyone to forge — the worst a
- * tampered client can do is fail to upload its own photo.
+ * Writes go through a verified callable so archive and deletion can fence the
+ * bucket mutation. Preview bytes come back through a verified callable too;
+ * the browser never receives a bucket URL or creates a download token.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { storage } from '../lib/storage';
+import { uploadHeadshot, workingHeadshotImage } from '../lib/proposals';
 import { useI18n } from '../i18n/context';
-import { FORM_LIMITS, IMAGE_TYPES, headshotPath } from '@shared/confirmForm';
+import { FORM_LIMITS, IMAGE_TYPES } from '@shared/confirmForm';
 
 interface Props {
   cfpId: string;
-  uid: string;
+  proposalId: string;
   fieldKey: string;
   label: string;
   help?: string;
@@ -28,13 +23,13 @@ interface Props {
   disabled: boolean;
   /** True once the server has told us there is already a file for this key. */
   uploaded: boolean;
-  onUploaded: () => void;
+  onUploaded: (path: string) => void;
   onBusyChange?: (busy: boolean) => void;
 }
 
 export function HeadshotField({
   cfpId,
-  uid,
+  proposalId,
   fieldKey,
   label,
   help,
@@ -50,17 +45,43 @@ export function HeadshotField({
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState('');
   const [problem, setProblem] = useState('');
+  const previewUrl = useRef('');
+
+  const showPreview = useCallback((blob: Blob | null) => {
+    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    previewUrl.current = blob ? URL.createObjectURL(blob) : '';
+    setPreview(previewUrl.current);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    },
+    [],
+  );
 
   // Shows what is already stored, so someone coming back sees the photo they
   // sent rather than an empty control that reads as "it did not save".
   useEffect(() => {
-    if (!uploaded) return;
+    if (!uploaded) {
+      showPreview(null);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
-        const { getDownloadURL, ref } = await import('firebase/storage');
-        const url = await getDownloadURL(ref(await storage(), headshotPath(cfpId, uid, fieldKey)));
-        if (!cancelled) setPreview(url);
+        const { data } = await workingHeadshotImage({
+          cfpId,
+          proposalId,
+          key: fieldKey,
+          working: true,
+        });
+        const binary = atob(data.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        if (!cancelled) showPreview(new Blob([bytes], { type: data.contentType }));
       } catch {
         /* The answer is recorded either way; a missing preview is cosmetic. */
       }
@@ -68,11 +89,11 @@ export function HeadshotField({
     return () => {
       cancelled = true;
     };
-  }, [uploaded, cfpId, uid, fieldKey]);
+  }, [uploaded, cfpId, proposalId, fieldKey, showPreview]);
 
   async function choose(file: File) {
-    // Checked here as well as in `storage.rules`, because a rule rejection
-    // arrives as an opaque failure after the whole file has gone up the wire.
+    // Checked here as well as in the callable, so an unsupported file is
+    // explained before base64 encoding and upload consume time and bandwidth.
     if (!(IMAGE_TYPES as readonly string[]).includes(file.type)) {
       setProblem(t.form.imageType);
       return;
@@ -86,11 +107,26 @@ export function HeadshotField({
     setBusy(true);
     onBusyChange?.(true);
     try {
-      const { getDownloadURL, ref, uploadBytes } = await import('firebase/storage');
-      const target = ref(await storage(), headshotPath(cfpId, uid, fieldKey));
-      await uploadBytes(target, file, { contentType: file.type });
-      setPreview(await getDownloadURL(target));
-      onUploaded();
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(reader.error ?? new Error('Could not read the file.'));
+        reader.onload = () =>
+          typeof reader.result === 'string'
+            ? resolve(reader.result)
+            : reject(new Error('Could not read the file.'));
+        reader.readAsDataURL(file);
+      });
+      const separator = dataUrl.indexOf(',');
+      if (separator < 0) throw new Error('Could not encode the file.');
+      const { data } = await uploadHeadshot({
+        cfpId,
+        proposalId,
+        key: fieldKey,
+        contentType: file.type,
+        base64: dataUrl.slice(separator + 1),
+      });
+      showPreview(file);
+      onUploaded(data.path);
     } catch {
       setProblem(t.form.imageFailed);
     } finally {
@@ -124,7 +160,11 @@ export function HeadshotField({
             disabled={disabled || busy}
             onClick={() => input.current?.click()}
           >
-            {busy ? t.form.imageUploading : preview ? t.form.imageReplace : t.form.imageChoose}
+            {busy
+              ? t.form.imageUploading
+              : uploaded || preview
+                ? t.form.imageReplace
+                : t.form.imageChoose}
           </button>
           <p className="field__help">{t.form.imageHint}</p>
         </div>

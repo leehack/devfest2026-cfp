@@ -23,6 +23,7 @@ ui-debug.log
 firebase-export-*
 test-results/
 playwright-report/
+output/
 
 # The Resend key for the emulator; production reads it from Secret Manager.
 functions/.secret.local

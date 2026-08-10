@@ -10,6 +10,7 @@ import {
 } from '@shared/submissionForm';
 
 import { useToast } from '../components/Toast';
+import { Link } from '../components/Link';
 import { Checkbox, RadioGroup, SelectField, TextAreaField, TextField } from '../components/fields';
 import { FormProgress, type FormProgressItem } from '../components/FormProgress';
 import { Reveal } from '../components/Reveal';
@@ -19,14 +20,20 @@ import {
   SpeakerProfileSummary,
   speakerProfileComplete,
 } from '../components/SpeakerFields';
-import { formatDate, type Dictionary } from '../i18n';
+import { formatCalendarDay, formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { COC_URL } from '../lib/env';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
 import { editScope, type EditScope } from '../lib/lifecycle';
-import { goTo } from '../lib/router';
+import { goTo, href } from '../lib/router';
+import {
+  loadPublishedSchedule,
+  loadSharedSchedule,
+  type PublishedScheduleBundle,
+  type SharedScheduleBundle,
+} from '../lib/schedule';
 import {
   clearTalk,
   emptyForm,
@@ -48,11 +55,12 @@ import {
   type LoadedProposal,
 } from '../lib/proposals';
 import type { ProposalStatus } from '@shared/enums';
+import { calendarDate } from '@shared/cfp';
+import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
 import { HeadshotField } from '../components/HeadshotField';
 import {
   EMPTY_FORM,
   FORM_LIMITS,
-  headshotPath,
   localised,
   validateAnswers,
   type AnswerFaults,
@@ -64,6 +72,24 @@ import {
 
 type Errors = Record<string, string>;
 type SaveSource = 'background' | 'manual' | 'transition';
+
+function confirmationAnswersFrom(proposal: Record<string, any>): Answers {
+  const loaded = { ...((proposal.confirmAnswers ?? {}) as Answers) };
+  const uploads = proposal.headshotUploads;
+  if (!uploads || typeof uploads !== 'object' || Array.isArray(uploads)) return loaded;
+  for (const [key, pointer] of Object.entries(uploads)) {
+    if (
+      loaded[key] === undefined &&
+      pointer &&
+      typeof pointer === 'object' &&
+      !Array.isArray(pointer) &&
+      typeof (pointer as { path?: unknown }).path === 'string'
+    ) {
+      loaded[key] = (pointer as { path: string }).path;
+    }
+  }
+  return loaded;
+}
 const PAST_STATUSES = new Set<ProposalStatus>(['withdrawn', 'rejected', 'declined']);
 
 function isPastTalk(talk: LoadedProposal): boolean {
@@ -182,7 +208,7 @@ function AckLabel({ ack }: { ack: ConfirmField }) {
 
 interface QuestionsProps {
   cfpId: string;
-  uid: string;
+  proposalId: string | null;
   fields: ConfirmField[];
   answers: Answers;
   faults: AnswerFaults;
@@ -201,7 +227,7 @@ interface QuestionsProps {
  */
 function Questions({
   cfpId,
-  uid,
+  proposalId,
   fields,
   answers,
   faults,
@@ -223,11 +249,15 @@ function Questions({
         const value = answers[field.key];
 
         if (field.type === 'image') {
+          // Submission forms refuse image fields. Confirmation questions only
+          // render after a proposal exists, and the callable requires its id
+          // to prove the current user owns an eligible proposal.
+          if (!proposalId) return null;
           return (
             <HeadshotField
               key={field.key}
               cfpId={cfpId}
-              uid={uid}
+              proposalId={proposalId}
               fieldKey={field.key}
               label={label}
               help={help}
@@ -238,7 +268,7 @@ function Questions({
               // file exists. Set locally on upload too, purely so the control
               // updates — the callable re-derives it from the bucket regardless.
               uploaded={typeof value === 'string' && value !== ''}
-              onUploaded={() => onAnswer(field.key, headshotPath(cfpId, uid, field.key))}
+              onUploaded={(path) => onAnswer(field.key, path)}
               onBusyChange={(next) => onUploadBusyChange?.(field.key, next)}
             />
           );
@@ -318,6 +348,65 @@ interface StatusBannerProps {
   onCancelAsk: () => void;
   /** Present once confirmed, so an answer can still be corrected afterwards. */
   onSaveAnswers?: () => void;
+  schedule?: {
+    date: string;
+    time: string;
+    room: string;
+    language: string;
+    timeZone: string;
+    public: boolean;
+    href?: string;
+  };
+  /** A newer shared preview exists, but this confirmed talk has no placement in it. */
+  schedulePending?: boolean;
+  /** The current shared preview could not be loaded, so no older placement is shown. */
+  scheduleUnavailable?: boolean;
+}
+
+function proposalJourneyStage(status: ProposalStatus): number {
+  if (status === 'draft' || status === 'withdrawn') return 0;
+  if (status === 'submitted' || status === 'under_review') return 1;
+  if (status === 'confirmed') return 3;
+  return 2;
+}
+
+function ProposalJourney({
+  status,
+  next,
+}: {
+  status: ProposalStatus;
+  next: { title: string; help: string };
+}) {
+  const { t } = useI18n();
+  const current = proposalJourneyStage(status);
+  const ended = ['withdrawn', 'rejected', 'declined'].includes(status);
+  return (
+    <section className="proposal-journey" aria-labelledby="proposal-next-step-title">
+      <ol className="proposal-journey__steps" aria-label={t.form.journeyLabel}>
+        {t.form.journeySteps.map((label, index) => (
+          <li
+            key={label}
+            className={`proposal-journey__step${
+              index === current
+                ? ' proposal-journey__step--current'
+                : index < current
+                  ? ' proposal-journey__step--complete'
+                  : ''
+            }`}
+            aria-current={index === current ? 'step' : undefined}
+          >
+            <span aria-hidden="true">{index + 1}</span>
+            {label}
+          </li>
+        ))}
+      </ol>
+      <div className="proposal-journey__next">
+        <p>{ended ? t.form.journeyOutcome : t.form.nextStep}</p>
+        <h2 id="proposal-next-step-title">{next.title}</h2>
+        <p>{next.help}</p>
+      </div>
+    </section>
+  );
 }
 
 /** Where the talk stands, and what is still theirs to change about it. */
@@ -332,6 +421,9 @@ function StatusBanner({
   onAsk,
   onCancelAsk,
   onSaveAnswers,
+  schedule,
+  schedulePending,
+  scheduleUnavailable,
 }: StatusBannerProps) {
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
@@ -342,7 +434,45 @@ function StatusBanner({
   return (
     <div className={`panel submission-status${good ? ' panel--good' : ''}`}>
       <h2>{t.enums.status[status]}</h2>
-      <p>{t.form.statusHelp[status] ?? t.form.submittedHelp}</p>
+      <p>
+        {status === 'confirmed' && schedule
+          ? schedule.public
+            ? t.form.scheduledHelp
+            : t.form.sharedScheduledHelp
+          : status === 'confirmed' && scheduleUnavailable
+            ? t.form.sharedScheduleUnavailable
+          : status === 'confirmed' && schedulePending
+            ? t.form.sharedUnscheduledHelp
+            : (t.form.statusHelp[status] ?? t.form.submittedHelp)}
+      </p>
+
+      {status === 'confirmed' && schedule && (
+        <aside className="submission-schedule" aria-labelledby="submission-schedule-title">
+          <div className="submission-schedule__heading">
+            <div>
+              <h3 id="submission-schedule-title">
+                {schedule.public ? t.form.scheduleDetails : t.form.sharedScheduleDetails}
+              </h3>
+              {!schedule.public && (
+                <span className="submission-schedule__privacy">{t.schedule.notPublic}</span>
+              )}
+            </div>
+            {schedule.href && (
+              <Link className="btn btn--primary" to={schedule.href}>
+                {t.form.viewScheduledSession}
+              </Link>
+            )}
+          </div>
+          {!schedule.public && <p>{t.form.sharedScheduleHelp}</p>}
+          <dl>
+            <div><dt>{t.schedule.date}</dt><dd>{schedule.date}</dd></div>
+            <div><dt>{t.schedule.time}</dt><dd>{schedule.time}</dd></div>
+            <div><dt>{t.schedule.room}</dt><dd>{schedule.room}</dd></div>
+            <div><dt>{t.schedule.language}</dt><dd>{schedule.language}</dd></div>
+            <div><dt>{t.schedule.timeZone}</dt><dd>{schedule.timeZone}</dd></div>
+          </dl>
+        </aside>
+      )}
 
       {/*
         The whole point of the acceptance email's link. Both answers are here
@@ -478,6 +608,10 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   /** What this call asks for. Defaults until the config comes back, so the
       dropdowns are never momentarily empty. */
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
+  const [publishedSchedule, setPublishedSchedule] =
+    useState<PublishedScheduleBundle | null>(null);
+  const [sharedSchedule, setSharedSchedule] = useState<SharedScheduleBundle | null>(null);
+  const [sharedScheduleFailed, setSharedScheduleFailed] = useState(false);
   const [answers, setAnswers] = useState<Answers>({});
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
   const [answerSaveState, setAnswerSaveState] =
@@ -566,10 +700,18 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked] = await Promise.all([
+        const [{ talks: found, speaker: profile }, questions, asked, schedule, sharedResult] = await Promise.all([
           loadMyProposals(cfpId, user),
           loadConfirmForm(cfpId),
           loadSubmissionForm(cfpId),
+          cfp.publishedScheduleId
+            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId).catch(() => null)
+            : Promise.resolve(null),
+          cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId
+            ? loadSharedSchedule(cfpId)
+                .then((value) => ({ value, failed: false }))
+                .catch(() => ({ value: null, failed: true }))
+            : Promise.resolve({ value: null, failed: false }),
         ]);
         if (cancelled) return;
         setTalks(found);
@@ -578,13 +720,16 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         speakerRef.current = profile;
         setConfirmForm(questions);
         setShape(asked);
+        setPublishedSchedule(schedule);
+        setSharedSchedule(sharedResult.value);
+        setSharedScheduleFailed(sharedResult.failed);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
         const currentTalks = found.filter((talk) => !isPastTalk(talk));
         const open =
           cfp.state === 'open'
-            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0])
+            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? found[0])
             : (currentTalks.find((talk) => talk.status === 'accepted') ??
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
               currentTalks[0] ??
@@ -596,7 +741,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           setProposalId(open.id);
           proposalIdRef.current = open.id;
           setStatus(open.status);
-          const loadedAnswers = (open.proposal.confirmAnswers ?? {}) as Answers;
+          const loadedAnswers = confirmationAnswersFrom(open.proposal);
           setAnswers(loadedAnswers);
           savedAnswersRef.current = loadedAnswers;
           answerDirty.current = false;
@@ -624,7 +769,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [cfp.state, cfpId, loadAttempt, user]);
+  }, [cfp.publishedScheduleId, cfp.sharedScheduleId, cfp.state, cfpId, loadAttempt, user]);
 
   // ----------------------------------------------------------------- autosave
 
@@ -636,7 +781,30 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     answerRevision.current += 1;
     setAnswerSaveState('idle');
     setAnswers((previous) => ({ ...previous, [key]: value }));
-  }, [armHistoryGuard]);
+    const id = proposalIdRef.current;
+    if (
+      id &&
+      typeof value === 'string' &&
+      value.startsWith(`cfps/${cfpId}/workingHeadshots/${id}/${key}/`)
+    ) {
+      const updated = talksRef.current.map((talk) =>
+        talk.id === id
+          ? {
+              ...talk,
+              proposal: {
+                ...talk.proposal,
+                headshotUploads: {
+                  ...(talk.proposal.headshotUploads ?? {}),
+                  [key]: { path: value },
+                },
+              },
+            }
+          : talk,
+      );
+      talksRef.current = updated;
+      setTalks(updated);
+    }
+  }, [armHistoryGuard, cfpId]);
 
   const setAnswerUploadBusy = useCallback((key: string, busy: boolean) => {
     if (busy) uploadingFields.current.add(key);
@@ -1028,7 +1196,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       setProposalId(talk.id);
       proposalIdRef.current = talk.id;
       setStatus(talk.status);
-      const loadedAnswers = (talk.proposal.confirmAnswers ?? {}) as Answers;
+      const loadedAnswers = confirmationAnswersFrom(talk.proposal);
       setAnswers(loadedAnswers);
       savedAnswersRef.current = loadedAnswers;
     } else {
@@ -1300,7 +1468,10 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <p>{cfp.state === 'paused' ? t.window.paused : t.window.closed}</p>
         {cfp.state === 'closed' && (
           <p>
-            {t.window.closedAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
+            {t.window.closedAt}{' '}
+            <strong>
+              {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+            </strong>
           </p>
         )}
       </div>
@@ -1336,6 +1507,56 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   const withdrawable = status !== 'draft' && inStatusSet('withdrawable', status);
+  const sharedEntry: PublishedScheduleEntry | undefined =
+    proposalId && sharedSchedule?.schedule
+      ? sharedSchedule.entries.find(
+          (entry) =>
+            entry.kind === 'proposal' &&
+            entry.proposalId === proposalId &&
+            !entry.cancelled,
+        )
+      : undefined;
+  const publishedEntry: PublishedScheduleEntry | undefined =
+    proposalId && publishedSchedule
+      ? publishedSchedule.entries.find(
+          (entry) =>
+            entry.kind === 'proposal' &&
+            entry.proposalId === proposalId &&
+            !entry.cancelled,
+        )
+      : undefined;
+  // The newer pointer is authoritative even when its speaker projection is
+  // empty. Falling back would resurrect a placement organisers already removed.
+  const hasNewerSharedPreview = Boolean(
+    cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId,
+  );
+  const displayedEntry = hasNewerSharedPreview ? sharedEntry : publishedEntry;
+  const displayedSchedule = hasNewerSharedPreview
+    ? sharedSchedule?.schedule
+    : publishedSchedule?.schedule;
+  const displayedRoom =
+    displayedEntry?.kind === 'proposal'
+      ? displayedSchedule?.rooms.find((room) => room.id === displayedEntry.roomId)
+      : undefined;
+  const displayedDate =
+    displayedEntry?.kind === 'proposal' ? calendarDate(displayedEntry.date) : null;
+  const isSharedPlacement = hasNewerSharedPreview && sharedEntry?.kind === 'proposal';
+  const speakerSchedule =
+    displayedEntry?.kind === 'proposal' && displayedDate
+      ? {
+          date: formatCalendarDay(displayedDate, locale),
+          time: `${displayedEntry.startsAt}–${scheduleEndTime(displayedEntry)}`,
+          room: displayedRoom
+            ? localised(displayedRoom.name, locale)
+            : displayedEntry.roomId,
+          language: t.enums.deliveryLanguage[displayedEntry.session.language],
+          timeZone: displayedSchedule?.timeZone ?? cfp.profile.timeZone ?? 'America/Toronto',
+          public: !isSharedPlacement,
+          ...(!isSharedPlacement
+            ? { href: href({ route: 'session', cfpId, entryId: displayedEntry.id }) }
+            : {}),
+        }
+      : undefined;
   const profileOnly = scope === 'none';
   const liveErrorKeys = Object.keys(liveErrors);
   const hasAny = (keys: string[]) => keys.some((key) => liveErrorKeys.includes(key));
@@ -1400,6 +1621,38 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     },
   ];
 
+  const speakerNext = archived
+    ? t.form.nextSteps.archived
+    : status === 'draft'
+      ? cfp.state === 'open'
+        ? t.form.nextSteps.draft
+        : t.form.nextSteps.draftClosed
+      : status === 'submitted'
+        ? scope === 'all'
+          ? t.form.nextSteps.submittedEditable
+          : t.form.nextSteps.submitted
+        : status === 'under_review'
+          ? t.form.nextSteps.underReview
+          : status === 'accepted'
+            ? t.form.nextSteps.accepted
+            : status === 'confirmed'
+              ? speakerSchedule?.public
+                ? t.form.nextSteps.confirmedPublic
+                : speakerSchedule
+                  ? t.form.nextSteps.confirmedShared
+                  : sharedScheduleFailed
+                    ? t.form.nextSteps.confirmedUnavailable
+                    : hasNewerSharedPreview
+                      ? t.form.nextSteps.confirmedPending
+                      : t.form.nextSteps.confirmedWaiting
+              : status === 'waitlisted'
+                ? t.form.nextSteps.waitlisted
+                : status === 'rejected'
+                  ? t.form.nextSteps.rejected
+                  : status === 'declined'
+                    ? t.form.nextSteps.declined
+                    : t.form.nextSteps.withdrawn;
+
   return (
     <form className="form submission-form" onSubmit={onSubmit} noValidate>
       {picker}
@@ -1418,11 +1671,20 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <div className="submission-context__deadline">
           <span>{t.form.deadline}</span>
           <strong>
-            <time dateTime={cfp.closesAt.toISOString()}>{formatDate(cfp.closesAt, locale)}</time>
+            <time dateTime={cfp.closesAt.toISOString()}>
+              {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+            </time>
           </strong>
-          <span className="submission-context__timezone">{t.form.deadlineTimeZone}</span>
+          <span className="submission-context__timezone">
+            {t.form.deadlineTimeZone.replace(
+              '{zone}',
+              cfp.profile.timeZone ?? 'America/Toronto',
+            )}
+          </span>
         </div>
       </section>
+
+      <ProposalJourney status={status} next={speakerNext} />
 
       {/*
         The talk stays on screen after submitting. A speaker who cannot re-read
@@ -1442,7 +1704,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           }
           questions={{
             cfpId,
-            uid: user.uid,
+            proposalId,
             fields: confirmForm.fields,
             answers,
             faults: answerFaults,
@@ -1457,6 +1719,16 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             !archived && status === 'confirmed'
               ? () => void saveConfirmationAnswers('manual')
               : undefined
+          }
+          schedule={speakerSchedule}
+          schedulePending={
+            status === 'confirmed' &&
+            hasNewerSharedPreview &&
+            !sharedEntry &&
+            !sharedScheduleFailed
+          }
+          scheduleUnavailable={
+            status === 'confirmed' && hasNewerSharedPreview && sharedScheduleFailed
           }
         />
       )}
@@ -1632,7 +1904,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           <h2>{t.sections.extra}</h2>
           <Questions
             cfpId={cfpId}
-            uid={user.uid}
+            proposalId={proposalId}
             fields={shape.fields}
             answers={form.answers}
             faults={extraFaults}

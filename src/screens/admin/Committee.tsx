@@ -46,7 +46,15 @@ function RoleSelect({
   );
 }
 
-export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
+export function Committee({
+  user,
+  cfpId,
+  readOnly = false,
+}: {
+  user: User;
+  cfpId: string;
+  readOnly?: boolean;
+}) {
   const { t } = useI18n();
   const tRef = useLatest(t);
   const [people, setPeople] = useState<Person[]>([]);
@@ -117,6 +125,7 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
   }, [cfpId, reload]);
 
   async function invite() {
+    if (readOnly) return;
     const scope = cfpId;
     setBusy(true);
     setNote('');
@@ -145,7 +154,7 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
    * the first of them.
    */
   async function changeRole(target: string, next: GrantableRole) {
-    if (busy) return;
+    if (busy || readOnly) return;
     const scope = cfpId;
     setBusy(true);
     setNote('');
@@ -221,7 +230,7 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
                     who={person.name ?? person.email}
                     value={person.role}
                     onChange={(next) => changeRole(person.email, next)}
-                    disabled={busy}
+                    disabled={busy || readOnly}
                   />
                   <button
                     type="button"
@@ -246,7 +255,7 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
                   who={grant.email}
                   value={grant.role}
                   onChange={(next) => changeRole(grant.email, next)}
-                  disabled={busy}
+                  disabled={busy || readOnly}
                 />
                 <button
                   type="button"
@@ -269,7 +278,7 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
           value={email}
           onChange={setEmail}
           required
-          disabled={busy || loadFailed}
+          disabled={busy || loadFailed || readOnly}
         />
         <SelectField
           label={t.admin.roleLabel}
@@ -277,13 +286,13 @@ export function Committee({ user, cfpId }: { user: User; cfpId: string }) {
           options={GRANTABLE_ROLES.map((r) => ({ value: r, label: t.enums.role[r] }))}
           onChange={setRole}
           required
-          disabled={busy || loadFailed}
+          disabled={busy || loadFailed || readOnly}
         />
       </div>
       <button
         type="button"
         className="btn btn--primary"
-        disabled={busy || loadFailed || !email.trim()}
+        disabled={busy || loadFailed || readOnly || !email.trim()}
         onClick={invite}
       >
         {busy ? t.admin.inviting : t.admin.invite}

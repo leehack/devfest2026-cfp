@@ -31,6 +31,7 @@ const APPLICANT = 'applicant-anna';
 const OTHER_APPLICANT = 'applicant-bruno';
 const REVIEWER = 'reviewer-chen';
 const OTHER_REVIEWER = 'reviewer-dara';
+const OWNER = 'owner-olive';
 
 /**
  * Two tenants throughout, not one.
@@ -123,6 +124,11 @@ beforeEach(async () => {
       cfpId: CFP_ID,
       uid: REVIEWER,
     });
+    await setDoc(doc(db, `${CFP}/members`, OWNER), {
+      ...member('owner', 'Olive'),
+      cfpId: CFP_ID,
+      uid: OWNER,
+    });
     await setDoc(doc(db, `${CFP}/members`, OTHER_REVIEWER), {
       ...member('reviewer', 'Dara'),
       cfpId: CFP_ID,
@@ -178,6 +184,111 @@ const asOther = () => env.authenticatedContext(OTHER_APPLICANT, VERIFIED).firest
 const asReviewer = () => env.authenticatedContext(REVIEWER, VERIFIED).firestore();
 const asOtherReviewer = () => env.authenticatedContext(OTHER_REVIEWER, VERIFIED).firestore();
 const asUnverified = () => env.authenticatedContext(APPLICANT, {}).firestore();
+const asOwner = () => env.authenticatedContext(OWNER, VERIFIED).firestore();
+
+describe('schedule drafts, shared previews and published releases', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await updateDoc(doc(db, CFP), {
+        publishedScheduleId: 'release-current',
+        sharedScheduleId: 'release-shared',
+      });
+      await setDoc(doc(db, `${CFP}/config/schedule`), {
+        revision: 2,
+        timeZone: 'America/Toronto',
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room' } }],
+      });
+      await setDoc(doc(db, `${CFP}/scheduleDraft/talk-one`), {
+        kind: 'proposal',
+        proposalId: 'p-anna',
+        date: '2026-11-14',
+        startsAt: '09:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      });
+      for (const releaseId of ['release-current', 'release-shared', 'release-old']) {
+        await setDoc(doc(db, `${CFP}/scheduleReleases/${releaseId}`), {
+          version: releaseId === 'release-current' ? 2 : 1,
+          timeZone: 'America/Toronto',
+          days: [],
+          rooms: [],
+        });
+        await setDoc(doc(db, `${CFP}/scheduleReleases/${releaseId}/entries/talk-one`), {
+          kind: 'proposal',
+          proposalId: 'p-anna',
+          date: '2026-11-14',
+          startsAt: '09:00',
+          durationMinutes: 40,
+          roomId: 'main',
+        });
+        await setDoc(doc(db, `${CFP}/scheduleReleases/${releaseId}/internal/source`), {
+          sourceRevision: 2,
+          sourceFingerprint: `fingerprint-${releaseId}`,
+          sharedBy: OWNER,
+        });
+      }
+    });
+  });
+
+  it('lets only event admins read the draft', async () => {
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/config/schedule`)));
+    await assertSucceeds(getDocs(collection(asOwner(), `${CFP}/scheduleDraft`)));
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/config/schedule`)));
+    await assertFails(getDocs(collection(asApplicant(), `${CFP}/scheduleDraft`)));
+  });
+
+  it('makes every draft mutation callable-only, including for an owner', async () => {
+    await assertFails(updateDoc(doc(asOwner(), `${CFP}/config/schedule`), { revision: 3 }));
+    await assertFails(deleteDoc(doc(asOwner(), `${CFP}/scheduleDraft/talk-one`)));
+    await assertFails(
+      setDoc(doc(asOwner(), `${CFP}/scheduleDraft/talk-two`), { kind: 'custom' }),
+    );
+  });
+
+  it('publishes only the release selected by the CFP document', async () => {
+    const anon = env.unauthenticatedContext().firestore();
+    await assertSucceeds(getDoc(doc(anon, `${CFP}/scheduleReleases/release-current`)));
+    await assertSucceeds(
+      getDocs(collection(anon, `${CFP}/scheduleReleases/release-current/entries`)),
+    );
+    await assertFails(getDoc(doc(anon, `${CFP}/scheduleReleases/release-old`)));
+    await assertFails(getDocs(collection(anon, `${CFP}/scheduleReleases/release-old/entries`)));
+  });
+
+  it('never exposes the shared-only release through direct browser reads', async () => {
+    const anon = env.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(anon, `${CFP}/scheduleReleases/release-shared`)));
+    await assertFails(
+      getDocs(collection(anon, `${CFP}/scheduleReleases/release-shared/entries`)),
+    );
+    await assertFails(getDoc(doc(asApplicant(), `${CFP}/scheduleReleases/release-shared`)));
+    await assertFails(
+      getDocs(collection(asReviewer(), `${CFP}/scheduleReleases/release-shared/entries`)),
+    );
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/scheduleReleases/release-shared`)));
+    await assertSucceeds(
+      getDocs(collection(asOwner(), `${CFP}/scheduleReleases/release-shared/entries`)),
+    );
+  });
+
+  it('keeps release provenance admin-only even after its programme is public', async () => {
+    const source = `${CFP}/scheduleReleases/release-current/internal/source`;
+    await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), source)));
+    await assertFails(getDoc(doc(asApplicant(), source)));
+    await assertFails(getDoc(doc(asReviewer(), source)));
+    await assertSucceeds(getDoc(doc(asOwner(), source)));
+  });
+
+  it('never lets a browser change a public release', async () => {
+    await assertFails(
+      updateDoc(doc(asOwner(), `${CFP}/scheduleReleases/release-current/entries/talk-one`), {
+        startsAt: '10:00',
+      }),
+    );
+  });
+});
 
 describe('applicants read and write only their own proposal', () => {
   it('reads its own proposal', async () => {
@@ -295,6 +406,26 @@ describe('status and aggregate are function-writable only', () => {
   it('denies writing the confirmation answers directly', async () => {
     await assertFails(
       updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { confirmAnswers: { shirt: 'XXL' } }),
+    );
+  });
+
+  it('denies writing or planting a server-owned headshot pointer', async () => {
+    const headshotUploads = {
+      headshot: {
+        path: `cfps/${CFP_ID}/workingHeadshots/p-anna/headshot/forged`,
+        generation: '1',
+        contentType: 'image/png',
+        size: 8,
+      },
+    };
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { headshotUploads }),
+    );
+    await assertFails(
+      addDoc(collection(asApplicant(), `${CFP}/proposals`), {
+        ...draft(APPLICANT),
+        headshotUploads,
+      }),
     );
   });
 
@@ -463,13 +594,12 @@ describe('the deadline is enforced server-side', () => {
   });
 });
 
-describe('reviewers write only their own review', () => {
-  // Scoring a draft is denied outright, so every refusal below would otherwise
-  // pass for that reason rather than the one it is written to prove.
+describe('review writes are callable-only', () => {
+  // The callable owns status, conflict, score and comment validation.
   beforeEach(() => submitted('p-anna'));
 
-  it('writes its own review', async () => {
-    await assertSucceeds(
+  it('denies a valid direct review create', async () => {
+    await assertFails(
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
         cfpId: CFP_ID,
         score: 2,
@@ -482,8 +612,8 @@ describe('reviewers write only their own review', () => {
     );
   });
 
-  it('accepts a comment right up to the cap', async () => {
-    await assertSucceeds(
+  it('denies a direct write even when the comment is within the cap', async () => {
+    await assertFails(
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
         cfpId: CFP_ID,
         score: 2,
@@ -494,8 +624,7 @@ describe('reviewers write only their own review', () => {
   });
 
   it('refuses one character more', async () => {
-    // The textarea's maxLength stops a person typing past it; this is what stops
-    // everything that is not a person typing.
+    // This remains denied at the rules boundary; the callable owns validation.
     await assertFails(
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
         cfpId: CFP_ID,
@@ -507,7 +636,7 @@ describe('reviewers write only their own review', () => {
   });
 
   it('refuses a key the review model does not have', async () => {
-    // Otherwise the cap above is decorative: the same text lands under any name.
+    // Direct writes remain closed regardless of their shape.
     await assertFails(
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
         cfpId: CFP_ID,
@@ -525,6 +654,15 @@ describe('reviewers write only their own review', () => {
         score: 1,
         conflictOfInterest: false,
       }),
+    );
+  });
+
+  it('denies direct review updates and deletes', async () => {
+    await assertFails(
+      updateDoc(doc(asReviewer(), `${CFP}/proposals/p-anna/reviews`, REVIEWER), { score: 1 }),
+    );
+    await assertFails(
+      deleteDoc(doc(asReviewer(), `${CFP}/proposals/p-anna/reviews`, REVIEWER)),
     );
   });
 
@@ -632,8 +770,8 @@ describe('a reviewer who is also a speaker', () => {
     await assertFails(getDoc(doc(asReviewer(), `${CFP}/proposals/p-chen/reviews`, OTHER_REVIEWER)));
   });
 
-  it('reviews everyone else’s proposals as normal', async () => {
-    await assertSucceeds(
+  it('still cannot bypass the review callable for someone else’s proposal', async () => {
+    await assertFails(
       setDoc(doc(asReviewer(), `${CFP}/proposals/p-bruno/reviews`, REVIEWER), {
         cfpId: CFP_ID,
         score: 3,
@@ -678,9 +816,8 @@ describe('unsubmitted drafts are private to their author', () => {
     await assertSucceeds(getDoc(doc(asReviewer(), `${CFP}/proposals/p-anna`)));
   });
 
-  it('denies scoring a draft or a withdrawn proposal', async () => {
-    // Otherwise the review would count towards an aggregate for something
-    // nobody submitted.
+  it('keeps direct scoring closed for a draft or withdrawn proposal', async () => {
+    // The callable separately enforces the lifecycle state.
     for (const status of ['draft', 'withdrawn']) {
       await env.withSecurityRulesDisabled(async (ctx) => {
         await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-bruno`), { status });
@@ -695,11 +832,11 @@ describe('unsubmitted drafts are private to their author', () => {
     }
   });
 
-  it('allows scoring once it is submitted', async () => {
+  it('keeps direct scoring closed once it is submitted', async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-bruno`), { status: 'submitted' });
     });
-    await assertSucceeds(
+    await assertFails(
       setDoc(doc(asReviewer(), `${CFP}/proposals/p-bruno/reviews`, REVIEWER), {
         cfpId: CFP_ID,
         score: 3,
@@ -1069,13 +1206,9 @@ describe('nothing crosses between two CFPs', () => {
     );
   });
 
-  /*
-   * The aggregate reaches reviews through a collection-group query, which
-   * cannot be filtered by ancestor path — so it filters on the denormalised
-   * `cfpId`. A review that lies about which CFP it belongs to would be counted
-   * into that CFP's scores by somebody with no role there at all.
-   */
-  it('denies a review whose cfpId is not the one it is filed under', async () => {
+  // The callable derives cfpId from the tenant path; a client cannot forge the
+  // denormalised field that aggregate collection-group queries use.
+  it('denies a direct review with either a forged or matching cfpId', async () => {
     await submitted('p-anna');
     await assertFails(
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
@@ -1084,7 +1217,7 @@ describe('nothing crosses between two CFPs', () => {
         conflictOfInterest: false,
       }),
     );
-    await assertSucceeds(
+    await assertFails(
       setDoc(doc(asOtherReviewer(), `${CFP}/proposals/p-anna/reviews`, OTHER_REVIEWER), {
         cfpId: CFP_ID,
         score: 4,
@@ -1283,7 +1416,7 @@ describe('an archived CFP is read-only', () => {
     );
   });
 
-  it('refuses a review', async () => {
+  it('keeps direct review writes closed', async () => {
     await submitted('p-anna');
     await assertFails(
       setDoc(doc(asReviewer(), `${CFP}/proposals/p-anna/reviews`, REVIEWER), {

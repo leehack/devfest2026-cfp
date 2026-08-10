@@ -9,13 +9,19 @@
  * owner in one transaction.
  */
 
-import type { Auth } from 'firebase-admin/auth';
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
+
+import type { Auth, UserRecord } from 'firebase-admin/auth';
+import { FieldValue, type Firestore, type Transaction } from 'firebase-admin/firestore';
 import { CFP_ROLES, type CfpRole } from '../../shared/cfp';
 
 export class RoleError extends Error {
   constructor(
-    readonly code: 'invalid-argument' | 'failed-precondition' | 'not-found',
+    readonly code:
+      | 'invalid-argument'
+      | 'failed-precondition'
+      | 'not-found'
+      | 'permission-denied',
     message: string,
   ) {
     super(message);
@@ -58,21 +64,26 @@ const grantDoc = (db: Firestore, cfpId: string, email: string) =>
  * attacker could register a colleague's address, wait for the grant, and be
  * handed the role — never having read a single message sent to it.
  */
-async function uidForEmail(auth: Auth, email: string): Promise<string | undefined> {
+async function userForEmail(auth: Auth, email: string): Promise<UserRecord | undefined> {
   try {
-    const user = await auth.getUserByEmail(email);
-    return user.emailVerified ? user.uid : undefined;
-  } catch {
-    return undefined; // never signed in — the grant waits for them
+    return await auth.getUserByEmail(email);
+  } catch (error) {
+    if ((error as { code?: string }).code === 'auth/user-not-found') return undefined;
+    throw error;
   }
 }
 
-async function adminUids(db: Firestore, cfpId: string): Promise<string[]> {
-  const snap = await db
-    .collection(`cfps/${cfpId}/members`)
-    .where('role', 'in', ['admin', 'owner'])
-    .get();
-  return snap.docs.map((d) => d.id);
+async function assertAdminInTransaction(
+  tx: Transaction,
+  db: Firestore,
+  cfpId: string,
+  uid: string,
+) {
+  const member = await tx.get(memberDoc(db, cfpId, uid));
+  if (member.get('role') !== 'admin' && member.get('role') !== 'owner') {
+    throw new RoleError('permission-denied', 'Only an admin can change event roles.');
+  }
+  return member;
 }
 
 /**
@@ -96,51 +107,101 @@ export async function grant(
     role: rawRole,
     byUid,
   }: { cfpId: string; email: unknown; role: unknown; byUid: string },
-): Promise<{ email: string; role: CfpRole; applied: boolean }> {
+): Promise<{ email: string; role: CfpRole; applied: boolean; invitationId?: string }> {
   const email = normalizeEmail(rawEmail);
   const role = normalizeRole(rawRole);
-  const uid = await uidForEmail(auth, email);
+  const user = await userForEmail(auth, email);
+  const eligibleUid = user?.emailVerified && !user.disabled ? user.uid : undefined;
+  const grantRef = grantDoc(db, cfpId, email);
+  const result = await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const cfp = await tx.get(cfpRef);
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('archived') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is archived.');
+    }
 
-  if (uid) {
-    const current = (await memberDoc(db, cfpId, uid).get()).data()?.role;
-    if (current === 'owner') {
+    const existingGrant = await tx.get(grantRef);
+    const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
+    const claimedUid = existingGrant.get('claimedBy');
+    if (claimedUid && typeof claimedUid !== 'string') {
+      throw new RoleError('failed-precondition', 'That invitation is not usable.');
+    }
+    if (eligibleUid && claimedUid && eligibleUid !== claimedUid) {
+      throw new RoleError(
+        'failed-precondition',
+        'That invitation has already been claimed by another account.',
+      );
+    }
+
+    // A claimed grant remains linked to its member even if Auth is temporarily
+    // disabled. New unverified or disabled accounts still receive only a
+    // pending invitation, as before.
+    const uid = eligibleUid ?? (claimedUid as string | undefined);
+    const currentMember = uid
+      ? uid === byUid
+        ? actor
+        : await tx.get(memberDoc(db, cfpId, uid))
+      : null;
+    const storedLocale = [currentMember?.get('locale'), existingGrant.get('locale')].find(
+      (value) => value === 'en' || value === 'fr',
+    );
+    const currentRole = currentMember?.data()?.role;
+    if (currentRole === 'owner') {
       throw new RoleError('failed-precondition', "An owner's role cannot be changed.");
     }
-    if (current === 'admin' && role !== 'admin') {
-      const admins = await adminUids(db, cfpId);
-      if (admins.length <= 1) {
+    if (currentRole === 'admin' && role !== 'admin') {
+      const admins = await tx.get(
+        db.collection(`cfps/${cfpId}/members`).where('role', 'in', ['admin', 'owner']),
+      );
+      if (admins.size <= 1) {
         throw new RoleError('failed-precondition', 'That is the only admin left.');
       }
     }
-  }
 
-  await grantDoc(db, cfpId, email).set(
-    {
+    if (uid) {
+      // Replace the grant shape so a formerly pending invitation cannot remain
+      // deliverable after its membership has been applied.
+      tx.set(grantRef, {
+        cfpId,
+        email,
+        role,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: byUid,
+        claimedBy: uid,
+        claimedAt: FieldValue.serverTimestamp(),
+        ...(storedLocale ? { locale: storedLocale } : {}),
+      });
+      tx.set(
+        memberDoc(db, cfpId, uid),
+        {
+          cfpId,
+          uid,
+          role,
+          email,
+          createdAt: FieldValue.serverTimestamp(),
+          grantedBy: byUid,
+          ...(storedLocale ? { locale: storedLocale } : {}),
+        },
+        { merge: true },
+      );
+      return { applied: true as const };
+    }
+
+    const invitationId = String(existingGrant.get('invitationId') ?? randomUUID());
+    tx.set(grantRef, {
       cfpId,
       email,
       role,
+      invitationId,
       createdAt: FieldValue.serverTimestamp(),
       createdBy: byUid,
-      ...(uid ? { claimedBy: uid, claimedAt: FieldValue.serverTimestamp() } : {}),
-    },
-    { merge: true },
-  );
+      ...(storedLocale ? { locale: storedLocale } : {}),
+    });
+    return { applied: false as const, invitationId };
+  });
 
-  if (uid) {
-    await memberDoc(db, cfpId, uid).set(
-      {
-        cfpId,
-        uid,
-        role,
-        email,
-        createdAt: FieldValue.serverTimestamp(),
-        grantedBy: byUid,
-      },
-      { merge: true },
-    );
-  }
-
-  return { email, role, applied: Boolean(uid) };
+  return { email, role, ...result };
 }
 
 /**
@@ -151,27 +212,51 @@ export async function grant(
 export async function revoke(
   db: Firestore,
   auth: Auth,
-  { cfpId, email: rawEmail }: { cfpId: string; email: unknown },
+  { cfpId, email: rawEmail, byUid }: { cfpId: string; email: unknown; byUid: string },
 ): Promise<{ email: string }> {
   const email = normalizeEmail(rawEmail);
-  const uid = await uidForEmail(auth, email);
+  const authUid = (await userForEmail(auth, email))?.uid;
+  const grantRef = grantDoc(db, cfpId, email);
 
-  if (uid) {
-    const existing = await memberDoc(db, cfpId, uid).get();
-    const role = existing.data()?.role;
-    if (role === 'owner') {
+  await db.runTransaction(async (tx) => {
+    const [cfp, grant] = await tx.getAll(db.doc(`cfps/${cfpId}`), grantRef);
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('deleting') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is being deleted.');
+    }
+    const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
+    const byEmail = await tx.get(
+      db.collection(`cfps/${cfpId}/members`).where('email', '==', email),
+    );
+    const claimedUid = grant.get('claimedBy');
+    const targetUids = [
+      ...(typeof claimedUid === 'string' ? [claimedUid] : []),
+      ...(authUid ? [authUid] : []),
+      ...byEmail.docs.map((member) => member.id),
+    ].filter((uid, index, all) => all.indexOf(uid) === index);
+    const targets = await Promise.all(
+      targetUids.map((uid) =>
+        uid === byUid ? Promise.resolve(actor) : tx.get(memberDoc(db, cfpId, uid)),
+      ),
+    );
+
+    if (targets.some((member) => member.get('role') === 'owner')) {
       throw new RoleError('failed-precondition', 'An owner cannot be removed.');
     }
-    if (existing.exists && role === 'admin') {
-      const admins = await adminUids(db, cfpId);
-      if (admins.length <= 1) {
+    const removingAdmin = targets.some((member) => member.get('role') === 'admin');
+    if (removingAdmin) {
+      const admins = await tx.get(
+        db.collection(`cfps/${cfpId}/members`).where('role', 'in', ['admin', 'owner']),
+      );
+      const remaining = admins.docs.filter((member) => !targetUids.includes(member.id));
+      if (remaining.length === 0) {
         throw new RoleError('failed-precondition', 'That is the only admin left.');
       }
     }
-    await memberDoc(db, cfpId, uid).delete();
-  }
 
-  await grantDoc(db, cfpId, email).delete();
+    for (const uid of targetUids) tx.delete(memberDoc(db, cfpId, uid));
+    tx.delete(grantRef);
+  });
   return { email };
 }
 
@@ -185,31 +270,49 @@ export async function claim(
   db: Firestore,
   { cfpId, uid, email: rawEmail, name }: { cfpId: string; uid: string; email?: string; name?: string },
 ): Promise<CfpRole | null> {
-  const existing = await memberDoc(db, cfpId, uid).get();
-  if (existing.exists) return (existing.data()?.role ?? null) as CfpRole | null;
+  const memberRef = memberDoc(db, cfpId, uid);
+  const email = rawEmail?.trim().toLowerCase();
 
-  if (!rawEmail) return null;
-  const email = rawEmail.trim().toLowerCase();
+  return db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const [existing, cfp] = await tx.getAll(memberRef, cfpRef);
+    if (existing.exists) return (existing.data()?.role ?? null) as CfpRole | null;
+    if (!email) return null;
 
-  const grantSnap = await grantDoc(db, cfpId, email).get();
-  if (!grantSnap.exists) return null;
+    const grantRef = grantDoc(db, cfpId, email);
+    const grantSnap = await tx.get(grantRef);
+    if (!grantSnap.exists) return null;
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('archived') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is archived.');
+    }
 
-  const granted = grantSnap.data()!;
-  const role = normalizeRole(granted.role);
+    const granted = grantSnap.data()!;
+    const claimedBy = granted.claimedBy;
+    if (claimedBy && claimedBy !== uid) {
+      throw new RoleError(
+        'failed-precondition',
+        'That invitation has already been claimed by another account.',
+      );
+    }
+    const role = normalizeRole(granted.role);
 
-  await memberDoc(db, cfpId, uid).set({
-    cfpId,
-    uid,
-    role,
-    email,
-    ...(name ? { name } : {}),
-    createdAt: FieldValue.serverTimestamp(),
-    grantedBy: granted.createdBy ?? 'unknown',
+    tx.set(memberRef, {
+      cfpId,
+      uid,
+      role,
+      email,
+      ...(name ? { name } : {}),
+      createdAt: FieldValue.serverTimestamp(),
+      grantedBy: granted.createdBy ?? 'unknown',
+      ...(granted.locale === 'en' || granted.locale === 'fr'
+        ? { locale: granted.locale }
+        : {}),
+    });
+    tx.update(grantRef, {
+      claimedBy: uid,
+      claimedAt: FieldValue.serverTimestamp(),
+    });
+    return role;
   });
-  await grantSnap.ref.set(
-    { claimedBy: uid, claimedAt: FieldValue.serverTimestamp() },
-    { merge: true },
-  );
-
-  return role;
 }

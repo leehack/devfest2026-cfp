@@ -1,14 +1,9 @@
 /**
- * The review comment's cap, in the two places it has to exist.
+ * The review comment's callable boundary.
  *
- * A reviewer's notes are written straight to Firestore by the client, so
- * `firestore.rules` is the boundary and the textarea's `maxLength` is only an
- * affordance. The rules cannot import TypeScript, so the number is a literal
- * there and `LIMITS.reviewCommentMax` here — two copies, free to drift, with
- * nothing noticing if the UI started promising room the rules would refuse.
- *
- * The behaviour is tested where it lives, against the emulator, in
- * `tests/rules.test.ts`. This is only the pin: same number, both files.
+ * Review saves go through one callable so the score write and the proposal's
+ * submitted -> under_review transition commit atomically. The callable imports
+ * the shared limit directly; browser writes are denied outright by the rules.
  */
 
 import { readFileSync } from 'node:fs';
@@ -17,31 +12,31 @@ import { describe, expect, it } from 'vitest';
 import { LIMITS } from '../shared/enums';
 
 const rules = readFileSync('firestore.rules', 'utf8');
+const backend = readFileSync('functions/src/index.ts', 'utf8');
+const reviewRules = rules.slice(
+  rules.indexOf('match /reviews/{reviewerUid}'),
+  rules.indexOf('// -------------------------------------------------------- email log'),
+);
 
 describe('the review comment cap', () => {
-  it('is the same number in the rules as in LIMITS', () => {
-    const caps = [...rules.matchAll(/comment\.size\(\)\s*<=\s*(\d+)/g)].map((m) => Number(m[1]));
-
-    expect(caps, 'no comment cap found in firestore.rules — was it renamed?').not.toHaveLength(0);
-    for (const cap of caps) expect(cap).toBe(LIMITS.reviewCommentMax);
+  it('uses the shared limit in the callable', () => {
+    expect(LIMITS.reviewCommentMax).toBeGreaterThan(0);
+    expect(backend).toMatch(/comment\.length\s*>\s*LIMITS\.reviewCommentMax/);
   });
 
-  it('is enforced by the rules at all, not just by the textarea', () => {
-    // Guards the deletion rather than the value: dropping the clause entirely
-    // would leave the UI cap in place and look fine.
-    expect(rules).toMatch(/request\.resource\.data\.comment\.size\(\)/);
+  it('keeps direct review writes closed', () => {
+    expect(reviewRules).toMatch(/allow create, update, delete:\s*if false;/);
   });
 
-  it('is meaningful, because a review cannot carry an unlisted key', () => {
-    /*
-     * Without hasOnly the cap is decorative — the same text goes in under any
-     * other name. These five are exactly what saveReview writes.
-     */
-    const hasOnly = /keys\(\)\s*\.hasOnly\(\[([^\]]*)\]\)/.exec(rules);
-    expect(hasOnly, 'the review write no longer restricts its keys').toBeTruthy();
-    const keys = hasOnly![1].split(',').map((k) => k.trim().replace(/^'|'$/g, ''));
-    expect(new Set(keys)).toEqual(
-      new Set(['cfpId', 'score', 'conflictOfInterest', 'comment', 'updatedAt']),
-    );
+  it('writes an explicit review shape instead of spreading caller data', () => {
+    const start = backend.indexOf("tx.set(proposalRef.collection('reviews').doc(reviewerUid)");
+    const end = backend.indexOf("if (current === 'submitted')", start);
+    const write = backend.slice(start, end);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    for (const field of ['cfpId', 'score', 'conflictOfInterest', 'comment', 'updatedAt']) {
+      expect(write).toContain(field);
+    }
+    expect(write).not.toContain('...data');
   });
 });

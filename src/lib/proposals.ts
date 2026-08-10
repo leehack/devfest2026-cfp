@@ -40,6 +40,8 @@ export interface CfpWindow {
    */
   profile: CfpProfile;
   visibility: Visibility;
+  sharedScheduleId?: string;
+  publishedScheduleId?: string;
 }
 
 /**
@@ -77,10 +79,15 @@ export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
     profile: {
       description: data.description,
       eventDate: data.eventDate,
+      eventStartDate: data.eventStartDate ?? data.eventDate,
+      eventEndDate: data.eventEndDate ?? data.eventStartDate ?? data.eventDate,
+      timeZone: data.timeZone,
       venue: data.venue,
       location: data.location,
       website: data.website,
     },
+    sharedScheduleId: data.sharedScheduleId,
+    publishedScheduleId: data.publishedScheduleId,
   };
 }
 
@@ -245,6 +252,23 @@ export const deleteDraftProposal = httpsCallable<
   { cfpId: string; proposalId: string },
   CallableResult
 >(functions, 'deleteDraftProposal');
+
+export const uploadHeadshot = httpsCallable<
+  {
+    cfpId: string;
+    proposalId: string;
+    key: string;
+    contentType: string;
+    /** Canonical padded base64, without a data-URL prefix. */
+    base64: string;
+  },
+  { ok: boolean; path: string }
+>(functions, 'uploadHeadshot');
+
+export const workingHeadshotImage = httpsCallable<
+  { cfpId: string; proposalId: string; key: string; working: true },
+  { ok: boolean; contentType: string; base64: string }
+>(functions, 'headshotImage');
 
 export const respondToDecision = httpsCallable<
   { cfpId: string; proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },

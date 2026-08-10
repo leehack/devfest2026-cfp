@@ -27,24 +27,93 @@ export const FORM_LIMITS = {
   /** What a speaker may write back, by field type. */
   answerText: 200,
   answerTextarea: 2000,
-  /** Bytes. Restated in `storage.rules`, which is what actually enforces it. */
+  /** Bytes. Re-checked by `uploadHeadshot`, which is what actually enforces it. */
   image: 5 * 1024 * 1024,
 } as const;
 
-/** What the bucket will take. Restated in `storage.rules` — change both. */
+/** Image types accepted by the upload and preview callables. */
 export const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 
+export interface HeadshotUploadPointer {
+  path: string;
+  generation: string;
+  contentType: (typeof IMAGE_TYPES)[number];
+  size: number;
+}
+
+export type HeadshotUploads = Record<string, HeadshotUploadPointer>;
+
 /**
- * Where one speaker's answer to one image question lives.
+ * Legacy canonical location used before proposal-backed upload pointers.
  *
- * Fully determined by the three ids, which is the point: the client uploads
- * here and the callable looks here, so there is no path for a speaker to
- * *claim* — and therefore no way to claim somebody else's object as their own
- * answer. The CFP comes first so that deleting one is a single prefix rather
- * than a scan of the bucket.
+ * Confirmation and preview retain this fallback for existing CFPs. New uploads
+ * use a unique `workingHeadshotPath`; the CFP still comes first so deletion is
+ * one bounded prefix.
  */
 export function headshotPath(cfpId: string, uid: string, key: string): string {
   return `cfps/${cfpId}/headshots/${uid}/${key}`;
+}
+
+/** A unique working upload. Only its server-written proposal pointer is live. */
+export function workingHeadshotPath(
+  cfpId: string,
+  proposalId: string,
+  key: string,
+  uploadId: string,
+): string {
+  return `${workingHeadshotPrefix(cfpId, proposalId, key)}${encodeURIComponent(uploadId)}`;
+}
+
+export function workingHeadshotPrefix(
+  cfpId: string,
+  proposalId: string,
+  key: string,
+): string {
+  return `cfps/${cfpId}/workingHeadshots/${proposalId}/${key}/`;
+}
+
+export function isWorkingHeadshotPath(
+  path: string,
+  cfpId: string,
+  proposalId: string,
+  key: string,
+): boolean {
+  const prefix = workingHeadshotPrefix(cfpId, proposalId, key);
+  const uploadId = path.slice(prefix.length);
+  return path.startsWith(prefix) && uploadId.length > 0 && !uploadId.includes('/');
+}
+
+/**
+ * A confirmed image answer is a snapshot, not the speaker's replaceable upload.
+ * The generation makes a later confirmation a different object while keeping
+ * retries for the same upload idempotent. Browser rules never open this prefix.
+ */
+export function confirmedHeadshotPath(
+  cfpId: string,
+  proposalId: string,
+  key: string,
+  generation: string,
+): string {
+  return `${confirmedHeadshotPrefix(cfpId, proposalId, key)}${encodeURIComponent(generation)}`;
+}
+
+export function confirmedHeadshotPrefix(
+  cfpId: string,
+  proposalId: string,
+  key: string,
+): string {
+  return `cfps/${cfpId}/confirmedHeadshots/${proposalId}/${key}/`;
+}
+
+export function isConfirmedHeadshotPath(
+  path: string,
+  cfpId: string,
+  proposalId: string,
+  key: string,
+): boolean {
+  const prefix = confirmedHeadshotPrefix(cfpId, proposalId, key);
+  const generation = path.slice(prefix.length);
+  return path.startsWith(prefix) && generation.length > 0 && !generation.includes('/');
 }
 
 

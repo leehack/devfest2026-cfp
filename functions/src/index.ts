@@ -5,7 +5,7 @@
  * against the server clock — neither can be bypassed by posting to Firestore.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
@@ -21,14 +21,13 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
-import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES, STATUS_SETS } from '../../shared/enums';
+import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES } from '../../shared/enums';
 import { submissionSchema } from '../../shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
   mergeSubmissionForm,
   normaliseSubmissionForm,
   validateSubmissionForm,
-  type SubmissionForm,
 } from '../../shared/submissionForm';
 import { aggregateReviews, type Aggregate, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
@@ -37,6 +36,8 @@ import {
   EMAIL_KINDS,
   EMAIL_LOCALES,
   MESSAGE_KIND,
+  SCHEDULE_EMAIL_KINDS,
+  STAFF_EMAIL_KINDS,
   renderSignInEmail,
   validateTemplate,
   type EmailKind,
@@ -46,16 +47,21 @@ import {
 import { senderMismatch, validateSettings, type EmailSettings } from '../../shared/emailSettings';
 import {
   EMPTY_FORM,
-  IMAGE_TYPES,
+  isConfirmedHeadshotPath,
   headshotPath,
+  workingHeadshotPath,
   normaliseForm,
   validateAnswers,
   validateForm,
+  localised,
   type Answers,
   type ConfirmForm,
+  type HeadshotUploadPointer,
+  type HeadshotUploads,
 } from '../../shared/confirmForm';
 import {
   CFP_LIMITS,
+  calendarDate,
   validateCfp,
   validateCfpId,
   validateProfile,
@@ -79,11 +85,31 @@ import {
   loadPlatform,
   loadSettings,
   loadTemplates,
+  logId,
   queueEmail,
   sendViaResend,
   settingsFromConfig,
+  isStaffEmail,
+  isRoleInvitationEmail,
+  roleInvitationStillTrue,
+  sendingLeaseExpired,
+  staffEmailLanguage,
+  staffMemberIsActive,
+  staffNotificationStillTrue,
+  verifiedStaffUser,
   type EmailStatus,
 } from './email';
+import {
+  decodeHeadshotUpload,
+  findUploadedHeadshots,
+  freezeLegacyHeadshotAnswer,
+  freezeLegacyHeadshots,
+  freezeUploadedHeadshots,
+  readStoredHeadshot,
+  workingHeadshotFrom,
+  workingHeadshotMatches,
+} from './headshots';
+import { clearCfpFirestoreChildren, clearCfpStorage } from './deletion';
 import { keyHint, readResendKey, writeResendKey } from './secrets';
 import {
   addDomain,
@@ -94,6 +120,23 @@ import {
   verifyDomain,
 } from './domains';
 import { useFreshHostingOrigin } from './authLinks';
+import {
+  SCHEDULE_LIMITS,
+  publicScheduleSpeakers,
+  resolvedScheduleLanguage,
+  scheduleConflicts,
+  sharedScheduleAudience,
+  sharedScheduleEntriesFor,
+  sharedScheduleForEntries,
+  validateScheduleConfig,
+  validateScheduleEntry,
+  type PublishedScheduleEntry,
+  type ScheduleConfig,
+  type ScheduleDay,
+  type ScheduleEntry,
+  type ScheduleRoom,
+  type SharedSchedule,
+} from '../../shared/schedule';
 
 export { sendQueuedEmail } from './email';
 
@@ -107,6 +150,8 @@ const db = getFirestore();
  * than autoscale into a bill.
  */
 const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
+const EXTERNAL_MUTATION_CALLABLE = { ...CALLABLE, timeoutSeconds: 300 } as const;
+const EXTERNAL_MUTATION_LEASE_MS = 10 * 60 * 1000;
 
 /** How many emailLog rows the admin panel gets in one response. */
 const ROW_CAP = 500;
@@ -114,6 +159,7 @@ const ROW_CAP = 500;
 interface CfpWindow {
   paused: boolean;
   archived: boolean;
+  deleting?: boolean;
   opensAt: Timestamp;
   closesAt: Timestamp;
 }
@@ -134,14 +180,15 @@ function requireCfpId(data: unknown): string {
   return id;
 }
 
-/** Fails closed: a missing CFP must not read as "wide open". */
-async function assertCfpOpen(cfpId: string): Promise<void> {
-  const snap = await db.doc(`cfps/${cfpId}`).get();
+function assertCfpOpenSnapshot(snap: DocumentSnapshot): void {
   if (!snap.exists) {
     throw new HttpsError('not-found', 'No such call for proposals.');
   }
   const cfp = snap.data() as CfpWindow;
   const now = Date.now();
+  if (cfp.deleting) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+  }
   // Archiving is how a round is stopped without editing its window, so it is
   // checked before the dates rather than after them.
   if (cfp.archived) {
@@ -174,14 +221,138 @@ async function assertCfpNotArchived(
   if (!snap.exists) {
     throw new HttpsError('not-found', 'No such call for proposals.');
   }
+  if (snap.get('deleting') === true) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+  }
   if (snap.get('archived') === true) {
     throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+  }
+}
+
+/** For external side effects that cannot participate in a Firestore transaction. */
+async function assertCfpNotArchivedNow(cfpId: string): Promise<DocumentSnapshot> {
+  const snap = await db.doc(`cfps/${cfpId}`).get();
+  if (!snap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+  if (snap.get('deleting') === true) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+  }
+  if (snap.get('archived') === true) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+  }
+  return snap;
+}
+
+const mutationLeaseRef = (cfpId: string) =>
+  db.doc(`cfps/${cfpId}/config/externalMutation`);
+
+function activeMutationLease(snap: DocumentSnapshot, now = Date.now()): boolean {
+  if (!snap.exists) return false;
+  const expiresAt = snap.get('expiresAt');
+  return expiresAt instanceof Timestamp && expiresAt.toMillis() > now;
+}
+
+function assertMutationActor(
+  member: DocumentSnapshot,
+  role: 'admin' | 'owner',
+): void {
+  const actual = member.get('role');
+  const allowed = role === 'owner' ? actual === 'owner' : actual === 'owner' || actual === 'admin';
+  if (!allowed) {
+    throw new HttpsError(
+      'permission-denied',
+      role === 'owner'
+        ? 'Only an owner can complete this change.'
+        : 'Only an admin can complete this change.',
+    );
+  }
+}
+
+/**
+ * Reserves the external side-effect lane for one CFP. The callable timeout is
+ * shorter than the lease, so an expired lease always belongs to a dead call.
+ */
+async function acquireCfpMutation(
+  cfpId: string,
+  kind: string,
+  validate: (tx: FirebaseFirestore.Transaction) => Promise<void>,
+  options: { allowArchived?: boolean } = {},
+): Promise<string> {
+  const leaseId = randomUUID();
+  await db.runTransaction(async (tx) => {
+    const [cfp, lease] = await tx.getAll(db.doc(`cfps/${cfpId}`), mutationLeaseRef(cfpId));
+    if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    if (cfp.get('deleting') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+    }
+    if (cfp.get('archived') === true && options.allowArchived !== true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    if (activeMutationLease(lease)) {
+      throw new HttpsError('aborted', 'Another event change is still in progress. Try again.');
+    }
+    await validate(tx);
+    tx.set(mutationLeaseRef(cfpId), {
+      id: leaseId,
+      kind,
+      expiresAt: Timestamp.fromMillis(Date.now() + EXTERNAL_MUTATION_LEASE_MS),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+  return leaseId;
+}
+
+async function finishCfpMutation(
+  cfpId: string,
+  leaseId: string,
+  apply: (tx: FirebaseFirestore.Transaction) => Promise<void> | void,
+  options: { allowArchived?: boolean } = {},
+): Promise<void> {
+  await db.runTransaction(async (tx) => {
+    const [cfp, lease] = await tx.getAll(db.doc(`cfps/${cfpId}`), mutationLeaseRef(cfpId));
+    if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    if (cfp.get('deleting') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+    }
+    if (cfp.get('archived') === true && options.allowArchived !== true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    if (!lease.exists || lease.get('id') !== leaseId) {
+      throw new HttpsError('aborted', 'The event change lease expired. Try again.');
+    }
+    await apply(tx);
+    tx.delete(lease.ref);
+  });
+}
+
+async function releaseCfpMutation(cfpId: string, leaseId: string): Promise<void> {
+  await db.runTransaction(async (tx) => {
+    const lease = await tx.get(mutationLeaseRef(cfpId));
+    if (lease.exists && lease.get('id') === leaseId) tx.delete(lease.ref);
+  });
+}
+
+async function releaseCfpMutationQuietly(cfpId: string, leaseId: string): Promise<void> {
+  try {
+    await releaseCfpMutation(cfpId, leaseId);
+  } catch (error) {
+    logger.error('could not release event mutation lease', { cfpId, error: String(error) });
   }
 }
 
 function requireUid(request: { auth?: { uid: string } }, action: string): string {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', `Sign in to ${action}.`);
+  return uid;
+}
+
+function requireVerifiedUid(
+  request: { auth?: { uid: string; token?: { email_verified?: unknown } } },
+  action: string,
+): string {
+  const uid = requireUid(request, action);
+  if (request.auth?.token?.email_verified !== true) {
+    throw new HttpsError('failed-precondition', 'Verify your email address first.');
+  }
   return uid;
 }
 
@@ -219,6 +390,19 @@ async function requireAdmin(
   action: string,
 ): Promise<string> {
   const uid = requireUid(request, action);
+  const role = await roleOn(cfpId, uid);
+  if (role !== 'admin' && role !== 'owner') {
+    throw new HttpsError('permission-denied', `Only an admin can ${action}.`);
+  }
+  return uid;
+}
+
+async function requireScheduleAdmin(
+  request: { auth?: { uid: string; token?: { email_verified?: unknown } } },
+  cfpId: string,
+  action: string,
+): Promise<string> {
+  const uid = requireVerifiedUid(request, action);
   const role = await roleOn(cfpId, uid);
   if (role !== 'admin' && role !== 'owner') {
     throw new HttpsError('permission-denied', `Only an admin can ${action}.`);
@@ -364,11 +548,6 @@ function assemble(proposal: FirebaseFirestore.DocumentData, speaker: FirebaseFir
  * defaults are what those calls were already using — so a missing document is a
  * working document rather than a reason to refuse a submission.
  */
-async function submissionFormFor(cfpId: string): Promise<SubmissionForm> {
-  const snap = await db.doc(`cfps/${cfpId}/config/submissionForm`).get();
-  return mergeSubmissionForm(snap.exists ? snap.data() : undefined);
-}
-
 /**
  * The speaker as the committee will read them.
  *
@@ -406,6 +585,28 @@ const DECISION_STILL_TRUE: Record<string, readonly string[]> = {
   waitlisted: ['waitlisted'],
   rejected: ['rejected'],
 };
+const CARRY_SCHEDULE_EMAIL_STATUSES = new Set<EmailStatus>(['held', 'failed', 'dry_run']);
+
+function isScheduleEmail(kind: unknown): kind is EmailKind {
+  return SCHEDULE_EMAIL_KINDS.includes(kind as EmailKind);
+}
+
+/** Working-placement mail follows the newest shared snapshot, then legacy public data. */
+function scheduleEmailReleaseId(cfp: DocumentSnapshot | null | undefined): string {
+  return String(cfp?.get('sharedScheduleId') ?? cfp?.get('publishedScheduleId') ?? '');
+}
+
+function scheduleEmailStillTrue(
+  kind: string,
+  rowReleaseId: string,
+  currentReleaseId: string,
+  entry: DocumentSnapshot | undefined,
+  proposalStatus: string | undefined,
+): boolean {
+  if (!currentReleaseId || rowReleaseId !== currentReleaseId || !entry) return false;
+  if (kind === 'schedule_cancelled') return !entry.exists || entry.get('cancelled') === true;
+  return proposalStatus === 'confirmed' && entry.exists && entry.get('cancelled') !== true;
+}
 
 /**
  * Splits unsent decision rows by whether the proposal still has that decision.
@@ -420,14 +621,109 @@ async function currentDecisionEmails(
   if (docs.length === 0) return { sendable: [], stale: [] };
 
   const proposalIds = [
-    ...new Set(docs.map((doc) => doc.get('proposalId') as string).filter(Boolean)),
+    ...new Set(
+      docs
+        .filter((doc) => {
+          const kind = doc.get('kind');
+          return (
+            Boolean(DECISION_STILL_TRUE[kind as string]) ||
+            (isScheduleEmail(kind) && kind !== 'schedule_cancelled') ||
+            kind === 'committee_proposal_submitted'
+          );
+        })
+        .map((doc) => doc.get('proposalId') as string)
+        .filter(Boolean),
+    ),
   ];
-  const proposals = await db.getAll(
-    ...proposalIds.map((proposalId) => db.doc(`cfps/${cfpId}/proposals/${proposalId}`)),
+  const proposals = proposalIds.length
+    ? await db.getAll(
+        ...proposalIds.map((proposalId) => db.doc(`cfps/${cfpId}/proposals/${proposalId}`)),
+      )
+    : [];
+  const proposalMap = new Map(proposals.map((proposal) => [proposal.id, proposal]));
+  const current = new Map(
+    proposals.map((proposal) => [proposal.id, proposal.get('status') as string]),
   );
-  const current = new Map(proposals.map((proposal) => [proposal.id, proposal.get('status') as string]));
+  const scheduleDocs = docs.filter((doc) => isScheduleEmail(doc.get('kind')));
+  const staffDocs = docs.filter((doc) => isStaffEmail(doc.get('kind')));
+  const cfp = await db.doc(`cfps/${cfpId}`).get();
+  if (!cfp.exists || cfp.get('archived') === true) {
+    return { sendable: [], stale: docs };
+  }
+  const currentReleaseId = scheduleEmailReleaseId(cfp);
+  const scheduleEntryIds = [
+    ...new Set(
+      scheduleDocs
+        .filter((doc) => doc.get('dedupeKey') === currentReleaseId)
+        .map((doc) => doc.get('data')?.scheduleEntryId as string)
+        .filter(Boolean),
+    ),
+  ];
+  const scheduleEntries = scheduleEntryIds.length
+    ? await db.getAll(
+        ...scheduleEntryIds.map((entryId) =>
+          db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
+        ),
+      )
+    : [];
+  const scheduleEntryMap = new Map(scheduleEntries.map((entry) => [entry.id, entry]));
+  const staffUids = [
+    ...new Set(staffDocs.map((doc) => String(doc.get('recipientUid') ?? '')).filter(Boolean)),
+  ];
+  const [staffMembers, staffUsers] = await Promise.all([
+    staffUids.length
+      ? db.getAll(...staffUids.map((uid) => db.doc(`cfps/${cfpId}/members/${uid}`)))
+      : Promise.resolve([]),
+    Promise.all(staffUids.map(async (uid) => [uid, await verifiedStaffUser(uid)] as const)),
+  ]);
+  const staffMemberMap = new Map(staffMembers.map((member) => [member.id, member]));
+  const staffUserMap = new Map(staffUsers);
+  const invitationDocs = docs.filter((doc) => isRoleInvitationEmail(doc.get('kind')));
+  const grantEmails = [
+    ...new Set(
+      invitationDocs.map((doc) => String(doc.get('grantEmail') ?? '')).filter(Boolean),
+    ),
+  ];
+  const grants = grantEmails.length
+    ? await db.getAll(
+        ...grantEmails.map((email) => db.doc(`cfps/${cfpId}/roleGrants/${email}`)),
+      )
+    : [];
+  const grantMap = new Map(grants.map((grant) => [grant.id, grant]));
   const sendable = docs.filter((doc) => {
-    const holds = DECISION_STILL_TRUE[doc.get('kind') as string];
+    const kind = doc.get('kind') as string;
+    const holds = DECISION_STILL_TRUE[kind];
+    if (isStaffEmail(kind)) {
+      const uid = String(doc.get('recipientUid') ?? '');
+      const subjectId = String(doc.get('proposalId') ?? '');
+      const subject =
+        kind === 'committee_proposal_submitted' ? proposalMap.get(subjectId) ?? null : cfp;
+      return (
+        Boolean(staffUserMap.get(uid)) &&
+        staffMemberIsActive(staffMemberMap.get(uid)?.data(), cfpId, uid) &&
+        staffNotificationStillTrue(kind, subjectId, subject)
+      );
+    }
+    if (isRoleInvitationEmail(kind)) {
+      const grantEmail = String(doc.get('grantEmail') ?? '');
+      return roleInvitationStillTrue(
+        kind,
+        String(doc.get('proposalId') ?? ''),
+        cfpId,
+        grantEmail,
+        grantMap.get(grantEmail) ?? null,
+      );
+    }
+    if (isScheduleEmail(kind)) {
+      const entryId = doc.get('data')?.scheduleEntryId as string;
+      return scheduleEmailStillTrue(
+        kind,
+        String(doc.get('dedupeKey') ?? ''),
+        currentReleaseId,
+        scheduleEntryMap.get(entryId),
+        current.get(doc.get('proposalId') as string),
+      );
+    }
     // A kind with no entry is not a decision at all, so nothing to check.
     return !holds || holds.includes(current.get(doc.get('proposalId') as string) ?? '');
   });
@@ -443,15 +739,33 @@ async function advanceEmailQueue(
 ): Promise<{ released: number; stale: number }> {
   let released = 0;
   let stale = 0;
-  const CHUNK = 200;
+  const CHUNK = 100;
 
   for (let i = 0; i < candidates.length; i += CHUNK) {
+    const candidateChunk = candidates.slice(i, i + CHUNK);
+    const staffUids = [
+      ...new Set(
+        candidateChunk
+          .filter((row) => isStaffEmail(row.get('kind')))
+          .map((row) => String(row.get('recipientUid') ?? ''))
+          .filter(Boolean),
+      ),
+    ];
+    const staffUsers = new Map(
+      await Promise.all(staffUids.map(async (uid) => [uid, await verifiedStaffUser(uid)] as const)),
+    );
     const result = await db.runTransaction(async (tx) => {
-      const rows = await tx.getAll(...candidates.slice(i, i + CHUNK).map((doc) => doc.ref));
+      const rows = await tx.getAll(...candidateChunk.map((doc) => doc.ref));
       const proposalIds = [
         ...new Set(
           rows
-            .filter((row) => DECISION_STILL_TRUE[row.get('kind') as string])
+            .filter(
+              (row) =>
+                DECISION_STILL_TRUE[row.get('kind') as string] ||
+                (isScheduleEmail(row.get('kind')) &&
+                  row.get('kind') !== 'schedule_cancelled') ||
+                row.get('kind') === 'committee_proposal_submitted',
+            )
             .map((row) => row.get('proposalId') as string)
             .filter(Boolean),
         ),
@@ -467,12 +781,111 @@ async function advanceEmailQueue(
       const proposalStatuses = new Map(
         proposals.map((proposal) => [proposal.id, proposal.get('status') as string]),
       );
+      const proposalMap = new Map(proposals.map((proposal) => [proposal.id, proposal]));
+      const scheduleRows = rows.filter((row) => isScheduleEmail(row.get('kind')));
+      const staffRows = rows.filter((row) => isStaffEmail(row.get('kind')));
+      const cfp = await tx.get(db.doc(`cfps/${cfpId}`));
+      if (!cfp.exists || cfp.get('archived') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+      }
+      const currentReleaseId = scheduleEmailReleaseId(cfp);
+      const scheduleEntryIds = [
+        ...new Set(
+          scheduleRows
+            .filter((row) => row.get('dedupeKey') === currentReleaseId)
+            .map((row) => row.get('data')?.scheduleEntryId as string)
+            .filter(Boolean),
+        ),
+      ];
+      const scheduleEntries = scheduleEntryIds.length
+        ? await tx.getAll(
+            ...scheduleEntryIds.map((entryId) =>
+              db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
+            ),
+          )
+        : [];
+      const scheduleEntryMap = new Map(scheduleEntries.map((entry) => [entry.id, entry]));
+      const memberUids = [
+        ...new Set(
+          staffRows.map((row) => String(row.get('recipientUid') ?? '')).filter(Boolean),
+        ),
+      ];
+      const members = memberUids.length
+        ? await tx.getAll(
+            ...memberUids.map((uid) => db.doc(`cfps/${cfpId}/members/${uid}`)),
+          )
+        : [];
+      const memberMap = new Map(members.map((member) => [member.id, member]));
+      const invitationRows = rows.filter((row) => isRoleInvitationEmail(row.get('kind')));
+      const grantEmails = [
+        ...new Set(
+          invitationRows.map((row) => String(row.get('grantEmail') ?? '')).filter(Boolean),
+        ),
+      ];
+      const grants = grantEmails.length
+        ? await tx.getAll(
+            ...grantEmails.map((email) => db.doc(`cfps/${cfpId}/roleGrants/${email}`)),
+          )
+        : [];
+      const grantMap = new Map(grants.map((grant) => [grant.id, grant]));
 
       let advanced = 0;
       let superseded = 0;
       for (const row of rows) {
         if (!row.exists || !from.includes(row.get('status') as EmailStatus)) continue;
+        if (
+          row.get('status') === 'sending' &&
+          !sendingLeaseExpired(row.get('sendingStartedAt') ?? row.updateTime)
+        ) {
+          continue;
+        }
         const holds = DECISION_STILL_TRUE[row.get('kind') as string];
+        if (isStaffEmail(row.get('kind'))) {
+          const uid = String(row.get('recipientUid') ?? '');
+          const subjectId = String(row.get('proposalId') ?? '');
+          const subject =
+            row.get('kind') === 'committee_proposal_submitted'
+              ? proposalMap.get(subjectId) ?? null
+              : cfp;
+          if (
+            !staffUsers.get(uid) ||
+            !staffMemberIsActive(memberMap.get(uid)?.data(), cfpId, uid) ||
+            !staffNotificationStillTrue(row.get('kind'), subjectId, subject)
+          ) {
+            superseded += 1;
+            continue;
+          }
+        }
+        if (isRoleInvitationEmail(row.get('kind'))) {
+          const grantEmail = String(row.get('grantEmail') ?? '');
+          if (
+            !roleInvitationStillTrue(
+              row.get('kind'),
+              String(row.get('proposalId') ?? ''),
+              cfpId,
+              grantEmail,
+              grantMap.get(grantEmail) ?? null,
+            )
+          ) {
+            superseded += 1;
+            continue;
+          }
+        }
+        if (isScheduleEmail(row.get('kind'))) {
+          const entryId = row.get('data')?.scheduleEntryId as string;
+          if (
+            !scheduleEmailStillTrue(
+              row.get('kind') as string,
+              String(row.get('dedupeKey') ?? ''),
+              currentReleaseId,
+              scheduleEntryMap.get(entryId),
+              proposalStatuses.get(row.get('proposalId') as string),
+            )
+          ) {
+            superseded += 1;
+            continue;
+          }
+        }
         if (
           holds &&
           !holds.includes(proposalStatuses.get(row.get('proposalId') as string) ?? '')
@@ -480,7 +893,14 @@ async function advanceEmailQueue(
           superseded += 1;
           continue;
         }
-        tx.update(row.ref, { status: 'queued' satisfies EmailStatus });
+        tx.update(row.ref, {
+          status: 'queued' satisfies EmailStatus,
+          sendingClaimId: FieldValue.delete(),
+          sendingStartedAt: FieldValue.delete(),
+          sentAt: FieldValue.delete(),
+          providerId: FieldValue.delete(),
+          error: FieldValue.delete(),
+        });
         advanced += 1;
       }
       return { advanced, superseded };
@@ -540,17 +960,35 @@ export const refreshSpeakerSnapshots = onDocumentWritten(
     );
     if (open.length === 0) return;
 
-    const batch = db.batch();
-    for (const doc of open) {
-      // Replace this speaker's entry and leave any co-presenter's alone.
-      const current = (doc.get('speakerSnapshot') as SpeakerSnapshot[] | undefined) ?? [];
-      batch.update(doc.ref, {
-        speakerSnapshot: current.map((person) => (person.uid === uid ? next : person)),
-      });
-    }
-    await batch.commit();
+    const refreshed = await Promise.all(
+      open.map((doc) =>
+        db.runTransaction(async (tx) => {
+          const cfpId = doc.ref.parent.parent?.id;
+          if (!cfpId) return false;
+          const [cfp, proposal] = await tx.getAll(db.doc(`cfps/${cfpId}`), doc.ref);
+          if (
+            !cfp.exists ||
+            cfp.get('archived') === true ||
+            !proposal.exists ||
+            !STILL_BEING_JUDGED.includes(String(proposal.get('status') ?? ''))
+          ) {
+            return false;
+          }
+          // Replace this speaker's entry and leave any co-presenter's alone.
+          const current =
+            (proposal.get('speakerSnapshot') as SpeakerSnapshot[] | undefined) ?? [];
+          tx.update(proposal.ref, {
+            speakerSnapshot: current.map((person) => (person.uid === uid ? next : person)),
+          });
+          return true;
+        }),
+      ),
+    );
 
-    logger.info('speaker snapshot refreshed', { uid, proposals: open.length });
+    logger.info('speaker snapshot refreshed', {
+      uid,
+      proposals: refreshed.filter(Boolean).length,
+    });
   },
 );
 
@@ -584,20 +1022,120 @@ async function emailContext(
   };
 }
 
+type StaffEmailKind = Extract<
+  EmailKind,
+  'committee_proposal_submitted' | 'committee_schedule_shared'
+>;
+
+interface StaffRecipient {
+  uid: string;
+  email: string;
+  name: string;
+  locale: EmailLocale;
+  bilingual: boolean;
+}
+
+async function activeStaffRecipients(
+  cfpId: string,
+  excludeUid: string,
+): Promise<StaffRecipient[]> {
+  const members = await db.collection(`cfps/${cfpId}/members`).get();
+  const candidates = members.docs.filter(
+    (member) =>
+      member.id !== excludeUid &&
+      staffMemberIsActive(member.data(), cfpId, member.id),
+  );
+  const users = new Map<string, Awaited<ReturnType<typeof verifiedStaffUser>>>();
+  for (let index = 0; index < candidates.length; index += 100) {
+    const chunk = candidates.slice(index, index + 100);
+    const result = await getAuth().getUsers(chunk.map((member) => ({ uid: member.id })));
+    for (const user of result.users) {
+      users.set(user.uid, !user.disabled && user.emailVerified && user.email ? user : null);
+    }
+  }
+
+  return candidates.flatMap((member) => {
+    const user = users.get(member.id);
+    if (!user?.email) return [];
+    const language = staffEmailLanguage(member.data());
+    return [{
+      uid: member.id,
+      email: user.email,
+      name: String(member.get('name') ?? user.displayName ?? user.email),
+      ...language,
+    }];
+  });
+}
+
+async function queueStaffNotifications(
+  cfpId: string,
+  kind: StaffEmailKind,
+  subjectId: string,
+  actorUid: string,
+): Promise<number> {
+  if (!STAFF_EMAIL_KINDS.includes(kind)) return 0;
+  const recipients = await activeStaffRecipients(cfpId, actorUid);
+  let eligible = 0;
+
+  for (let index = 0; index < recipients.length; index += 10) {
+    const results = await Promise.all(
+      recipients.slice(index, index + 10).map((recipient) =>
+        db.runTransaction(async (tx) => {
+          const memberRef = db.doc(`cfps/${cfpId}/members/${recipient.uid}`);
+          const subjectRef =
+            kind === 'committee_proposal_submitted'
+              ? db.doc(`cfps/${cfpId}/proposals/${subjectId}`)
+              : db.doc(`cfps/${cfpId}`);
+          const cfpRef = db.doc(`cfps/${cfpId}`);
+          const [cfp, member] = await tx.getAll(cfpRef, memberRef);
+          const subject =
+            kind === 'committee_proposal_submitted' ? await tx.get(subjectRef) : cfp;
+          if (
+            !cfp.exists ||
+            cfp.get('archived') === true ||
+            !staffMemberIsActive(member.data(), cfpId, recipient.uid) ||
+            !staffNotificationStillTrue(kind, subjectId, subject)
+          ) {
+            return false;
+          }
+          await queueEmail(db, tx, cfpId, {
+            kind,
+            proposalId: subjectId,
+            dedupeKey: recipient.uid,
+            recipientUid: recipient.uid,
+            to: recipient.email,
+            locale: recipient.locale,
+            bilingual: recipient.bilingual,
+            data: {
+              speakerName: recipient.name,
+              title: '',
+            },
+          });
+          return true;
+        }),
+      ),
+    );
+    eligible += results.filter(Boolean).length;
+  }
+  return eligible;
+}
+
 export const submitProposal = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'submit a proposal');
   const proposalId = requireProposalId(request.data);
 
-  await assertCfpOpen(cfpId);
-
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
-  // Outside the transaction: config, not state — nothing in here depends on it
-  // being read at the same instant as the proposal, and a transaction that
-  // reads it would retry on every unrelated edit to the form.
-  const shape = await submissionFormFor(cfpId);
 
   const result = await db.runTransaction(async (tx) => {
+    const [cfp, formSnap] = await tx.getAll(
+      db.doc(`cfps/${cfpId}`),
+      db.doc(`cfps/${cfpId}/config/submissionForm`),
+    );
+    assertCfpOpenSnapshot(cfp);
+    // The form is part of the commit boundary. If an organiser adds a required
+    // answer concurrently, Firestore retries and validates against that form.
+    const shape = mergeSubmissionForm(formSnap.exists ? formSnap.data() : undefined);
     const proposal = await readOwnProposal(tx, proposalRef, uid);
 
     if (proposal.status === 'submitted') {
@@ -677,6 +1215,37 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
   logger.info('proposal submitted', { proposalId, uid, ...result });
   return { ok: true, proposalId, ...result };
 });
+
+export const notifyCommitteeOnProposalSubmitted = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    if (
+      event.data?.before.get('status') !== 'draft' ||
+      event.data?.after.get('status') !== 'submitted'
+    ) {
+      return;
+    }
+    const actorUid = String(
+      ((event.data.after.get('speakerIds') ?? []) as unknown[])[0] ?? '',
+    );
+    const notified = await queueStaffNotifications(
+      event.params.cfpId,
+      'committee_proposal_submitted',
+      event.params.proposalId,
+      actorUid,
+    );
+    logger.info('committee proposal notifications queued', {
+      cfpId: event.params.cfpId,
+      proposalId: event.params.proposalId,
+      notified,
+    });
+  },
+);
 
 /**
  * Withdrawal is a status change rather than a delete: the rules block deletes
@@ -784,41 +1353,175 @@ export const deleteDraftProposal = onCall(CALLABLE, async (request) => {
  * already the speaker's, so the session is the authentication. A one-time token
  * would be a second, weaker credential to leak, expire and support.
  */
-/**
- * Which image questions this speaker has actually uploaded a file for.
- *
- * Asked of the bucket rather than of the browser. The path is derived from the
- * caller's own uid, so there is nothing here a speaker could point at somebody
- * else's object — the answer is a fact we look up, not a claim we accept.
- */
-async function findUploads(
-  cfpId: string,
-  form: ConfirmForm,
-  uid: string,
-): Promise<Record<string, string>> {
-  const images = (form.fields ?? []).filter((field) => field.type === 'image');
-  if (images.length === 0) return {};
-
-  const bucket = getStorage().bucket();
-  const found: Record<string, string> = {};
-  await Promise.all(
-    images.map(async (field) => {
-      const path = headshotPath(cfpId, uid, field.key);
-      const [exists] = await bucket.file(path).exists();
-      if (exists) found[field.key] = path;
-    }),
-  );
-  return found;
-}
-
 /** The organiser's questions, or none. Missing means nothing extra is asked. */
 async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
   const snap = await db.doc(`cfps/${cfpId}/config/confirmForm`).get();
+  return confirmFormFrom(snap);
+}
+
+function confirmFormFrom(snap: DocumentSnapshot): ConfirmForm {
   const fields = snap.data()?.fields;
   return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
 }
 
-export const respondToDecision = onCall(CALLABLE, async (request) => {
+function assertDecisionCanBeAnswered(proposal: FirebaseFirestore.DocumentData): void {
+  if (!inStatusSet('speakerResponse', proposal.status) && proposal.status !== 'accepted') {
+    throw new HttpsError(
+      'failed-precondition',
+      `A proposal with status "${proposal.status}" has no decision to answer.`,
+    );
+  }
+}
+
+function assertWorkingHeadshotAccess(
+  proposal: FirebaseFirestore.DocumentData,
+  form: ConfirmForm,
+  key: string,
+): void {
+  // A declined speaker can change their answer back to confirmed from this
+  // same screen, and therefore has to be able to replace a required photo
+  // before `respondToDecision` moves the status again.
+  if (!['accepted', 'confirmed', 'declined'].includes(String(proposal.status ?? ''))) {
+    throw new HttpsError(
+      'failed-precondition',
+      'A headshot can only be uploaded while answering an acceptance.',
+    );
+  }
+  if (!form.fields.some((field) => field.key === key && field.type === 'image')) {
+    throw new HttpsError('invalid-argument', 'That image question is not on the current form.');
+  }
+}
+
+/**
+ * Writes one replaceable confirmation photo through the same per-CFP lane as
+ * archive and deletion. Browser Storage writes cannot participate in that
+ * fence, so they stay closed in `storage.rules`.
+ */
+export const uploadHeadshot = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = requireVerifiedUid(request, 'upload a headshot');
+  const proposalId = requireProposalId(request.data);
+  const data = (request.data ?? {}) as {
+    key?: unknown;
+    contentType?: unknown;
+    base64?: unknown;
+  };
+  const key = typeof data.key === 'string' ? data.key : '';
+  if (!key) throw new HttpsError('invalid-argument', 'key is required.');
+  const upload = await decodeHeadshotUpload(data.contentType, data.base64);
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
+  const formRef = db.doc(`cfps/${cfpId}/config/confirmForm`);
+  const readValidProposal = async (tx: FirebaseFirestore.Transaction) => {
+    const [proposal, form] = await tx.getAll(proposalRef, formRef);
+    if (!proposal.exists || !((proposal.get('speakerIds') ?? []) as unknown[]).includes(uid)) {
+      throw new HttpsError('not-found', 'Proposal not found.');
+    }
+    assertWorkingHeadshotAccess(proposal.data()!, confirmFormFrom(form), key);
+    return proposal;
+  };
+
+  const leaseId = await acquireCfpMutation(cfpId, 'speaker-headshot-upload', async (tx) => {
+    await readValidProposal(tx);
+  });
+  const path = workingHeadshotPath(cfpId, proposalId, key, leaseId);
+  const file = getStorage().bucket().file(path);
+  let pointer: HeadshotUploadPointer | undefined;
+
+  try {
+    await file.save(upload.bytes, {
+      resumable: false,
+      metadata: {
+        contentType: upload.contentType,
+        cacheControl: 'private, no-store',
+      },
+    });
+    const [metadata] = await file.getMetadata();
+    const generation = String(metadata.generation ?? '');
+    if (!generation) {
+      throw new HttpsError('failed-precondition', 'The uploaded photo has no stable version.');
+    }
+    pointer = {
+      path,
+      generation,
+      contentType: upload.contentType,
+      size: upload.bytes.length,
+    };
+    // Admins may change the decision or confirmation form without touching
+    // Storage. Recheck both, then atomically make this unique object current.
+    await finishCfpMutation(cfpId, leaseId, async (tx) => {
+      const proposal = await readValidProposal(tx);
+      const current = proposal.get('headshotUploads');
+      const uploads: HeadshotUploads =
+        current && typeof current === 'object' && !Array.isArray(current)
+          ? (current as HeadshotUploads)
+          : {};
+      tx.update(proposalRef, {
+        headshotUploads: { ...uploads, [key]: pointer },
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  } catch (error) {
+    if (pointer) {
+      try {
+        const current = await proposalRef.get();
+        const committed =
+          current.exists &&
+          workingHeadshotMatches(
+            current.get('headshotUploads'),
+            cfpId,
+            proposalId,
+            key,
+            pointer,
+          );
+        if (committed) {
+          logger.warn('headshot upload recovered after an ambiguous commit response', {
+            cfpId,
+            proposalId,
+            uid,
+            key,
+          });
+          return { ok: true, path };
+        }
+      } catch (verificationError) {
+        // The pointer transaction may have committed. Never delete a possibly
+        // referenced object merely because its response or verification was
+        // unavailable; an unreferenced unique object is cleared with the CFP.
+        logger.error('headshot upload commit could not be verified', {
+          cfpId,
+          proposalId,
+          uid,
+          error: String(verificationError),
+        });
+        throw new HttpsError('unavailable', 'The photo upload could not be settled. Try again.');
+      }
+    }
+    try {
+      // Unique staging means a failed attempt never touches the previous
+      // pointer or its object; cleanup can only remove this attempt.
+      await file.delete({ ignoreNotFound: true });
+    } catch (cleanupError) {
+      // Keep the lease until expiry. Archive and deletion stay fenced while a
+      // possibly committed upload is ambiguous, and their later bucket clear
+      // remains the final backstop.
+      logger.error('headshot upload cleanup failed', {
+        cfpId,
+        proposalId,
+        uid,
+        error: String(cleanupError),
+      });
+      throw new HttpsError('unavailable', 'The photo upload could not be settled. Try again.');
+    }
+    await releaseCfpMutationQuietly(cfpId, leaseId);
+    if (error instanceof HttpsError) throw error;
+    logger.error('headshot upload failed', { cfpId, proposalId, uid, error: String(error) });
+    throw new HttpsError('unavailable', 'The photo could not be uploaded. Try again.');
+  }
+
+  logger.info('headshot uploaded', { cfpId, proposalId, uid, key });
+  return { ok: true, path };
+});
+
+export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'answer a decision');
   const proposalId = requireProposalId(request.data);
@@ -829,6 +1532,7 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'Answer must be "confirm" or "decline".');
   }
   const status = response === 'confirm' ? 'confirmed' : 'declined';
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
 
   /*
    * Only a confirmation carries answers. Someone who cannot come should not
@@ -840,85 +1544,234 @@ export const respondToDecision = onCall(CALLABLE, async (request) => {
    * the client's copy of the form is a convenience.
    */
   let answers: Answers = {};
+  let leaseId: string | undefined;
+  let uploadPaths: Record<string, string> = {};
+  let frozenUploads: Record<string, string> = {};
   if (status === 'confirmed') {
-    const form = await loadConfirmForm(cfpId);
-    const uploads = await findUploads(cfpId, form, uid);
-    const checked = validateAnswers(form, (data.answers ?? {}) as Answers, uploads);
-    if (Object.keys(checked.faults).length > 0) {
-      throw new HttpsError('invalid-argument', 'Some answers need fixing.', checked.faults);
+    leaseId = await acquireCfpMutation(cfpId, 'speaker-confirmation', async (tx) => {
+      assertDecisionCanBeAnswered(await readOwnProposal(tx, proposalRef, uid));
+    });
+    try {
+      const form = await loadConfirmForm(cfpId);
+      const bucket = getStorage().bucket();
+      const currentProposal = await proposalRef.get();
+      const uploads = await findUploadedHeadshots(
+        bucket,
+        cfpId,
+        proposalId,
+        form,
+        uid,
+        currentProposal.get('headshotUploads'),
+      );
+      uploadPaths = Object.fromEntries(
+        Object.entries(uploads).map(([key, upload]) => [key, upload.path]),
+      );
+      const checked = validateAnswers(form, (data.answers ?? {}) as Answers, uploadPaths);
+      if (Object.keys(checked.faults).length > 0) {
+        throw new HttpsError('invalid-argument', 'Some answers need fixing.', checked.faults);
+      }
+      frozenUploads = await freezeUploadedHeadshots(bucket, cfpId, proposalId, uploads);
+      answers = { ...checked.clean, ...frozenUploads };
+    } catch (error) {
+      await releaseCfpMutationQuietly(cfpId, leaseId);
+      throw error;
     }
-    answers = checked.clean;
   }
 
-  await db.runTransaction(async (tx) => {
-    await assertCfpNotArchived(tx, cfpId);
-    const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
-    const proposal = await readOwnProposal(tx, proposalRef, uid);
+  try {
+    const finish = async (tx: FirebaseFirestore.Transaction) => {
+      const proposal = await readOwnProposal(tx, proposalRef, uid);
+      // `confirmed` is allowed so re-clicking a mailed link is a no-op rather
+      // than an error the speaker has to interpret.
+      assertDecisionCanBeAnswered(proposal);
 
-    // `confirmed` is in the set so that re-clicking a mailed link is a no-op
-    // rather than an error the speaker has to interpret.
-    if (!inStatusSet('speakerResponse', proposal.status) && proposal.status !== 'accepted') {
-      throw new HttpsError(
-        'failed-precondition',
-        `A proposal with status "${proposal.status}" has no decision to answer.`,
-      );
+      if (status === 'confirmed') {
+        const latestForm = confirmFormFrom(
+          await tx.get(db.doc(`cfps/${cfpId}/config/confirmForm`)),
+        );
+        const checked = validateAnswers(
+          latestForm,
+          (data.answers ?? {}) as Answers,
+          uploadPaths,
+        );
+        if (Object.keys(checked.faults).length > 0) {
+          throw new HttpsError('invalid-argument', 'Some answers need fixing.', checked.faults);
+        }
+        answers = { ...checked.clean };
+        for (const [key, path] of Object.entries(frozenUploads)) {
+          if (Object.prototype.hasOwnProperty.call(answers, key)) answers[key] = path;
+        }
+      }
+
+      tx.update(proposalRef, {
+        status,
+        confirmedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        // Replaced wholesale, not merged: confirming again is how a speaker
+        // corrects an answer, and a merge would leave the old one behind.
+        ...(status === 'confirmed' ? { confirmAnswers: answers } : {}),
+      });
+    };
+
+    if (leaseId) {
+      await finishCfpMutation(cfpId, leaseId, finish);
+    } else {
+      await db.runTransaction(async (tx) => {
+        await assertCfpNotArchived(tx, cfpId);
+        await finish(tx);
+      });
     }
-
-    tx.update(proposalRef, {
-      status,
-      confirmedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      // Replaced wholesale, not merged: confirming again is how a speaker
-      // corrects an answer, and a merge would leave the old one behind.
-      ...(status === 'confirmed' ? { confirmAnswers: answers } : {}),
-    });
-  });
+  } catch (error) {
+    if (leaseId) await releaseCfpMutationQuietly(cfpId, leaseId);
+    throw error;
+  }
 
   logger.info('decision answered', { proposalId, uid, status });
   return { ok: true, status };
 });
 
+async function readHeadshotBytes(
+  path: string,
+  generation?: string,
+): Promise<{ contentType: string; base64: string }> {
+  const stored = await readStoredHeadshot(getStorage().bucket(), path, generation);
+  if (!stored) throw new HttpsError('not-found', 'No headshot for that speaker.');
+  return { contentType: stored.contentType, base64: stored.bytes.toString('base64') };
+}
+
 /**
- * One speaker's headshot, for an organiser.
- *
- * The bucket stays shut to everyone but the owner: Cloud Storage rules cannot
- * read Firestore, so "and the committee" is not expressible there, and any rule
- * loose enough to admit a reviewer would admit everybody. Putting a callable in
- * the path moves the role check somewhere it can actually be made.
- *
- * The bytes come back inline rather than as a signed URL. A signed URL would be
- * cheaper, but `getSignedUrl` has to sign with a private key: the emulator has
- * none, and a deployed function only manages it by calling IAM `signBlob`, which
- * needs a role the runtime service account is not granted by default. So the
- * link would work here and fail on the one machine that matters. Inline also
- * means no bearer URL for the photo ever exists to be forwarded or logged.
- * Answers are capped at `FORM_LIMITS.image`, which bounds the response.
+ * Reads either a speaker's current working upload or an organiser's immutable
+ * confirmed answer. Both paths return bytes inline, without a public download
+ * token; the explicit `working: true` branch derives its path from the
+ * server-written proposal pointer and never accepts one from the browser.
  */
-export const headshotImage = onCall(CALLABLE, async (request) => {
+export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
-  await requireAdmin(request, cfpId, 'view a headshot');
-  const data = (request.data ?? {}) as { speakerUid?: unknown; key?: unknown };
-  const speakerUid = String(data.speakerUid ?? '');
+  const proposalId = requireProposalId(request.data);
+  const data = (request.data ?? {}) as { key?: unknown; working?: unknown };
   const key = String(data.key ?? '');
-  if (!speakerUid || !key) {
-    throw new HttpsError('invalid-argument', 'speakerUid and key are required.');
+  if (!key) {
+    throw new HttpsError('invalid-argument', 'proposalId and key are required.');
+  }
+  const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
+
+  if (data.working === true) {
+    const uid = requireVerifiedUid(request, 'view a working headshot');
+    const pointer = await db.runTransaction(async (tx) => {
+      const [cfp, proposal, form] = await tx.getAll(
+        db.doc(`cfps/${cfpId}`),
+        proposalRef,
+        db.doc(`cfps/${cfpId}/config/confirmForm`),
+      );
+      if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+      if (cfp.get('deleting') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+      }
+      if (!proposal.exists || !((proposal.get('speakerIds') ?? []) as unknown[]).includes(uid)) {
+        throw new HttpsError('not-found', 'Proposal not found.');
+      }
+      assertWorkingHeadshotAccess(proposal.data()!, confirmFormFrom(form), key);
+      const uploads = proposal.get('headshotUploads');
+      const current = workingHeadshotFrom(uploads, cfpId, proposalId, key);
+      if (current) return current;
+      if (
+        uploads &&
+        typeof uploads === 'object' &&
+        !Array.isArray(uploads) &&
+        Object.prototype.hasOwnProperty.call(uploads, key)
+      ) {
+        throw new HttpsError('failed-precondition', 'The saved photo pointer is invalid.');
+      }
+      // Calls created before pointer-backed uploads keep their canonical live
+      // object until the speaker replaces it once through the new callable.
+      return { path: headshotPath(cfpId, uid, key), generation: undefined };
+    });
+    const image = await readHeadshotBytes(pointer.path, pointer.generation);
+    return { ok: true, ...image };
   }
 
-  const file = getStorage().bucket().file(headshotPath(cfpId, speakerUid, key));
-  const [exists] = await file.exists();
-  if (!exists) throw new HttpsError('not-found', 'No headshot for that speaker.');
+  const byUid = await requireAdmin(request, cfpId, 'view a headshot');
 
-  // Read from the object rather than trusting the upload rule, because this
-  // string goes into a `data:` URL an organiser's browser will act on. Anything
-  // that is not one of the three image types we accept is refused outright.
-  const [meta] = await file.getMetadata();
-  const contentType = String(meta.contentType ?? '');
-  if (!(IMAGE_TYPES as readonly string[]).includes(contentType)) {
-    throw new HttpsError('failed-precondition', 'That file is not an image.');
+  const proposal = await proposalRef.get();
+  if (!proposal.exists) throw new HttpsError('not-found', 'No such proposal.');
+  const answers = proposal.get('confirmAnswers');
+  const path =
+    answers && typeof answers === 'object' && !Array.isArray(answers)
+      ? (answers as Record<string, unknown>)[key]
+      : undefined;
+  const speakerIds = proposal.get('speakerIds');
+  const isLegacyPath =
+    typeof path === 'string' &&
+    Array.isArray(speakerIds) &&
+    speakerIds.some((uid) =>
+      typeof uid === 'string' ? path === headshotPath(cfpId, uid, key) : false,
+    );
+  if (
+    typeof path !== 'string' ||
+    (!isConfirmedHeadshotPath(path, cfpId, proposalId, key) && !isLegacyPath)
+  ) {
+    throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+  }
+  let imagePath = path;
+
+  if (isLegacyPath) {
+    const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
+    const leaseId = await acquireCfpMutation(
+      cfpId,
+      'legacy-headshot-read',
+      async (tx) => assertMutationActor(await tx.get(memberRef), 'admin'),
+      { allowArchived: true },
+    );
+    try {
+      // Re-read after acquiring the lane. Another organiser may have completed
+      // the migration between the first read and this reservation.
+      const current = await proposal.ref.get();
+      const currentAnswers = current.get('confirmAnswers');
+      const currentPath =
+        currentAnswers && typeof currentAnswers === 'object' && !Array.isArray(currentAnswers)
+          ? (currentAnswers as Record<string, unknown>)[key]
+          : undefined;
+      const currentSpeakerIds = current.get('speakerIds');
+      const currentIsLegacy =
+        typeof currentPath === 'string' &&
+        Array.isArray(currentSpeakerIds) &&
+        currentSpeakerIds.some((uid) =>
+          typeof uid === 'string' ? currentPath === headshotPath(cfpId, uid, key) : false,
+        );
+      if (
+        typeof currentPath === 'string' &&
+        isConfirmedHeadshotPath(currentPath, cfpId, proposalId, key)
+      ) {
+        imagePath = currentPath;
+      } else if (currentIsLegacy) {
+        imagePath = await freezeLegacyHeadshotAnswer(
+          db,
+          getStorage().bucket(),
+          cfpId,
+          proposal.ref,
+          key,
+          currentPath as string,
+        );
+      } else {
+        throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+      }
+      await finishCfpMutation(
+        cfpId,
+        leaseId,
+        async (tx) => assertMutationActor(await tx.get(memberRef), 'admin'),
+        { allowArchived: true },
+      );
+      if (!isConfirmedHeadshotPath(imagePath, cfpId, proposalId, key)) {
+        throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+      }
+    } catch (error) {
+      await releaseCfpMutationQuietly(cfpId, leaseId);
+      throw error;
+    }
   }
 
-  const [bytes] = await file.download();
-  return { ok: true, dataUrl: `data:${contentType};base64,${bytes.toString('base64')}` };
+  const image = await readHeadshotBytes(imagePath);
+  return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
 });
 
 /**
@@ -948,7 +1801,10 @@ export const setConfirmForm = onCall(CALLABLE, async (request) => {
     );
   }
 
-  await db.doc(`cfps/${cfpId}/config/confirmForm`).set(form);
+  await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
+    tx.set(db.doc(`cfps/${cfpId}/config/confirmForm`), form);
+  });
   logger.info('confirm form saved', { byUid, fields: form.fields.length });
   return { ok: true, fields: form.fields };
 });
@@ -989,7 +1845,10 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
     }
   }
 
-  await db.doc(`cfps/${cfpId}/config/submissionForm`).set(form);
+  await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
+    tx.set(db.doc(`cfps/${cfpId}/config/submissionForm`), form);
+  });
   logger.info('submission form saved', {
     byUid,
     cfpId,
@@ -1011,6 +1870,68 @@ const aggregateScorable = (status: unknown): boolean =>
   (PROPOSAL_STATUSES as readonly string[]).includes(status) &&
   status !== 'draft' &&
   status !== 'withdrawn';
+
+export const saveReview = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const reviewerUid = requireVerifiedUid(request, 'save a review');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const proposalId = requireProposalId(data);
+  const score = data.score;
+  const conflictOfInterest = data.conflictOfInterest;
+  const comment = data.comment === undefined ? '' : data.comment;
+  if (!isKnownScore(score)) {
+    throw new HttpsError('invalid-argument', 'Score must be between 1 and 4.');
+  }
+  if (typeof conflictOfInterest !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'Conflict of interest must be true or false.');
+  }
+  if (typeof comment !== 'string' || comment.length > LIMITS.reviewCommentMax) {
+    throw new HttpsError('invalid-argument', 'That review comment is too long.');
+  }
+
+  const status = await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const memberRef = db.doc(`cfps/${cfpId}/members/${reviewerUid}`);
+    const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
+    const [cfp, member, proposal] = await tx.getAll(cfpRef, memberRef, proposalRef);
+    if (!cfp.exists || !proposal.exists) {
+      throw new HttpsError('not-found', 'No such proposal.');
+    }
+    if (cfp.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    if (!staffMemberIsActive(member.data(), cfpId, reviewerUid)) {
+      throw new HttpsError('permission-denied', 'Only an active reviewer can save a review.');
+    }
+    if (((proposal.get('speakerIds') ?? []) as string[]).includes(reviewerUid)) {
+      throw new HttpsError('permission-denied', 'You cannot review your own proposal.');
+    }
+    const current = String(proposal.get('status') ?? '');
+    if (!(REVIEW_QUEUE_STATUSES as readonly string[]).includes(current)) {
+      throw new HttpsError('failed-precondition', 'That proposal cannot be reviewed.');
+    }
+
+    const trimmed = comment.trim();
+    tx.set(proposalRef.collection('reviews').doc(reviewerUid), {
+      cfpId,
+      score,
+      conflictOfInterest,
+      ...(trimmed ? { comment: trimmed } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    if (current === 'submitted') {
+      tx.update(proposalRef, {
+        status: 'under_review',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return 'under_review';
+    }
+    return current;
+  });
+
+  logger.info('review saved', { cfpId, proposalId, reviewerUid, status });
+  return { ok: true, proposalId, status };
+});
 
 /**
  * The current review policy is deliberately explicit: every active role-holder
@@ -1115,19 +2036,23 @@ interface AggregateRefresh {
   proposalCount: number;
   writes: number;
   superseded: boolean;
+  archived: boolean;
 }
 
 /** A monotonic fence: an older refresh may never commit after a newer one starts. */
-async function reserveAggregateRevision(cfpId: string): Promise<number | null> {
+async function reserveAggregateRevision(
+  cfpId: string,
+): Promise<{ revision: number | null; archived: boolean }> {
   const cfpRef = db.doc(`cfps/${cfpId}`);
   return db.runTransaction(async (tx) => {
     const cfp = await tx.get(cfpRef);
-    if (!cfp.exists) return null;
+    if (!cfp.exists) return { revision: null, archived: false };
+    if (cfp.get('archived') === true) return { revision: null, archived: true };
     const stored = cfp.get(AGGREGATE_REVISION_FIELD);
     const current = typeof stored === 'number' && Number.isSafeInteger(stored) ? stored : 0;
     const revision = current + 1;
     tx.update(cfpRef, { [AGGREGATE_REVISION_FIELD]: revision });
-    return revision;
+    return { revision, archived: false };
   });
 }
 
@@ -1150,9 +2075,16 @@ function sameAggregate(current: unknown, desired: Aggregate): boolean {
  * run stops; it cannot land stale values after the new run.
  */
 async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
-  const revision = await reserveAggregateRevision(cfpId);
+  const reservation = await reserveAggregateRevision(cfpId);
+  const { revision } = reservation;
   if (revision === null) {
-    return { reviewCount: 0, proposalCount: 0, writes: 0, superseded: false };
+    return {
+      reviewCount: 0,
+      proposalCount: 0,
+      writes: 0,
+      superseded: false,
+      archived: reservation.archived,
+    };
   }
 
   const [proposalSnaps, reviewSnaps] = await Promise.all([
@@ -1193,8 +2125,11 @@ async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
     const chunk = candidates.slice(i, i + AGGREGATE_CHUNK);
     const result = await db.runTransaction(async (tx) => {
       const cfp = await tx.get(cfpRef);
+      if (cfp.get('archived') === true) {
+        return { applied: false, writes: 0, archived: true };
+      }
       if (!cfp.exists || cfp.get(AGGREGATE_REVISION_FIELD) !== revision) {
-        return { applied: false, writes: 0 };
+        return { applied: false, writes: 0, archived: false };
       }
 
       const currentProposals = [];
@@ -1215,7 +2150,7 @@ async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
         });
         chunkWrites += 1;
       }
-      return { applied: true, writes: chunkWrites };
+      return { applied: true, writes: chunkWrites, archived: false };
     });
 
     if (!result.applied) {
@@ -1224,6 +2159,7 @@ async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
         proposalCount: aggregates.size,
         writes,
         superseded: true,
+        archived: result.archived,
       };
     }
     writes += result.writes;
@@ -1234,6 +2170,7 @@ async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
     proposalCount: aggregates.size,
     writes,
     superseded: false,
+    archived: false,
   };
 }
 
@@ -1245,6 +2182,9 @@ export const recomputeAggregates = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const uid = await requireAdmin(request, cfpId, 'recompute review scores');
   const result = await refreshAggregates(cfpId);
+  if (result.archived) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+  }
 
   logger.info('aggregates recomputed', { cfpId, uid, ...result });
   return {
@@ -1270,6 +2210,22 @@ export const refreshReviewAggregates = onDocumentWritten(
         (before.get('conflictOfInterest') === true) !==
         (after.get('conflictOfInterest') === true);
       if (!scoreChanged && !conflictChanged) return;
+    }
+
+    if (!before?.exists && after?.exists) {
+      const proposalRef = db.doc(
+        `cfps/${event.params.cfpId}/proposals/${event.params.proposalId}`,
+      );
+      await db.runTransaction(async (tx) => {
+        const [cfp, proposal] = await tx.getAll(db.doc(`cfps/${event.params.cfpId}`), proposalRef);
+        if (!cfp.exists || cfp.get('archived') === true) return;
+        if (proposal.exists && proposal.get('status') === 'submitted') {
+          tx.update(proposalRef, {
+            status: 'under_review',
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      });
     }
 
     const result = await refreshAggregates(event.params.cfpId);
@@ -1613,7 +2569,9 @@ function readProfile(data: Record<string, unknown>): CfpProfile {
   const description = (data.description ?? {}) as Record<string, unknown>;
   return {
     description: { en: text(description.en), fr: text(description.fr) },
-    eventDate: text(data.eventDate),
+    eventStartDate: text(data.eventStartDate || data.eventDate),
+    eventEndDate: text(data.eventEndDate || data.eventStartDate || data.eventDate),
+    timeZone: text(data.timeZone),
     venue: text(data.venue),
     location: text(data.location),
     website: text(data.website),
@@ -1635,7 +2593,11 @@ function writableProfile(profile: CfpProfile): Record<string, unknown> {
     description: anyDescription
       ? { en: description!.en, ...(description!.fr ? { fr: description!.fr } : {}) }
       : FieldValue.delete(),
-    eventDate: profile.eventDate || FieldValue.delete(),
+    eventStartDate: profile.eventStartDate || profile.eventDate || FieldValue.delete(),
+    eventEndDate:
+      profile.eventEndDate || profile.eventStartDate || profile.eventDate || FieldValue.delete(),
+    timeZone: profile.timeZone || FieldValue.delete(),
+    eventDate: FieldValue.delete(),
     venue: profile.venue || FieldValue.delete(),
     location: profile.location || FieldValue.delete(),
     website: profile.website || FieldValue.delete(),
@@ -1657,11 +2619,15 @@ export const updateCfp = onCall(CALLABLE, async (request) => {
   const profileFault = validateProfile(profile);
   if (profileFault) throw new HttpsError('invalid-argument', profileFault);
 
-  await db.doc(`cfps/${cfpId}`).update({
-    name,
-    visibility,
-    ...writableProfile(profile),
-    updatedAt: FieldValue.serverTimestamp(),
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc(`cfps/${cfpId}`);
+    await assertCfpNotArchived(tx, cfpId);
+    tx.update(ref, {
+      name,
+      visibility,
+      ...writableProfile(profile),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   });
   logger.info('cfp updated', { cfpId, byUid });
   return { ok: true };
@@ -1675,18 +2641,74 @@ export const updateCfp = onCall(CALLABLE, async (request) => {
  * them destroyed asked for `deleteCfp`. Reversible for the same reason —
  * archiving by mistake must not cost anybody their data.
  */
-export const archiveCfp = onCall(CALLABLE, async (request) => {
+export const archiveCfp = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireOwner(request, cfpId, 'archive this call for proposals');
   const archived = (request.data as { archived?: unknown }).archived !== false;
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
 
-  await db.doc(`cfps/${cfpId}`).update({
-    archived,
-    // Cleared rather than left behind, so "when was this archived" cannot
-    // answer for an archiving that was undone.
-    archivedAt: archived ? FieldValue.serverTimestamp() : FieldValue.delete(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  if (!archived) {
+    await db.runTransaction(async (tx) => {
+      const [cfp, lease, member] = await tx.getAll(
+        cfpRef,
+        mutationLeaseRef(cfpId),
+        memberRef,
+      );
+      if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+      assertMutationActor(member, 'owner');
+      if (cfp.get('deleting') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+      }
+      if (activeMutationLease(lease)) {
+        throw new HttpsError('aborted', 'Another event change is still in progress. Try again.');
+      }
+      if (lease.exists) tx.delete(lease.ref);
+      tx.update(cfpRef, {
+        archived: false,
+        archivedAt: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  } else {
+    const alreadyArchived = await db.runTransaction(async (tx) => {
+      const [cfp, lease, member] = await tx.getAll(
+        cfpRef,
+        mutationLeaseRef(cfpId),
+        memberRef,
+      );
+      if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+      assertMutationActor(member, 'owner');
+      if (cfp.get('deleting') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+      }
+      if (activeMutationLease(lease)) {
+        throw new HttpsError('aborted', 'Another event change is still in progress. Try again.');
+      }
+      if (lease.exists) tx.delete(lease.ref);
+      return cfp.get('archived') === true;
+    });
+
+    if (!alreadyArchived) {
+      const leaseId = await acquireCfpMutation(cfpId, 'archive', async (tx) => {
+        assertMutationActor(await tx.get(memberRef), 'owner');
+      });
+      try {
+        await freezeLegacyHeadshots(db, getStorage().bucket(), cfpId);
+        await finishCfpMutation(cfpId, leaseId, async (tx) => {
+          assertMutationActor(await tx.get(memberRef), 'owner');
+          tx.update(cfpRef, {
+            archived: true,
+            archivedAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        });
+      } catch (error) {
+        await releaseCfpMutationQuietly(cfpId, leaseId);
+        throw error;
+      }
+    }
+  }
   logger.info('cfp archived', { cfpId, byUid, archived });
   return { ok: true, archived };
 });
@@ -1699,29 +2721,73 @@ export const archiveCfp = onCall(CALLABLE, async (request) => {
  * which is what a confirm dialog cannot do on its own. This is other people's
  * writing; nobody should be one stray click from it.
  *
- * `recursiveDelete` walks the subcollections, and the bucket prefix goes with
- * them. Both are best-effort against a partial failure: a second call finishes
- * the job, because a half-deleted CFP is worse than either outcome.
+ * A reservation fences unarchive and every other write first. Storage is
+ * cleared before Firestore. Firestore descendants are then cleared while the
+ * root and caller's owner membership remain as retry anchors; only a final
+ * transaction removes those two together.
  */
 export const deleteCfp = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireOwner(request, cfpId, 'delete this call for proposals');
-
-  const snap = await db.doc(`cfps/${cfpId}`).get();
-  if (!snap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
-  if (snap.data()?.archived !== true) {
-    throw new HttpsError('failed-precondition', 'Archive it before deleting it.');
-  }
   if (String((request.data as { confirm?: unknown }).confirm ?? '') !== cfpId) {
     throw new HttpsError('invalid-argument', 'Type the address to confirm.');
   }
 
-  await getStorage()
-    .bucket()
-    .deleteFiles({ prefix: `cfps/${cfpId}/` })
-    .catch((error) => logger.error('could not clear the bucket', { cfpId, error: String(error) }));
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  await db.runTransaction(async (tx) => {
+    const [cfp, lease, member] = await tx.getAll(
+      cfpRef,
+      mutationLeaseRef(cfpId),
+      db.doc(`cfps/${cfpId}/members/${byUid}`),
+    );
+    if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    assertMutationActor(member, 'owner');
+    if (cfp.get('archived') !== true) {
+      throw new HttpsError('failed-precondition', 'Archive it before deleting it.');
+    }
+    if (cfp.get('deleting') === true && member.get('deletionReserved') !== true) {
+      throw new HttpsError('aborted', 'Another owner is already deleting this event.');
+    }
+    if (activeMutationLease(lease)) {
+      throw new HttpsError('aborted', 'Another event change is still in progress. Try again.');
+    }
+    if (lease.exists) tx.delete(lease.ref);
+    tx.update(member.ref, { deletionReserved: true });
+    tx.update(cfpRef, {
+      deleting: true,
+      deletingAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
 
-  await db.recursiveDelete(db.doc(`cfps/${cfpId}`));
+  try {
+    await clearCfpStorage(getStorage().bucket(), cfpId);
+  } catch (error) {
+    logger.error('could not clear the bucket', { cfpId, error: String(error) });
+    throw new HttpsError('unavailable', 'Could not clear stored event files. Try deleting again.');
+  }
+
+  try {
+    await clearCfpFirestoreChildren(db, cfpRef, byUid);
+  } catch (error) {
+    logger.error('could not clear event records', { cfpId, error: String(error) });
+    throw new HttpsError('unavailable', 'Could not clear event records. Try deleting again.');
+  }
+
+  await db.runTransaction(async (tx) => {
+    const [cfp, owner] = await tx.getAll(cfpRef, db.doc(`cfps/${cfpId}/members/${byUid}`));
+    if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    assertMutationActor(owner, 'owner');
+    if (
+      cfp.get('archived') !== true ||
+      cfp.get('deleting') !== true ||
+      owner.get('deletionReserved') !== true
+    ) {
+      throw new HttpsError('failed-precondition', 'This deletion is no longer reserved.');
+    }
+    tx.delete(owner.ref);
+    tx.delete(cfpRef);
+  });
   logger.warn('cfp deleted', { cfpId, byUid });
   return { ok: true };
 });
@@ -1743,7 +2809,7 @@ export const claimRole = onCall(CALLABLE, async (request) => {
   // pass. Google always sets it, but a role is the wrong thing to hand out on
   // the assumption that the only provider we enabled today is the only one
   // there will ever be.
-  if (token.email && token.email_verified !== true) {
+  if (typeof token.email !== 'string' || !token.email || token.email_verified !== true) {
     throw new HttpsError('failed-precondition', 'Verify your email address first.');
   }
 
@@ -1775,6 +2841,58 @@ export const grantRole = onCall(CALLABLE, async (request) => {
   }
 });
 
+export const notifyCommitteeRoleInvite = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/roleGrants/{grantEmail}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const after = event.data?.after;
+    if (!after?.exists || after.get('claimedBy')) return;
+    const invitationId = String(after.get('invitationId') ?? '');
+    const beforeInvitationId = event.data?.before.exists
+      ? String(event.data.before.get('invitationId') ?? '')
+      : '';
+    if (!invitationId || invitationId === beforeInvitationId) return;
+
+    const { cfpId, grantEmail } = event.params;
+    const queued = await db.runTransaction(async (tx) => {
+      const [cfp, grant] = await tx.getAll(db.doc(`cfps/${cfpId}`), after.ref);
+      if (
+        !cfp.exists ||
+        cfp.get('archived') === true ||
+        !roleInvitationStillTrue(
+          'committee_role_invited',
+          invitationId,
+          cfpId,
+          grantEmail,
+          grant,
+        )
+      ) {
+        return false;
+      }
+      const language = staffEmailLanguage(grant.data());
+      await queueEmail(db, tx, cfpId, {
+        kind: 'committee_role_invited',
+        proposalId: invitationId,
+        grantEmail,
+        to: grantEmail,
+        ...language,
+        data: { speakerName: grantEmail, title: '' },
+      });
+      return true;
+    });
+    logger.info('committee role invitation queued', {
+      cfpId,
+      grantEmail,
+      invitationId,
+      queued,
+    });
+  },
+);
+
 /** Admin only, and refuses to remove the last admin. */
 export const revokeRole = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -1782,7 +2900,7 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
   const data = (request.data ?? {}) as { email?: unknown };
 
   try {
-    const result = await revoke(db, getAuth(), { cfpId, email: data.email });
+    const result = await revoke(db, getAuth(), { cfpId, email: data.email, byUid });
     logger.info('role revoked', { ...result, byUid });
     return result;
   } catch (error) {
@@ -1795,12 +2913,15 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
  * `status` is what every other permission keys off — an applicant who could
  * write it could accept themselves.
  *
- * Admins may also restore a decision to `submitted`. That is the exact state
- * the proposals screen's Undo control needs; `draft` and `withdrawn` remain the
- * applicant's own states and are never settable here.
+ * Undo returns to `under_review`. `submitted` is the speaker-editable state
+ * before the first review and is never a committee target.
  */
-const DECIDABLE = STATUS_SETS.decidable;
-const ADMIN_PROPOSAL_STATUSES = ['submitted', ...DECIDABLE] as const;
+const ADMIN_PROPOSAL_STATUSES = [
+  'under_review',
+  'accepted',
+  'waitlisted',
+  'rejected',
+] as const;
 
 export const setProposalStatus = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -1818,7 +2939,10 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
 
   const ref = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
+    const [cfp, snap] = await tx.getAll(db.doc(`cfps/${cfpId}`), ref);
+    if (cfp.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
     if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
 
     const current = String(snap.data()?.status ?? '');
@@ -1829,7 +2953,6 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
         `A proposal with status "${current}" cannot be decided.`,
       );
     }
-
     // Decisions queue `held`, and an admin releases the whole batch at once
     // (§8) — otherwise the first people alphabetically learn their fate hours
     // before the rest, and rejections trickle out ahead of acceptances.
@@ -1896,8 +3019,19 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     if (!logId) throw new HttpsError('invalid-argument', 'logId is required.');
 
     const ref = db.doc(`cfps/${cfpId}/emailLog/${logId}`);
+    const initial = await ref.get();
+    const initialRecipientUid =
+      initial.exists && isStaffEmail(initial.get('kind'))
+        ? String(initial.get('recipientUid') ?? '')
+        : '';
+    const resendStaffUser = initialRecipientUid
+      ? await verifiedStaffUser(initialRecipientUid)
+      : null;
     const status = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
+      const [cfp, snap] = await tx.getAll(db.doc(`cfps/${cfpId}`), ref);
+      if (!cfp.exists || cfp.get('archived') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+      }
       if (!snap.exists) throw new HttpsError('not-found', 'No such message.');
 
       // Held decisions belong to the reviewed batch, while in-flight rows belong
@@ -1912,6 +3046,48 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       if (current === 'queued' || current === 'sending') {
         throw new HttpsError('failed-precondition', `That message is already ${current}.`);
       }
+      if (isStaffEmail(snap.get('kind'))) {
+        const uid = String(snap.get('recipientUid') ?? '');
+        const subjectId = String(snap.get('proposalId') ?? '');
+        const subjectRef =
+          snap.get('kind') === 'committee_proposal_submitted'
+            ? db.doc(`cfps/${cfpId}/proposals/${subjectId}`)
+            : db.doc(`cfps/${cfpId}`);
+        const [member, subject] = uid
+          ? await tx.getAll(db.doc(`cfps/${cfpId}/members/${uid}`), subjectRef)
+          : [null, null];
+        if (
+          !resendStaffUser ||
+          resendStaffUser.uid !== uid ||
+          !staffMemberIsActive(member?.data(), cfpId, uid) ||
+          !staffNotificationStillTrue(snap.get('kind'), subjectId, subject)
+        ) {
+          throw new HttpsError(
+            'failed-precondition',
+            'That committee notification is no longer sendable.',
+          );
+        }
+      }
+      if (isRoleInvitationEmail(snap.get('kind'))) {
+        const grantEmail = String(snap.get('grantEmail') ?? '');
+        const grant = grantEmail
+          ? await tx.get(db.doc(`cfps/${cfpId}/roleGrants/${grantEmail}`))
+          : null;
+        if (
+          !roleInvitationStillTrue(
+            snap.get('kind'),
+            String(snap.get('proposalId') ?? ''),
+            cfpId,
+            grantEmail,
+            grant,
+          )
+        ) {
+          throw new HttpsError(
+            'failed-precondition',
+            'That committee invitation is no longer sendable.',
+          );
+        }
+      }
       const holds = DECISION_STILL_TRUE[snap.get('kind') as string];
       if (holds) {
         const proposalId = snap.get('proposalId') as string;
@@ -1923,7 +3099,45 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
           );
         }
       }
-      tx.update(ref, { status: 'queued' satisfies EmailStatus });
+      if (isScheduleEmail(snap.get('kind'))) {
+        const cfp = await tx.get(db.doc(`cfps/${cfpId}`));
+        const currentReleaseId = scheduleEmailReleaseId(cfp);
+        const entryId = snap.get('data')?.scheduleEntryId as string;
+        const proposalId = snap.get('proposalId') as string;
+        const proposal = proposalId
+          ? await tx.get(db.doc(`cfps/${cfpId}/proposals/${proposalId}`))
+          : undefined;
+        const entry = currentReleaseId && entryId
+          ? await tx.get(
+              db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
+            )
+          : undefined;
+        if (
+          !scheduleEmailStillTrue(
+            snap.get('kind') as string,
+            String(snap.get('dedupeKey') ?? ''),
+            currentReleaseId,
+            entry,
+            proposal?.exists ? (proposal.get('status') as string) : undefined,
+          )
+        ) {
+          throw new HttpsError(
+            'failed-precondition',
+            'That schedule changed, so this message is no longer sendable.',
+          );
+        }
+      }
+      tx.update(ref, {
+        status: 'queued' satisfies EmailStatus,
+        sendingClaimId: FieldValue.delete(),
+        sendingStartedAt: FieldValue.delete(),
+        // A one-row resend is an explicit new delivery. Bulk retry retains an
+        // ambiguous provider attempt so its Resend idempotency key stays stable.
+        providerAttemptId: FieldValue.delete(),
+        sentAt: FieldValue.delete(),
+        providerId: FieldValue.delete(),
+        error: FieldValue.delete(),
+      });
       return current;
     });
 
@@ -1939,14 +3153,25 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   }
 
   const snap = await log.get();
-  const pendingDocs = snap.docs.filter((doc) =>
-    ['held', 'failed', 'dry_run'].includes(doc.get('status') as string),
+  const expiredSending = snap.docs.filter(
+    (doc) =>
+      doc.get('status') === 'sending' &&
+      sendingLeaseExpired(doc.get('sendingStartedAt') ?? doc.updateTime),
+  );
+  const expiredSendingIds = new Set(expiredSending.map((doc) => doc.id));
+  const pendingDocs = snap.docs.filter(
+    (doc) =>
+      ['held', 'failed', 'dry_run'].includes(doc.get('status') as string) ||
+      expiredSendingIds.has(doc.id),
   );
   const pendingState =
     action === 'preview' || action === 'release' || action === 'retry'
       ? await currentDecisionEmails(cfpId, pendingDocs)
       : { sendable: pendingDocs, stale: [] };
   const staleIds = new Set(pendingState.stale.map((doc) => doc.id));
+  const recoverableSendingIds = new Set(
+    expiredSending.filter((doc) => !staleIds.has(doc.id)).map((doc) => doc.id),
+  );
 
   const tally: Record<string, number> = {};
   for (const doc of snap.docs) {
@@ -1977,6 +3202,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       // The provider's reason, not ours — shown as-is to an admin, who is the
       // one person who can act on "domain is not verified".
       error: (d.get('error') as string) ?? '',
+      recoverable: recoverableSendingIds.has(d.id),
       // The database row remains held so restoring the decision can release it.
       // This flag lets the log describe its effective state truthfully.
       stale: staleIds.has(d.id),
@@ -2018,14 +3244,18 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
        * would.
        */
       rows: rows.slice(0, ROW_CAP),
+      recoverableSending: recoverableSendingIds.size,
       truncated: Math.max(0, rows.length - ROW_CAP),
     };
   }
 
+  await assertCfpNotArchivedNow(cfpId);
+
   // `dry_run` counts as unsent, because it is: the row records a message that
   // was rendered while no sender was configured. Retrying picks those up once
   // the domain is, so a receipt written during setup still reaches its speaker.
-  const from: EmailStatus[] = action === 'release' ? ['held'] : ['failed', 'dry_run'];
+  const from: EmailStatus[] =
+    action === 'release' ? ['held'] : ['failed', 'dry_run', 'sending'];
   let candidates: DocumentSnapshot[];
   if (action === 'release') {
     const rawLogIds = data.logIds;
@@ -2042,7 +3272,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     }
     candidates = await db.getAll(...rawLogIds.map((id) => log.doc(id as string)));
   } else {
-    candidates = snap.docs.filter((doc) => from.includes(doc.get('status') as EmailStatus));
+    candidates = snap.docs.filter(
+      (doc) =>
+        from.includes(doc.get('status') as EmailStatus) &&
+        (doc.get('status') !== 'sending' || expiredSendingIds.has(doc.id)),
+    );
   }
   const { released, stale } = await advanceEmailQueue(cfpId, candidates, from);
 
@@ -2067,8 +3301,10 @@ const LINKS_PER_WINDOW = 5;
 const SIGN_IN_DESTINATIONS = new Set([
   'submit',
   'review',
+  'schedule',
   'admin/overview',
   'admin/proposals',
+  'admin/schedule',
   'admin/committee',
   'admin/settings',
   'admin/submission',
@@ -2229,7 +3465,13 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
   }
 
   const logId = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(db.doc(`cfps/${cfpId}/proposals/${proposalId}`));
+    const [cfp, snap] = await tx.getAll(
+      db.doc(`cfps/${cfpId}`),
+      db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+    );
+    if (!cfp.exists || cfp.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
     if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
 
     // A draft is nobody's but its author's, and writing to someone about a talk
@@ -2290,16 +3532,21 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   }
 
   const configRef = db.doc(`cfps/${cfpId}/config/email`);
-  const registered = ((await configRef.get()).get('domain') as string | undefined) ?? '';
-  if (!registered) {
-    throw new HttpsError('failed-precondition', 'Add your sending domain first.');
-  }
-  const mismatch = senderMismatch(settings.from, registered);
-  if (mismatch) {
-    throw new HttpsError('invalid-argument', `${mismatch} is not your verified domain.`);
-  }
-
-  await configRef.set({ from: settings.from, replyTo: settings.replyTo }, { merge: true });
+  await db.runTransaction(async (tx) => {
+    const [cfp, config] = await tx.getAll(db.doc(`cfps/${cfpId}`), configRef);
+    if (!cfp.exists || cfp.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    const registered = (config.get('domain') as string | undefined) ?? '';
+    if (!registered) {
+      throw new HttpsError('failed-precondition', 'Add your sending domain first.');
+    }
+    const mismatch = senderMismatch(settings.from, registered);
+    if (mismatch) {
+      throw new HttpsError('invalid-argument', `${mismatch} is not your verified domain.`);
+    }
+    tx.set(configRef, { from: settings.from, replyTo: settings.replyTo }, { merge: true });
+  });
   logger.info('email settings changed', { byUid, ...settings });
   return { ok: true, settings };
 });
@@ -2326,10 +3573,16 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
   }
 
   const path = `templates.${kind}.${locale}`;
+  const configRef = db.doc(`cfps/${cfpId}/config/email`);
 
   if (data.reset === true) {
-    await db.doc(`cfps/${cfpId}/config/email`).update({ [path]: FieldValue.delete() }).catch(() => {
-      // Nothing stored for it yet, which is the state `reset` was asking for.
+    await db.runTransaction(async (tx) => {
+      const [cfp, config] = await tx.getAll(db.doc(`cfps/${cfpId}`), configRef);
+      if (!cfp.exists || cfp.get('archived') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+      }
+      // Nothing stored for it yet is already the state `reset` asks for.
+      if (config.exists) tx.update(configRef, { [path]: FieldValue.delete() });
     });
     logger.info('email template reset', { byUid, kind, locale });
     return { ok: true, reset: true };
@@ -2345,7 +3598,10 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', `${problem.problem}: ${problem.detail ?? ''}`);
   }
 
-  await db.doc(`cfps/${cfpId}/config/email`).set({ templates: { [kind]: { [locale]: template } } }, { merge: true });
+  await db.runTransaction(async (tx) => {
+    await assertCfpNotArchived(tx, cfpId);
+    tx.set(configRef, { templates: { [kind]: { [locale]: template } } }, { merge: true });
+  });
   logger.info('email template changed', { byUid, kind, locale });
   return { ok: true };
 });
@@ -2369,14 +3625,17 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
   }
   const locale = (data.locale === 'fr' ? 'fr' : 'en') as EmailLocale;
+  const cfpSnap = await assertCfpNotArchivedNow(cfpId);
 
-  const [apiKey, settings, templates, platform, cfpSnap] = await Promise.all([
+  const [apiKey, settings, templates, platform] = await Promise.all([
     readResendKey(),
     loadSettings(db, cfpId),
     loadTemplates(db, cfpId),
     loadPlatform(db),
-    db.doc(`cfps/${cfpId}`).get(),
   ]);
+  // This is the last check possible before the provider handoff. An archive
+  // racing the HTTP request itself cannot recall a message Resend accepted.
+  await assertCfpNotArchivedNow(cfpId);
   const outcome = await deliver(
     {
       kind,
@@ -2410,7 +3669,7 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
  * against Resend before it is stored, so a typo fails here rather than silently
  * failing on the night the decisions go out.
  */
-export const setEmailSecret = onCall(CALLABLE, async (request) => {
+export const setEmailSecret = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'set the API key');
   const apiKey = String((request.data as { apiKey?: unknown } | undefined)?.apiKey ?? '').trim();
@@ -2419,18 +3678,30 @@ export const setEmailSecret = onCall(CALLABLE, async (request) => {
   if (!apiKey.startsWith('re_')) {
     throw new HttpsError('invalid-argument', 'A Resend API key starts with "re_".');
   }
-
+  const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
+  const leaseId = await acquireCfpMutation(cfpId, 'email-secret', async (tx) => {
+    assertMutationActor(await tx.get(memberRef), 'admin');
+  });
   try {
-    await listDomains(apiKey);
-  } catch (error) {
-    throw asResendError(error);
-  }
+    try {
+      await listDomains(apiKey);
+    } catch (error) {
+      throw asResendError(error);
+    }
 
-  await writeResendKey(apiKey);
-  await db.doc(`cfps/${cfpId}/config/email`).set(
-    { keyHint: keyHint(apiKey), keySetAt: FieldValue.serverTimestamp() },
-    { merge: true },
-  );
+    await writeResendKey(apiKey);
+    await finishCfpMutation(cfpId, leaseId, async (tx) => {
+      assertMutationActor(await tx.get(memberRef), 'admin');
+      tx.set(
+        db.doc(`cfps/${cfpId}/config/email`),
+        { keyHint: keyHint(apiKey), keySetAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+    });
+  } catch (error) {
+    await releaseCfpMutationQuietly(cfpId, leaseId);
+    throw error;
+  }
 
   logger.info('resend key set', { byUid, hint: keyHint(apiKey) });
   return { ok: true, keyHint: keyHint(apiKey) };
@@ -2453,7 +3724,7 @@ function asResendError(error: unknown): HttpsError {
  * domains, and `get`/`verify` took an id straight from the caller — which would
  * have let one CFP read another's DNS records and trigger its verifications.
  */
-export const emailDomain = onCall(CALLABLE, async (request) => {
+export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'manage the sending domain');
   const data = (request.data ?? {}) as Record<string, unknown>;
@@ -2462,6 +3733,7 @@ export const emailDomain = onCall(CALLABLE, async (request) => {
   const apiKey = await readResendKey();
   const configRef = db.doc(`cfps/${cfpId}/config/email`);
   const ours = ((await configRef.get()).get('domainId') as string | undefined) ?? '';
+  const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
 
   try {
     if (action === 'list') {
@@ -2471,24 +3743,50 @@ export const emailDomain = onCall(CALLABLE, async (request) => {
     if (action === 'add') {
       const name = cleanDomain(String(data.domain ?? ''));
       if (!name) throw new HttpsError('invalid-argument', 'That is not a domain name.');
-
-      // Already in the account — verified through Resend's own dashboard, or
-      // added here before the write below landed. Adopting the existing one is
-      // the only way forward: Resend refuses a duplicate, and refusing back
-      // would leave a CFP permanently unable to claim a domain it owns.
-      const existing = (await listDomains(apiKey)).find((d) => d.name === name);
-      const domain = existing ?? (await addDomain(apiKey, name));
-      await configRef.set({ domainId: domain.id, domain: name }, { merge: true });
-      return { ok: true, domain: existing ? await getDomain(apiKey, domain.id) : domain };
+      const leaseId = await acquireCfpMutation(cfpId, 'email-domain-add', async (tx) => {
+        assertMutationActor(await tx.get(memberRef), 'admin');
+      });
+      try {
+        // Already in the account — verified through Resend's own dashboard, or
+        // added here before the write below landed. Adopting the existing one is
+        // the only way forward: Resend refuses a duplicate, and refusing back
+        // would leave a CFP permanently unable to claim a domain it owns.
+        const existing = (await listDomains(apiKey)).find((d) => d.name === name);
+        const domain = existing ?? (await addDomain(apiKey, name));
+        await finishCfpMutation(cfpId, leaseId, async (tx) => {
+          assertMutationActor(await tx.get(memberRef), 'admin');
+          tx.set(configRef, { domainId: domain.id, domain: name }, { merge: true });
+        });
+        return { ok: true, domain: existing ? await getDomain(apiKey, domain.id) : domain };
+      } catch (error) {
+        await releaseCfpMutationQuietly(cfpId, leaseId);
+        throw error;
+      }
     }
 
-    if (!ours) throw new HttpsError('failed-precondition', 'No domain has been added yet.');
-
-    if (action === 'get') return { ok: true, domain: await getDomain(apiKey, ours) };
+    if (action === 'get') {
+      if (!ours) throw new HttpsError('failed-precondition', 'No domain has been added yet.');
+      return { ok: true, domain: await getDomain(apiKey, ours) };
+    }
     if (action === 'verify') {
-      const domain = await verifyDomain(apiKey, ours);
-      logger.info('domain verification requested', { byUid, cfpId, status: domain.status });
-      return { ok: true, domain };
+      const leaseId = await acquireCfpMutation(cfpId, 'email-domain-verify', async (tx) => {
+        assertMutationActor(await tx.get(memberRef), 'admin');
+      });
+      try {
+        const currentDomainId = ((await configRef.get()).get('domainId') as string | undefined) ?? '';
+        if (!currentDomainId) {
+          throw new HttpsError('failed-precondition', 'No domain has been added yet.');
+        }
+        const domain = await verifyDomain(apiKey, currentDomainId);
+        await finishCfpMutation(cfpId, leaseId, async (tx) => {
+          assertMutationActor(await tx.get(memberRef), 'admin');
+        });
+        logger.info('domain verification requested', { byUid, cfpId, status: domain.status });
+        return { ok: true, domain };
+      } catch (error) {
+        await releaseCfpMutationQuietly(cfpId, leaseId);
+        throw error;
+      }
     }
   } catch (error) {
     if (error instanceof HttpsError) throw error;
@@ -2523,14 +3821,1258 @@ export const setCfpWindow = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'Nothing to change.');
   }
 
-  const current = (await db.doc(`cfps/${cfpId}`).get()).data() ?? {};
-  const opensAt = (patch.opensAt ?? current.opensAt) as Timestamp | undefined;
-  const closesAt = (patch.closesAt ?? current.closesAt) as Timestamp | undefined;
-  if (opensAt && closesAt && closesAt.toMillis() <= opensAt.toMillis()) {
-    throw new HttpsError('invalid-argument', 'The window would close before it opens.');
-  }
-
-  await db.doc(`cfps/${cfpId}`).set(patch, { merge: true });
+  await db.runTransaction(async (tx) => {
+    const ref = db.doc(`cfps/${cfpId}`);
+    const current = await tx.get(ref);
+    if (!current.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    if (current.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    const opensAt = (patch.opensAt ?? current.get('opensAt')) as Timestamp | undefined;
+    const closesAt = (patch.closesAt ?? current.get('closesAt')) as Timestamp | undefined;
+    if (opensAt && closesAt && closesAt.toMillis() <= opensAt.toMillis()) {
+      throw new HttpsError('invalid-argument', 'The window would close before it opens.');
+    }
+    tx.set(
+      ref,
+      { ...patch, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true },
+    );
+  });
   logger.info('cfp window changed', { byUid, ...patch });
   return { ok: true };
 });
+
+// --------------------------------------------------------------- schedule
+
+const scheduleConfigRef = (cfpId: string) => db.doc(`cfps/${cfpId}/config/schedule`);
+const scheduleDraft = (cfpId: string) => db.collection(`cfps/${cfpId}/scheduleDraft`);
+const scheduleReleaseSourceRef = (cfpId: string, releaseId: string) =>
+  db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`);
+
+function scheduleConfigFrom(value: unknown): ScheduleConfig {
+  const data = (value ?? {}) as Record<string, unknown>;
+  const days = Array.isArray(data.days) ? data.days : [];
+  const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+  return {
+    timeZone: String(data.timeZone ?? '').trim(),
+    days: days.map((item) => {
+      const day = item as Record<string, unknown>;
+      return {
+        date: String(day.date ?? '').trim(),
+        startsAt: String(day.startsAt ?? '').trim(),
+        endsAt: String(day.endsAt ?? '').trim(),
+      } satisfies ScheduleDay;
+    }),
+    rooms: rooms.map((item) => {
+      const room = item as Record<string, unknown>;
+      const name = (room.name ?? {}) as Record<string, unknown>;
+      return {
+        id: String(room.id ?? '').trim(),
+        name: { en: String(name.en ?? '').trim(), fr: String(name.fr ?? '').trim() },
+      } satisfies ScheduleRoom;
+    }),
+    revision: Number(data.revision ?? 0),
+  };
+}
+
+function scheduleEntryFrom(value: unknown): ScheduleEntry {
+  const data = (value ?? {}) as Record<string, unknown>;
+  const base = {
+    id: String(data.id ?? '').trim(),
+    date: String(data.date ?? '').trim(),
+    startsAt: String(data.startsAt ?? '').trim(),
+    durationMinutes: Number(data.durationMinutes),
+    roomId: String(data.roomId ?? '').trim(),
+  };
+  if (data.kind === 'proposal') {
+    const assigned = String(data.assignedLanguage ?? '');
+    return {
+      ...base,
+      kind: 'proposal',
+      proposalId: String(data.proposalId ?? '').trim(),
+      ...(assigned === 'en' || assigned === 'fr' ? { assignedLanguage: assigned } : {}),
+    };
+  }
+  const title = (data.title ?? {}) as Record<string, unknown>;
+  const description = (data.description ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    kind: 'custom',
+    customType: String(data.customType ?? '') as ScheduleEntry & never,
+    title: { en: String(title.en ?? '').trim(), fr: String(title.fr ?? '').trim() },
+    description: {
+      en: String(description.en ?? '').trim(),
+      fr: String(description.fr ?? '').trim(),
+    },
+  } as ScheduleEntry;
+}
+
+function assertScheduleRevision(current: number, expected: unknown): void {
+  if (!Number.isInteger(expected) || expected !== current) {
+    throw new HttpsError(
+      'aborted',
+      'The schedule changed in another tab. Reload it before making this change.',
+    );
+  }
+}
+
+export const setScheduleConfig = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireScheduleAdmin(request, cfpId, 'configure the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const config = scheduleConfigFrom(input.config);
+  const problem = validateScheduleConfig(config);
+  if (problem) throw new HttpsError('invalid-argument', problem);
+
+  const revision = await db.runTransaction(async (tx) => {
+    const ref = scheduleConfigRef(cfpId);
+    await assertCfpNotArchived(tx, cfpId);
+    const [snap, draftEntries] = await Promise.all([
+      tx.get(ref),
+      tx.get(scheduleDraft(cfpId)),
+    ]);
+    const current = Number(snap.get('revision') ?? 0);
+    assertScheduleRevision(current, input.expectedRevision);
+    for (const doc of draftEntries.docs) {
+      const entryProblem = validateScheduleEntry(
+        scheduleEntryFrom({ id: doc.id, ...doc.data() }),
+        config,
+      );
+      if (entryProblem) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Move or remove entries that do not fit the new schedule setup.',
+        );
+      }
+    }
+    const next = current + 1;
+    tx.set(ref, {
+      ...config,
+      revision: next,
+      needsAttention: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return next;
+  });
+  logger.info('schedule configured', { cfpId, byUid, revision });
+  return { ok: true, revision };
+});
+
+export const upsertScheduleEntry = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireScheduleAdmin(request, cfpId, 'edit the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const entry = scheduleEntryFrom(input.entry);
+
+  const revision = await db.runTransaction(async (tx) => {
+    const configRef = scheduleConfigRef(cfpId);
+    await assertCfpNotArchived(tx, cfpId);
+    const [configSnap, entriesSnap] = await Promise.all([
+      tx.get(configRef),
+      tx.get(scheduleDraft(cfpId)),
+    ]);
+    if (!configSnap.exists) throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+    const config = scheduleConfigFrom(configSnap.data());
+    const current = Number(configSnap.get('revision') ?? 0);
+    assertScheduleRevision(current, input.expectedRevision);
+    const problem = validateScheduleEntry(entry, config);
+    if (problem) throw new HttpsError('invalid-argument', problem);
+
+    const entries = entriesSnap.docs
+      .filter((doc) => doc.id !== entry.id)
+      .map((doc) => scheduleEntryFrom({ id: doc.id, ...doc.data() }));
+    if (entries.length >= SCHEDULE_LIMITS.entries) {
+      throw new HttpsError('resource-exhausted', 'This schedule has reached its entry limit.');
+    }
+    entries.push(entry);
+    const proposalIds = entries
+      .filter((item): item is Extract<ScheduleEntry, { kind: 'proposal' }> => item.kind === 'proposal')
+      .map((item) => item.proposalId);
+    const proposalSnaps = proposalIds.length
+      ? await tx.getAll(...proposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`)))
+      : [];
+    const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap.data()]));
+    for (const item of entries) {
+      if (item.kind !== 'proposal') continue;
+      const proposal = proposals.get(item.proposalId);
+      if (!proposal || !['accepted', 'confirmed'].includes(String(proposal.status))) {
+        throw new HttpsError('failed-precondition', 'Only accepted or confirmed talks can be scheduled.');
+      }
+    }
+    const speakers = new Map(
+      proposalSnaps.map((snap) => [snap.id, (snap.get('speakerIds') ?? []) as string[]]),
+    );
+    if (scheduleConflicts(entries, speakers).length) {
+      throw new HttpsError('already-exists', 'That placement conflicts with another session.');
+    }
+
+    const next = current + 1;
+    const { id, ...stored } = entry;
+    tx.set(scheduleDraft(cfpId).doc(id), { ...stored, updatedAt: FieldValue.serverTimestamp() });
+    tx.update(configRef, {
+      revision: next,
+      needsAttention: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return next;
+  });
+  logger.info('schedule entry saved', { cfpId, entryId: entry.id, byUid, revision });
+  return { ok: true, revision, entryId: entry.id };
+});
+
+export const removeScheduleEntry = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireScheduleAdmin(request, cfpId, 'edit the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const entryId = String(input.entryId ?? '');
+  if (!/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(entryId)) {
+    throw new HttpsError('invalid-argument', 'entryId is required.');
+  }
+  const revision = await db.runTransaction(async (tx) => {
+    const configRef = scheduleConfigRef(cfpId);
+    await assertCfpNotArchived(tx, cfpId);
+    const snap = await tx.get(configRef);
+    if (!snap.exists) throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+    const current = Number(snap.get('revision') ?? 0);
+    assertScheduleRevision(current, input.expectedRevision);
+    const next = current + 1;
+    tx.delete(scheduleDraft(cfpId).doc(entryId));
+    tx.update(configRef, {
+      revision: next,
+      needsAttention: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return next;
+  });
+  logger.info('schedule entry removed', { cfpId, entryId, byUid, revision });
+  return { ok: true, revision, entryId };
+});
+
+function stableScheduleValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableScheduleValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableScheduleValue(item)]),
+  );
+}
+
+function scheduleProjectionFingerprint(
+  config: Pick<ScheduleConfig, 'timeZone' | 'days' | 'rooms'>,
+  entries: readonly PublishedScheduleEntry[],
+): string {
+  const source = stableScheduleValue({
+    timeZone: config.timeZone,
+    days: config.days,
+    rooms: config.rooms,
+    entries: [...entries].sort((left, right) => left.id.localeCompare(right.id)),
+  });
+  return createHash('sha256').update(JSON.stringify(source)).digest('hex');
+}
+
+function sharedProjection(
+  config: ScheduleConfig,
+  entries: readonly ScheduleEntry[],
+  proposals: ReadonlyMap<string, DocumentSnapshot>,
+): { entries: PublishedScheduleEntry[]; omittedCount: number; fingerprint: string } {
+  const projected: PublishedScheduleEntry[] = [];
+  const eligibleDraft: ScheduleEntry[] = [];
+  let omittedCount = 0;
+
+  for (const entry of entries) {
+    const problem = validateScheduleEntry(entry, config);
+    if (problem) throw new HttpsError('invalid-argument', problem);
+    if (entry.kind === 'custom') {
+      projected.push(entry);
+      eligibleDraft.push(entry);
+      continue;
+    }
+    const proposal = proposals.get(entry.proposalId);
+    if (!proposal?.exists || proposal.get('status') !== 'confirmed') {
+      omittedCount += 1;
+      continue;
+    }
+    const data = proposal.data()!;
+    const language = resolvedScheduleLanguage(data.deliveryLanguage, entry.assignedLanguage);
+    if (!language) {
+      throw new HttpsError('failed-precondition', 'Assign a language to every flexible session.');
+    }
+    eligibleDraft.push(entry);
+    projected.push({
+      id: entry.id,
+      kind: 'proposal',
+      proposalId: entry.proposalId,
+      date: entry.date,
+      startsAt: entry.startsAt,
+      durationMinutes: entry.durationMinutes,
+      roomId: entry.roomId,
+      session: {
+        proposalId: entry.proposalId,
+        title: String(data.title ?? ''),
+        abstract: String(data.abstract ?? ''),
+        category: String(data.category ?? ''),
+        format: String(data.format ?? ''),
+        level: String(data.level ?? ''),
+        language,
+        speakers: publicScheduleSpeakers(
+          (data.speakerSnapshot ?? []) as SpeakerSnapshot[],
+        ),
+      },
+    });
+  }
+
+  const speakers = new Map(
+    [...proposals].map(([id, proposal]) => [id, (proposal.get('speakerIds') ?? []) as string[]]),
+  );
+  if (scheduleConflicts(eligibleDraft, speakers).length) {
+    throw new HttpsError('already-exists', 'Resolve every shared schedule conflict first.');
+  }
+  return {
+    entries: projected,
+    omittedCount,
+    fingerprint: scheduleProjectionFingerprint(config, projected),
+  };
+}
+
+export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireScheduleAdmin(request, cfpId, 'share the schedule preview');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const [configSnap, entriesSnap, cfpBefore] = await Promise.all([
+    scheduleConfigRef(cfpId).get(),
+    scheduleDraft(cfpId).get(),
+    db.doc(`cfps/${cfpId}`).get(),
+  ]);
+  if (!cfpBefore.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+  if (cfpBefore.get('archived') === true) {
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+  }
+  if (!configSnap.exists) throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+  const current = Number(configSnap.get('revision') ?? 0);
+  assertScheduleRevision(current, input.expectedRevision);
+  const config = scheduleConfigFrom(configSnap.data());
+  const configProblem = validateScheduleConfig(config);
+  if (configProblem) throw new HttpsError('invalid-argument', configProblem);
+  const entries = entriesSnap.docs.map((doc) => scheduleEntryFrom({ id: doc.id, ...doc.data() }));
+  if (!entries.length) throw new HttpsError('failed-precondition', 'Add at least one schedule item first.');
+
+  const proposalEntries = entries.filter(
+    (entry): entry is Extract<ScheduleEntry, { kind: 'proposal' }> => entry.kind === 'proposal',
+  );
+  const proposalSnaps = proposalEntries.length
+    ? await db.getAll(
+        ...proposalEntries.map((entry) => db.doc(`cfps/${cfpId}/proposals/${entry.proposalId}`)),
+      )
+    : [];
+  const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap]));
+  const projection = sharedProjection(config, entries, proposals);
+  const sharedEntries = projection.entries;
+  if (!sharedEntries.length) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Add at least one confirmed session or custom schedule item first.',
+    );
+  }
+
+  const previousReleaseId = (cfpBefore.get('sharedScheduleId') ??
+    cfpBefore.get('publishedScheduleId')) as string | undefined;
+  const [previousRelease, previousEntriesSnap, previousSource] = previousReleaseId
+    ? await Promise.all([
+        db.doc(`cfps/${cfpId}/scheduleReleases/${previousReleaseId}`).get(),
+        db.collection(`cfps/${cfpId}/scheduleReleases/${previousReleaseId}/entries`).get(),
+        scheduleReleaseSourceRef(cfpId, previousReleaseId).get(),
+      ])
+    : [null, null, null];
+  const previousFingerprint = String(
+    previousSource?.get('sourceFingerprint') ?? previousRelease?.get('sourceFingerprint') ?? '',
+  );
+  const projectionChanged =
+    previousRelease?.exists !== true ||
+    !previousFingerprint ||
+    previousFingerprint !== projection.fingerprint;
+  if (configSnap.get('needsAttention') !== true && !projectionChanged) {
+    throw new HttpsError('failed-precondition', 'There are no unpublished schedule changes.');
+  }
+  const previousEntries = new Map(
+    (previousEntriesSnap?.docs ?? [])
+      .filter((doc) => doc.get('kind') === 'proposal')
+      .map((doc) => [doc.get('proposalId') as string, { id: doc.id, ...doc.data() }]),
+  );
+  const previousRooms = new Map(
+    (((previousRelease?.get('rooms') as ScheduleRoom[] | undefined) ?? []).map((room) => [
+      room.id,
+      room,
+    ])),
+  );
+  const currentRooms = new Map(config.rooms.map((room) => [room.id, room]));
+  const timeZoneChanged =
+    previousRelease?.exists === true && previousRelease.get('timeZone') !== config.timeZone;
+  type ScheduleEmailChange = {
+    kind: Extract<EmailKind, 'schedule_assigned' | 'schedule_changed' | 'schedule_cancelled'>;
+    proposalId: string;
+    entryId: string;
+    title: string;
+    date: string;
+    startsAt: string;
+    room: ScheduleRoom | undefined;
+  };
+  const changes: ScheduleEmailChange[] = [];
+  const unchanged: { proposalId: string; entryId: string }[] = [];
+  const alreadyCancelled: ScheduleEmailChange[] = [];
+  const currentProposalIds = new Set<string>();
+  for (const entry of sharedEntries) {
+    if (entry.kind !== 'proposal') continue;
+    currentProposalIds.add(entry.proposalId);
+    const previous = previousEntries.get(entry.proposalId) as
+      | (Record<string, any> & { id: string })
+      | undefined;
+    const moved =
+      previous &&
+      (previous.date !== entry.date ||
+        previous.startsAt !== entry.startsAt ||
+        previous.durationMinutes !== entry.durationMinutes ||
+        previous.roomId !== entry.roomId ||
+        JSON.stringify(stableScheduleValue(previousRooms.get(String(previous.roomId))?.name)) !==
+          JSON.stringify(stableScheduleValue(currentRooms.get(entry.roomId)?.name)) ||
+        timeZoneChanged ||
+        previous.session?.title !== entry.session.title ||
+        previous.session?.language !== entry.session.language ||
+        previous.cancelled === true);
+    if (!previous || moved) {
+      changes.push({
+        kind: previous ? 'schedule_changed' : 'schedule_assigned',
+        proposalId: entry.proposalId,
+        entryId: entry.id,
+        title: entry.session.title,
+        date: entry.date,
+        startsAt: entry.startsAt,
+        room: currentRooms.get(entry.roomId),
+      });
+    } else {
+      unchanged.push({ proposalId: entry.proposalId, entryId: entry.id });
+    }
+  }
+  for (const [proposalId, previous] of previousEntries) {
+    if (currentProposalIds.has(proposalId)) continue;
+    const old = previous as Record<string, any> & { id: string };
+    const cancellation: ScheduleEmailChange = {
+      kind: 'schedule_cancelled',
+      proposalId,
+      entryId: old.id,
+      title: String(old.session?.title ?? ''),
+      date: String(old.date ?? ''),
+      startsAt: String(old.startsAt ?? ''),
+      room: previousRooms.get(String(old.roomId ?? '')),
+    };
+    if (old.cancelled === true) alreadyCancelled.push(cancellation);
+    else changes.push(cancellation);
+  }
+  const cancelledCarrySources: {
+    proposalId: string;
+    entryId: string;
+    sourceRef: FirebaseFirestore.DocumentReference;
+  }[] = [];
+  if (previousReleaseId && alreadyCancelled.length) {
+    const sourceRefs = alreadyCancelled.map((change) =>
+      db.doc(
+        `cfps/${cfpId}/emailLog/${logId('schedule_cancelled', change.proposalId, previousReleaseId)}`,
+      ),
+    );
+    const sources = await db.getAll(...sourceRefs);
+    for (const [index, change] of alreadyCancelled.entries()) {
+      const source = sources[index];
+      const status = source.exists ? (source.get('status') as EmailStatus) : undefined;
+      if (status && CARRY_SCHEDULE_EMAIL_STATUSES.has(status)) {
+        cancelledCarrySources.push({
+          proposalId: change.proposalId,
+          entryId: change.entryId,
+          sourceRef: sourceRefs[index],
+        });
+      } else if (!source.exists) {
+        changes.push(change);
+      }
+    }
+  }
+  const changeProposalIds = [...new Set(changes.map((change) => change.proposalId))];
+  const changeProposalSnaps = changeProposalIds.length
+    ? await db.getAll(
+        ...changeProposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`)),
+      )
+    : [];
+
+  const releaseRef = db.collection(`cfps/${cfpId}/scheduleReleases`).doc();
+  const carryCandidates = previousReleaseId
+    ? [
+        ...unchanged.flatMap(({ proposalId, entryId }) =>
+          (['schedule_assigned', 'schedule_changed'] as const).map((kind) => ({
+            proposalId,
+            entryId,
+            sourceRef: db.doc(
+              `cfps/${cfpId}/emailLog/${logId(kind, proposalId, previousReleaseId)}`,
+            ),
+            targetRef: db.doc(
+              `cfps/${cfpId}/emailLog/${logId(kind, proposalId, releaseRef.id)}`,
+            ),
+          })),
+        ),
+        ...cancelledCarrySources.map(({ proposalId, entryId, sourceRef }) => ({
+          proposalId,
+          entryId,
+          sourceRef,
+          targetRef: db.doc(
+            `cfps/${cfpId}/emailLog/${logId('schedule_cancelled', proposalId, releaseRef.id)}`,
+          ),
+        })),
+      ]
+    : [];
+  const version =
+    Math.max(
+      Number(configSnap.get('sharedVersion') ?? 0),
+      Number(configSnap.get('publishedVersion') ?? 0),
+      Number(previousRelease?.get('version') ?? 0),
+    ) + 1;
+  const { revision, speakerNotificationCount } = await db.runTransaction(async (tx) => {
+    const allProposalIds = [...new Set([...proposalEntries.map((entry) => entry.proposalId), ...changes.map((change) => change.proposalId)])];
+    const proposalRefs = allProposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`));
+    const speakerIds = [
+      ...new Set(changeProposalSnaps.flatMap((snap) => (snap.get('speakerIds') ?? []) as string[])),
+    ];
+    const speakerRefs = speakerIds.map((id) => db.doc(`speakers/${id}`));
+    const emailRefs = changes.map((change) =>
+      db.doc(`cfps/${cfpId}/emailLog/${logId(change.kind, change.proposalId, releaseRef.id)}`),
+    );
+    const carrySourceRefs = carryCandidates.map((candidate) => candidate.sourceRef);
+    const carryTargetRefs = carryCandidates.map((candidate) => candidate.targetRef);
+    const comparisonRefs = previousReleaseId
+      ? [
+          db.doc(`cfps/${cfpId}/scheduleReleases/${previousReleaseId}`),
+          scheduleReleaseSourceRef(cfpId, previousReleaseId),
+        ]
+      : [];
+    const snapshots = await tx.getAll(
+      scheduleConfigRef(cfpId),
+      db.doc(`cfps/${cfpId}`),
+      ...comparisonRefs,
+      ...proposalRefs,
+      ...speakerRefs,
+      ...emailRefs,
+      ...carrySourceRefs,
+      ...carryTargetRefs,
+    );
+    const freshConfig = snapshots[0];
+    const cfpSnap = snapshots[1];
+    const dataStart = 2 + comparisonRefs.length;
+    const freshPreviousRelease = previousReleaseId ? snapshots[2] : null;
+    const freshPreviousSource = previousReleaseId ? snapshots[3] : null;
+    const freshProposals = snapshots.slice(dataStart, dataStart + proposalRefs.length);
+    const freshSpeakers = snapshots.slice(
+      dataStart + proposalRefs.length,
+      dataStart + proposalRefs.length + speakerRefs.length,
+    );
+    const emailStart = dataStart + proposalRefs.length + speakerRefs.length;
+    const existingEmails = snapshots.slice(emailStart, emailStart + emailRefs.length);
+    const carrySources = snapshots.slice(
+      emailStart + emailRefs.length,
+      emailStart + emailRefs.length + carrySourceRefs.length,
+    );
+    const carryTargets = snapshots.slice(
+      emailStart + emailRefs.length + carrySourceRefs.length,
+    );
+    if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    if (cfpSnap.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    assertScheduleRevision(Number(freshConfig.get('revision') ?? 0), input.expectedRevision);
+    const freshPreviousReleaseId = (cfpSnap.get('sharedScheduleId') ??
+      cfpSnap.get('publishedScheduleId')) as string | undefined;
+    if (freshPreviousReleaseId !== previousReleaseId) {
+      throw new HttpsError(
+        'aborted',
+        'The shared schedule changed in another tab. Reload it before sharing again.',
+      );
+    }
+    const freshProjection = sharedProjection(
+      scheduleConfigFrom(freshConfig.data()),
+      entries,
+      new Map(freshProposals.map((snap) => [snap.id, snap])),
+    );
+    if (freshProjection.fingerprint !== projection.fingerprint) {
+      throw new HttpsError(
+        'aborted',
+        'A speaker response changed while the schedule preview was being shared. Try again.',
+      );
+    }
+    const freshPreviousFingerprint = String(
+      freshPreviousSource?.get('sourceFingerprint') ??
+        freshPreviousRelease?.get('sourceFingerprint') ??
+        '',
+    );
+    const freshProjectionChanged =
+      freshPreviousRelease?.exists !== true ||
+      !freshPreviousFingerprint ||
+      freshPreviousFingerprint !== freshProjection.fingerprint;
+    if (freshConfig.get('needsAttention') !== true && !freshProjectionChanged) {
+      throw new HttpsError('failed-precondition', 'There are no unpublished schedule changes.');
+    }
+    let writeCount = 0;
+    const countWrite = () => {
+      writeCount += 1;
+      // Firestore caps a transaction at 500 writes. Leave room for SDK-level
+      // transforms rather than committing a release whose pointer cannot land.
+      if (writeCount > 490) {
+        throw new HttpsError(
+          'resource-exhausted',
+          'This schedule release is too large to share in one safe operation.',
+        );
+      }
+    };
+
+    countWrite();
+    tx.create(releaseRef, {
+      version,
+      timeZone: config.timeZone,
+      days: config.days,
+      rooms: config.rooms,
+    });
+    countWrite();
+    tx.create(scheduleReleaseSourceRef(cfpId, releaseRef.id), {
+      sourceRevision: current,
+      sourceFingerprint: projection.fingerprint,
+      sharedBy: byUid,
+      sharedAt: FieldValue.serverTimestamp(),
+    });
+    for (const sharedEntry of sharedEntries) {
+      const { id, ...stored } = sharedEntry;
+      countWrite();
+      tx.create(releaseRef.collection('entries').doc(id), stored);
+    }
+    const next = current;
+    countWrite();
+    tx.update(scheduleConfigRef(cfpId), {
+      sharedVersion: version,
+      sharedRevision: current,
+      sharedFingerprint: projection.fingerprint,
+      needsAttention: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    countWrite();
+    tx.update(db.doc(`cfps/${cfpId}`), {
+      sharedScheduleId: releaseRef.id,
+      sharedScheduleAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    const includedProposalIds = new Set(
+      sharedEntries
+        .filter((entry) => entry.kind === 'proposal')
+        .map((entry) => entry.proposalId),
+    );
+    for (const entry of proposalEntries) {
+      if (entry.assignedLanguage && includedProposalIds.has(entry.proposalId)) {
+        countWrite();
+        tx.update(db.doc(`cfps/${cfpId}/proposals/${entry.proposalId}`), {
+          assignedLanguage: entry.assignedLanguage,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    }
+    const freshProposalMap = new Map(freshProposals.map((snap) => [snap.id, snap]));
+    const freshSpeakerMap = new Map(freshSpeakers.map((snap) => [snap.id, snap]));
+    let speakerNotificationCount = 0;
+    for (const [index, change] of changes.entries()) {
+      if (existingEmails[index]?.exists) continue;
+      const proposal = freshProposalMap.get(change.proposalId);
+      if (change.kind !== 'schedule_cancelled' && proposal?.get('status') !== 'confirmed') {
+        continue;
+      }
+      const speakerId = ((proposal?.get('speakerIds') ?? []) as string[])[0];
+      const speaker = speakerId ? freshSpeakerMap.get(speakerId) : undefined;
+      const to = speaker?.get('email') as string | undefined;
+      if (!to) continue;
+      const locale = speaker?.get('locale') === 'fr' ? 'fr' : 'en';
+      const date = calendarDate(change.date);
+      const scheduleDate = date
+        ? new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
+            dateStyle: 'full',
+            timeZone: 'UTC',
+          }).format(date)
+        : change.date;
+      countWrite();
+      tx.create(emailRefs[index], {
+        kind: change.kind,
+        proposalId: change.proposalId,
+        dedupeKey: releaseRef.id,
+        to,
+        locale,
+        data: {
+          speakerName: (speaker?.get('name') as string) || to,
+          title: change.title || (proposal?.get('title') as string) || '',
+          needsVisa: proposal?.get('attendance')?.needsVisa === true,
+          scheduleDate,
+          scheduleTime: `${change.startsAt} (${config.timeZone})`,
+          scheduleRoom: change.room ? localised(change.room.name, locale) : '',
+          scheduleEntryId: change.entryId,
+        },
+        status: 'held' satisfies EmailStatus,
+        attempts: 0,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      speakerNotificationCount += 1;
+    }
+    for (const [index, candidate] of carryCandidates.entries()) {
+      const source = carrySources[index];
+      const sourceStatus = source?.exists
+        ? (source.get('status') as EmailStatus | undefined)
+        : undefined;
+      if (
+        !source?.exists ||
+        !sourceStatus ||
+        !CARRY_SCHEDULE_EMAIL_STATUSES.has(sourceStatus) ||
+        carryTargets[index]?.exists
+      ) {
+        continue;
+      }
+      const sourceData = source.data()!;
+      if (
+        sourceData.kind !== 'schedule_cancelled' &&
+        freshProposalMap.get(candidate.proposalId)?.get('status') !== 'confirmed'
+      ) {
+        continue;
+      }
+      countWrite();
+      tx.create(candidate.targetRef, {
+        ...sourceData,
+        dedupeKey: releaseRef.id,
+        data: {
+          ...(sourceData.data as Record<string, unknown>),
+          scheduleEntryId: candidate.entryId,
+        },
+        status: sourceStatus,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      speakerNotificationCount += 1;
+    }
+    return { revision: next, speakerNotificationCount };
+  });
+  logger.info('schedule preview shared', {
+    cfpId,
+    releaseId: releaseRef.id,
+    version,
+    entries: sharedEntries.length,
+    omitted: projection.omittedCount,
+    byUid,
+  });
+  let committeeNotificationCount = 0;
+  try {
+    committeeNotificationCount = await queueStaffNotifications(
+      cfpId,
+      'committee_schedule_shared',
+      releaseRef.id,
+      byUid,
+    );
+  } catch (error) {
+    logger.error('committee schedule notifications will be retried by the pointer trigger', {
+      cfpId,
+      releaseId: releaseRef.id,
+      error: String(error),
+    });
+  }
+  return {
+    ok: true,
+    releaseId: releaseRef.id,
+    version,
+    revision,
+    sharedCount: sharedEntries.length,
+    omittedCount: projection.omittedCount,
+    committeeNotificationCount,
+    speakerNotificationCount,
+  };
+});
+
+export const notifyCommitteeOnScheduleShared = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    const before = event.data?.before;
+    const after = event.data?.after;
+    if (!after?.exists) return;
+    const releaseId = String(after.get('sharedScheduleId') ?? '');
+    if (!releaseId || releaseId === String(before?.get('sharedScheduleId') ?? '')) return;
+    if (
+      !before?.get('sharedScheduleId') &&
+      before?.get('publishedScheduleId') === releaseId &&
+      !after.get('publishedScheduleId')
+    ) {
+      return;
+    }
+    const source = await scheduleReleaseSourceRef(event.params.cfpId, releaseId).get();
+    const sharedBy = String(source.get('sharedBy') ?? '');
+    if (!sharedBy) return;
+    const notified = await queueStaffNotifications(
+      event.params.cfpId,
+      'committee_schedule_shared',
+      releaseId,
+      sharedBy,
+    );
+    logger.info('committee schedule notifications queued', {
+      cfpId: event.params.cfpId,
+      releaseId,
+      notified,
+    });
+  },
+);
+
+const callableTime = (value: unknown): unknown =>
+  value instanceof Timestamp ? value.toMillis() : (value ?? null);
+
+export const getSharedSchedule = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = requireVerifiedUid(request, 'view the shared schedule');
+  const [cfpSnap, role] = await Promise.all([
+    db.doc(`cfps/${cfpId}`).get(),
+    roleOn(cfpId, uid),
+  ]);
+  if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+  const audience = sharedScheduleAudience(role);
+  const releaseId = (cfpSnap.get('sharedScheduleId') ??
+    cfpSnap.get('publishedScheduleId')) as string | undefined;
+  if (!releaseId) {
+    return { ok: true, audience, schedule: null, entries: [], stale: false };
+  }
+
+  const [release, releaseSource, releaseEntriesSnap, ownProposals] = await Promise.all([
+    db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`).get(),
+    scheduleReleaseSourceRef(cfpId, releaseId).get(),
+    db.collection(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries`).get(),
+    audience === 'speaker'
+      ? db
+          .collection(`cfps/${cfpId}/proposals`)
+          .where('speakerIds', 'array-contains', uid)
+          .get()
+      : Promise.resolve(null),
+  ]);
+  if (!release.exists) {
+    throw new HttpsError('failed-precondition', 'The shared schedule is unavailable.');
+  }
+  const sourceRevision = Number(
+    releaseSource.get('sourceRevision') ?? release.get('sourceRevision') ?? 0,
+  );
+  const sourceFingerprint = String(
+    releaseSource.get('sourceFingerprint') ?? release.get('sourceFingerprint') ?? '',
+  );
+  const releaseEntries = releaseEntriesSnap.docs.map(
+    (entry) => ({ id: entry.id, ...entry.data() }) as PublishedScheduleEntry,
+  );
+  const ownConfirmedSpeakers = new Map(
+    (ownProposals?.docs ?? [])
+      .filter((proposal) => proposal.get('status') === 'confirmed')
+      .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
+  );
+  if (audience === 'speaker') {
+    if (ownConfirmedSpeakers.size === 0) {
+      throw new HttpsError(
+        'permission-denied',
+        'You have no confirmed proposal for this shared schedule.',
+      );
+    }
+  }
+
+  const schedule: SharedSchedule = {
+    id: release.id,
+    version: Number(release.get('version') ?? 0),
+    timeZone: String(release.get('timeZone') ?? ''),
+    days: (release.get('days') ?? []) as ScheduleDay[],
+    rooms: (release.get('rooms') ?? []) as ScheduleRoom[],
+    sourceRevision,
+    sharedAt: callableTime(releaseSource.get('sharedAt') ?? release.get('sharedAt')),
+    ...(release.get('publishedAt')
+      ? { publishedAt: callableTime(release.get('publishedAt')) }
+      : {}),
+  };
+
+  if (audience === 'speaker') {
+    const configSnap = await scheduleConfigRef(cfpId).get();
+    const visibleEntries = sharedScheduleEntriesFor(
+      releaseEntries,
+      audience,
+      uid,
+      ownConfirmedSpeakers,
+    );
+    const stale =
+      !configSnap.exists ||
+      configSnap.get('needsAttention') === true ||
+      sourceRevision !== Number(configSnap.get('revision') ?? 0) ||
+      sourceFingerprint !==
+        scheduleProjectionFingerprint(scheduleConfigFrom(release.data()), releaseEntries);
+    return {
+      ok: true,
+      audience,
+      schedule: sharedScheduleForEntries(schedule, visibleEntries),
+      entries: visibleEntries,
+      stale,
+    };
+  }
+
+  const [configSnap, draftSnap] = await Promise.all([
+    scheduleConfigRef(cfpId).get(),
+    scheduleDraft(cfpId).get(),
+  ]);
+  const draftEntries = draftSnap.docs.map((entry) =>
+    scheduleEntryFrom({ id: entry.id, ...entry.data() }),
+  );
+  const proposalIds = [
+    ...new Set([
+      ...releaseEntries
+        .filter((entry) => entry.kind === 'proposal')
+        .map((entry) => entry.proposalId),
+      ...draftEntries
+        .filter(
+          (entry): entry is Extract<ScheduleEntry, { kind: 'proposal' }> =>
+            entry.kind === 'proposal',
+        )
+        .map((entry) => entry.proposalId),
+    ]),
+  ];
+  const proposalSnaps = proposalIds.length
+    ? await db.getAll(
+        ...proposalIds.map((proposalId) =>
+          db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+        ),
+      )
+    : [];
+  const proposals = new Map(proposalSnaps.map((proposal) => [proposal.id, proposal]));
+  const confirmedSpeakers = new Map(
+    proposalSnaps
+      .filter((proposal) => proposal.exists && proposal.get('status') === 'confirmed')
+      .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
+  );
+  const visibleEntries = sharedScheduleEntriesFor(
+    releaseEntries,
+    audience,
+    uid,
+    confirmedSpeakers,
+  );
+
+  let stale = !configSnap.exists || configSnap.get('needsAttention') === true;
+  if (configSnap.exists) {
+    try {
+      const config = scheduleConfigFrom(configSnap.data());
+      const currentProjection = sharedProjection(config, draftEntries, proposals);
+      const releaseConfig = scheduleConfigFrom(release.data());
+      stale =
+        stale ||
+        sourceRevision !== Number(configSnap.get('revision') ?? 0) ||
+        sourceFingerprint !== currentProjection.fingerprint ||
+        sourceFingerprint !== scheduleProjectionFingerprint(releaseConfig, releaseEntries);
+    } catch {
+      stale = true;
+    }
+  }
+  return { ok: true, audience, schedule, entries: visibleEntries, stale };
+});
+
+export const publishSchedule = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireScheduleAdmin(request, cfpId, 'publish the schedule');
+  const input = (request.data ?? {}) as Record<string, unknown>;
+  const result = await db.runTransaction(async (tx) => {
+    const configRef = scheduleConfigRef(cfpId);
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const [configSnap, cfpSnap] = await tx.getAll(configRef, cfpRef);
+    if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    if (cfpSnap.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    if (!configSnap.exists) {
+      throw new HttpsError('failed-precondition', 'Configure the schedule first.');
+    }
+    const revision = Number(configSnap.get('revision') ?? 0);
+    assertScheduleRevision(revision, input.expectedRevision);
+    const releaseId = cfpSnap.get('sharedScheduleId') as string | undefined;
+    if (!releaseId) {
+      throw new HttpsError('failed-precondition', 'Share the schedule preview before publishing.');
+    }
+    if (cfpSnap.get('publishedScheduleId') === releaseId) {
+      throw new HttpsError('failed-precondition', 'That schedule is already public.');
+    }
+    if (configSnap.get('needsAttention') === true) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The shared schedule is out of date. Share it again before publishing.',
+      );
+    }
+
+    const releaseRef = db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`);
+    const [release, releaseSource, releaseEntriesSnap, draftSnap] = await Promise.all([
+      tx.get(releaseRef),
+      tx.get(scheduleReleaseSourceRef(cfpId, releaseId)),
+      tx.get(releaseRef.collection('entries')),
+      tx.get(scheduleDraft(cfpId)),
+    ]);
+    if (!release.exists) {
+      throw new HttpsError('failed-precondition', 'The shared schedule is unavailable.');
+    }
+    const config = scheduleConfigFrom(configSnap.data());
+    const configProblem = validateScheduleConfig(config);
+    if (configProblem) throw new HttpsError('invalid-argument', configProblem);
+    const draftEntries = draftSnap.docs.map((entry) =>
+      scheduleEntryFrom({ id: entry.id, ...entry.data() }),
+    );
+    const proposalIds = [
+      ...new Set(
+        draftEntries
+          .filter(
+            (entry): entry is Extract<ScheduleEntry, { kind: 'proposal' }> =>
+              entry.kind === 'proposal',
+          )
+          .map((entry) => entry.proposalId),
+      ),
+    ];
+    const proposalSnaps = proposalIds.length
+      ? await tx.getAll(
+          ...proposalIds.map((proposalId) =>
+            db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+          ),
+        )
+      : [];
+    const projection = sharedProjection(
+      config,
+      draftEntries,
+      new Map(proposalSnaps.map((proposal) => [proposal.id, proposal])),
+    );
+    const releaseEntries = releaseEntriesSnap.docs.map(
+      (entry) => ({ id: entry.id, ...entry.data() }) as PublishedScheduleEntry,
+    );
+    const sourceFingerprint = String(
+      releaseSource.get('sourceFingerprint') ?? release.get('sourceFingerprint') ?? '',
+    );
+    const sourceRevision = Number(
+      releaseSource.get('sourceRevision') ?? release.get('sourceRevision') ?? -1,
+    );
+    const releaseFingerprint = scheduleProjectionFingerprint(
+      scheduleConfigFrom(release.data()),
+      releaseEntries,
+    );
+    if (
+      sourceRevision !== revision ||
+      Number(configSnap.get('sharedRevision') ?? -1) !== revision ||
+      String(configSnap.get('sharedFingerprint') ?? '') !== sourceFingerprint ||
+      projection.fingerprint !== sourceFingerprint ||
+      releaseFingerprint !== sourceFingerprint
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The shared schedule is out of date. Share it again before publishing.',
+      );
+    }
+
+    if (!release.get('publishedAt')) {
+      tx.update(releaseRef, { publishedAt: FieldValue.serverTimestamp() });
+    }
+    tx.update(configRef, {
+      publishedVersion: Number(release.get('version') ?? 0),
+      publishedRevision: revision,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.update(cfpRef, {
+      publishedScheduleId: releaseId,
+      publishedScheduleAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { releaseId, version: Number(release.get('version') ?? 0), revision };
+  });
+  logger.info('shared schedule published', { cfpId, byUid, ...result });
+  return { ok: true, ...result };
+});
+
+export const unpublishSchedule = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireScheduleAdmin(request, cfpId, 'take the public schedule offline');
+  const result = await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const cfpSnap = await tx.get(cfpRef);
+    if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    if (cfpSnap.get('archived') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    const releaseId = cfpSnap.get('publishedScheduleId') as string | undefined;
+    if (!releaseId) return { releaseId: null, version: null };
+    const release = await tx.get(db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`));
+    const migrateLegacyPreview = !cfpSnap.get('sharedScheduleId');
+    tx.update(cfpRef, {
+      ...(migrateLegacyPreview
+        ? {
+            sharedScheduleId: releaseId,
+            sharedScheduleAt:
+              cfpSnap.get('publishedScheduleAt') ?? FieldValue.serverTimestamp(),
+          }
+        : {}),
+      publishedScheduleId: FieldValue.delete(),
+      publishedScheduleAt: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    if (migrateLegacyPreview) {
+      tx.set(
+        scheduleConfigRef(cfpId),
+        { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+    }
+    return {
+      releaseId,
+      version: release.exists ? Number(release.get('version') ?? 0) : null,
+    };
+  });
+  logger.info('public schedule taken offline', { cfpId, byUid, ...result });
+  return { ok: true, ...result };
+});
+
+export const cancelPublishedSession = onDocumentWritten(
+  {
+    document: 'cfps/{cfpId}/proposals/{proposalId}',
+    region: 'northamerica-northeast1',
+    maxInstances: 10,
+    retry: true,
+  },
+  async (event) => {
+    // Creation and deletion are not decision transitions. In particular, a
+    // delayed event from deleting an old CFP must not cancel a newly recreated
+    // proposal that happens to reuse the same path.
+    if (!event.data?.before.exists || !event.data.after.exists) return;
+    const beforeStatus = event.data?.before.get('status');
+    const afterStatus = event.data?.after.get('status');
+    if (beforeStatus === afterStatus) return;
+    const { cfpId, proposalId } = event.params;
+    const cfpSnap = await db.doc(`cfps/${cfpId}`).get();
+    if (!cfpSnap.exists || cfpSnap.get('archived') === true) return;
+    const releaseIds = [
+      ...new Set(
+        [cfpSnap.get('sharedScheduleId'), cfpSnap.get('publishedScheduleId')].filter(
+          (value): value is string => typeof value === 'string' && Boolean(value),
+        ),
+      ),
+    ];
+    const [draftMatching, ...releaseMatches] = await Promise.all([
+      scheduleDraft(cfpId).where('proposalId', '==', proposalId).get(),
+      ...releaseIds.map((releaseId) =>
+        db
+          .collection(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries`)
+          .where('proposalId', '==', proposalId)
+          .get(),
+      ),
+    ]);
+    const hasReleaseEntry = releaseMatches.some((matching) => !matching.empty);
+    if (draftMatching.empty && !hasReleaseEntry) return;
+
+    const cancelled = beforeStatus === 'confirmed' && afterStatus !== 'confirmed';
+    const observedReleaseId = scheduleEmailReleaseId(cfpSnap);
+    const observedReleaseIndex = releaseIds.indexOf(observedReleaseId);
+    const observedEntries =
+      observedReleaseIndex >= 0 ? releaseMatches[observedReleaseIndex].docs : [];
+    await db.runTransaction(async (tx) => {
+      const [freshCfp, ...freshObservedEntries] = await tx.getAll(
+        db.doc(`cfps/${cfpId}`),
+        ...observedEntries.map((entry) => entry.ref),
+      );
+      if (!freshCfp.exists || freshCfp.get('archived') === true) return;
+      if (cancelled) {
+        for (const matching of releaseMatches) {
+          for (const entry of matching.docs) {
+            tx.update(entry.ref, {
+              cancelled: true,
+              cancelledAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      }
+
+      // A share that commits after this trigger starts already re-reads the
+      // proposal status. Do not let the delayed trigger stale that newer snapshot.
+      if (scheduleEmailReleaseId(freshCfp) !== observedReleaseId) return;
+      const expectedEntryIds =
+        afterStatus === 'confirmed' ? draftMatching.docs.map((entry) => entry.id).sort() : [];
+      const actualEntryIds = freshObservedEntries
+        .filter((entry) => entry.exists)
+        .map((entry) => entry.id)
+        .sort();
+      const aligned =
+        expectedEntryIds.length === actualEntryIds.length &&
+        expectedEntryIds.every((entryId, index) => entryId === actualEntryIds[index]) &&
+        freshObservedEntries.every(
+          (entry) => !entry.exists || entry.get('cancelled') !== true,
+        );
+      if (!aligned) {
+        tx.set(
+          scheduleConfigRef(cfpId),
+          { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+          { merge: true },
+        );
+      }
+    });
+    if (!cancelled || !hasReleaseEntry) {
+      logger.info('scheduled proposal status changed', {
+        cfpId,
+        proposalId,
+        beforeStatus,
+        afterStatus,
+      });
+      return;
+    }
+
+    const preferredReleaseId = scheduleEmailReleaseId(
+      await db.doc(`cfps/${cfpId}`).get(),
+    );
+    const preferredIndex = releaseIds.indexOf(preferredReleaseId);
+    const chosenIndex =
+      preferredIndex >= 0 && !releaseMatches[preferredIndex].empty
+        ? preferredIndex
+        : releaseMatches.findIndex((matching) => !matching.empty);
+    const entryReleaseId = releaseIds[chosenIndex];
+    const entry = releaseMatches[chosenIndex].docs[0];
+    const release = await db.doc(`cfps/${cfpId}/scheduleReleases/${entryReleaseId}`).get();
+    const room = ((release.get('rooms') ?? []) as ScheduleRoom[]).find(
+      (candidate) => candidate.id === entry.get('roomId'),
+    );
+    const cancellationTime = String(entry.get('startsAt') ?? '');
+    const cancellationTimeZone = String(release.get('timeZone') ?? '');
+    await db.runTransaction(async (tx) => {
+      await assertCfpNotArchived(tx, cfpId);
+      const proposal = event.data?.after.data();
+      if (!proposal) return;
+      const context = await emailContext(tx, proposal);
+      if (!context) return;
+      const date = calendarDate(String(entry.get('date') ?? ''));
+      const scheduleDate = date
+        ? new Intl.DateTimeFormat(context.locale === 'fr' ? 'fr-CA' : 'en-CA', {
+            dateStyle: 'full',
+            timeZone: 'UTC',
+          }).format(date)
+        : String(entry.get('date') ?? '');
+      await queueEmail(db, tx, cfpId, {
+        kind: 'schedule_cancelled',
+        proposalId,
+        dedupeKey: preferredReleaseId || entryReleaseId,
+        ...context,
+        data: {
+          ...context.data,
+          scheduleDate,
+          scheduleTime: cancellationTimeZone
+            ? `${cancellationTime} (${cancellationTimeZone})`
+            : cancellationTime,
+          scheduleRoom: room ? localised(room.name, context.locale) : '',
+          scheduleEntryId: entry.id,
+        },
+      });
+    });
+    logger.info('shared and public session cancelled', {
+      cfpId,
+      proposalId,
+      releaseIds,
+    });
+  },
+);

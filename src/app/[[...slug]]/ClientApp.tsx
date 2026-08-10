@@ -5,6 +5,7 @@ import { ErrorBoundary } from '../../components/ErrorBoundary';
 import type { CfpWindow } from '../../lib/proposals';
 import type { CfpState } from '@shared/cfpWindow';
 import type { Localised } from '@shared/confirmForm';
+import type { PublishedScheduleBundle } from '../../lib/schedule';
 
 /** The client boundary. Nothing above this line ships to the browser. */
 export interface InitialPublicCfp {
@@ -17,6 +18,11 @@ export interface InitialPublicCfp {
   opensAtMs: number;
   closesAtMs: number;
   eventDate: string | null;
+  eventStartDate: string | null;
+  eventEndDate: string | null;
+  timeZone: string | null;
+  sharedScheduleId: string | null;
+  publishedScheduleId: string | null;
   paused: boolean;
   archived: boolean;
   visibility: 'public' | 'private';
@@ -34,19 +40,26 @@ function toCfpWindow(cfp: InitialPublicCfp): CfpWindow {
     profile: {
       description: cfp.description ?? undefined,
       eventDate: cfp.eventDate ?? undefined,
+      eventStartDate: cfp.eventStartDate ?? cfp.eventDate ?? undefined,
+      eventEndDate: cfp.eventEndDate ?? cfp.eventStartDate ?? cfp.eventDate ?? undefined,
+      timeZone: cfp.timeZone ?? undefined,
       venue: cfp.venue ?? undefined,
       location: cfp.location ?? undefined,
       website: cfp.website ?? undefined,
     },
+    sharedScheduleId: cfp.sharedScheduleId ?? undefined,
+    publishedScheduleId: cfp.publishedScheduleId ?? undefined,
   };
 }
 
 export function ClientApp({
   initialPath,
   initialCfp,
+  initialSchedule,
 }: {
   initialPath: string;
   initialCfp?: { id: string; cfp: InitialPublicCfp | null };
+  initialSchedule?: { releaseId: string; value: PublishedScheduleBundle | null };
 }) {
   return (
     <ErrorBoundary>
@@ -60,6 +73,7 @@ export function ClientApp({
               }
             : undefined
         }
+        initialSchedule={initialSchedule}
       />
     </ErrorBoundary>
   );

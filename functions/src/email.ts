@@ -14,12 +14,18 @@
  */
 
 import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
+import { getAuth, type UserRecord } from 'firebase-admin/auth';
+import { createHash } from 'node:crypto';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
 import {
   DECISION_KINDS,
+  ROLE_INVITATION_EMAIL_KINDS,
+  SCHEDULE_EMAIL_KINDS,
+  STAFF_EMAIL_KINDS,
   MESSAGE_KIND,
+  renderBilingualEmail,
   renderEmail,
   renderTemplate,
   type EmailData,
@@ -111,20 +117,160 @@ export async function loadTemplates(db: Firestore, cfpId: string): Promise<Templ
 
 export type EmailStatus = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'dry_run';
 
+/** A send normally completes in seconds; this is the manual-recovery boundary. */
+export const EMAIL_SENDING_LEASE_MS = 10 * 60 * 1_000;
+
+type TimestampLike = { toMillis: () => number } | Date | number;
+
+/** `updateTime` is the fallback for rows left by releases before leases existed. */
+export function sendingLeaseExpired(
+  startedAt: TimestampLike | null | undefined,
+  now = Date.now(),
+): boolean {
+  const started =
+    typeof startedAt === 'number'
+      ? startedAt
+      : startedAt instanceof Date
+        ? startedAt.getTime()
+        : startedAt?.toMillis();
+  return Number.isFinite(started) && now - Number(started) >= EMAIL_SENDING_LEASE_MS;
+}
+
+export type EmailClaimMode = 'new' | 'resume';
+
+/**
+ * Duplicate delivery of one CloudEvent may resume its claim. A stale queued
+ * event may not claim a later manual retry, whose attempt counter has moved on.
+ */
+export function emailClaimMode(
+  row: FirebaseFirestore.DocumentData,
+  eventId: string,
+  queuedAttempts: number,
+): EmailClaimMode | null {
+  if (row.status === 'sending' && row.sendingClaimId === eventId) return 'resume';
+  if (row.status === 'queued' && Number(row.attempts ?? 0) === queuedAttempts) return 'new';
+  return null;
+}
+
+/**
+ * Provider identity survives an ambiguous timeout and a later queue event.
+ * Active Firestore claims may change; the Resend request must not.
+ */
+export function providerAttemptId(
+  row: FirebaseFirestore.DocumentData,
+  claimId: string,
+): string {
+  const existing = row.providerAttemptId;
+  return typeof existing === 'string' && existing ? existing : claimId;
+}
+
+/** Bounded for Resend's header while retaining all three uniqueness domains. */
+export function resendIdempotencyKey(
+  cfpId: string,
+  logId: string,
+  providerAttempt: string,
+): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify([cfpId, logId, providerAttempt]))
+    .digest('hex');
+  return `cfp-email/${digest}`;
+}
+
 export interface QueueRequest {
   kind: EmailKind;
   proposalId: string;
   to: string;
   locale: EmailLocale;
+  /** Unknown committee language gets one message containing both EN and FR. */
+  bilingual?: boolean;
   /** The link and the event name are filled in at send time — see `deliver`. */
-  data: Omit<EmailData, 'proposalUrl' | 'event'>;
+  data: Omit<EmailData, 'proposalUrl' | 'event' | 'scheduleUrl' | 'reviewUrl'> & {
+    scheduleEntryId?: string;
+  };
+  /** Schedule releases need one row per version rather than one row forever. */
+  dedupeKey?: string;
+  /** Staff notices are revalidated against this claimed event membership before sending. */
+  recipientUid?: string;
+  /** Pending role invitations are revalidated against this exact grant before sending. */
+  grantEmail?: string;
+}
+
+export function isStaffEmail(kind: unknown): kind is EmailKind {
+  return STAFF_EMAIL_KINDS.includes(kind as EmailKind);
+}
+
+export function isRoleInvitationEmail(kind: unknown): kind is EmailKind {
+  return ROLE_INVITATION_EMAIL_KINDS.includes(kind as EmailKind);
+}
+
+export function staffEmailLanguage(
+  stored: FirebaseFirestore.DocumentData | undefined,
+): { locale: EmailLocale; bilingual: boolean } {
+  const locale = stored?.locale;
+  return locale === 'en' || locale === 'fr'
+    ? { locale, bilingual: false }
+    : { locale: 'en', bilingual: true };
+}
+
+export function staffMemberIsActive(
+  member: FirebaseFirestore.DocumentData | undefined,
+  cfpId: string,
+  uid: string,
+): boolean {
+  return (
+    member?.cfpId === cfpId &&
+    member.uid === uid &&
+    ['owner', 'admin', 'reviewer'].includes(String(member.role ?? ''))
+  );
+}
+
+export async function verifiedStaffUser(uid: string): Promise<UserRecord | null> {
+  try {
+    const user = await getAuth().getUser(uid);
+    return !user.disabled && user.emailVerified && user.email ? user : null;
+  } catch {
+    return null;
+  }
+}
+
+export function staffNotificationStillTrue(
+  kind: unknown,
+  subjectId: string,
+  subject: FirebaseFirestore.DocumentSnapshot | null,
+): boolean {
+  if (!subject?.exists) return false;
+  if (kind === 'committee_proposal_submitted') {
+    return ['submitted', 'under_review'].includes(String(subject.get('status') ?? ''));
+  }
+  if (kind === 'committee_schedule_shared') {
+    return subject.get('sharedScheduleId') === subjectId;
+  }
+  return false;
+}
+
+export function roleInvitationStillTrue(
+  kind: unknown,
+  invitationId: string,
+  cfpId: string,
+  grantEmail: string,
+  grant: FirebaseFirestore.DocumentSnapshot | null,
+): boolean {
+  if (kind !== 'committee_role_invited' || !grant?.exists) return false;
+  return (
+    grant.get('cfpId') === cfpId &&
+    grant.get('email') === grantEmail &&
+    ['admin', 'reviewer'].includes(String(grant.get('role') ?? '')) &&
+    grant.get('invitationId') === invitationId &&
+    !grant.get('claimedBy')
+  );
 }
 
 /**
  * One document per (kind, proposal). Two acceptances for the same talk collapse
  * into one row, and therefore one email.
  */
-export const logId = (kind: EmailKind, proposalId: string) => `${kind}__${proposalId}`;
+export const logId = (kind: EmailKind, proposalId: string, dedupeKey?: string) =>
+  [kind, proposalId, dedupeKey].filter(Boolean).join('__');
 
 /**
  * Queues inside the caller's transaction, so an email is never recorded for a
@@ -137,7 +283,9 @@ export async function queueEmail(
   cfpId: string,
   request: QueueRequest,
 ): Promise<void> {
-  const ref = db.doc(`cfps/${cfpId}/emailLog/${logId(request.kind, request.proposalId)}`);
+  const ref = db.doc(
+    `cfps/${cfpId}/emailLog/${logId(request.kind, request.proposalId, request.dedupeKey)}`,
+  );
   const existing = await tx.get(ref);
   if (existing.exists) return;
 
@@ -149,7 +297,11 @@ export async function queueEmail(
   tx.create(ref, {
     ...request,
     // Held decisions wait for an admin to release the whole batch.
-    status: (DECISION_KINDS.includes(request.kind) ? 'held' : 'queued') satisfies EmailStatus,
+    status: (
+      DECISION_KINDS.includes(request.kind) || SCHEDULE_EMAIL_KINDS.includes(request.kind)
+        ? 'held'
+        : 'queued'
+    ) satisfies EmailStatus,
     attempts: 0,
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -159,6 +311,8 @@ interface SendOutcome {
   status: EmailStatus;
   providerId?: string;
   error?: string;
+  /** The provider may have accepted the request before the response was lost. */
+  ambiguous?: boolean;
 }
 
 /**
@@ -174,6 +328,7 @@ export async function sendViaResend(
   email: RenderedEmail,
   apiKey: string,
   settings: EmailSettings,
+  idempotencyKey?: string,
 ): Promise<SendOutcome> {
   const sender = settings.from;
   if (!apiKey || !sender) {
@@ -185,7 +340,11 @@ export async function sendViaResend(
   try {
     response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
       signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
         from: sender,
@@ -197,12 +356,28 @@ export async function sendViaResend(
       }),
     });
   } catch (error) {
-    return { status: 'failed', error: `network: ${String(error)}` };
+    return { status: 'failed', error: `network: ${String(error)}`, ambiguous: true };
   }
 
-  const body = (await response.json().catch(() => ({}))) as { id?: string; message?: string };
+  const body = (await response.json().catch(() => ({}))) as {
+    id?: string;
+    message?: string;
+    name?: string;
+  };
   if (!response.ok) {
-    return { status: 'failed', error: `${response.status}: ${body.message ?? 'unknown'}` };
+    const ambiguousResponse =
+      response.status === 408 ||
+      response.status >= 500 ||
+      (response.status === 409 &&
+        (body.name === 'concurrent_idempotent_requests' ||
+          /concurrent/i.test(body.message ?? '')));
+    return {
+      status: 'failed',
+      error: `${response.status}: ${body.message ?? 'unknown'}`,
+      // Resend has the same idempotent request in flight. Retrying the same key
+      // is safe; assigning a new one could send it twice.
+      ...(ambiguousResponse ? { ambiguous: true } : {}),
+    };
   }
   return { status: 'sent', providerId: body.id };
 }
@@ -220,6 +395,7 @@ export async function deliver(
   settings: EmailSettings,
   cfp: { id: string; name: string; publicUrl: string },
   templates?: TemplateOverrides,
+  idempotencyKey?: string,
 ): Promise<SendOutcome> {
   const locale = (row.locale ?? 'en') as EmailLocale;
   // The link and the event name are resolved now rather than when the row was
@@ -227,54 +403,212 @@ export async function deliver(
   const data = {
     ...(row.data as Omit<EmailData, 'proposalUrl' | 'event'>),
     proposalUrl: cfpUrl(cfp.publicUrl, cfp.id),
+    reviewUrl: `${cfp.publicUrl}/c/${cfp.id}/review`,
+    scheduleUrl: claimedScheduleUrl(row, cfp),
     event: cfp.name,
   };
 
   // A message carries its own copy on the row. It was written once, for one
   // person, so there is nothing to look up and nothing an override could apply
   // to — but it still goes through the same renderer.
+  const committeeNotice = isStaffEmail(row.kind) || isRoleInvitationEmail(row.kind);
   const email =
     row.kind === MESSAGE_KIND
       ? renderTemplate({ subject: row.subject as string, body: row.body as string }, locale, data)
-      : renderEmail(row.kind as EmailKind, locale, data, templates);
+      : row.bilingual === true && committeeNotice
+        ? renderBilingualEmail(row.kind as EmailKind, data, templates)
+        : renderEmail(row.kind as EmailKind, locale, data, templates);
 
-  return sendViaResend(row.to as string, email, apiKey, settings);
+  return sendViaResend(row.to as string, email, apiKey, settings, idempotencyKey);
+}
+
+function claimedScheduleUrl(
+  row: FirebaseFirestore.DocumentData,
+  cfp: { id: string; publicUrl: string },
+): string {
+  return row.kind === 'committee_schedule_shared'
+    ? `${cfp.publicUrl}/c/${cfp.id}/schedule`
+    : cfpUrl(cfp.publicUrl, cfp.id);
 }
 
 /**
  * Sends anything sitting at `queued`.
  *
  * Firestore triggers are at-least-once, and the same event can arrive twice.
- * The claim below is the guard: a transaction moves `queued` → `sending`, and
- * whichever invocation loses that race sees a status it does not act on and
- * stops. The `sending` write re-fires this trigger, which is why the first thing
- * it does is check the status.
+ * The claim below is the guard: a transaction moves `queued` → `sending`. A
+ * retry carrying the same CloudEvent id resumes that attempt with the same
+ * provider idempotency key; every other event stops. The `sending` write
+ * re-fires this trigger, which is why the first thing it does checks `queued`.
  *
  * `onDocumentWritten` rather than `onDocumentCreated` because decisions are
  * created `held` and become sendable later, on release — an on-create trigger
  * would never see that moment.
  */
+export const SEND_QUEUED_EMAIL_TRIGGER_OPTIONS = {
+  document: 'cfps/{cfpId}/emailLog/{logId}',
+  region: 'northamerica-northeast1',
+  maxInstances: 10,
+  retry: true,
+} as const;
+
 export const sendQueuedEmail = onDocumentWritten(
-  {
-    document: 'cfps/{cfpId}/emailLog/{logId}',
-    region: 'northamerica-northeast1',
-    maxInstances: 10,
-    retry: false,
-  },
+  SEND_QUEUED_EMAIL_TRIGGER_OPTIONS,
   async (event) => {
     const ref = event.data?.after.ref;
     if (!ref || !event.data?.after.exists) return;
     if (event.data.after.get('status') !== 'queued') return;
 
     const { cfpId } = event.params;
+    const claimId = event.id;
+    const queuedAttempts = Number(event.data.after.get('attempts') ?? 0);
     const db = getFirestore();
-    const claimed = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists || snap.get('status') !== 'queued') return null;
-      tx.update(ref, { status: 'sending', attempts: FieldValue.increment(1) });
-      return snap.data()!;
+    const pending = event.data.after.data()!;
+    const recipientUid = isStaffEmail(pending.kind)
+      ? String(pending.recipientUid ?? '')
+      : '';
+    const staffUser = recipientUid ? await verifiedStaffUser(recipientUid) : null;
+    const claimed = await db.runTransaction<FirebaseFirestore.DocumentData | null>(async (tx) => {
+      const [snap, cfp] = await tx.getAll(ref, db.doc(`cfps/${cfpId}`));
+      if (!snap.exists) return null;
+      const claimMode = emailClaimMode(snap.data()!, claimId, queuedAttempts);
+      if (!claimMode) return null;
+      if (!cfp.exists || cfp.get('deleting') === true) return null;
+      if (cfp.get('archived') === true) {
+        tx.update(ref, {
+          status: 'failed',
+          error: 'This notification is superseded because the event is archived.',
+          sendingClaimId: FieldValue.delete(),
+          sendingStartedAt: FieldValue.delete(),
+          providerAttemptId: FieldValue.delete(),
+        });
+        return null;
+      }
+      let to = snap.get('to') as string;
+      let language = {
+        locale: (snap.get('locale') === 'fr' ? 'fr' : 'en') as EmailLocale,
+        bilingual: snap.get('bilingual') === true,
+      };
+      if (isStaffEmail(snap.get('kind'))) {
+        const uid = String(snap.get('recipientUid') ?? '');
+        const subjectId = String(snap.get('proposalId') ?? '');
+        const subjectRef =
+          snap.get('kind') === 'committee_proposal_submitted'
+            ? db.doc(`cfps/${cfpId}/proposals/${subjectId}`)
+            : db.doc(`cfps/${cfpId}`);
+        const [member, subject] = uid
+          ? await tx.getAll(db.doc(`cfps/${cfpId}/members/${uid}`), subjectRef)
+          : [null, null];
+        if (
+          !staffUser ||
+          staffUser.uid !== uid ||
+          !staffMemberIsActive(member?.data(), cfpId, uid) ||
+          !staffNotificationStillTrue(snap.get('kind'), subjectId, subject)
+        ) {
+          tx.update(ref, {
+            status: 'failed',
+            error: 'This notification is superseded.',
+            sendingClaimId: FieldValue.delete(),
+            sendingStartedAt: FieldValue.delete(),
+            providerAttemptId: FieldValue.delete(),
+          });
+          return null;
+        }
+        to = staffUser.email!;
+        language = staffEmailLanguage(member?.data());
+      } else if (isRoleInvitationEmail(snap.get('kind'))) {
+        const invitationId = String(snap.get('proposalId') ?? '');
+        const grantEmail = String(snap.get('grantEmail') ?? '');
+        const grant = grantEmail
+          ? await tx.get(db.doc(`cfps/${cfpId}/roleGrants/${grantEmail}`))
+          : null;
+        if (
+          !roleInvitationStillTrue(
+            snap.get('kind'),
+            invitationId,
+            cfpId,
+            grantEmail,
+            grant,
+          )
+        ) {
+          tx.update(ref, {
+            status: 'failed',
+            error: 'This notification is superseded.',
+            sendingClaimId: FieldValue.delete(),
+            sendingStartedAt: FieldValue.delete(),
+            providerAttemptId: FieldValue.delete(),
+          });
+          return null;
+        }
+        to = grantEmail;
+        language = staffEmailLanguage(grant?.data());
+      }
+      const claim =
+        claimMode === 'new'
+          ? {
+              status: 'sending' as const,
+              attempts: FieldValue.increment(1),
+              sendingClaimId: claimId,
+              sendingStartedAt: FieldValue.serverTimestamp(),
+            }
+          : {};
+      const providerIdempotencyAttempt = providerAttemptId(snap.data()!, claimId);
+      const changedRecipient = to !== snap.get('to');
+      const changedLanguage =
+        language.locale !== snap.get('locale') || language.bilingual !== snap.get('bilingual');
+      if (
+        claimMode === 'new' ||
+        changedRecipient ||
+        changedLanguage ||
+        snap.get('providerAttemptId') !== providerIdempotencyAttempt
+      ) {
+        tx.update(ref, {
+          ...claim,
+          providerAttemptId: providerIdempotencyAttempt,
+          ...(changedRecipient ? { to } : {}),
+          locale: language.locale,
+          bilingual: language.bilingual,
+        });
+      }
+      return {
+        ...snap.data()!,
+        sendingClaimId: claimId,
+        providerAttemptId: providerIdempotencyAttempt,
+        to,
+        ...language,
+      };
     });
     if (!claimed) return;
+
+    const updateClaim = async (
+      fields?: FirebaseFirestore.UpdateData<FirebaseFirestore.DocumentData>,
+      preserveProviderAttempt = false,
+    ): Promise<boolean> =>
+      db.runTransaction(async (tx) => {
+        const current = await tx.get(ref);
+        if (
+          !current.exists ||
+          current.get('status') !== 'sending' ||
+          current.get('sendingClaimId') !== claimId
+        ) {
+          return false;
+        }
+        if (fields) {
+          const terminal = ['sent', 'failed', 'dry_run'].includes(String(fields.status ?? ''));
+          tx.update(ref, {
+            ...fields,
+            ...(terminal
+              ? {
+                  sendingClaimId: FieldValue.delete(),
+                  sendingStartedAt: FieldValue.delete(),
+                  ...(!preserveProviderAttempt
+                    ? { providerAttemptId: FieldValue.delete() }
+                    : {}),
+                }
+              : {}),
+          });
+        }
+        return true;
+      });
 
     const [apiKey, settings, templates, platform, cfpSnap] = await Promise.all([
       readResendKey(),
@@ -288,14 +622,109 @@ export const sendQueuedEmail = onDocumentWritten(
       name: (cfpSnap.get('name') as string) || cfpId,
       publicUrl: platform.publicUrl,
     };
-    const outcome = await deliver(claimed, apiKey, settings, cfp, templates);
+    if (!cfpSnap.exists || cfpSnap.get('deleting') === true) return;
+    if (cfpSnap.get('archived') === true) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded because the event is archived.',
+      });
+      return;
+    }
+    if (isStaffEmail(claimed.kind)) {
+      const uid = String(claimed.recipientUid ?? '');
+      const subjectId = String(claimed.proposalId ?? '');
+      const subjectRef =
+        claimed.kind === 'committee_proposal_submitted'
+          ? db.doc(`cfps/${cfpId}/proposals/${subjectId}`)
+          : db.doc(`cfps/${cfpId}`);
+      const [latestUser, member, subject] = await Promise.all([
+        uid ? verifiedStaffUser(uid) : Promise.resolve(null),
+        uid ? db.doc(`cfps/${cfpId}/members/${uid}`).get() : Promise.resolve(null),
+        subjectRef.get(),
+      ]);
+      if (
+        !latestUser?.email ||
+        !staffMemberIsActive(member?.data(), cfpId, uid) ||
+        !staffNotificationStillTrue(claimed.kind, subjectId, subject)
+      ) {
+        await updateClaim({
+          status: 'failed',
+          error: 'This notification is superseded.',
+        });
+        return;
+      }
+      const language = staffEmailLanguage(member?.data());
+      if (
+        claimed.to !== latestUser.email ||
+        claimed.locale !== language.locale ||
+        claimed.bilingual !== language.bilingual
+      ) {
+        if (!(await updateClaim({ to: latestUser.email, ...language }))) return;
+      }
+      claimed.to = latestUser.email;
+      Object.assign(claimed, language);
+    } else if (isRoleInvitationEmail(claimed.kind)) {
+      const invitationId = String(claimed.proposalId ?? '');
+      const grantEmail = String(claimed.grantEmail ?? '');
+      const grant = grantEmail
+        ? await db.doc(`cfps/${cfpId}/roleGrants/${grantEmail}`).get()
+        : null;
+      if (
+        !roleInvitationStillTrue(
+          claimed.kind,
+          invitationId,
+          cfpId,
+          grantEmail,
+          grant,
+        )
+      ) {
+        await updateClaim({
+          status: 'failed',
+          error: 'This notification is superseded.',
+        });
+        return;
+      }
+      const language = staffEmailLanguage(grant?.data());
+      if (claimed.locale !== language.locale || claimed.bilingual !== language.bilingual) {
+        if (!(await updateClaim(language))) return;
+      }
+      Object.assign(claimed, language);
+    }
+    const finalCfp = await db.doc(`cfps/${cfpId}`).get();
+    if (!finalCfp.exists || finalCfp.get('deleting') === true) return;
+    if (finalCfp.get('archived') === true) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded because the event is archived.',
+      });
+      return;
+    }
+    // This is the final state check before the provider handoff. An archive
+    // racing the HTTP request itself cannot recall a message Resend accepted.
+    if (!(await updateClaim())) return;
+    const outcome = await deliver(
+      claimed,
+      apiKey,
+      settings,
+      cfp,
+      templates,
+      resendIdempotencyKey(
+        cfpId,
+        event.params.logId,
+        String(claimed.providerAttemptId ?? claimId),
+      ),
+    );
 
-    await ref.update({
-      status: outcome.status,
-      sentAt: FieldValue.serverTimestamp(),
-      providerId: outcome.providerId ?? FieldValue.delete(),
-      error: outcome.error ?? FieldValue.delete(),
-    });
+    const finalized = await updateClaim(
+      {
+        status: outcome.status,
+        sentAt: FieldValue.serverTimestamp(),
+        providerId: outcome.providerId ?? FieldValue.delete(),
+        error: outcome.error ?? FieldValue.delete(),
+      },
+      outcome.ambiguous === true,
+    );
+    if (!finalized) return;
 
     const line = { cfpId, logId: event.params.logId, kind: claimed.kind, status: outcome.status };
     if (outcome.status === 'failed') logger.error('email failed', { ...line, error: outcome.error });

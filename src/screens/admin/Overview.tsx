@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { Link } from '../../components/Link';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
+import {
+  isLateIntakeWindow,
+  publishedProgrammeLifecycleStep,
+} from '../../lib/adminLifecycle';
 import { toDate } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
+import { loadScheduleDraft, loadSharedSchedule } from '../../lib/schedule';
 import {
   emailDomain,
   emailQueue,
@@ -13,7 +19,7 @@ import {
   loadCommittee,
   type ProposalRow,
 } from '../../lib/roles';
-import { navigate } from '../../lib/router';
+import { href, navigate, type AdminTab } from '../../lib/router';
 import { paths } from '../../lib/paths';
 import { cfpState, type CfpState } from '@shared/cfpWindow';
 import type { ConfirmForm } from '@shared/confirmForm';
@@ -24,6 +30,15 @@ interface EmailReadiness {
   key: boolean;
   domain: boolean;
   sender: boolean;
+  waiting: number;
+  checkFailed: boolean;
+}
+
+interface ScheduleReadiness {
+  configured: boolean;
+  draftProposalIds: string[];
+  sharedReleaseId: string;
+  stale: boolean;
   checkFailed: boolean;
 }
 
@@ -35,6 +50,7 @@ interface OverviewData {
   submission: SubmissionForm;
   confirmation: ConfirmForm;
   email: EmailReadiness;
+  schedule: ScheduleReadiness;
 }
 
 type SetupTab = 'settings' | 'submission' | 'committee' | 'confirmation' | 'email';
@@ -65,6 +81,44 @@ function stateOf(cfp: Cfp): CfpState {
   );
 }
 
+function todayIn(timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((value) => value.type === type)?.value ?? '';
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+function lifecycleHref(cfpId: string, step: number, firstSetupTab: SetupTab): string {
+  if (step === 2 || step === 12) return href({ route: 'cfp', cfpId });
+  if (step === 3 || step === 13) return href({ route: 'review', cfpId });
+
+  const tabs: Partial<Record<number, AdminTab>> = {
+    1: firstSetupTab,
+    4: 'proposals',
+    5: 'email',
+    6: 'schedule',
+    7: 'schedule',
+    8: 'settings',
+    9: 'settings',
+    10: 'schedule',
+    11: 'settings',
+    14: 'proposals',
+    15: 'email',
+    16: 'schedule',
+    17: 'settings',
+  };
+  return href({ route: 'admin', cfpId, tab: tabs[step] ?? 'overview' });
+}
+
 export function Overview({ cfpId }: { cfpId: string }) {
   const { t, locale } = useI18n();
   const [data, setData] = useState<OverviewData | null>(null);
@@ -80,14 +134,17 @@ export function Overview({ cfpId }: { cfpId: string }) {
     }
     setError('');
     try {
-      const [cfp, proposals, committee, submission, confirmation, email] = await Promise.all([
+      const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId),
         loadAllProposals(cfpId),
         loadCommittee(cfpId),
         loadSubmissionForm(cfpId),
         loadConfirmForm(cfpId),
-        emailQueue({ cfpId, action: 'readiness' })
-          .then(async ({ data: snapshot }) => {
+        Promise.all([
+          emailQueue({ cfpId, action: 'readiness' }),
+          emailQueue({ cfpId, action: 'summary' }),
+        ])
+          .then(async ([{ data: snapshot }, { data: summary }]) => {
             const domains =
               snapshot.keyHint && snapshot.domainId
                 ? (await emailDomain({ cfpId, action: 'list' })).data.domains ?? []
@@ -98,10 +155,28 @@ export function Overview({ cfpId }: { cfpId: string }) {
                 (domain) => domain.id === snapshot.domainId && domain.status === 'verified',
               ),
               sender: Boolean(snapshot.settings?.from),
+              waiting: summary.waiting ?? 0,
               checkFailed: false,
             };
           })
-          .catch(() => ({ key: false, domain: false, sender: false, checkFailed: true })),
+          .catch(() => ({ key: false, domain: false, sender: false, waiting: 0, checkFailed: true })),
+        Promise.all([loadScheduleDraft(cfpId), loadSharedSchedule(cfpId)])
+          .then(([draft, shared]) => ({
+            configured: draft.config !== null,
+            draftProposalIds: draft.entries.flatMap((entry) =>
+              entry.kind === 'proposal' ? [entry.proposalId] : [],
+            ),
+            sharedReleaseId: shared.schedule?.id ?? '',
+            stale: Boolean(draft.config?.needsAttention || shared.stale),
+            checkFailed: false,
+          }))
+          .catch(() => ({
+            configured: false,
+            draftProposalIds: [],
+            sharedReleaseId: '',
+            stale: false,
+            checkFailed: true,
+          })),
       ]);
       if (request !== requestGeneration.current) return;
       if (!cfp) {
@@ -109,7 +184,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         setLoadedFor(cfpId);
         return;
       }
-      setData({ cfpId, cfp, proposals, committee, submission, confirmation, email });
+      setData({ cfpId, cfp, proposals, committee, submission, confirmation, email, schedule });
       setLoadedFor(cfpId);
     } catch (e) {
       if (request !== requestGeneration.current) return;
@@ -143,13 +218,13 @@ export function Overview({ cfpId }: { cfpId: string }) {
     );
   }
 
-  const { cfp, proposals, committee, submission, confirmation, email } = current;
+  const { cfp, proposals, committee, submission, confirmation, email, schedule } = current;
   const opens = toDate(cfp.opensAt);
   const closes = toDate(cfp.closesAt);
   const windowValid = Boolean(opens && closes && closes.getTime() > opens.getTime() && !cfp.archived);
   const detailsReady = Boolean(
     cfp.description?.en?.trim() &&
-      cfp.eventDate &&
+      (cfp.eventStartDate ?? cfp.eventDate) &&
       cfp.location?.trim() &&
       cfp.website?.trim(),
   );
@@ -179,8 +254,8 @@ export function Overview({ cfpId }: { cfpId: string }) {
       title: t.admin.setupWindow,
       detail: windowValid
         ? t.admin.setupWindowDone(
-            opens ? formatDate(opens, locale) : '—',
-            closes ? formatDate(closes, locale) : '—',
+            opens ? formatDate(opens, locale, cfp.timeZone ?? 'America/Toronto') : '—',
+            closes ? formatDate(closes, locale, cfp.timeZone ?? 'America/Toronto') : '—',
           )
         : t.admin.setupWindowTodo,
       action: t.admin.setupWindowAction,
@@ -195,16 +270,6 @@ export function Overview({ cfpId }: { cfpId: string }) {
       tab: 'submission',
     },
     {
-      id: 'committee',
-      done: committeeReady,
-      title: t.admin.setupCommittee,
-      detail: committeeReady
-        ? t.admin.setupCommitteeDone(committeeCount)
-        : t.admin.setupCommitteeTodo,
-      action: t.admin.setupCommitteeAction,
-      tab: 'committee',
-    },
-    {
       id: 'email',
       done: emailReady,
       unknown: email.checkFailed,
@@ -216,6 +281,16 @@ export function Overview({ cfpId }: { cfpId: string }) {
           : t.admin.setupEmailTodo,
       action: t.admin.setupEmailAction,
       tab: 'email',
+    },
+    {
+      id: 'committee',
+      done: committeeReady,
+      title: t.admin.setupCommittee,
+      detail: committeeReady
+        ? t.admin.setupCommitteeDone(committeeCount)
+        : t.admin.setupCommitteeTodo,
+      action: t.admin.setupCommitteeAction,
+      tab: 'committee',
     },
     {
       id: 'confirmation',
@@ -234,11 +309,70 @@ export function Overview({ cfpId }: { cfpId: string }) {
   const required = steps.filter((step) => !step.optional);
   const done = required.filter((step) => step.done).length;
   const readiness = Math.round((done / required.length) * 100);
-  const live = proposals.filter((proposal) => proposal.status !== 'withdrawn');
-  const scored = live.filter((proposal) => (proposal.aggregate?.reviewCount ?? 0) > 0);
-  const decided = live.filter((proposal) =>
-    ['accepted', 'confirmed', 'declined', 'waitlisted', 'rejected'].includes(proposal.status),
+  const live = proposals.filter(
+    (proposal) => proposal.status !== 'draft' && proposal.status !== 'withdrawn',
   );
+  const undecided = live.filter((proposal) =>
+    ['submitted', 'under_review'].includes(proposal.status),
+  );
+  const needsFirstReview = undecided.filter(
+    (proposal) => (proposal.aggregate?.reviewCount ?? 0) === 0,
+  );
+  const awaitingConfirmation = live.filter((proposal) => proposal.status === 'accepted');
+  const confirmed = live.filter((proposal) => proposal.status === 'confirmed');
+  const draftProposalIds = new Set(schedule.draftProposalIds);
+  const confirmedUnscheduled = confirmed.filter((proposal) => !draftProposalIds.has(proposal.id));
+  const lateIntake = isLateIntakeWindow(cfp, status);
+  const eventEnd = cfp.eventEndDate ?? cfp.eventStartDate ?? cfp.eventDate ?? '';
+  const eventDone = Boolean(
+    eventEnd && eventEnd < todayIn(cfp.timeZone ?? 'America/Toronto'),
+  );
+  const publicNeedsUpdate = Boolean(
+    cfp.publishedScheduleId &&
+      (schedule.stale ||
+        confirmedUnscheduled.length > 0 ||
+        (schedule.sharedReleaseId && schedule.sharedReleaseId !== cfp.publishedScheduleId)),
+  );
+
+  let lifecycleStep = 1;
+  if (cfp.archived || eventDone) {
+    lifecycleStep = 17;
+  } else if (cfp.publishedScheduleId) {
+    lifecycleStep = publishedProgrammeLifecycleStep({
+      status,
+      lateIntake,
+      awaitingConfirmation: awaitingConfirmation.length,
+      undecided: undecided.length,
+      needsFirstReview: needsFirstReview.length,
+      publicNeedsUpdate,
+      waitingEmails: email.waiting,
+    });
+  } else if (readiness < 100) {
+    lifecycleStep = 1;
+  } else if (live.length === 0) {
+    lifecycleStep = 2;
+  } else if (email.waiting > 0) {
+    lifecycleStep = schedule.sharedReleaseId && confirmed.length > 0 ? 7 : 5;
+  } else if (undecided.length > 0) {
+    lifecycleStep = needsFirstReview.length > 0 ? 3 : 4;
+  } else if (awaitingConfirmation.length > 0) {
+    lifecycleStep = 5;
+  } else if (confirmed.length > 0) {
+    if (!schedule.configured || schedule.draftProposalIds.length === 0) lifecycleStep = 6;
+    else if (!schedule.sharedReleaseId) lifecycleStep = 7;
+    else if (status === 'open') lifecycleStep = 8;
+    else if (status === 'closed') lifecycleStep = 10;
+    else lifecycleStep = 9;
+  } else {
+    lifecycleStep = 4;
+  }
+
+  const firstSetupTab = required.find((step) => !step.done)?.tab ?? 'settings';
+  const currentLifecycle =
+    t.admin.lifecycle.steps[lifecycleStep - 1] ?? t.admin.lifecycle.steps[0];
+  const deadline = closes
+    ? formatDate(closes, locale, cfp.timeZone ?? 'America/Toronto')
+    : t.admin.notSet;
 
   return (
     <div className="admin-overview">
@@ -278,33 +412,128 @@ export function Overview({ cfpId }: { cfpId: string }) {
         </a>
       </section>
 
+      <section className="round-guide" aria-labelledby="round-guide-title">
+        <div className="round-guide__current">
+          <div className="round-guide__copy">
+            <p className="round-guide__eyebrow">
+              {t.admin.lifecycle.step(lifecycleStep, t.admin.lifecycle.steps.length)}
+            </p>
+            <h2 id="round-guide-title">{currentLifecycle.title}</h2>
+            <p>{currentLifecycle.help}</p>
+          </div>
+          <Link
+            className="btn btn--primary round-guide__action"
+            to={lifecycleHref(cfpId, lifecycleStep, firstSetupTab)}
+          >
+            {currentLifecycle.action}
+          </Link>
+          {lifecycleStep === 11 && (
+            <a
+              className="round-guide__secondary"
+              href={`${href({ route: 'admin', cfpId, tab: 'settings' })}#event-closeout`}
+            >
+              {t.admin.lifecycle.skipLateIntake}
+            </a>
+          )}
+        </div>
+
+        <dl className="round-guide__facts">
+          <div><dt>{t.admin.metricProposals}</dt><dd>{live.length}</dd></div>
+          <div><dt>{t.admin.metricDeadline}</dt><dd>{deadline}</dd></div>
+          <div>
+            <dt>{t.admin.lifecycle.programmeLabel}</dt>
+            <dd>
+              {cfp.publishedScheduleId
+                ? publicNeedsUpdate
+                  ? t.admin.lifecycle.programmeUpdate
+                  : t.admin.lifecycle.programmeLive
+                : schedule.sharedReleaseId
+                  ? t.admin.lifecycle.programmeShared
+                  : t.admin.lifecycle.programmePrivate}
+            </dd>
+          </div>
+        </dl>
+
+        {lateIntake && (
+          <aside className="round-guide__notice round-guide__notice--late" role="status">
+            <strong>{t.admin.lifecycle.lateIntakeTitle}</strong>
+            <p>{t.admin.lifecycle.lateIntakeHelp}</p>
+          </aside>
+        )}
+        {publicNeedsUpdate && (
+          <aside className="round-guide__notice round-guide__notice--update" role="status">
+            <strong>{t.admin.lifecycle.publicUpdateTitle}</strong>
+            <p>{t.admin.lifecycle.publicUpdateHelp}</p>
+          </aside>
+        )}
+        {schedule.checkFailed && (
+          <p className="round-guide__unknown">{t.admin.lifecycle.scheduleUnknown}</p>
+        )}
+
+        <details className="lifecycle-map">
+          <summary>{t.admin.lifecycle.allSteps}</summary>
+          <div className="lifecycle-track" role="region" aria-label={t.admin.lifecycle.allSteps}>
+            <ol>
+              {t.admin.lifecycle.steps.map((step, index) => {
+                const number = index + 1;
+                const phase =
+                  number <= 5
+                    ? 'intake'
+                    : number <= 10
+                      ? 'programme'
+                      : number <= 16
+                        ? 'late'
+                        : 'finish';
+                return (
+                  <li
+                    key={number}
+                    className={`lifecycle-track__step lifecycle-track__step--${phase}${
+                      number === lifecycleStep
+                        ? ' lifecycle-track__step--current'
+                        : number < lifecycleStep
+                          ? ' lifecycle-track__step--past'
+                          : ''
+                    }`}
+                    aria-current={number === lifecycleStep ? 'step' : undefined}
+                  >
+                    <span className="lifecycle-track__number" aria-hidden="true">{number}</span>
+                    <span>{step.title}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </details>
+      </section>
+
       <section className="admin-metrics" aria-label={t.admin.roundActivity}>
         <div className="admin-metric">
-          <span>{t.admin.metricProposals}</span>
-          <strong>{live.length}</strong>
+          <span>{t.admin.metricNeedsReview}</span>
+          <strong>{needsFirstReview.length}</strong>
         </div>
         <div className="admin-metric">
-          <span>{t.admin.metricScored}</span>
-          <strong>{scored.length}</strong>
+          <span>{t.admin.metricNeedsDecision}</span>
+          <strong>{undecided.length}</strong>
         </div>
         <div className="admin-metric">
-          <span>{t.admin.metricDecided}</span>
-          <strong>{decided.length}</strong>
+          <span>{t.admin.metricAwaitingConfirmation}</span>
+          <strong>{awaitingConfirmation.length}</strong>
         </div>
         <div className="admin-metric">
-          <span>{t.admin.metricDeadline}</span>
-          <strong className="admin-metric__date">
-            {closes ? formatDate(closes, locale) : t.admin.notSet}
+          <span>{t.admin.metricConfirmed}</span>
+          <strong>
+            {confirmed.length}
+            <small>{t.admin.metricUnscheduled(confirmedUnscheduled.length)}</small>
           </strong>
         </div>
       </section>
 
-      <section className="section setup-panel">
+      <details className="section setup-panel" open={readiness < 100}>
+        <summary>
+          {t.admin.setupChecklistSummary(done, required.length)}
+        </summary>
         <div className="setup-panel__heading">
-          <div>
-            <h2>{t.admin.setupChecklist}</h2>
-            <p className="section__help">{t.admin.setupChecklistHelp}</p>
-          </div>
+          <p className="section__help">{t.admin.setupChecklistHelp}</p>
           <button type="button" className="btn btn--ghost" onClick={() => void load()}>
             {t.admin.refreshOverview}
           </button>
@@ -340,7 +569,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
             </li>
           ))}
         </ol>
-      </section>
+      </details>
 
       {error && (
         <p className="field__error" role="alert">

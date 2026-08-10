@@ -56,6 +56,23 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
+export function scheduleError(error: unknown, t: Dictionary): string {
+  switch (codeOf(error)) {
+    case 'aborted':
+      return t.schedule.stale;
+    case 'already-exists':
+      return t.schedule.conflict;
+    case 'failed-precondition':
+      return t.schedule.invalidState;
+    case 'invalid-argument':
+      return t.schedule.badInput;
+    case 'permission-denied':
+      return t.nav.forbidden;
+    default:
+      return friendlyError(error, t);
+  }
+}
+
 /** Global access controls have their own input and protected-role guard. */
 export function platformAdminError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {

@@ -26,6 +26,12 @@ import { friendlyError } from '../lib/errors';
 import { loadSubmissionForm } from '../lib/proposals';
 import { loadCfp, loadReviewQueue, type ProposalRow } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
+import {
+  clearReviewDraft,
+  keepReviewDraft,
+  loadReviewDrafts,
+  type ReviewDraft as Draft,
+} from '../lib/reviewDrafts';
 import { LIMITS, SCORES, type Score } from '@shared/enums';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -33,12 +39,6 @@ import {
   type SubmissionForm,
 } from '@shared/submissionForm';
 import type { Review, SpeakerSnapshot } from '@shared/types';
-
-interface Draft {
-  score: Score | null;
-  conflictOfInterest: boolean;
-  comment: string;
-}
 
 interface SaveFailure {
   id: string;
@@ -63,6 +63,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
+  const [intakeOpen, setIntakeOpen] = useState(false);
   const [index, setIndex] = useState(0);
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [savedId, setSavedId] = useState('');
@@ -75,6 +76,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const draftsRef = useRef(drafts);
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -106,6 +108,18 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       );
       if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
       const visible = cfp?.reviewsVisible === true;
+      const opens = toDate(cfp?.opensAt);
+      const closes = toDate(cfp?.closesAt);
+      const now = Date.now();
+      const open = Boolean(
+        cfp &&
+          cfp.archived !== true &&
+          cfp.paused !== true &&
+          opens &&
+          closes &&
+          opens.getTime() <= now &&
+          now < closes.getTime(),
+      );
 
       // Decided once, here. Once the round is open, disagreement is the point of
       // the meeting, so the widest spreads come first; until then, work through
@@ -116,11 +130,20 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
       );
 
+      const recovered = loadReviewDrafts(cfpId, user.uid);
+      const loadedDrafts = new Map(
+        sorted.map((proposal) => [
+          proposal.id,
+          { ...draftOf(reviews.get(proposal.id)), ...recovered.get(proposal.id) },
+        ]),
+      );
+      draftsRef.current = loadedDrafts;
       setOrder(sorted);
       setOwn(loaded.own);
       setMine(reviews);
-      setDrafts(new Map(sorted.map((p) => [p.id, draftOf(reviews.get(p.id))])));
+      setDrafts(loadedDrafts);
       setReviewsVisible(visible);
+      setIntakeOpen(open);
       setShape(form);
       setIndex(0);
       setFailures(new Map());
@@ -161,7 +184,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     : scopedOrder;
   const current = filteredOrder[index] ?? filteredOrder[0];
   const displayIndex = current ? filteredOrder.indexOf(current) : 0;
-  const filteredScored = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
+  const filteredHandled = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
   const unscored = filteredOrder
     .map((proposal, proposalIndex) => ({ proposal, proposalIndex }))
     .filter(({ proposal }) => !mine.has(proposal.id));
@@ -179,11 +202,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   );
 
   const patch = useCallback((id: string, part: Partial<Draft>) => {
-    setDrafts((prev) => {
-      const next = new Map(prev);
-      next.set(id, { ...draftOf(), ...prev.get(id), ...part });
-      return next;
-    });
+    const draft = { ...draftOf(), ...draftsRef.current.get(id), ...part };
+    const nextDrafts = new Map(draftsRef.current).set(id, draft);
+    draftsRef.current = nextDrafts;
+    setDrafts(nextDrafts);
+    keepReviewDraft(cfpId, user.uid, id, draft);
     // If this proposal already has a failed write, Retry must use the edits the
     // reviewer makes while recovering it rather than the older failed snapshot.
     setFailures((prev) => {
@@ -193,7 +216,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       next.set(id, { ...failed, draft: { ...failed.draft, ...part } });
       return next;
     });
-  }, []);
+  }, [cfpId, user.uid]);
 
   /**
    * `id` and `draft` are arguments rather than reads of current state: by the
@@ -226,6 +249,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }),
         );
         setSavedId(id);
+        clearReviewDraft(cfpId, user.uid, id, draft);
         setFailures((current) => {
           const updated = new Map(current);
           updated.delete(id);
@@ -341,22 +365,66 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     );
   }
   if (scopedOrder.length === 0) {
-    // "Nothing to review" reads as a bug when the one submission on the system
-    // is your own. Say which of the two it is.
-    return <p className="muted">{own > 0 ? t.review.onlyYours : t.review.empty}</p>;
+    return (
+      <section className="review-empty" aria-labelledby="review-empty-title">
+        <p className="review-workload__eyebrow">{t.review.workload}</p>
+        <h2 id="review-empty-title">{t.review.caughtUp}</h2>
+        <p>{own > 0 ? t.review.onlyYours : t.review.empty}</p>
+        <p className="muted">
+          {intakeOpen ? t.review.intakeOpenHelp : t.review.intakeClosedHelp}
+        </p>
+        <button type="button" className="btn" onClick={() => void load()}>
+          {t.review.refresh}
+        </button>
+      </section>
+    );
   }
   if (!current) return null;
 
   const draft = drafts.get(current.id) ?? draftOf(mine.get(current.id));
+  const handled = filteredHandled;
+  const conflicts = filteredOrder.filter(
+    (proposal) => mine.get(proposal.id)?.conflictOfInterest,
+  ).length;
+  const remaining = Math.max(filteredOrder.length - handled, 0);
 
   return (
     <div className="deck">
+      <section className="review-workload" aria-labelledby="review-workload-title">
+        <div className="review-workload__copy">
+          <p className="review-workload__eyebrow">{t.review.workload}</p>
+          <h2 id="review-workload-title">
+            {remaining === 0 ? t.review.caughtUp : t.review.remainingTitle(remaining)}
+          </h2>
+          <p>{intakeOpen ? t.review.intakeOpenHelp : t.review.intakeClosedHelp}</p>
+        </div>
+        <dl className="review-workload__stats">
+          <div><dt>{t.review.responses}</dt><dd>{handled}</dd></div>
+          <div><dt>{t.review.conflicts}</dt><dd>{conflicts}</dd></div>
+          <div><dt>{t.review.remaining}</dt><dd>{remaining}</dd></div>
+        </dl>
+        <button
+          type="button"
+          className="btn btn--ghost review-workload__refresh"
+          disabled={savingIds.size > 0}
+          onClick={() => void load()}
+        >
+          {t.review.refresh}
+        </button>
+      </section>
+
+      {intakeOpen && reviewsVisible && (
+        <p className="review-round-warning" role="alert">
+          {t.review.scoresVisibleDuringIntake}
+        </p>
+      )}
+
       <div className="deck__bar">
         <p className="deck__progress">
           <strong>{t.review.position(displayIndex + 1, filteredOrder.length)}</strong>
           <span className="muted">
             {' '}
-            · {t.review.progress(filteredScored, filteredOrder.length)}
+            · {t.review.progress(filteredHandled, filteredOrder.length)}
           </span>
         </p>
         <div className="deck__nav">
@@ -440,8 +508,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           <ol className="deck-queue__list">
             {filteredOrder.map((proposal, proposalIndex) => {
               const currentProposal = proposalIndex === displayIndex;
-              const scored = mine.has(proposal.id);
-              const reviewState = scored ? t.review.queueScored : t.review.queueWaiting;
+              const review = mine.get(proposal.id);
+              const scored = Boolean(review);
+              const reviewState = review?.conflictOfInterest
+                ? t.review.queueConflict
+                : scored
+                  ? t.review.queueScored
+                  : t.review.queueWaiting;
               const content = (
                 <>
                   <span className="deck-queue__number">{proposalIndex + 1}</span>
@@ -486,7 +559,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         </section>
       )}
 
-      {filteredScored === filteredOrder.length && (
+      {filteredHandled === filteredOrder.length && (
         <p className="note deck__complete" role="status">
           {t.review.complete}
         </p>

@@ -44,6 +44,7 @@ export const en = {
   nav: {
     cfp: 'Event',
     form: 'My proposals',
+    schedule: 'Schedule',
     review: 'Review talks',
     admin: 'Manage event',
     breadcrumb: 'Breadcrumb',
@@ -448,26 +449,109 @@ export const en = {
     submissionContext: 'Submission details',
     acceptingNow: 'Accepting proposals',
     deadline: 'Deadline',
-    deadlineTimeZone: 'Montréal time',
+    deadlineTimeZone: 'Event time zone: {zone}',
     profileReady: 'Profile ready',
     editProfile: 'Edit profile',
     submit: 'Submit proposal',
     submitting: 'Submitting…',
     submittedHelp: 'We have emailed you a copy.',
+    journeyLabel: 'Proposal journey',
+    journeySteps: ['Proposal', 'Committee', 'Decision', 'Programme'],
+    journeyOutcome: 'Outcome',
+    nextStep: 'Next step',
+    nextSteps: {
+      archived: {
+        title: 'This event is archived',
+        help: 'The proposal is preserved as a read-only record. Contact the organisers if something is wrong.',
+      },
+      draft: {
+        title: 'Finish and submit your proposal',
+        help: 'Your draft is private. Complete the required sections, then submit it before the deadline.',
+      },
+      draftClosed: {
+        title: 'This draft was not submitted',
+        help: 'The proposal window is closed. Keep the draft for your records or delete it if you no longer need it.',
+      },
+      submittedEditable: {
+        title: 'Check what you submitted',
+        help: 'The committee has not started reading yet, so you can still correct the proposal before it locks.',
+      },
+      submitted: {
+        title: 'Wait for the committee',
+        help: 'Your proposal is safely submitted. We will email you when the organisers record a decision.',
+      },
+      underReview: {
+        title: 'The committee is reviewing it',
+        help: 'The talk content is locked for a fair review. You can still keep your profile and travel details current.',
+      },
+      accepted: {
+        title: 'Confirm whether you can present',
+        help: 'Answer the invitation here and complete every required speaker detail before organisers schedule the session.',
+      },
+      confirmedPublic: {
+        title: 'Check your published session',
+        help: 'Your session is public. Verify the final time and room, and download its calendar entry from the session page.',
+      },
+      confirmedShared: {
+        title: 'Review your working placement',
+        help: 'Check the time, room, and language. Tell the organisers through their agreed channel if anything conflicts; this is not public yet.',
+      },
+      confirmedUnavailable: {
+        title: 'Reload before relying on a schedule time',
+        help: 'The current shared placement could not be loaded, so an older public time is deliberately not shown.',
+      },
+      confirmedPending: {
+        title: 'Wait for an updated placement',
+        help: 'The current working schedule has no time for this session. Organisers will share another version when that changes.',
+      },
+      confirmedWaiting: {
+        title: 'Wait for the working schedule',
+        help: 'Your attendance is confirmed. Your own placement will appear here after organisers share a confirmed preview.',
+      },
+      waitlisted: {
+        title: 'Keep an eye on your email',
+        help: 'The proposal is still in consideration if a place opens. Organisers will contact you if the status changes.',
+      },
+      rejected: {
+        title: 'This proposal was not selected',
+        help: 'No action is required. Your profile remains yours, and you can use it again for another event.',
+      },
+      declined: {
+        title: 'You declined the invitation',
+        help: 'Organisers can now offer the place elsewhere. Contact them directly if your availability changes.',
+      },
+      withdrawn: {
+        title: 'This proposal is withdrawn',
+        help: 'It will not be reviewed or scheduled. Organisers retain the record, and no action is required.',
+      },
+    },
 
     /** What has happened to the talk. Falls back to `submittedHelp`. */
     statusHelp: {
       submitted: 'It is in. The committee has not started reading yet.',
       under_review: 'The committee is reading it now.',
       accepted:
-        'You are on the programme — please tell us whether you can still make it, so we know the slot is filled.',
-      confirmed: 'Confirmed. See you in Montréal.',
+        'Your proposal has been accepted. Please tell us whether you can still make it, so organisers can plan a slot.',
+      confirmed:
+        'You are confirmed. Schedule details will appear here after organisers share a confirmed preview.',
       waitlisted: 'Not in yet, but not out — we come back to the waitlist as places free up.',
       rejected: 'Not this year. There were more good proposals than slots, and we are sorry.',
       declined: 'You turned down the slot.',
       withdrawn:
         'You withdrew this one. It is no longer reviewed or counted toward your limit; organisers keep the record.',
     } as Record<string, string>,
+    scheduledHelp: 'You are confirmed and this session is now on the published programme.',
+    sharedScheduledHelp:
+      'You are confirmed and organisers have shared your current placement with you.',
+    sharedUnscheduledHelp:
+      'You are confirmed, but the current shared preview does not assign this session a time yet. Organisers will share another update when that changes.',
+    sharedScheduleUnavailable:
+      'We could not load the current shared placement. Reload this page before relying on an older programme time.',
+    scheduleDetails: 'Your published session',
+    sharedScheduleDetails: 'Your working schedule',
+    sharedScheduleHelp:
+      'This placement is shared with you for planning. It is not public yet and may still change.',
+    viewScheduledSession: 'View session details',
 
     /** What is still theirs to change, keyed by `EditScope`. */
     editHelp: {
@@ -526,6 +610,7 @@ export const en = {
     tabs: {
       overview: 'Dashboard',
       proposals: 'Proposals',
+      schedule: 'Schedule',
       committee: 'Committee',
       settings: 'Event setup',
       submission: 'Submission form',
@@ -554,8 +639,121 @@ export const en = {
     metricScored: 'Scored',
     metricDecided: 'Decided',
     metricDeadline: 'Deadline',
+    metricNeedsReview: 'No review yet',
+    metricNeedsDecision: 'Need a decision',
+    metricAwaitingConfirmation: 'Awaiting speaker',
+    metricConfirmed: 'Confirmed',
+    metricUnscheduled: (count: number) =>
+      count === 1 ? ' · 1 not scheduled' : ` · ${count} not scheduled`,
     notSet: 'Not set',
+    lifecycle: {
+      step: (current: number, total: number) => `Recommended next action · Step ${current} of ${total}`,
+      allSteps: 'Show all 17 lifecycle steps',
+      skipLateIntake: 'Skip late intake and prepare to close out the event',
+      programmeLabel: 'Programme',
+      programmePrivate: 'Private planning',
+      programmeShared: 'Shared preview',
+      programmeLive: 'Public and current',
+      programmeUpdate: 'Public update needed',
+      lateIntakeTitle: 'The programme is live while proposals are open',
+      lateIntakeHelp:
+        'Reopening proposals does not change the public programme. Late talks still go through review, speaker confirmation, the private schedule, a new shared preview, and an explicit republish.',
+      publicUpdateTitle: 'The live programme has unpublished work',
+      publicUpdateHelp:
+        'Keep the current public version stable while you finish the private changes. Share a confirmed preview, collect feedback, then publish that exact version.',
+      scheduleUnknown:
+        'Schedule readiness could not be checked. Open Schedule before relying on this lifecycle position.',
+      steps: [
+        {
+          title: 'Configure the event',
+          help: 'Finish the public details, proposal window, forms, committee, and email delivery.',
+          action: 'Finish setup',
+        },
+        {
+          title: 'Collect proposals',
+          help: 'Share the event page and watch for complete proposals ready for the committee.',
+          action: 'Open public page',
+        },
+        {
+          title: 'Review proposals',
+          help: 'Committee members respond independently. Conflicts count as a response, not a score.',
+          action: 'Open review workspace',
+        },
+        {
+          title: 'Decide outcomes',
+          help: 'Choose accepted, waitlisted, or rejected. Confirmation belongs to the speaker.',
+          action: 'Decide proposals',
+        },
+        {
+          title: 'Notify and confirm',
+          help: 'Review held decisions, send them, and wait for accepted speakers to complete every required detail.',
+          action: 'Review email queue',
+        },
+        {
+          title: 'Build the private schedule',
+          help: 'Place accepted talks tentatively and confirmed talks for the reviewed programme.',
+          action: 'Open schedule',
+        },
+        {
+          title: 'Share the working schedule',
+          help: 'Create a confirmed-only preview without changing what the public can see.',
+          action: 'Review and share',
+        },
+        {
+          title: 'Check the working schedule',
+          help: 'Ask the committee and scheduled speakers to check timing, room, and language and send feedback through your agreed channel.',
+          action: 'Close proposals when feedback is complete',
+        },
+        {
+          title: 'Close proposals',
+          help: 'Close the proposal window when the planned intake is complete. The working preview stays private.',
+          action: 'Manage proposal window',
+        },
+        {
+          title: 'Publish the programme',
+          help: 'Publish the exact current shared preview only after its timing and content have been checked.',
+          action: 'Review publication',
+        },
+        {
+          title: 'Add last-minute speakers',
+          help: 'Use the same proposal and confirmation path so required speaker details are never bypassed.',
+          action: 'Plan late intake',
+        },
+        {
+          title: 'Collect late proposals',
+          help: 'Keep the bounded late-intake window open without changing the already-public programme.',
+          action: 'Open public page',
+        },
+        {
+          title: 'Review new proposals',
+          help: 'Review late proposals independently; the existing public programme remains stable.',
+          action: 'Review additions',
+        },
+        {
+          title: 'Decide additions',
+          help: 'Accept, waitlist, or reject the late proposals using the same decision rules.',
+          action: 'Decide additions',
+        },
+        {
+          title: 'Notify and confirm additions',
+          help: 'Send held decisions and collect the required confirmation details before scheduling.',
+          action: 'Review email queue',
+        },
+        {
+          title: 'Update the public programme',
+          help: 'Add confirmed sessions privately, re-share for review, then publish the new version.',
+          action: 'Update schedule',
+        },
+        {
+          title: 'Close out the event',
+          help: 'After the event, preserve the record and archive the workspace when operations are complete.',
+          action: 'Review archive controls',
+        },
+      ],
+    },
     setupChecklist: 'Setup checklist',
+    setupChecklistSummary: (done: number, total: number) =>
+      `Setup checklist · ${done} of ${total} essentials complete`,
     setupChecklistHelp: 'Each item opens exactly where it can be completed.',
     refreshOverview: 'Refresh status',
     optional: 'Optional',
@@ -565,7 +763,7 @@ export const en = {
     setupDetailsAction: 'Edit event',
     setupWindow: 'Confirm the submission window',
     setupWindowDone: (opens: string, closes: string) =>
-      `${opens} to ${closes}, Montréal time.`,
+      `${opens} to ${closes}.`,
     setupWindowTodo: 'Choose a valid opening and closing time.',
     setupWindowAction: 'Edit window',
     setupSubmission: 'Review the submission form',
@@ -621,6 +819,9 @@ export const en = {
     descriptionFr: 'Description (French)',
     descriptionFrHelp: 'Left empty, French readers see the English.',
     eventDate: 'Date of the event',
+    eventStartDate: 'First event day',
+    eventEndDate: 'Last event day',
+    eventTimeZone: 'Event time zone',
     eventVenue: 'Venue',
     eventLocation: 'City',
     eventLocationHelp: 'Speakers plan travel from this.',
@@ -628,10 +829,10 @@ export const en = {
 
     archive: 'Archiving',
     archiveHelp:
-      'An archived call is read-only and drops off the public list. Everything stays where it is, and you can bring it back.',
+      'An archived call is read-only and drops off the public list. Its existing public programme stays available at its direct link as a frozen record. You can bring the event back later.',
     archiveAction: 'Archive it',
     archiveConfirm:
-      'Archive this call? Nobody will be able to submit, and it disappears from the public list.',
+      'Archive this call? Nobody will be able to submit, and it disappears from the public list. Any existing public programme stays available at its direct link and is frozen until you bring the event back.',
     archived: 'Archived. It is read-only now.',
     unarchiveAction: 'Bring it back',
     unarchived: 'Back in service.',
@@ -647,6 +848,20 @@ export const en = {
     dangerDeleting: 'Deleting…',
 
     window: 'Submission window',
+    lateIntakeEyebrow: 'Late intake',
+    lateIntakeWindowOpen: 'Proposals are open alongside a public programme',
+    lateIntakeWindowClosed: 'Reopen proposals without disturbing the public programme',
+    lateIntakeWindowHelp:
+      'Changing this window does not change the live programme. New proposals still go through review, speaker confirmation, the private schedule, a new shared preview, and an explicit republish.',
+    lateIntakeScoresWarning:
+      'Reviewer scores are currently visible. Turn this off before a new review round so early scores do not anchor later reviewers. Your final choice is saved only when you press Save window.',
+    prepareLateIntake: 'Prepare a 7-day late intake',
+    prepareLateIntakeHelp:
+      'Fills an opening time of now, a closing time seven days from now, resumes submissions, and hides reviewer scores. Review the fields, then press Save window to apply it.',
+    windowTimeZone: 'Proposal window times use the event time zone: {zone}.',
+    windowTimeZoneUnsaved:
+      'Save the event details before changing the proposal window so its time zone is unambiguous.',
+    windowInvalid: 'Choose a valid opening and a later closing time in the event time zone.',
     opensAtLabel: 'Opens',
     closesAtLabel: 'Closes',
     pausedLabel: 'Pause submissions now',
@@ -750,44 +965,61 @@ export const en = {
       unreachable: 'Could not reach Resend. Try again shortly.',
     },
     emailQueue: 'Queue',
-    emailDecisionQueue: 'Decision emails',
+    emailDecisionQueue: 'Held speaker notifications',
     emailHelp:
-      'Decisions are held until you release them, so everyone hears on the same day. Check the list below before sending — it cannot be taken back.',
+      'Decision and schedule messages are held until you release them. Check the recipients and message types below before sending — it cannot be taken back.',
     emailQueueEmpty:
-      'No decision emails are waiting. New decisions will appear here before anything is sent.',
+      'No speaker notifications are waiting. New decisions and schedule changes appear here before anything is sent.',
     emailQueueSetupNeeded:
       'These emails are safely held. Finish the delivery setup below before releasing them.',
     pendingEmailEyebrow: 'Speaker notifications',
     pendingEmailShort: 'pending',
     pendingEmailTitle: (count: number) =>
       count === 1
-        ? '1 decision email is waiting to be sent.'
-        : `${count} decision emails are waiting to be sent.`,
+        ? '1 speaker notification is waiting to be sent.'
+        : `${count} speaker notifications are waiting to be sent.`,
     pendingEmailHelp:
-      'Saving a decision holds its email for review. Check the full batch, then send everyone’s result together.',
+      'Decisions and schedule changes are held for review. Check the recipients and message types before sending.',
     pendingEmailReview: 'Review and send',
     pendingEmailTabLabel: (count: number) =>
-      `Email, ${count} decision ${count === 1 ? 'email' : 'emails'} waiting`,
+      `Email, ${count} speaker ${count === 1 ? 'notification' : 'notifications'} waiting`,
     pendingEmailUnknownTitle: 'Email queue status unavailable',
     pendingEmailUnknownHelp:
       'The decision is saved, but we could not verify its email. Open Email to check the queue before notifying speakers.',
     emailStatus: {
       held: 'Waiting for release',
       queued: 'Queued',
+      sending: 'Sending',
       sent: 'Sent',
       dry_run: 'Not sent — no sender configured',
       failed: 'Failed',
     },
+    emailRecoverableStatus: 'Delivery stalled — retry available',
     emailKind: 'Message',
     emailTo: 'To',
     emailKinds: {
       submission_received: 'Submission received',
+      committee_role_invited: 'Committee invitation',
+      committee_proposal_submitted: 'New proposal for committee',
+      committee_schedule_shared: 'Shared preview for committee',
       withdrawn: 'Withdrawn',
       accepted: 'Accepted',
       waitlisted: 'Waitlisted',
       rejected: 'Not selected',
+      schedule_assigned: 'Schedule assigned',
+      schedule_changed: 'Schedule changed',
+      schedule_cancelled: 'Session cancelled',
       message: 'Message',
     } as Record<string, string>,
+    emailDeliveryImmediateStaff: 'Immediate internal notification',
+    emailDeliveryImmediateStaffHelp:
+      'This goes directly to eligible active committee members when the event action succeeds. It is not part of the held speaker batch.',
+    emailDeliveryHeldSpeaker: 'Held speaker notification',
+    emailDeliveryHeldSpeakerHelp:
+      'New messages stay in Email for an organiser to review and release. Previewing or publishing alone does not send them.',
+    emailDeliveryAutomatic: 'Automatic event notification',
+    emailDeliveryAutomaticHelp:
+      'The relevant event action queues this message immediately; delivery still depends on the configured sender.',
     messageTitle: 'Write to a speaker',
     messageHelp:
       'For anything the templates do not cover — a question, a correction, a detail about the day. It goes out from the same address and is recorded in the log below, so the rest of the committee can see it happened.',
@@ -806,12 +1038,12 @@ export const en = {
     messageNoTalks: 'Nothing to write about yet — no proposal has been submitted.',
     emailRefresh: 'Refresh',
     emailRelease: (count: number) =>
-      `Send ${count} decision ${count === 1 ? 'email' : 'emails'}`,
+      `Send ${count} ${count === 1 ? 'notification' : 'notifications'}`,
     emailNothing: 'Nothing to send',
     emailStaleHeld:
-      'Earlier decision emails retained: {count}. They become sendable only if those decisions are restored.',
-    emailStaleStatus: 'Retained — decision changed',
-    emailConfirm: 'Send {count} decision emails now? This cannot be undone.',
+      'Superseded notifications retained: {count}. They stay in the history and can be sent only if they become current again.',
+    emailStaleStatus: 'Retained — superseded',
+    emailConfirm: 'Send {count} speaker notifications now? This cannot be undone.',
     emailRetry: 'Retry {count} unsent',
     emailSent: (count: number) => `${count} ${count === 1 ? 'email' : 'emails'} queued.`,
     emailLog: 'What was sent',
@@ -830,6 +1062,8 @@ export const en = {
     proposals: 'Proposal decisions',
     proposalsHelp:
       'Scores update automatically as reviews are saved. Find the talks that need attention, then make one explicit decision at a time.',
+    speakerResponseGuardrail:
+      'Accepted is the organiser decision. Confirmed and declined are speaker responses completed in My proposals, where required details are collected.',
     overview: 'The round at a glance',
     overviewHelp: 'Coverage, outcomes, and programme balance before you make the next decision.',
     metricInRound: 'In the round',
@@ -1012,10 +1246,24 @@ export const en = {
 
   review: {
     help: 'Score every proposal you can judge. Your own are never listed.',
+    workload: 'Your review workload',
+    caughtUp: 'You are caught up',
+    remainingTitle: (count: number) =>
+      count === 1 ? '1 proposal needs your response' : `${count} proposals need your response`,
+    responses: 'Responses',
+    conflicts: 'Conflicts',
+    remaining: 'Remaining',
+    refresh: 'Refresh proposals',
+    intakeOpenHelp:
+      'Proposals are still open, so new work may arrive. Refresh before you finish a review session.',
+    intakeClosedHelp:
+      'Proposals are closed. When every item has a response, the organisers can make decisions.',
+    scoresVisibleDuringIntake:
+      'Committee scores are visible while proposals are open. For an independent late-intake round, ask an organiser to hide scores before continuing.',
     allCategories: 'All categories',
     empty: 'Nothing to review yet — no talks have been submitted.',
     onlyYours: 'Nothing to review yet. You cannot score your own talk, and so far that is the only one submitted.',
-    progress: (scored: number, total: number) => `${scored} of ${total} scored`,
+    progress: (handled: number, total: number) => `${handled} of ${total} responded`,
     scoreLabel: 'Score this proposal',
     scores: {
       1: '1 — Pass',
@@ -1036,13 +1284,14 @@ export const en = {
     previous: 'Previous proposal',
     next: 'Next proposal',
     queue: 'Review queue',
-    queueHelp: 'Jump to any talk and see what still needs a score.',
+    queueHelp: 'Jump to any talk and see what still needs a response.',
     queueClose: 'Close queue',
-    nextUnscored: 'Next unscored',
+    nextUnscored: 'Next unanswered',
     queueCurrent: 'Current',
-    queueScored: 'Scored',
-    queueWaiting: 'Not scored',
-    complete: 'Every talk in this view has a score.',
+    queueScored: 'Responded',
+    queueConflict: 'Conflict recorded',
+    queueWaiting: 'Needs response',
+    complete: 'Every proposal in this view has a response.',
     shortcuts: 'Shortcuts',
     shortcutScore: 'Score, and move to the next one',
     shortcutMove: 'Back and forward without scoring',
@@ -1066,7 +1315,7 @@ export const en = {
     save: 'Save review',
     saving: 'Saving…',
     saved: 'Saved',
-    notScored: 'Not scored yet',
+    notScored: 'No response yet',
     untitled: 'Untitled proposal',
     saveFailedTitle: 'Some reviews did not save',
     saveFailedHelp:
@@ -1077,6 +1326,177 @@ export const en = {
     others: 'Committee scores',
     sortedByDisagreement: 'Sorted by disagreement — the ones worth discussing are first.',
     conflictDeclared: 'conflict declared',
+  },
+
+  schedule: {
+    title: 'Programme',
+    adminTitle: 'Build the programme',
+    adminHelp:
+      'Place talks privately, share a confirmed preview, then publish that exact reviewed version.',
+    releaseFlowEyebrow: 'Schedule disclosure',
+    releaseFlowTitle: 'Move the programme through three deliberate stages',
+    releaseFlowHelp:
+      'Draft privately, share a confirmed preview, then publish that exact version for everyone.',
+    privateBadge: 'Private',
+    sharedBadge: 'Shared',
+    notSharedBadge: 'Not shared',
+    liveBadge: 'Live',
+    offlineBadge: 'Offline',
+    privateDraftTitle: 'Private draft',
+    privateDraftHelp:
+      'Your working board. Accepted, tentative, and confirmed placements stay with admins here.',
+    sharedPreviewTitle: 'Shared preview',
+    sharedPreviewHelp:
+      'A frozen confirmed-only version for speakers and the committee. Draft edits do not leak into it.',
+    publicProgrammeTitle: 'Public programme',
+    publicProgrammeHelp:
+      'The attendee-facing version. Publishing promotes the exact shared preview without rebuilding it.',
+    versionLabel: 'Version',
+    revision: (n: number) => `Draft r${n}`,
+    audienceLabel: 'Audience',
+    privateAudience: 'Admins and owners',
+    sharedAudience: 'Committee; confirmed speakers see only their own placement',
+    publicAudience: 'Everyone',
+    updatedLabel: 'Updated',
+    privateTentative: (n: number) => `${n} tentative ${n === 1 ? 'placement stays' : 'placements stay'} private`,
+    sharedStale: 'The private draft has changed. Share a new preview before publishing.',
+    archivedTitle: 'Archived programme — read only',
+    archivedHelp:
+      'The planning board and public programme history are frozen. Bring the event back first if an emergency change is needed.',
+    share: 'Review and share',
+    shareTitle: 'Share this confirmed preview?',
+    shareHelp:
+      'This creates a frozen version from confirmed sessions and public-safe programme items. Tentative placements remain private.',
+    shareDeliveryHelp:
+      'After sharing, committee delivery starts immediately. New speaker placement messages stay held in Email for organiser review.',
+    shareConfirm: 'Share preview',
+    shareBlocked: 'Resolve conflicts in confirmed sessions before sharing.',
+    shareNoChanges: 'The shared preview already matches this draft.',
+    shareSpeakerAudience: 'Confirmed speakers see only their own date, time, room, and language.',
+    shareCommitteeAudience: 'Reviewers, admins, and owners see the confirmed programme read-only.',
+    sharePublicAudience: 'The public still sees only the currently published programme.',
+    sharedCount: (n: number) => `${n} items shared`,
+    omittedCount: (n: number) => `${n} tentative omitted`,
+    shared: 'Preview shared.',
+    sharedVersion: (n: number) => `Shared version ${n}`,
+    sharedSummary: (shared: number, omitted: number) => `${shared} items shared; ${omitted} tentative omitted.`,
+    sharedChannels: (committee: number, speakers: number) =>
+      `Committee delivery started for ${committee} eligible ${committee === 1 ? 'member' : 'members'}. ${speakers} speaker placement ${speakers === 1 ? 'message is' : 'messages are'} managed in Email; new messages remain held for review.`,
+    publishNeedsShare: 'Review and share the confirmed preview first.',
+    publishNeedsReshare: 'The private draft changed. Share a new preview before publishing.',
+    publishWaitingHelp: 'Nothing is ready for the public yet. Share a confirmed preview first.',
+    publishReadyHelp: 'The latest shared preview is ready to publish.',
+    viewPublic: 'View public programme',
+    takeOffline: 'Take offline',
+    takeOfflineTitle: 'Take the public programme offline?',
+    takeOfflineHelp:
+      'This immediately removes the programme from public view. Links to sessions will stop showing programme content.',
+    takeOfflineKept:
+      'The private draft, shared preview, and release history stay intact. You can publish again later.',
+    takeOfflineConfirm: 'Take public programme offline',
+    unpublishedSuccess: 'The public programme is offline. The shared preview and history were kept.',
+    publishOpenTitle: 'Proposals are still open',
+    publishOpenHelp:
+      'Publishing now exposes the programme while speakers may still be submitting. Confirm that this timing is intentional.',
+    configure: 'Schedule setup',
+    configureHelp: 'Rooms are the attendee-facing tracks. Times use the event time zone.',
+    timeZone: 'Event time zone',
+    days: 'Event days',
+    day: 'Day',
+    addDay: 'Add day',
+    removeDay: 'Remove day',
+    dayHasItems: 'Move or remove this day’s programme items first.',
+    dayStarts: 'Programme starts',
+    dayEnds: 'Programme ends',
+    rooms: 'Rooms / tracks',
+    roomNameEn: 'Room name (English)',
+    roomNameFr: 'Room name (French)',
+    addRoom: 'Add room',
+    removeRoom: 'Remove room',
+    saveSetup: 'Save schedule setup',
+    setupSaved: 'Schedule setup saved.',
+    saveSetupFirst: 'Save the schedule setup before sharing or publishing.',
+    needsSetup: 'Set the event days and at least one room before placing sessions.',
+    unassigned: 'Unscheduled sessions',
+    unassignedHelp:
+      'Accepted talks can be planned here; only confirmed talks enter the shared or public programme.',
+    noUnassigned: 'Every selected talk has a place.',
+    tentative: 'Awaiting confirmation',
+    confirmed: 'Confirmed',
+    search: 'Search sessions',
+    custom: 'Add programme item',
+    edit: 'Edit placement',
+    move: 'Move or edit',
+    remove: 'Remove from schedule',
+    removeConfirm: 'Remove this item from the draft schedule?',
+    date: 'Date',
+    startsAt: 'Start time',
+    time: 'Time',
+    duration: 'Duration (minutes)',
+    room: 'Room / track',
+    language: 'Scheduled language',
+    itemType: 'Item type',
+    titleEn: 'Title (English)',
+    titleFr: 'Title (French)',
+    descriptionEn: 'Description (English)',
+    descriptionFr: 'Description (French)',
+    saveItem: 'Save item',
+    cancelEdit: 'Cancel',
+    dragHint: 'Drag to a time slot, or use Move or edit.',
+    emptySlot: (time: string, room: string) => `Add an item at ${time} in ${room}`,
+    metrics: 'Programme readiness',
+    scheduledCount: (n: number) => `${n} scheduled`,
+    unassignedCount: (n: number) => `${n} unscheduled`,
+    tentativeCount: (n: number) => `${n} tentative`,
+    conflictCount: (n: number) => `${n} conflicts`,
+    unpublished: 'Changes not shared',
+    publishedVersion: (n: number) => `Public version ${n}`,
+    publish: 'Review and publish',
+    publishTitle: 'Publish this programme?',
+    publishHelp:
+      'Attendees will see this version immediately. Schedule emails will remain held for review.',
+    publishBlocked: 'The shared preview must be current and conflict-free before publishing.',
+    publishNoChanges: 'The public programme is already up to date.',
+    publishConfirm: 'Publish programme',
+    published: 'The public programme is live.',
+    committeePreviewTitle: 'Committee preview',
+    committeePreviewHelp: 'Confirmed sessions only. This read-only working programme is not public.',
+    committeePreviewDetail:
+      'This is the committee’s shared working version. Calendar downloads become available after publication.',
+    committeeNextTitle: 'Check the working details',
+    committeeNextHelp:
+      'Review the timing, room, and language. Send any conflict or correction through the channel agreed with the organisers; there is no in-app approval step.',
+    committeeSignInTitle: 'Committee preview available',
+    committeeSignInHelp:
+      'Sign in with your committee account to open the current confirmed working schedule. You will stay on this page.',
+    notPublic: 'Not public',
+    publicHelp: 'Choose a day, room, or language. Times are shown in the event time zone.',
+    allRooms: 'All rooms',
+    allLanguages: 'All languages',
+    calendar: 'Download calendar',
+    sessionCalendar: 'Add session to calendar',
+    csv: 'Download CSV',
+    details: 'Session details',
+    speakers: 'Speakers',
+    back: 'Back to the programme',
+    cancelled: 'Cancelled',
+    cancelledHelp: 'This session is no longer taking place. The programme will be updated soon.',
+    noPublished: 'The programme has not been published yet.',
+    noMatches: 'No programme items match these filters.',
+    stale: 'Someone changed the schedule in another tab. Reload before continuing.',
+    conflict: 'That placement overlaps a room or speaker already scheduled.',
+    invalidState: 'Only accepted or confirmed talks can be planned, and publication requires confirmation.',
+    badInput: 'Check the event days, rooms, times, duration, and required titles.',
+    reload: 'Reload schedule',
+    types: {
+      keynote: 'Keynote',
+      break: 'Break',
+      meal: 'Meal',
+      social: 'Social',
+      opening: 'Opening',
+      closing: 'Closing',
+      other: 'Other',
+    } as Record<string, string>,
   },
 
   consent: {

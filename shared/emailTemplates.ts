@@ -17,15 +17,33 @@
 
 export const EMAIL_KINDS = [
   'submission_received',
+  'committee_role_invited',
+  'committee_proposal_submitted',
+  'committee_schedule_shared',
   'withdrawn',
   'accepted',
   'waitlisted',
   'rejected',
+  'schedule_assigned',
+  'schedule_changed',
+  'schedule_cancelled',
 ] as const;
 export type EmailKind = (typeof EMAIL_KINDS)[number];
 
 /** Decisions go out together or not at all — see the queue's `held` status. */
 export const DECISION_KINDS: readonly EmailKind[] = ['accepted', 'waitlisted', 'rejected'];
+export const SCHEDULE_EMAIL_KINDS: readonly EmailKind[] = [
+  'schedule_assigned',
+  'schedule_changed',
+  'schedule_cancelled',
+];
+export const STAFF_EMAIL_KINDS: readonly EmailKind[] = [
+  'committee_proposal_submitted',
+  'committee_schedule_shared',
+];
+export const ROLE_INVITATION_EMAIL_KINDS: readonly EmailKind[] = [
+  'committee_role_invited',
+];
 
 /**
  * A one-off an organiser writes themselves — a question, a correction, a
@@ -50,6 +68,11 @@ export interface EmailData {
   event: string;
   /** Drives the `{visa}` paragraph on an acceptance (§5). */
   needsVisa?: boolean;
+  scheduleDate?: string;
+  scheduleTime?: string;
+  scheduleRoom?: string;
+  scheduleUrl?: string;
+  reviewUrl?: string;
 }
 
 export interface RenderedEmail {
@@ -63,7 +86,18 @@ export interface RenderedEmail {
  * paragraph consisting only of it disappears when the speaker does not need a
  * visa, which is how one template serves both cases.
  */
-export const PLACEHOLDERS = ['speakerName', 'title', 'proposalUrl', 'event', 'visa'] as const;
+export const PLACEHOLDERS = [
+  'speakerName',
+  'title',
+  'proposalUrl',
+  'event',
+  'visa',
+  'scheduleDate',
+  'scheduleTime',
+  'scheduleRoom',
+  'scheduleUrl',
+  'reviewUrl',
+] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
 
 export interface Template {
@@ -85,6 +119,34 @@ const EN: Record<EmailKind, Template> = {
       'We will write again when there is a decision. That is usually a few weeks after the deadline, and we will tell you either way.',
     ),
   },
+  committee_role_invited: {
+    subject: 'You are invited to the {event} committee',
+    body: p(
+      'Hello,',
+      'You have been invited to help review proposals for {event}.',
+      'Sign in with this email address to claim your access:',
+      '{reviewUrl}',
+    ),
+  },
+  committee_proposal_submitted: {
+    subject: 'New proposal ready to review for {event}',
+    body: p(
+      'Hi {speakerName},',
+      'There is a new item in the {event} review queue.',
+      'Sign in to review it:',
+      '{reviewUrl}',
+    ),
+  },
+  committee_schedule_shared: {
+    subject: 'Committee schedule update for {event}',
+    body: p(
+      'Hi {speakerName},',
+      'The committee schedule view for {event} has been updated.',
+      'Sign in to view the current working schedule:',
+      '{scheduleUrl}',
+      'Please reply to the organising team if you spot a conflict or anything that needs changing.',
+    ),
+  },
   withdrawn: {
     subject: 'You withdrew “{title}” from {event}',
     body: p(
@@ -98,7 +160,8 @@ const EN: Record<EmailKind, Template> = {
     subject: 'Your {event} talk has been accepted',
     body: p(
       'Hi {speakerName},',
-      '“{title}” is on the programme. We would like you to give it at {event}.',
+      'We would like to invite you to present “{title}” at {event}.',
+      'This is an invitation, not a published programme placement. The organising team schedules sessions after speakers respond.',
       'Please confirm you can still make it: open your proposal and pick one of the two answers there. Signing in with the account you submitted with is all it takes.',
       '{proposalUrl}',
       'If you cannot come, saying so early is genuinely useful rather than awkward: it lets us offer the slot to someone on the waitlist while there is still time.',
@@ -124,6 +187,36 @@ const EN: Record<EmailKind, Template> = {
       'Thank you for taking the time. It matters more than a form can convey.',
     ),
   },
+  schedule_assigned: {
+    subject: 'Your {event} session placement',
+    body: p(
+      'Hi {speakerName},',
+      'The organising team shared a working placement for “{title}” on {scheduleDate} at {scheduleTime}, in {scheduleRoom}.',
+      'This placement is shared with speakers and the committee. Public programme visibility is controlled separately. Review it in My proposals:',
+      '{scheduleUrl}',
+      'Please tell the organising team promptly if this timing creates a problem.',
+    ),
+  },
+  schedule_changed: {
+    subject: 'Your {event} session placement changed',
+    body: p(
+      'Hi {speakerName},',
+      'The organising team shared a new working placement for “{title}” on {scheduleDate} at {scheduleTime}, in {scheduleRoom}.',
+      'This placement is shared with speakers and the committee. Public programme visibility is controlled separately. Review it in My proposals:',
+      '{scheduleUrl}',
+      'Please tell the organising team promptly if this timing creates a problem.',
+    ),
+  },
+  schedule_cancelled: {
+    subject: 'Your {event} session placement was removed',
+    body: p(
+      'Hi {speakerName},',
+      'The organising team removed “{title}” from its shared working schedule.',
+      'Public programme visibility is controlled separately. Review your proposal in My proposals:',
+      '{scheduleUrl}',
+      'If this is unexpected, please reply to the organising team.',
+    ),
+  },
 };
 
 const FR: Record<EmailKind, Template> = {
@@ -135,6 +228,34 @@ const FR: Record<EmailKind, Template> = {
       'Vous pouvez encore la modifier ou la retirer jusqu’à la clôture de l’appel — rien n’est figé tant que le comité n’a pas commencé sa lecture. Tout ce que vous avez envoyé se trouve ici :',
       '{proposalUrl}',
       'Nous vous réécrirons dès qu’il y aura une décision, généralement quelques semaines après la date limite. Nous vous répondrons dans tous les cas.',
+    ),
+  },
+  committee_role_invited: {
+    subject: 'Invitation au comité de {event}',
+    body: p(
+      'Bonjour,',
+      'Vous avez été invité·e à participer à l’évaluation des propositions pour {event}.',
+      'Connectez-vous avec cette adresse courriel pour accepter votre accès :',
+      '{reviewUrl}',
+    ),
+  },
+  committee_proposal_submitted: {
+    subject: 'Nouvelle proposition à évaluer pour {event}',
+    body: p(
+      'Bonjour {speakerName},',
+      'Un nouvel élément se trouve dans la file d’évaluation de {event}.',
+      'Connectez-vous pour le consulter :',
+      '{reviewUrl}',
+    ),
+  },
+  committee_schedule_shared: {
+    subject: 'Mise à jour de l’horaire du comité pour {event}',
+    body: p(
+      'Bonjour {speakerName},',
+      'La vue de l’horaire du comité pour {event} a été mise à jour.',
+      'Connectez-vous pour consulter l’horaire de travail actuel :',
+      '{scheduleUrl}',
+      'Répondez à l’équipe organisatrice si vous repérez un conflit ou un élément à corriger.',
     ),
   },
   withdrawn: {
@@ -150,7 +271,8 @@ const FR: Record<EmailKind, Template> = {
     subject: 'Votre conférence pour {event} est acceptée',
     body: p(
       'Bonjour {speakerName},',
-      '« {title} » est au programme. Nous aimerions que vous la présentiez à {event}.',
+      'Nous aimerions vous inviter à présenter « {title} » à {event}.',
+      'Il s’agit d’une invitation, et non d’un placement au programme public. L’équipe organisatrice planifie les séances après la réponse des personnes invitées.',
       'Merci de confirmer votre disponibilité ici :',
       '{proposalUrl}',
       '{visa}',
@@ -173,6 +295,36 @@ const FR: Record<EmailKind, Template> = {
       'Nous ne pouvons pas inscrire « {title} » au programme cette année. Les bonnes propositions étaient bien plus nombreuses que les places, et refuser des conférences qui nous plaisaient a été la partie difficile du processus.',
       'Ce n’est pas un jugement sur votre travail, et ce n’est pas une raison de passer votre tour l’an prochain : plusieurs conférences au programme viennent de personnes que nous avions refusées auparavant.',
       'Merci du temps que vous y avez consacré. Cela compte plus qu’un formulaire ne peut le dire.',
+    ),
+  },
+  schedule_assigned: {
+    subject: 'Placement de votre séance à {event}',
+    body: p(
+      'Bonjour {speakerName},',
+      'L’équipe organisatrice a partagé un placement de travail pour « {title} » le {scheduleDate} à {scheduleTime}, dans {scheduleRoom}.',
+      'Ce placement est partagé avec les personnes conférencières et le comité. La visibilité du programme public est gérée séparément. Consultez-le dans Mes propositions :',
+      '{scheduleUrl}',
+      'Prévenez rapidement l’équipe organisatrice si cet horaire pose problème.',
+    ),
+  },
+  schedule_changed: {
+    subject: 'Le placement de votre séance à {event} a changé',
+    body: p(
+      'Bonjour {speakerName},',
+      'L’équipe organisatrice a partagé un nouveau placement de travail pour « {title} » le {scheduleDate} à {scheduleTime}, dans {scheduleRoom}.',
+      'Ce placement est partagé avec les personnes conférencières et le comité. La visibilité du programme public est gérée séparément. Consultez-le dans Mes propositions :',
+      '{scheduleUrl}',
+      'Prévenez rapidement l’équipe organisatrice si cet horaire pose problème.',
+    ),
+  },
+  schedule_cancelled: {
+    subject: 'Le placement de votre séance à {event} a été retiré',
+    body: p(
+      'Bonjour {speakerName},',
+      'L’équipe organisatrice a retiré « {title} » de son horaire de travail partagé.',
+      'La visibilité du programme public est gérée séparément. Consultez votre proposition dans Mes propositions :',
+      '{scheduleUrl}',
+      'Si cela vous surprend, répondez à l’équipe organisatrice.',
     ),
   },
 };
@@ -291,6 +443,11 @@ function substitute(source: string, data: EmailData, locale: EmailLocale): strin
     proposalUrl: data.proposalUrl,
     event: data.event,
     visa: data.needsVisa ? VISA[locale] : '',
+    scheduleDate: data.scheduleDate ?? '',
+    scheduleTime: data.scheduleTime ?? '',
+    scheduleRoom: data.scheduleRoom ?? '',
+    scheduleUrl: data.scheduleUrl ?? '',
+    reviewUrl: data.reviewUrl ?? '',
   };
   // An unknown name is left untouched rather than blanked: validateTemplate
   // rejects them on save, and a visible `{typo}` is easier to diagnose than a
@@ -307,6 +464,29 @@ export function renderEmail(
   overrides?: TemplateOverrides,
 ): RenderedEmail {
   return renderTemplate(activeTemplate(kind, locale, overrides), locale, data);
+}
+
+/** One committee notice when no explicit language has been stored for its recipient. */
+export function renderBilingualEmail(
+  kind: EmailKind,
+  data: EmailData,
+  overrides?: TemplateOverrides,
+): RenderedEmail {
+  const en = renderEmail(kind, 'en', data, overrides);
+  const fr = renderEmail(kind, 'fr', data, overrides);
+  return {
+    subject: `${en.subject} / ${fr.subject}`,
+    text: `${en.text}\n\n--- Français ---\n\n${fr.text}`,
+    html: [
+      '<div lang="en">',
+      en.html,
+      '</div>',
+      '<hr style="border:0;border-top:1px solid #dadce0;margin:24px 0">',
+      '<div lang="fr">',
+      fr.html,
+      '</div>',
+    ].join(''),
+  };
 }
 
 /**

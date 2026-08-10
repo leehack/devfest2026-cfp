@@ -15,8 +15,8 @@ drift apart.
 
 ```
 shared/       enums, types, schema, pure parsers — compiled into both bundles
-src/          screens/ the form, the admin screen, the review screen
-functions/    submit, withdraw, roles, window, aggregates, sessionize import
+src/          screens/ submission, review, administration and public programme
+functions/    proposal, role, email, aggregate and schedule operations
 firestore.rules   the enforcement boundary (§6)
 ```
 
@@ -32,7 +32,9 @@ platform-wide throttle) and `config/platform` sit outside.
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
 `/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
 public page, `/submit` the form, `/review` for anyone holding a role on it and
-`/admin/{tab}` for its admins. The public page is server-rendered by its Next
+`/schedule` the published agenda or an authenticated committee preview,
+`/schedule/{entryId}` a session, and
+`/admin/{tab}` for its admins. The public pages are server-rendered by their Next
 App Router segment, which puts the call's own title and description into the
 HTML — a crawler and a link preview never run the script, so `document.title`
 alone buys nothing. Everyone may submit a talk, reviewers and admins included —
@@ -43,7 +45,12 @@ readable by anyone with the link — private means unlisted, not secret). Its ow
 can **archive** it, which makes it read-only and drops it off the listing, and
 then **delete** it, which destroys every proposal, review, photo and email record
 under it. Deleting is two steps and needs the address typed back, because it is
-other people's writing as well as the owner's.
+other people's writing as well as the owner's. Archive preserves the current
+public programme and all history. Only role revocation, owner unarchive and the
+confirmed delete closeout remain writable afterward.
+Deletion first reserves the archived call, then clears Storage before Firestore;
+if Storage is unavailable the owner can retry without leaving private files
+behind or letting another tab unarchive the call mid-delete.
 
 One speaker, up to three talks. The picker on the form switches between them;
 the speaker profile and the travel answers are shared, so a second submission
@@ -123,6 +130,11 @@ npm run verify   # lint, build, unit, rules, end-to-end
 | `npm run test:rules` | Firestore emulator, JVM | `firestore.rules` |
 | `npm run test:e2e` | the full stack | every applicant, reviewer and admin flow |
 
+For release-level exploratory testing, the reusable persona, seed-state,
+mutation-budget, screenshot, accessibility, and flow catalog lives in
+[`docs/qa/persona-flow-handbook.md`](docs/qa/persona-flow-handbook.md). Keep it
+in sync when a route, role, lifecycle state, or user-facing transition changes.
+
 The end-to-end suite drives the same stack `npm start` brings up, reusing it if
 it is already running. It resets the emulators between tests through their REST
 surface ([`tests/e2e/backend.ts`](tests/e2e/backend.ts)), which lets a test put
@@ -197,8 +209,14 @@ uid to key on yet, so `cfps/{cfpId}/roleGrants/{email}` holds the invitation and
 no bootstrap problem any more: whoever creates a call is written as its `owner`
 in the same transaction. `owner` is deliberately not grantable through
 `grantRole` — otherwise an admin could promote themselves and archive the call
-out from under its owner. The callables call the same `grant()` the
-callable does, so "what granting means" cannot drift between them.
+out from under its owner. Immediate application and first-visit claiming live
+together in `functions/src/roles.ts`, so the two paths enforce the same role
+rules.
+
+A new pending grant also queues a generic committee invitation. Its authenticated
+review link is valid only while that exact grant is still pending; claiming or
+revoking it makes an unsent row stale. People whose verified account already
+exists receive the role immediately and join the active notification audience.
 
 **Platform access is separate from event roles.** `platformMembers` answers who
 may delegate access and create a new CFP; a platform owner or admin cannot read
@@ -228,6 +246,13 @@ in October. `src/lib/lifecycle.ts` names the three states; `firestore.rules`
 enforces them, down to refusing an abstract smuggled in beside an attendance
 change.
 
+The first saved review and `submitted → under_review` happen in one callable
+transaction. Review documents are not browser-writable: acknowledging a score
+before the lifecycle lock landed left a real interval in which the speaker could
+change the content already being judged. Admins choose committee outcomes;
+`confirmed` and `declined` remain speaker responses, so the required confirmation
+form and photo cannot be bypassed from the proposal table.
+
 **A draft is private to its author.** Reviewers see a proposal only once it has
 been submitted — someone may have typed something into a pitch and thought better
 of sending it, and the committee has no claim on that. Committee-side queries
@@ -255,13 +280,13 @@ no need of it.
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept
 themselves. `setProposalStatus` accepts the committee workflow states in
-`STATUS_SETS.decidable`, plus `submitted` so an accidental decision can be
-undone. It refuses `draft` (not theirs to touch) and `withdrawn` (the speaker's
-call, which outranks the committee's).
+`STATUS_SETS.decidable`. Undo returns to `under_review`; `submitted` remains the
+speaker-editable state before the first review. It refuses `draft` (not theirs to
+touch) and `withdrawn` (the speaker's call, which outranks the committee's).
 
 ## The deployed project
 
-Project **`devfest-mtl-2026-cfp`**. Firestore and the 27 functions are in
+Project **`devfest-mtl-2026-cfp`**. Firestore and the Cloud Functions are in
 `northamerica-northeast1`; the App Hosting backend is in `us-east4`, because App
 Hosting has no Canadian region. No personal data leaves the country — a proposal
 goes from the browser to Firestore directly and never touches the backend.
@@ -326,18 +351,75 @@ window and organisers are managed from `/admin`. An approved creator's
 `scripts/set-platform-admin.mjs` bootstraps global owners or administrators, and
 `scripts/set-platform.mjs` sets the platform-wide public origin.
 
+## Schedule
+
+The Schedule tab in `/admin` is a private planning board. Set the event time
+zone, day hours and rooms, then drag accepted or confirmed talks into 15-minute
+slots. A form behind every card provides the keyboard/touch fallback and edits
+the exact start, duration, room and resolved language. Custom programme items
+cover breaks, meals, opening/closing remarks, keynotes and social events.
+
+Draft writes are admin-only callables with an optimistic `revision`; a stale tab
+must reload instead of overwriting another organiser. The server rejects room,
+speaker and duplicate-proposal overlaps. Accepted talks may be planned
+tentatively, but they stay private until they are confirmed and the organiser
+shares a new preview. Every flexible language in that preview must be resolved.
+
+Disclosure is explicit and versioned. **Share preview** creates an immutable
+`scheduleReleases/{releaseId}` snapshot and moves
+`cfps/{cfpId}.sharedScheduleId`. Confirmed speakers receive only their own
+placement; active event reviewers see the confirmed agenda read-only. Both use a
+role-filtered callable and can never list the private release or draft directly.
+**Publish** then promotes that exact, still-current release by moving
+`publishedScheduleId`. Anonymous readers can read only that public pointer. If
+the draft or a scheduled proposal changes, it must be shared again before it can
+be published.
+
+The CFP submission window is a separate control. A rolling event may publish a
+programme while submissions remain open, but the publish review calls that out
+before the public pointer moves. While the event is active, emergency unpublish
+clears only the public pointer and leaves the immutable release and committee
+preview intact. Archiving freezes the current public programme too; an owner
+must reactivate the event before taking it offline. CSV export remains available
+from the private planner.
+
+Assignment, move and cancellation notices enter `emailLog` as `held` when a
+preview is shared, so an admin reviews and releases them from Email like
+decision messages. Editing the draft sends nothing, and promoting an unchanged
+preview to public does not duplicate them. If a confirmed talk later becomes
+declined, withdrawn or otherwise non-confirmed, a trigger marks both shared and
+public copies cancelled immediately and flags the draft for attention; it does
+not silently remove a speaker's or attendee's saved schedule item.
+
+Sharing also queues one immediate, generic schedule-preview notice for every
+other active event owner, admin and reviewer. It contains no room, time or
+speaker data and points back to the authenticated committee preview. Pending,
+revoked, disabled, unverified and platform-only identities are excluded, and a
+newer shared release supersedes an unsent older notice.
+
 ## Email
 
 Resend, called over its REST API from a Firestore trigger. Every message is a
-row in `emailLog` whose id is `{kind}__{proposalId}` — queueing the same message
-twice writes the same document, and the queue step refuses to touch a row that
-already exists, so a decision reversed and reinstated does not mail anyone
-twice. The trigger claims a row by moving it `queued → sending` in a
-transaction, which is what makes at-least-once trigger delivery safe.
+row in `emailLog` with a deterministic id derived from its kind, subject and,
+when needed, immutable schedule release or staff recipient. Queueing the same
+logical message twice finds the same document, so a decision reversed and
+reinstated or a retried trigger does not mail anyone twice. The trigger claims a
+row by moving it `queued → sending` in a transaction, which is what makes
+at-least-once trigger delivery safe.
 
-Decisions are queued **`held`**. They sit there until an admin releases the
-batch from `/admin`, so acceptances and rejections go out together rather than
-trickling out alphabetically over an afternoon. Receipts do not wait.
+Decisions and schedule changes are queued **`held`**. They sit there until an
+admin releases the batch from `/admin`, so sensitive results and programme
+changes are reviewed before delivery. Receipts do not wait.
+
+Committee operations do not depend on somebody refreshing a dashboard at the
+right moment. Submitting a proposal queues one immediate, generic review notice
+per active event owner/admin/reviewer and recipient, excluding the proposal's
+author. Sharing a preview does the same for the committee, excluding the acting
+organiser. An explicit locale on the event member or pending grant is honoured;
+without one, the single committee notice contains both English and French.
+These messages deliberately omit proposal, speaker and schedule
+details; access is checked again immediately before send, and their deterministic
+per-recipient ids prevent trigger retries from becoming duplicate mail.
 
 With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
@@ -371,8 +453,10 @@ queued perfectly and sent nothing, and no screen said why.
 
 Every message can be rewritten per language from that last step, stored in
 `config/email.templates`. Placeholders are `{speakerName}`, `{title}`,
-`{proposalUrl}`, `{event}` and `{visa}` — the last is conditional, so a paragraph
-containing only `{visa}` disappears for speakers who do not need one. A blank
+`{proposalUrl}`, `{reviewUrl}`, `{scheduleUrl}`, `{scheduleDate}`,
+`{scheduleTime}`, `{scheduleRoom}`, `{event}` and `{visa}` — the last is
+conditional, so a paragraph containing only `{visa}` disappears for speakers
+who do not need one. A blank
 subject or body, or a mistyped placeholder that would print braces to an
 applicant, is refused in the browser *and* in the callable. "Restore ours" drops
 the override and the built-in copy applies again.
@@ -449,21 +533,17 @@ Still open, in rough order of how much they would matter on the day:
 
 ## Open items
 
-- **`functions/src` has no tests.** The guards it repeated are now extracted and
-  pure, but the transaction bodies are only covered indirectly, through the
-  rules suite and by hand. They need an emulator-backed suite of their own.
 - **`importSessionizeProfile` has no per-user rate limit.** `maxInstances` caps
   the bill and the outbound fan-out at Sessionize, but one authenticated user
   can still call it in a loop.
-- Auth is Google sign-in only. Fine for a Google event, but it turns "no Google
-  account" into "cannot submit".
 - **No domain is verified with Resend yet**, so the pipeline is in dry-run. Every
   other part of it is built and tested; see [Email](#email) for the four steps.
 - **No confirmation reminder or waitlist-promotion job.** An acceptance sets no
   `confirmDeadline` and nothing chases a speaker who does not confirm. §8 lists
   both; both want a scheduled function, which is the next thing to build.
-- **Failed sends need a human.** The trigger records `failed` and the admin page
-  offers a retry button, but nothing retries on its own or alerts anyone.
+- **Definitive failed sends still need a human.** Trigger retries and a
+  ten-minute claim lease recover interrupted delivery automatically; the admin
+  page can retry a provider refusal, but nothing proactively alerts the team.
 
 ## Seeding a review corpus
 

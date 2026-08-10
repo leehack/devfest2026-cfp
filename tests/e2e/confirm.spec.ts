@@ -6,19 +6,27 @@
  * callable is the enforcement point and the thing an attacker would reach for.
  */
 
+import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 
 import {
   CFP_ID,
   callAs,
+  callJson,
   createAccount,
+  createUnverifiedAccount,
+  readCfp,
   readProposalById,
+  readProposalUpdateTime,
   reset,
   seedProposal,
   inviteRole,
   readStoredObjects,
   seedCfp,
+  seedExternalMutationLease,
+  seedMember,
   seedSpeaker,
+  setCfpArchivedDirect,
   setConfirmFormDirect,
   storeObjectDirect,
 } from './backend';
@@ -46,10 +54,15 @@ test.describe('answering an acceptance', () => {
     });
 
     await signInAs(page, SPEAKER);
+    await expect(page.getByText(/organisers can plan a slot/)).toBeVisible();
+    await expect(page.getByText(/published programme/)).toHaveCount(0);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
 
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
-    await expect(page.getByText('See you in Montréal')).toBeVisible();
+    await expect(
+      page.getByText(/Schedule details will appear here after organisers share a confirmed preview/),
+    ).toBeVisible();
+    await expect(page.getByText(/published programme/)).toHaveCount(0);
     expect(await statusOf('p-yes')).toBe('confirmed');
 
     // The answer is a status, not a bit of page state.
@@ -74,7 +87,7 @@ test.describe('answering an acceptance', () => {
 
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'I have to decline' }).click();
-    await expect(page.getByRole('heading', { name: 'Declined' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Declined', exact: true })).toBeVisible();
     expect(await statusOf('p-change')).toBe('declined');
 
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
@@ -102,7 +115,7 @@ test.describe('answering an acceptance', () => {
 
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'I have to decline' }).click();
-    await expect(page.getByRole('heading', { name: 'Declined' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Declined', exact: true })).toBeVisible();
     expect(await statusOf('p-no')).toBe('declined');
   });
 
@@ -265,7 +278,7 @@ test.describe('the confirmation questions', () => {
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'I have to decline' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Declined' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Declined', exact: true })).toBeVisible();
     expect(await statusOf('p-q')).toBe('declined');
     expect((await readProposalById('p-q'))?.confirmAnswers).toBeUndefined();
   });
@@ -534,8 +547,9 @@ test.describe('the confirmation questions', () => {
  *
  * A photo is the one answer the browser cannot be trusted to report: everything
  * else is a value the speaker types, but "there is a file" is a fact about the
- * bucket. So the claims here are that the callable looks rather than listens,
- * and that the object lands where the rules confine it.
+ * bucket. The verified upload callable owns the only write path and
+ * confirmation follows the server-written current-object pointer rather than a
+ * claim from the browser.
  */
 test.describe('a headshot question', () => {
   const PHOTO = {
@@ -546,6 +560,17 @@ test.describe('a headshot question', () => {
     required: true,
   };
   const FIXTURE = 'tests/fixtures/headshot.png';
+  const PNG_BYTES = readFileSync(FIXTURE);
+  const PNG_BASE64 = PNG_BYTES.toString('base64');
+  const WEBP_BYTES = Buffer.from(
+    'UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAAAcQ/Y/+ByKi/wEA',
+    'base64',
+  );
+  const REPLACEMENT_WEBP_BYTES = Buffer.from(
+    'UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAAAcQ0f/+ByKi/wEA',
+    'base64',
+  );
+  const WEBP_BASE64 = WEBP_BYTES.toString('base64');
 
   async function accepted() {
     await reset();
@@ -560,23 +585,135 @@ test.describe('a headshot question', () => {
     return speaker;
   }
 
-  test('a speaker uploads one and it is stored under their own uid', async ({ page }) => {
-    const speaker = await accepted();
+  test('a speaker uploads one and reloads its private preview', async ({ page }) => {
+    await accepted();
 
     await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
     await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
     await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
 
+    // The proposal pointer, not an in-memory File, is the durable uploaded
+    // state. Reloading reads preview bytes through the verified callable.
+    await page.reload();
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
+    await expect(page.locator('img.headshot__preview')).toBeVisible();
+
     await page.getByRole('button', { name: 'Confirm my talk' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
 
-    // The path is derived from the uid, which is what makes it unclaimable, and
-    // from the CFP, so two programmes can ask the same speaker for different
-    // photographs and deleting one takes its objects with it.
-    const path = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
-    expect(await readStoredObjects(`cfps/${CFP_ID}/headshots/`)).toEqual([path]);
-    expect((await readProposalById('p-pic'))?.confirmAnswers).toEqual({ headshot: path });
+    // The callable writes a unique object and atomically points this proposal
+    // at it. Failed replacements therefore cannot damage an older upload.
+    const proposal = await readProposalById('p-pic');
+    const path = proposal?.headshotUploads?.headshot?.path;
+    expect(path).toMatch(
+      new RegExp(`^cfps/${CFP_ID}/workingHeadshots/p-pic/headshot/[^/]+$`),
+    );
+    const stored = await readStoredObjects(`cfps/${CFP_ID}/`);
+    expect(stored).toContain(path);
+    const frozen = stored.find((name) =>
+      name.startsWith(`cfps/${CFP_ID}/confirmedHeadshots/p-pic/headshot/`),
+    );
+    expect(frozen).toBeTruthy();
+    expect(proposal?.confirmAnswers).toEqual({ headshot: frozen });
+  });
+
+  test('the upload callable enforces identity, ownership, lifecycle, form and event fences', async () => {
+    const speaker = await accepted();
+    const other = await createAccount(OTHER);
+    const unverified = await createUnverifiedAccount({ email: 'unverified-photo@example.org' });
+    const payload = {
+      proposalId: 'p-pic',
+      key: 'headshot',
+      contentType: 'image/png',
+      base64: PNG_BASE64,
+    };
+
+    expect(await callAs(unverified.idToken, 'uploadHeadshot', payload)).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
+    expect(await callAs(other.idToken, 'uploadHeadshot', payload)).toMatchObject({
+      ok: false,
+      code: 'NOT_FOUND',
+    });
+    expect(
+      await callAs(speaker.idToken, 'uploadHeadshot', { ...payload, key: 'retired-photo' }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+
+    await seedProposal('p-rejected-photo', {
+      speakerUid: speaker.uid,
+      title: 'Rejected photo',
+      status: 'rejected',
+    });
+    expect(
+      await callAs(speaker.idToken, 'uploadHeadshot', {
+        ...payload,
+        proposalId: 'p-rejected-photo',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+
+    await setCfpArchivedDirect(true);
+    expect(await callAs(speaker.idToken, 'uploadHeadshot', payload)).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
+    await setCfpArchivedDirect(false);
+    await seedExternalMutationLease(new Date(Date.now() + 60_000));
+    expect(await callAs(speaker.idToken, 'uploadHeadshot', payload)).toMatchObject({
+      ok: false,
+      code: 'ABORTED',
+    });
+    expect(await readStoredObjects(`cfps/${CFP_ID}/workingHeadshots/`)).toEqual([]);
+  });
+
+  test('a declined speaker can upload before changing their answer back to confirmed', async () => {
+    const speaker = await accepted();
+    const other = await createAccount(OTHER);
+    const unverified = await createUnverifiedAccount({ email: 'unverified-preview@example.org' });
+    await seedProposal('p-pic', {
+      speakerUid: speaker.uid,
+      title: 'Sam on shipping',
+      status: 'declined',
+    });
+
+    expect(
+      await callAs(speaker.idToken, 'uploadHeadshot', {
+        proposalId: 'p-pic',
+        key: 'headshot',
+        contentType: 'image/webp',
+        base64: WEBP_BASE64,
+      }),
+    ).toMatchObject({ ok: true });
+    const pointer = (await readProposalById('p-pic'))?.headshotUploads?.headshot?.path;
+    expect(pointer).toMatch(
+      new RegExp(`^cfps/${CFP_ID}/workingHeadshots/p-pic/headshot/[^/]+$`),
+    );
+    expect(await readStoredObjects(`cfps/${CFP_ID}/workingHeadshots/p-pic/`)).toEqual([
+      pointer,
+    ]);
+    expect(
+      await callJson(speaker.idToken, 'headshotImage', {
+        proposalId: 'p-pic',
+        key: 'headshot',
+        working: true,
+      }),
+    ).toMatchObject({ ok: true, contentType: 'image/webp', base64: WEBP_BASE64 });
+    expect(
+      await callAs(other.idToken, 'headshotImage', {
+        proposalId: 'p-pic',
+        key: 'headshot',
+        working: true,
+      }),
+    ).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    expect(
+      await callAs(unverified.idToken, 'headshotImage', {
+        proposalId: 'p-pic',
+        key: 'headshot',
+        working: true,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   });
 
   test('confirmation waits for a headshot upload already in flight', async ({ page }) => {
@@ -585,7 +722,7 @@ test.describe('a headshot question', () => {
     const held = new Promise<void>((resolve) => {
       releaseUpload = resolve;
     });
-    await page.route('**/v0/b/**', async (route) => {
+    await page.route('**/uploadHeadshot', async (route) => {
       if (route.request().method() === 'POST') await held;
       await route.continue();
     });
@@ -604,6 +741,43 @@ test.describe('a headshot question', () => {
 
     await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
     await expect(confirm).toBeEnabled();
+  });
+
+  test('a confirmation racing a new required question validates the committed form', async () => {
+    const speaker = await accepted();
+    await storeObjectDirect(
+      `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`,
+      'image/png',
+      PNG_BYTES,
+    );
+
+    const confirmation = callAs(speaker.idToken, 'respondToDecision', {
+      proposalId: 'p-pic',
+      response: 'confirm',
+      answers: {},
+    });
+    const formUpdatedAt = await setConfirmFormDirect([
+      PHOTO,
+      {
+        key: 'late_required',
+        type: 'text',
+        label: { en: 'A newly required answer' },
+        required: true,
+      },
+    ]);
+
+    const result = await confirmation;
+    if (result.ok) {
+      // A successful confirmation is valid only if its transaction committed
+      // before the direct form edit. Edit-first must make the transaction retry
+      // against the new required question and take the refusal branch below.
+      const proposalUpdatedAt = await readProposalUpdateTime('p-pic');
+      expect(Date.parse(proposalUpdatedAt!)).toBeLessThanOrEqual(Date.parse(formUpdatedAt));
+      expect(await statusOf('p-pic')).toBe('confirmed');
+    } else {
+      expect(result).toMatchObject({ code: 'INVALID_ARGUMENT' });
+      expect(await statusOf('p-pic')).toBe('accepted');
+    }
   });
 
   test('a required photo blocks the confirmation until there is one', async ({ page }) => {
@@ -665,39 +839,152 @@ test.describe('a headshot question', () => {
     await expect(photo).toHaveAttribute('src', /^data:image\/png;base64,/);
   });
 
-  test('nobody but an admin can read one back', async () => {
+  test('the confirmed-photo branch remains admin-only', async () => {
     const speaker = await accepted();
-    await storeObjectDirect(`headshots/${speaker.uid}/headshot`, 'image/png');
 
-    // Including the speaker whose photo it is: the callable is for organisers,
-    // and the owner already has the bucket. Reviewers are refused too — this is
-    // the only door to a headshot, so it is the only place the role is checked.
+    // A speaker uses the explicit working branch for their own current upload.
+    // The default branch is only for immutable confirmed answers and checks an
+    // organiser role before it looks at any bucket path.
     await inviteRole(OTHER.email, 'reviewer');
     const reviewer = await createAccount(OTHER);
     await callAs(reviewer.idToken, 'claimRole', {});
     for (const who of [speaker, reviewer]) {
       expect(
-        await callAs(who.idToken, 'headshotImage', { speakerUid: speaker.uid, key: 'headshot' }),
+        await callAs(who.idToken, 'headshotImage', { proposalId: 'p-pic', key: 'headshot' }),
       ).toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
     }
   });
 
-  test('an object that is not an image is refused rather than served', async () => {
+  test('the confirmed photo stays fixed when the working upload is replaced', async () => {
     const speaker = await accepted();
-    await inviteRole(ADMIN.email, 'admin');
-    const admin = await createAccount(ADMIN);
-    await callAs(admin.idToken, 'claimRole', {});
+    const live = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
+    await storeObjectDirect(live, 'image/webp', WEBP_BYTES);
+    expect(
+      await callAs(speaker.idToken, 'respondToDecision', {
+        proposalId: 'p-pic',
+        response: 'confirm',
+        answers: {},
+      }),
+    ).toMatchObject({ ok: true });
 
-    // `storage.rules` refuse this on the way in, so it takes going round them to
-    // plant one. The callable checks anyway, because what it returns goes into
-    // a `data:` URL an organiser's browser will act on.
+    const owner = await createAccount(ADMIN);
+    await seedMember(owner.uid, 'owner');
+    await storeObjectDirect(live, 'image/webp', REPLACEMENT_WEBP_BYTES);
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: true,
+    });
+
+    const result = await callJson(owner.idToken, 'headshotImage', {
+      proposalId: 'p-pic',
+      key: 'headshot',
+    });
+    expect(result.dataUrl).toBe(`data:image/webp;base64,${WEBP_BASE64}`);
+  });
+
+  test('archiving freezes a legacy live-path confirmation before it becomes read-only', async () => {
+    const speaker = await accepted();
+    const live = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
+    await seedProposal('p-pic', {
+      speakerUid: speaker.uid,
+      title: 'Sam on shipping',
+      status: 'confirmed',
+      confirmAnswers: { headshot: live },
+    });
+    await storeObjectDirect(live, 'image/webp', WEBP_BYTES);
+    const owner = await createAccount(ADMIN);
+    await seedMember(owner.uid, 'owner');
+
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: true,
+    });
+    const frozen = (await readProposalById('p-pic'))?.confirmAnswers?.headshot;
+    expect(frozen).toMatch(
+      new RegExp(`^cfps/${CFP_ID}/confirmedHeadshots/p-pic/headshot/[^/]+$`),
+    );
+
+    await storeObjectDirect(live, 'image/webp', REPLACEMENT_WEBP_BYTES);
+    const result = await callJson(owner.idToken, 'headshotImage', {
+      proposalId: 'p-pic',
+      key: 'headshot',
+    });
+    expect(result.dataUrl).toBe(`data:image/webp;base64,${WEBP_BASE64}`);
+  });
+
+  test('archive waits when a legacy confirmed photo cannot be secured', async () => {
+    const speaker = await accepted();
+    const live = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
+    await seedProposal('p-pic', {
+      speakerUid: speaker.uid,
+      title: 'Sam on shipping',
+      status: 'confirmed',
+      confirmAnswers: { headshot: live },
+    });
+    const owner = await createAccount(ADMIN);
+    await seedMember(owner.uid, 'owner');
+
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
+
+    // The failure left a retryable active CFP. Restoring the referenced image
+    // lets the same archive operation complete and freezes it first.
+    await storeObjectDirect(live, 'image/webp', WEBP_BYTES);
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: true,
+    });
+  });
+
+  test('a legacy photo read and CFP deletion cannot leave an orphan copy', async () => {
+    const speaker = await accepted();
+    const live = `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`;
+    await seedProposal('p-pic', {
+      speakerUid: speaker.uid,
+      title: 'Sam on shipping',
+      status: 'confirmed',
+      confirmAnswers: { headshot: live },
+    });
+    await storeObjectDirect(live, 'image/webp', WEBP_BYTES);
+    const owner = await createAccount(ADMIN);
+    await seedMember(owner.uid, 'owner');
+    // Models an event archived before immutable confirmation copies existed.
+    await setCfpArchivedDirect(true);
+
+    const [photo, deletion] = await Promise.all([
+      callAs(owner.idToken, 'headshotImage', { proposalId: 'p-pic', key: 'headshot' }),
+      callAs(owner.idToken, 'deleteCfp', { confirm: CFP_ID }),
+    ]);
+
+    if (deletion.ok) {
+      expect(await readCfp()).toBeNull();
+      expect(await readStoredObjects('cfps/')).toEqual([]);
+    } else {
+      expect(photo).toMatchObject({ ok: true });
+      const frozen = (await readProposalById('p-pic'))?.confirmAnswers?.headshot;
+      expect(frozen).toMatch(
+        new RegExp(`^cfps/${CFP_ID}/confirmedHeadshots/p-pic/headshot/[^/]+$`),
+      );
+      expect(await readStoredObjects(`cfps/${CFP_ID}/confirmedHeadshots/`)).toContain(frozen);
+    }
+  });
+
+  test('declared image bytes with the wrong signature cannot satisfy a required photo', async () => {
+    const speaker = await accepted();
+
+    // Pre-migration rows may still point at a canonical live object. It takes
+    // going around the now-closed browser rules to plant one with a false MIME.
     await storeObjectDirect(
       `cfps/${CFP_ID}/headshots/${speaker.uid}/headshot`,
-      'text/html',
-      '<script>',
+      'image/png',
+      'not actually a PNG',
     );
     expect(
-      await callAs(admin.idToken, 'headshotImage', { speakerUid: speaker.uid, key: 'headshot' }),
+      await callAs(speaker.idToken, 'respondToDecision', {
+        proposalId: 'p-pic',
+        response: 'confirm',
+        answers: {},
+      }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await statusOf('p-pic')).toBe('accepted');
   });
 });

@@ -20,7 +20,7 @@ const SECOND = 'What broke when we shipped it';
 
 async function submitCurrentTalk(page: Page) {
   await page.getByRole('button', { name: 'Submit proposal' }).click();
-  await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
 }
 
 test('speaker submits two talks, reviewer scores them, admin selects one', async ({ page }) => {
@@ -66,7 +66,7 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   await signInAs(page, REVIEWER, at('/review'));
 
   // One at a time now: the second proposal is a keystroke away, not a scroll.
-  await expect(page.getByText('0 of 2 scored')).toBeVisible();
+  await expect(page.getByText('0 of 2 responded')).toBeVisible();
   await expect(page.getByText('1 of 2')).toBeVisible();
   await expect(page.locator('.card h2')).toHaveCount(1);
   // Not a blind review (§7) — the speaker's name is on the card.
@@ -106,16 +106,16 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
   expect(titles).toEqual([FIRST, SECOND]);
 
   await page.getByLabel(`Status: ${FIRST}`).selectOption('accepted');
-  await expect(page.getByText(`“${FIRST}” moved from Submitted to Accepted.`)).toBeVisible();
+  await expect(page.getByText(`“${FIRST}” moved from Under review to Accepted.`)).toBeVisible();
   await page.getByLabel(`Status: ${SECOND}`).selectOption('rejected');
-  await expect(page.getByText(`“${SECOND}” moved from Submitted to Rejected.`)).toBeVisible();
+  await expect(page.getByText(`“${SECOND}” moved from Under review to Rejected.`)).toBeVisible();
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect(page.getByText(`Restored the previous status for “${SECOND}”.`)).toBeVisible();
   expect((await readProposals()).find((proposal) => proposal.title === SECOND)?.status).toBe(
-    'submitted',
+    'under_review',
   );
   await page.getByLabel(`Status: ${SECOND}`).selectOption('rejected');
-  await expect(page.getByText(`“${SECOND}” moved from Submitted to Rejected.`)).toBeVisible();
+  await expect(page.getByText(`“${SECOND}” moved from Under review to Rejected.`)).toBeVisible();
 
   // ---------------------------------------------------------------- results
   await expect(page.getByRole('heading', { name: 'Selected speakers' })).toBeVisible();
@@ -142,5 +142,5 @@ async function scoreTalk(page: Page, title: string, score: string, scoredAfter: 
   const card = page.locator('.card', { has: page.getByRole('heading', { name: title }) });
   await expect(card).toBeVisible();
   await card.getByRole('button', { name: score }).click();
-  await expect(page.getByText(`${scoredAfter} of 2 scored`)).toBeVisible();
+  await expect(page.getByText(`${scoredAfter} of 2 responded`)).toBeVisible();
 }
