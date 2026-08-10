@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link } from '../../components/Link';
+import { CoSpeakerRosterDialog } from '../../components/CoSpeakerRoster';
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { href } from '../../lib/router';
@@ -46,10 +47,12 @@ function Headshot({
   cfpId,
   proposalId,
   fieldKey,
+  speakerUid,
 }: {
   cfpId: string;
   proposalId: string;
   fieldKey: string;
+  speakerUid?: string;
 }) {
   const { t } = useI18n();
   const [url, setUrl] = useState('');
@@ -60,7 +63,12 @@ function Headshot({
     setBusy(true);
     setError('');
     try {
-      const { data } = await headshotImage({ cfpId, proposalId, key: fieldKey });
+      const { data } = await headshotImage({
+        cfpId,
+        proposalId,
+        key: fieldKey,
+        ...(speakerUid ? { speakerUid } : {}),
+      });
       setUrl(data.dataUrl);
     } catch (e) {
       setError(adminError(e, t));
@@ -90,12 +98,14 @@ function Answered({
   fields,
   answers,
   proposalId,
+  speakerUid,
   title,
 }: {
   cfpId: string;
   fields: ConfirmField[];
   answers?: Answers;
   proposalId?: string;
+  speakerUid?: string;
   title: string;
 }) {
   const { t, locale } = useI18n();
@@ -126,7 +136,12 @@ function Answered({
           <dd>
             {field?.type === 'image' || storedImage ? (
               proposalId ? (
-                <Headshot cfpId={cfpId} proposalId={proposalId} fieldKey={key} />
+                <Headshot
+                  cfpId={cfpId}
+                  proposalId={proposalId}
+                  fieldKey={key}
+                  speakerUid={speakerUid}
+                />
               ) : null
             ) : typeof value === 'boolean' ? (
               value ? (
@@ -143,6 +158,62 @@ function Answered({
       })}
       </dl>
     </>
+  );
+}
+
+function SpeakerConfirmations({
+  cfpId,
+  row,
+  fields,
+}: {
+  cfpId: string;
+  row: ProposalRow;
+  fields: ConfirmField[];
+}) {
+  const { t } = useI18n();
+  const ids = row.speakerIds ?? [];
+  const perSpeaker = Boolean(row.primarySpeakerId) || ids.length > 1;
+  if (!perSpeaker) {
+    return (
+      <Answered
+        cfpId={cfpId}
+        fields={fields}
+        answers={row.confirmAnswers}
+        proposalId={row.id}
+        title={t.admin.form}
+      />
+    );
+  }
+
+  const snapshots = row.speakerSnapshot ?? [];
+  return (
+    <div className="speaker-confirmations">
+      {ids.map((uid, index) => {
+        const confirmation = row.speakerConfirmations?.find((item) => item.uid === uid);
+        const name = snapshots[index]?.name || uid;
+        const response = confirmation?.response;
+        return (
+          <section className="speaker-confirmation" key={uid}>
+            <header className="speaker-confirmation__header">
+              <h4>{t.coSpeakers.confirmationFor(name)}</h4>
+              <span
+                className={`status-chip${response ? ` status-chip--${response}` : ''}`}
+              >
+                {response ? t.enums.status[response] : t.coSpeakers.awaitingConfirmation}
+              </span>
+            </header>
+            <Answered
+              cfpId={cfpId}
+              fields={fields}
+              answers={confirmation?.answers as Answers | undefined}
+              proposalId={row.id}
+              speakerUid={uid}
+              title={t.admin.form}
+            />
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -205,15 +276,68 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
     (value): value is [string, string] => value !== null && Boolean(value[1]),
   );
 
+  const personalLogistics = (row.speakerParticipants ?? []).map((participant) => {
+    const index = (row.speakerIds ?? []).indexOf(participant.uid);
+    return {
+      ...participant,
+      name: speakers[index]?.name || participant.uid,
+    };
+  });
+
   return (
-    <dl className="answers">
-      {values.map(([label, value]) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
+    <>
+      <dl className="answers">
+        {values.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {personalLogistics.length > 0 && (
+        <div className="speaker-logistics">
+          {personalLogistics.map((participant) => {
+            const attendance = participant.attendance;
+            return (
+              <section key={participant.uid} className="speaker-logistics__person">
+                <h4>
+                  {participant.name}{' '}
+                  <span className="muted">
+                    · {participant.role === 'primary' ? t.coSpeakers.lead : t.coSpeakers.joined}
+                  </span>
+                </h4>
+                <dl className="answers">
+                  {attendance?.status && (
+                    <div>
+                      <dt>{t.review.travel}</dt>
+                      <dd>{t.review.attendance[attendance.status] ?? attendance.status}</dd>
+                    </div>
+                  )}
+                  {attendance?.fundingSource && (
+                    <div><dt>{t.review.funding}</dt><dd>{attendance.fundingSource}</dd></div>
+                  )}
+                  {attendance?.decisionBy && (
+                    <div><dt>{t.review.decisionBy}</dt><dd>{attendance.decisionBy}</dd></div>
+                  )}
+                  {attendance && (
+                    <div>
+                      <dt>{t.review.visa}</dt>
+                      <dd>{attendance.needsVisa ? t.admin.formYes : t.admin.formNo}</dd>
+                    </div>
+                  )}
+                  {shape.acks.map((ack) => (
+                    <div key={ack.key}>
+                      <dt>{localised(ack.label, locale)}</dt>
+                      <dd>{participant.acks?.[ack.key] ? t.admin.formYes : t.admin.formNo}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            );
+          })}
         </div>
-      ))}
-    </dl>
+      )}
+    </>
   );
 }
 
@@ -501,11 +625,24 @@ export function Proposals({
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [sort, setSort] = useState<ProposalSort>('score');
+  const [managedProposalId, setManagedProposalId] = useState<string | null>(null);
   const loadGeneration = useRef(0);
   const activeCfp = useRef(cfpId);
   const decisionSequence = useRef(0);
   const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
   activeCfp.current = cfpId;
+
+  useEffect(() => {
+    const proposalId = new URLSearchParams(window.location.search).get('manageSpeakers');
+    setManagedProposalId(proposalId?.trim() || null);
+  }, [cfpId]);
+
+  const closeSpeakerManagement = useCallback(() => {
+    setManagedProposalId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('manageSpeakers');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const refresh = useCallback(async (reset = false) => {
     const request = ++loadGeneration.current;
@@ -536,7 +673,7 @@ export function Proposals({
     }
     try {
       const [all, form, submission] = await Promise.all([
-        loadAllProposals(cfpId),
+        loadAllProposals(cfpId, { speakerDetails: true }),
         loadConfirmForm(cfpId),
         loadSubmissionForm(cfpId),
       ]);
@@ -1015,7 +1152,19 @@ export function Proposals({
                           {labelOf(scopedShape.category, row.category, locale)}
                         </span>
                       </td>
-                      <td data-label={t.admin.colSpeaker}>{names(row) || '—'}</td>
+                      <td data-label={t.admin.colSpeaker}>
+                        <div className="decision-speakers">
+                          <span>{names(row) || '—'}</span>
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--small"
+                            aria-label={t.coSpeakers.manageFor(row.title || t.admin.untitled)}
+                            onClick={() => setManagedProposalId(row.id)}
+                          >
+                            {t.coSpeakers.manage}
+                          </button>
+                        </div>
+                      </td>
                       <td data-label={t.admin.colScore}>
                         {row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}
                       </td>
@@ -1126,20 +1275,25 @@ export function Proposals({
                   answers={row.answers}
                   title={t.admin.extraTitle}
                 />
-                {/* The whole reason for asking. Without it an organiser reads
-                    shirt sizes out of the Firestore console. */}
-                <Answered
-                  cfpId={cfpId}
-                  fields={questions}
-                  answers={row.confirmAnswers}
-                  proposalId={row.id}
-                  title={t.admin.form}
-                />
+                <SpeakerConfirmations cfpId={cfpId} row={row} fields={questions} />
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      {managedProposalId && (
+        <CoSpeakerRosterDialog
+          open
+          cfpId={cfpId}
+          proposalId={managedProposalId}
+          proposalTitle={
+            scopedRows.find((row) => row.id === managedProposalId)?.title || t.admin.untitled
+          }
+          readOnly={readOnly}
+          onClose={closeSpeakerManagement}
+        />
+      )}
     </>
   );
 }

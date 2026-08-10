@@ -247,16 +247,18 @@ Size it from the share of `pending` responses and non-Canadian applicants. Holdi
 speakers/{uid}
   name, bio_en, bio_fr, company, jobTitle, basedIn,
   socials[], isGde, email
-  photoUrl, tshirtSize, dietaryNeeds     // post-acceptance only
   createdAt, updatedAt
 
 proposals/{proposalId}
-  speakerIds[]                            // array — supports co-presenters
+  primarySpeakerId                       // lead; owns talk content and withdrawal
+  speakerIds[]                            // active, explicitly consenting presenters
+  formerSpeakerIds[]?                     // permanent review-conflict history
+  speakerSnapshot[]?                      // frozen at submission, no email
+  formerSpeakerSnapshot[]?                // audit copy after post-submit removal
   title, abstract, pitch
   category, format, level
   deliveryLanguage, languagePreference          // slideLanguage removed, see §4
-  acks { noTravelSupport, coc, recording }
-  attendance { status, fundingSource, decisionBy, needsVisa }
+  acks, attendance                        // legacy single-speaker fallback only
   status                                  // draft | submitted | under_review |
                                           // accepted | confirmed | declined |
                                           // waitlisted | rejected | withdrawn
@@ -265,6 +267,21 @@ proposals/{proposalId}
   aggregate {                             // written by Cloud Function only
     avgScore, normalizedScore, reviewCount, stdDev
   }
+
+proposals/{proposalId}/speakerInvitations/{invitationId}
+  email, status                           // pending | accepted | declined | revoked
+  expiresAt, createdBy, createdAt, respondedBy?, respondedAt?
+
+proposals/{proposalId}/speakerParticipants/{uid}
+  role                                    // primary | coSpeaker
+  status                                  // active | inactive
+  acks, attendance                        // private to this presenter and admins
+  invitationId?, joinedAt, removedAt?
+
+proposals/{proposalId}/speakerConfirmations/{uid}
+  response                                // confirmed | declined
+  answers, headshotUploads                // private per-presenter state
+  respondedAt, confirmedAt?
 
 proposals/{proposalId}/reviews/{reviewerUid}
   score                                   // 1 Pass · 2 Maybe · 3 Yes · 4 Strong yes
@@ -322,6 +339,11 @@ cfps/{cfpId}
 ### Security rules — non-negotiable
 
 - Applicants read/write **only their own** proposal, and only before the deadline
+- Co-speakers join only through a verified-email callable while the proposal is a
+  draft. The lead owns talk edits; each active presenter owns only their personal
+  participation data. Pending invitees receive no proposal access.
+- A former presenter remains in the proposal's conflict history and may never
+  review it, even after removal from the active roster.
 - **Applicants must never be able to read the `reviews` subcollection.** Hiding it in the UI is not enough — the Firestore SDK queries directly from the browser
 - `status` and `aggregate` are function-writable only; block all client writes
 - Reviewers write only their own review document, so nobody can overwrite a colleague's score
@@ -396,8 +418,8 @@ required confirmation answer or headshot cannot be bypassed from the admin
 table.
 
 Submitting a proposal queues one generic, private-data-free notice for each
-active claimed event owner, admin and reviewer except its author. Pending,
-revoked, unverified and platform-only identities receive nothing. The notice is
+active claimed event owner, admin and reviewer except every current or former
+speaker on that proposal. Pending, revoked, unverified and platform-only identities receive nothing. The notice is
 deduplicated per proposal and recipient, revalidated immediately before
 delivery, and links to the authenticated review workspace. Sharing a schedule
 preview applies the same rule per immutable release, excluding the organiser

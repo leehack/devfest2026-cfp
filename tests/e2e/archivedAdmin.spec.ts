@@ -78,5 +78,6 @@ test('an archived admin workspace keeps records readable without offering writes
   await expect(page.getByRole('textbox', { name: /^Send as/ })).toBeDisabled();
   await expect(page.getByRole('checkbox', { name: 'Edit the wording' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Send this to me' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  const compose = page.getByRole('region', { name: 'Write to all speakers on a talk' });
+  await expect(compose.getByRole('button', { name: 'Send to all speakers' })).toBeDisabled();
 });

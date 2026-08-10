@@ -25,7 +25,14 @@ export type SignInDestination = 'submit' | 'review' | 'schedule' | `admin/${Admi
  * link lands. An account is an account; it is not a membership of anything.
  */
 export const requestSignInLink = httpsCallable<
-  { email: string; locale: string; cfpId?: string; destination?: SignInDestination },
+  {
+    email: string;
+    locale: string;
+    cfpId?: string;
+    destination?: SignInDestination;
+    proposalId?: string;
+    speakerInvitationId?: string;
+  },
   { ok: boolean }
 >(functions, 'requestSignInLink');
 
@@ -77,11 +84,23 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
   if (!address) return 'needsEmail';
 
   try {
+    const source = new URL(window.location.href);
+    const proposalId = source.searchParams.get('proposal');
+    const invitationId = source.searchParams.get('speakerInvite');
     await signInWithEmailLink(auth, address, window.location.href);
     forgetPendingEmail();
     // The code is spent and the URL is now a confusing thing to bookmark or
     // share, so it does not stay in the address bar.
-    history.replaceState(null, '', window.location.pathname);
+    const retained = new URLSearchParams();
+    if (proposalId && invitationId) {
+      retained.set('proposal', proposalId);
+      retained.set('speakerInvite', invitationId);
+    }
+    history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${retained.size > 0 ? `?${retained}` : ''}`,
+    );
     return 'signedIn';
   } catch (error: any) {
     // A mismatched address is not a broken link — asking again is the fix.

@@ -1170,6 +1170,7 @@ export function Schedule({
               aria-labelledby={`schedule-admin-day-${Math.max(config.days.findIndex((day) => day.date === selectedDay), 0)}`}
             >
               <TimeGrid
+                cfpId={cfpId}
                 config={config}
                 date={selectedDay}
                 entries={entries}
@@ -1257,6 +1258,7 @@ export function Schedule({
 }
 
 function TimeGrid({
+  cfpId,
   config,
   date,
   entries,
@@ -1273,6 +1275,7 @@ function TimeGrid({
   emptySlot,
   moveLabel,
 }: {
+  cfpId: string;
   config: ScheduleConfig;
   date: string;
   entries: ScheduleEntry[];
@@ -1712,14 +1715,25 @@ function TimeGrid({
           </div>
           <div className="schedule-resize-inspector__action">
             <span>{t.schedule.sessionActions}</span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--compact"
-              disabled={busy || !interactive}
-              onClick={() => onEdit(selectedEntry)}
-            >
-              {t.schedule.editSelected}
-            </button>
+            <div className="schedule-resize-inspector__actions">
+              <button
+                type="button"
+                className="btn btn--ghost btn--compact"
+                disabled={busy || !interactive}
+                onClick={() => onEdit(selectedEntry)}
+              >
+                {t.schedule.editSelected}
+              </button>
+              {selectedEntry.kind === 'proposal' && (
+                <Link
+                  className="btn btn--ghost btn--compact"
+                  to={`${href({ route: 'admin', cfpId, tab: 'proposals' })}?manageSpeakers=${encodeURIComponent(selectedEntry.proposalId)}`}
+                  aria-label={t.coSpeakers.manageFor(selectedTitle)}
+                >
+                  {t.coSpeakers.manage}
+                </Link>
+              )}
+            </div>
           </div>
           {selectedFacts && (
             <dl className="schedule-resize-inspector__facts" aria-label={t.schedule.sessionFacts}>

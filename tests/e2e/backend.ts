@@ -6,6 +6,8 @@
  * one, an account that does not exist yet.
  */
 
+import { createHash } from 'node:crypto';
+
 const PROJECT = 'demo-devfest-cfp';
 const FIRESTORE = 'http://127.0.0.1:8080';
 const AUTH = 'http://127.0.0.1:9099';
@@ -656,6 +658,68 @@ export async function setEmailStatusDirect(logId: string, status: string, cfpId 
   await patch(`cfps/${cfpId}/emailLog/${logId}`, { status: { stringValue: status } });
 }
 
+/** Holds a queue row in a claimed send, with a caller-selected lease age. */
+export async function setEmailSendingDirect(
+  logId: string,
+  sendingStartedAt: Date,
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/emailLog/${logId}`, {
+    status: { stringValue: 'sending' },
+    sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() },
+  });
+}
+
+/** Puts one queue row at an exact retry boundary and clears prior claim metadata. */
+export async function setEmailDeliveryDirect(
+  logId: string,
+  {
+    status,
+    attempts,
+    sendingStartedAt,
+  }: {
+    status: string;
+    attempts: number;
+    sendingStartedAt?: Date;
+  },
+  cfpId = CFP_ID,
+) {
+  await patchWithMask(
+    `cfps/${cfpId}/emailLog/${logId}`,
+    {
+      status: { stringValue: status },
+      attempts: { integerValue: String(attempts) },
+      ...(sendingStartedAt
+        ? { sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() } }
+        : {}),
+    },
+    [
+      'status',
+      'attempts',
+      'sendingStartedAt',
+      'sendingClaimId',
+      'providerAttemptId',
+      'sentAt',
+      'providerId',
+      'error',
+      'retryRequestedAt',
+    ],
+  );
+}
+
+/** Seeds a global invitation throttle without spending real delivery attempts. */
+export async function setSpeakerInvitationRateDirect(
+  kind: 'speaker' | 'recipient',
+  value: string,
+  count: number,
+) {
+  const id = createHash('sha256').update(`${kind}:${value}`).digest('hex');
+  await patch(`speakerInvitationLimits/${id}`, {
+    windowStart: { integerValue: String(Date.now()) },
+    count: { integerValue: String(count) },
+  });
+}
+
 export async function seedEmailLog(
   logId: string,
   {
@@ -820,6 +884,88 @@ export async function seedSpeaker(
     ...(pastTalks ? { pastTalks: { stringValue: pastTalks } } : {}),
     ...(locale ? { locale: { stringValue: locale } } : {}),
   });
+}
+
+/**
+ * One proposal-scoped speaker membership.
+ *
+ * Co-speaker specs use this to put a linked proposal at a precise lifecycle
+ * boundary without granting a browser access to somebody else's private
+ * logistics. Production writes these rows through the invitation callables.
+ */
+export async function seedSpeakerParticipant(
+  proposalId: string,
+  uid: string,
+  {
+    role,
+    status = 'active',
+    invitationId,
+    acks,
+    attendance,
+  }: {
+    role: 'primary' | 'coSpeaker';
+    status?: 'active' | 'inactive';
+    invitationId?: string;
+    acks?: Record<string, boolean>;
+    attendance?: Record<string, unknown>;
+  },
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/speakerParticipants/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    proposalId: { stringValue: proposalId },
+    uid: { stringValue: uid },
+    role: { stringValue: role },
+    status: { stringValue: status },
+    ...(invitationId ? { invitationId: { stringValue: invitationId } } : {}),
+    ...(acks ? { acks: encode(acks) } : {}),
+    ...(attendance ? { attendance: encode(attendance) } : {}),
+  });
+}
+
+/** Private participation data, read only through the emulator owner surface. */
+export async function readSpeakerParticipant(
+  proposalId: string,
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/proposals/${proposalId}/speakerParticipants/${uid}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readSpeakerParticipant');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** One speaker's decision answers, isolated from the other speakers. */
+export async function readSpeakerConfirmation(
+  proposalId: string,
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/proposals/${proposalId}/speakerConfirmations/${uid}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readSpeakerConfirmation');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** Forces the immutable invitation deadline without moving the event window. */
+export async function setSpeakerInvitationExpiryDirect(
+  proposalId: string,
+  invitationId: string,
+  expiresAt: Date,
+  cfpId = CFP_ID,
+) {
+  await patch(
+    `cfps/${cfpId}/proposals/${proposalId}/speakerInvitations/${invitationId}`,
+    { expiresAt: { timestampValue: expiresAt.toISOString() } },
+  );
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   SEND_QUEUED_EMAIL_TRIGGER_OPTIONS,
   deliver,
   emailClaimMode,
+  logId,
   providerAttemptId,
   resendIdempotencyKey,
   sendViaResend,
@@ -160,5 +161,42 @@ describe('Resend idempotency', () => {
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       'Idempotency-Key': 'claimed-attempt-key',
     });
+  });
+
+  it('keeps the lead log id compatible and scopes additional recipients by uid', () => {
+    expect(logId('accepted', 'talk')).toBe('accepted__talk');
+    expect(logId('accepted', 'talk', undefined, 'co-speaker')).toBe(
+      'accepted__talk__co-speaker',
+    );
+    expect(logId('schedule_changed', 'talk', 'release-2', 'co-speaker')).toBe(
+      'schedule_changed__talk__release-2__co-speaker',
+    );
+  });
+
+  it('renders co-speaker invitations with the exact server-owned invite destination', async () => {
+    const fetchMock = successfulFetch();
+    await deliver(
+      {
+        kind: 'co_speaker_invited',
+        proposalId: 'talk-1',
+        invitationId: 'invite-1',
+        locale: 'en',
+        bilingual: true,
+        to: 'co@example.org',
+        data: { speakerName: 'Co Speaker', title: 'A shared session', needsVisa: false },
+      },
+      'resend-key',
+      settings,
+      { id: 'event', name: 'DevFest', publicUrl: 'https://cfp.example.org' },
+    );
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      text: string;
+      html: string;
+    };
+    expect(request.text).toContain(
+      'https://cfp.example.org/c/event/submit?proposal=talk-1&speakerInvite=invite-1',
+    );
+    expect(request.html).toContain('speakerInvite=invite-1');
   });
 });

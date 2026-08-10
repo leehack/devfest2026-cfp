@@ -165,6 +165,18 @@ export interface Proposal {
   speakerIds: string[];
 
   /**
+   * The account that owns talk content and lifecycle actions. Older proposals
+   * infer this from `speakerIds[0]` until a callable first touches the roster.
+   */
+  primarySpeakerId?: string;
+
+  /** Former participants remain conflicted from reviewing this proposal. */
+  formerSpeakerIds?: string[];
+
+  /** Frozen audit copy for people removed after the committee saw the roster. */
+  formerSpeakerSnapshot?: SpeakerSnapshot[];
+
+  /**
    * The speakers as the committee reads them, frozen at submission. Parallel to
    * `speakerIds`. Absent on a draft, which nobody but its author ever sees.
    */
@@ -194,10 +206,12 @@ export interface Proposal {
   /** Only meaningful when deliveryLanguage is `either`. */
   languagePreference?: string;
 
-  acks: Acks;
+  /** Legacy single-speaker storage; roster proposals keep this per participant. */
+  acks?: Acks;
   /** Answers to this call's own questions, if it asks any. */
   answers?: Answers;
-  attendance: Attendance;
+  /** Legacy single-speaker storage; roster proposals keep this per participant. */
+  attendance?: Attendance;
 
   /** Function-writable only — see firestore.rules. */
   status: ProposalStatus;

@@ -1400,6 +1400,305 @@ describe('platform access is callable-only', () => {
   });
 });
 
+describe('co-speaker consent and private participant data', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, `${CFP}/proposals`, 'p-pair'), {
+        ...draft(APPLICANT),
+        primarySpeakerId: APPLICANT,
+        speakerIds: [APPLICANT, OTHER_APPLICANT],
+        acks: deleteField(),
+        attendance: deleteField(),
+      }, { merge: true });
+      await setDoc(doc(db, `${CFP}/proposals/p-pair/speakerParticipants`, APPLICANT), {
+        cfpId: CFP_ID,
+        proposalId: 'p-pair',
+        uid: APPLICANT,
+        role: 'primary',
+        status: 'active',
+        acks: { coc: true },
+        attendance: { status: 'local', needsVisa: false },
+      });
+      await setDoc(doc(db, `${CFP}/proposals/p-pair/speakerParticipants`, OTHER_APPLICANT), {
+        cfpId: CFP_ID,
+        proposalId: 'p-pair',
+        uid: OTHER_APPLICANT,
+        role: 'coSpeaker',
+        status: 'active',
+        invitationId: 'invite-one',
+        acks: {},
+        attendance: {},
+      });
+      await setDoc(doc(db, `${CFP}/proposals/p-pair/speakerInvitations/invite-one`), {
+        cfpId: CFP_ID,
+        proposalId: 'p-pair',
+        invitationId: 'invite-one',
+        email: 'guest@example.org',
+        status: 'accepted',
+      });
+      await setDoc(doc(db, `${CFP}/proposals/p-pair/speakerConfirmations`, APPLICANT), {
+        cfpId: CFP_ID,
+        proposalId: 'p-pair',
+        uid: APPLICANT,
+        response: 'confirmed',
+        answers: { shirt: 'M' },
+      });
+    });
+  });
+
+  it('gives an accepted co-speaker read access but no whole-talk write access', async () => {
+    const proposal = doc(asOther(), `${CFP}/proposals/p-pair`);
+    await assertSucceeds(getDoc(proposal));
+    await assertFails(updateDoc(proposal, { title: 'Taken over' }));
+    await assertFails(updateDoc(proposal, { speakerIds: [OTHER_APPLICANT] }));
+    await assertSucceeds(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-pair`), { title: 'Lead edit' }),
+    );
+  });
+
+  it('keeps pending invitations callable-only', async () => {
+    const invite = `${CFP}/proposals/p-pair/speakerInvitations/invite-one`;
+    await assertFails(getDoc(doc(asApplicant(), invite)));
+    await assertFails(getDoc(doc(asOther(), invite)));
+    await assertFails(getDoc(doc(asOwner(), invite)));
+    await assertFails(updateDoc(doc(asApplicant(), invite), { status: 'revoked' }));
+    await assertFails(
+      setDoc(doc(asApplicant(), `${CFP}/proposals/p-pair/speakerInvitations/forged`), {
+        cfpId: CFP_ID,
+        proposalId: 'p-pair',
+        invitationId: 'forged',
+        email: 'forged@example.org',
+        status: 'pending',
+      }),
+    );
+  });
+
+  it('lets a participant update only their own private logistics', async () => {
+    const mine = doc(
+      asOther(),
+      `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+    );
+    await assertSucceeds(getDoc(mine));
+    await assertSucceeds(
+      updateDoc(mine, {
+        acks: { coc: true },
+        attendance: { status: 'local', needsVisa: false },
+        updatedAt: new Date(),
+      }),
+    );
+    await assertFails(updateDoc(mine, { role: 'primary' }));
+    await assertFails(
+      getDoc(
+        doc(
+          asApplicant(),
+          `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+        ),
+      ),
+    );
+    await assertFails(
+      getDoc(
+        doc(asOwner(), `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`),
+      ),
+    );
+    await assertFails(
+      getDoc(
+        doc(
+          asReviewer(),
+          `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+        ),
+      ),
+    );
+  });
+
+  it('requires an active participant to remain on the current speaker projection', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        speakerIds: [APPLICANT],
+        formerSpeakerIds: [OTHER_APPLICANT],
+      });
+    });
+    await assertFails(
+      updateDoc(
+        doc(
+          asOther(),
+          `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+        ),
+        {
+          attendance: { status: 'pending', needsVisa: true },
+          updatedAt: new Date(),
+        },
+      ),
+    );
+  });
+
+  it('matches participant edits to the proposal lifecycle', async () => {
+    const mine = doc(
+      asOther(),
+      `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+    );
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        status: 'submitted',
+      });
+    });
+    await assertSucceeds(
+      updateDoc(mine, {
+        acks: { coc: true, recording: true },
+        attendance: { status: 'pending', needsVisa: true },
+        updatedAt: new Date(),
+      }),
+    );
+
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        status: 'under_review',
+      });
+    });
+    await assertSucceeds(
+      updateDoc(mine, {
+        attendance: { status: 'secured', needsVisa: false },
+        updatedAt: new Date(),
+      }),
+    );
+    await assertFails(
+      updateDoc(mine, {
+        acks: { coc: true, recording: false },
+        updatedAt: new Date(),
+      }),
+    );
+
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        status: 'rejected',
+      });
+    });
+    await assertFails(
+      updateDoc(mine, {
+        attendance: { status: 'local', needsVisa: false },
+        updatedAt: new Date(),
+      }),
+    );
+  });
+
+  it('closes submitted participant details with the CFP window', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        status: 'submitted',
+      });
+    });
+    await setCfp({ closesAt: new Date(Date.now() - 1_000) });
+    await assertFails(
+      updateDoc(
+        doc(
+          asOther(),
+          `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+        ),
+        {
+          acks: { coc: true },
+          attendance: { status: 'pending', needsVisa: true },
+          updatedAt: new Date(),
+        },
+      ),
+    );
+  });
+
+  it('keeps confirmations visible only to that speaker and event admins', async () => {
+    const confirmation = `${CFP}/proposals/p-pair/speakerConfirmations/${APPLICANT}`;
+    const confirmations = collection(
+      asOwner(),
+      `${CFP}/proposals/p-pair/speakerConfirmations`,
+    );
+    await assertSucceeds(getDoc(doc(asApplicant(), confirmation)));
+    await assertFails(getDoc(doc(asOwner(), confirmation)));
+    await assertFails(getDocs(confirmations));
+    await assertFails(getDoc(doc(asOther(), confirmation)));
+    await assertFails(getDoc(doc(asReviewer(), confirmation)));
+    await assertFails(updateDoc(doc(asApplicant(), confirmation), { answers: { shirt: 'XL' } }));
+
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        status: 'submitted',
+      });
+    });
+    await assertSucceeds(getDoc(doc(asOwner(), confirmation)));
+    await assertSucceeds(getDocs(confirmations));
+  });
+
+  it('keeps draft participant rows private from event admins', async () => {
+    const participants = collection(
+      asOwner(),
+      `${CFP}/proposals/p-pair/speakerParticipants`,
+    );
+    const coSpeaker = doc(
+      asOwner(),
+      `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+    );
+    await assertFails(getDoc(coSpeaker));
+    await assertFails(getDocs(participants));
+
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        status: 'submitted',
+      });
+    });
+    await assertSucceeds(getDoc(coSpeaker));
+    await assertSucceeds(getDocs(participants));
+  });
+
+  it('never restores lead logistics to a participant-aware proposal root', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-pair`), {
+        attendance: { status: 'pending', needsVisa: true },
+      });
+    });
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-pair`), { title: 'Still leaked' }),
+    );
+  });
+
+  it('keeps former participants conflicted from their historical proposal', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await updateDoc(doc(db, `${CFP}/proposals/p-pair`), {
+        status: 'submitted',
+        speakerIds: [APPLICANT],
+        formerSpeakerIds: [OTHER_APPLICANT],
+      });
+      await updateDoc(
+        doc(db, `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`),
+        { status: 'inactive' },
+      );
+      await setDoc(doc(db, `${CFP}/members`, OTHER_APPLICANT), {
+        cfpId: CFP_ID,
+        uid: OTHER_APPLICANT,
+        email: 'bruno@example.org',
+        role: 'reviewer',
+      });
+      await setDoc(doc(db, `${CFP}/proposals/p-pair/reviews`, OTHER_APPLICANT), {
+        cfpId: CFP_ID,
+        score: 4,
+        conflictOfInterest: false,
+      });
+    });
+    await assertFails(
+      getDoc(doc(asOther(), `${CFP}/proposals/p-pair/reviews/${OTHER_APPLICANT}`)),
+    );
+    await assertFails(
+      updateDoc(
+        doc(
+          asOther(),
+          `${CFP}/proposals/p-pair/speakerParticipants/${OTHER_APPLICANT}`,
+        ),
+        {
+          attendance: { status: 'pending', needsVisa: true },
+          updatedAt: new Date(),
+        },
+      ),
+    );
+  });
+});
+
 /** Archiving is how a round is stopped without editing its window. */
 describe('an archived CFP is read-only', () => {
   beforeEach(async () => {
@@ -1423,6 +1722,24 @@ describe('an archived CFP is read-only', () => {
         cfpId: CFP_ID,
         score: 2,
         conflictOfInterest: false,
+      }),
+    );
+  });
+
+  it('freezes private participant logistics', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `${CFP}/proposals/p-anna/speakerParticipants`, APPLICANT), {
+        cfpId: CFP_ID,
+        proposalId: 'p-anna',
+        uid: APPLICANT,
+        role: 'primary',
+        status: 'active',
+        attendance: { status: 'local', needsVisa: false },
+      });
+    });
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna/speakerParticipants/${APPLICANT}`), {
+        attendance: { status: 'pending', needsVisa: true },
       }),
     );
   });

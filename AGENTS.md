@@ -45,10 +45,12 @@ tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
 the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
-creator access), `signInLinks` (a platform-wide throttle) and `config/platform`
-sit outside. Storage keeps server-only working versions under
-`cfps/{cfpId}/workingHeadshots/{proposalId}/{key}/{uploadId}` and confirmed
-copies under `cfps/{cfpId}/confirmedHeadshots/{proposalId}/{key}/{generation}`.
+creator access), `signInLinks` and `speakerInvitationLimits` (platform-wide
+hashed throttles) and `config/platform` sit outside. Storage keeps server-only
+working versions under
+`cfps/{cfpId}/workingHeadshots/{proposalId}/{uid}/{key}/{uploadId}` and confirmed
+copies under
+`cfps/{cfpId}/confirmedHeadshots/{proposalId}/{uid}/{key}/{generation}`.
 `headshots/{uid}/{key}` is a read-only compatibility fallback for uploads made
 before proposal pointers existed.
 
@@ -92,13 +94,16 @@ the committee starts reading, then travel answers only, then nothing. The speake
 profile is outside it — that document belongs to the account and never freezes.
 The rules are the enforcement; `editScope` only decides what to disable.
 
-An accepted speaker answers with `respondToDecision` — `confirmed` or `declined`,
-from `accepted` only. No token in the link: the CFP is behind Google sign-in and
-the proposal is already theirs, so the session is the authentication. Idempotent,
-and reversible, because plans change and the alternative is an organiser editing
-a status by hand from an email. Admins cannot set either speaker response: doing
-so would bypass every required confirmation answer and image. Moving a committee
-decision back re-enters `under_review`, never editable `submitted`.
+Each accepted speaker answers with `respondToDecision` — `confirmed` or
+`declined`, from `accepted` only. Roster proposals store the answer, required
+form data and image pointers under `speakerConfirmations/{uid}`; legacy
+single-speaker proposals retain the root fallback. The proposal becomes
+`confirmed` only when every active speaker confirms. A co-speaker decline leaves
+the talk accepted and needing organiser attention; a lead decline declines it.
+No token in the link: the signed-in session is the authentication. Admins cannot
+set a speaker response, because doing so would bypass that person's required
+answers and image. Moving a committee decision back clears every personal
+response and re-enters `under_review`, never editable `submitted`.
 
 Email is a queue, not a send: callables write a deterministic `emailLog` row and
 the `sendQueuedEmail` trigger delivers. Proposal decisions key by proposal;
@@ -197,12 +202,15 @@ collection — the rule names the two readable documents one at a time.
 - **Status groupings live in `STATUS_SETS` (`shared/enums.ts`).** They had drifted
   across the form, the callables and the admin screen. `firestore.rules` restates
   them because the rules language cannot import — change one, change both.
-- **Reviewers never see a draft.** An unsubmitted proposal is nobody's but its
-  author's, so committee queries must carry `where('status', '!=', 'draft')` or
-  the rules deny the whole listing.
-- **`speakerIds` is fixed at creation** and must equal `[uid()]`. Naming someone
-  hands them write access and disqualifies them from reviewing the talk; that
-  needs their consent, so co-presenters wait for an invitation callable.
+- **Reviewers never see a draft.** It belongs to its active speaker roster; an
+  exact pending invitee sees only a callable-projected consent summary. Committee
+  queries must carry `where('status', '!=', 'draft')` or the rules deny the
+  whole listing.
+- **`speakerIds` starts as `[uid()]` and is callable-only thereafter.** A verified
+  email invitation is still only pending metadata: the exact invited account must
+  accept before its uid is added. The first speaker remains `primarySpeakerId`
+  and owns talk edits. Removed participants stay in `formerSpeakerIds` and remain
+  conflicted from reviews permanently.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.

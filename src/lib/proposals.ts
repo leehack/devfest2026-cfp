@@ -21,7 +21,12 @@ import type { EditScope } from './lifecycle';
 import { cfpState } from '@shared/cfpWindow';
 import type { ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
-import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
+import {
+  EMPTY_FORM,
+  type Answers,
+  type ConfirmForm,
+  type HeadshotUploads,
+} from '@shared/confirmForm';
 import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
 import type { CfpProfile, Visibility } from '@shared/cfp';
 import type { Cfp } from '@shared/types';
@@ -96,6 +101,17 @@ export interface LoadedProposal {
   status: ProposalStatus;
   proposal: Record<string, any>;
   speaker: Record<string, any> | undefined;
+  ownConfirmation?: {
+    response?: 'confirmed' | 'declined';
+    answers: Answers;
+    headshotUploads?: HeadshotUploads;
+  };
+  ownParticipation?: {
+    role?: 'primary' | 'coSpeaker';
+    acks?: Record<string, boolean>;
+    attendance?: Record<string, any>;
+    detailsComplete?: boolean;
+  };
 }
 
 /**
@@ -120,14 +136,79 @@ export async function loadMyProposals(
   ]);
 
   const speaker = speakerSnap.exists() ? speakerSnap.data() : undefined;
+  const [confirmationSnaps, participationSnaps] = await Promise.all([
+    Promise.all(
+      snap.docs.map((proposal) =>
+        getDoc(
+          doc(
+            db,
+            'cfps',
+            cfpId,
+            'proposals',
+            proposal.id,
+            'speakerConfirmations',
+            user.uid,
+          ),
+        ),
+      ),
+    ),
+    Promise.all(
+      snap.docs.map((proposal) =>
+        getDoc(
+          doc(
+            db,
+            'cfps',
+            cfpId,
+            'proposals',
+            proposal.id,
+            'speakerParticipants',
+            user.uid,
+          ),
+        ),
+      ),
+    ),
+  ]);
 
   return {
-    talks: snap.docs.map((d) => ({
-      id: d.id,
-      status: (d.data().status ?? 'draft') as ProposalStatus,
-      proposal: d.data(),
-      speaker,
-    })),
+    talks: snap.docs.map((d, index) => {
+      const proposal = d.data();
+      const confirmation = confirmationSnaps[index];
+      const participation = participationSnaps[index];
+      const ids = Array.isArray(proposal.speakerIds) ? proposal.speakerIds : [];
+      const usesPersonalConfirmation = Boolean(proposal.primarySpeakerId) || ids.length > 1;
+      const legacyResponse =
+        proposal.status === 'confirmed' || proposal.status === 'declined'
+          ? proposal.status
+          : undefined;
+      const ownConfirmation = confirmation.exists()
+        ? {
+            response: confirmation.data().response as 'confirmed' | 'declined' | undefined,
+            answers: (confirmation.data().answers ?? {}) as Answers,
+            headshotUploads: confirmation.data().headshotUploads as HeadshotUploads | undefined,
+          }
+        : usesPersonalConfirmation
+          ? undefined
+          : {
+              response: legacyResponse,
+              answers: (proposal.confirmAnswers ?? {}) as Answers,
+              headshotUploads: proposal.headshotUploads as HeadshotUploads | undefined,
+            };
+      return {
+        id: d.id,
+        status: (proposal.status ?? 'draft') as ProposalStatus,
+        proposal,
+        speaker,
+        ownConfirmation,
+        ownParticipation: participation.exists()
+          ? {
+              role: participation.data().role,
+              acks: participation.data().acks,
+              attendance: participation.data().attendance,
+              detailsComplete: participation.data().detailsComplete,
+            }
+          : undefined,
+      };
+    }),
     speaker,
   };
 }
@@ -143,6 +224,8 @@ export async function saveDraft(
   proposalId: string | null,
   scope: EditScope = 'all',
   locale: Locale = 'en',
+  usesPersonalLifecycle = false,
+  personalScope: EditScope = scope,
 ): Promise<string> {
   const { proposalDoc, speakerDoc } = toDocuments(form);
   const existing = proposalId !== null;
@@ -169,15 +252,38 @@ export async function saveDraft(
   );
 
   if (proposalId) {
+    const { acks, attendance, ...talkDoc } = proposalDoc;
+    if (usesPersonalLifecycle && personalScope !== 'none') {
+      const personalPatch =
+        personalScope === 'logistics' ? { attendance } : { acks, attendance };
+      await setDoc(
+        doc(
+          db,
+          'cfps',
+          cfpId,
+          'proposals',
+          proposalId,
+          'speakerParticipants',
+          user.uid,
+        ),
+        {
+          ...forWrite(personalPatch),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
     // Under review the rules accept `attendance` and nothing else, so send
     // nothing else — a full write would be rejected in its entirety, taking
     // the speaker's profile edit down with it.
     const patch =
       scope === 'logistics'
-        ? { attendance: proposalDoc.attendance }
-        : forWrite(proposalDoc);
+        ? usesPersonalLifecycle
+          ? {}
+          : { attendance: proposalDoc.attendance }
+        : forWrite(usesPersonalLifecycle ? talkDoc : proposalDoc);
 
-    if (scope !== 'none') {
+    if (scope !== 'none' && Object.keys(patch).length > 0) {
       await setDoc(
         doc(db, 'cfps', cfpId, 'proposals', proposalId),
         { ...patch, updatedAt: serverTimestamp() },
@@ -272,7 +378,10 @@ export const workingHeadshotImage = httpsCallable<
 
 export const respondToDecision = httpsCallable<
   { cfpId: string; proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
-  CallableResult & { status: 'confirmed' | 'declined' }
+  CallableResult & {
+    status: ProposalStatus;
+    response: 'confirmed' | 'declined';
+  }
 >(functions, 'respondToDecision');
 
 /**

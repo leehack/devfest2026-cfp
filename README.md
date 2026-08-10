@@ -253,17 +253,28 @@ change the content already being judged. Admins choose committee outcomes;
 `confirmed` and `declined` remain speaker responses, so the required confirmation
 form and photo cannot be bypassed from the proposal table.
 
-**A draft is private to its author.** Reviewers see a proposal only once it has
-been submitted — someone may have typed something into a pitch and thought better
-of sending it, and the committee has no claim on that. Committee-side queries
-carry `where('status', '!=', 'draft')`; without it the rules deny the listing
-outright rather than quietly filtering.
+**A draft is private to its active speaker roster.** Before accepting, an exact
+invited account sees only the talk summary needed to make an informed choice.
+Reviewers and event admins see a proposal only once it has been submitted —
+someone may have typed something into a pitch and thought better of sending it,
+and the committee has no claim on that. Committee-side queries carry
+`where('status', '!=', 'draft')`; without it the rules deny the listing outright
+rather than quietly filtering.
 
-**`speakerIds` is fixed at creation.** The field is an array because §6 wants
-co-presenters, but naming someone is a claim about *them* — it grants them write
-access and, since nobody may review their own talk, silently disqualifies them
-from reviewing it. Both need consent, so the write surface stays shut until there
-is an invitation flow.
+**A roster changes only through verified invitations.** A proposal starts with
+one lead speaker. While it is still a draft, the lead may invite up to three
+co-speakers by verified email; the invitation grants nothing until that exact
+account reviews the talk, accepts, and completes its own profile and participation
+details. Pending invitations block submission. The lead owns talk content and
+withdrawal, while each active speaker owns their personal logistics,
+confirmation answers, and photo. Every active speaker must confirm before the
+proposal becomes `confirmed`.
+
+Accepting also creates a permanent conflict for that proposal. Removing someone
+from the active roster does not make them eligible to review material they have
+already seen; their inactive participant record and `formerSpeakerIds` preserve
+that history. Invite delivery is throttled through hashed counters, and its
+private draft title/address never appears in the admin email queue.
 
 **The speaker profile belongs to the account, not to a talk.** One
 `speakers/{uid}` shared by every proposal, editable throughout — including while
@@ -301,8 +312,8 @@ site is not the same thing.
 
 ```bash
 npm run verify                                  # lint, types, build, bundle gates, 3 suites
-npm run deploy:app                              # the app, from local source
 npm run deploy:backend                          # callables and both rule sets
+npm run deploy:app                              # the app, from local source; backend must land first
 npm run smoke:production                        # edge headers, public routes and Auth handler
 ```
 
@@ -421,7 +432,7 @@ changes are reviewed before delivery. Receipts do not wait.
 Committee operations do not depend on somebody refreshing a dashboard at the
 right moment. Submitting a proposal queues one immediate, generic review notice
 per active event owner/admin/reviewer and recipient, excluding the proposal's
-author. Sharing a preview does the same for the committee, excluding the acting
+current and former speakers. Sharing a preview does the same for the committee, excluding the acting
 organiser. An explicit locale on the event member or pending grant is honoured;
 without one, the single committee notice contains both English and French.
 These messages deliberately omit proposal, speaker and schedule
@@ -511,7 +522,9 @@ readable. The rules suite exercises every boundary and is mutation-checked.
   admin-only because it is a list of addresses; `emailLog` is closed to every
   client including admins, who reach its recipient data through the
   `emailQueue` callable. A client that could write there could mail anyone from
-  our verified domain, so the deny covers writes as well as reads.
+  our verified domain, so the deny covers writes as well as reads. Draft
+  co-speaker invitation rows are deliberately excluded even from that callable;
+  only the lead and invited address may see the draft roster flow.
 - **`config` is closed by default.** `submissionForm` is public because it
   defines what the call asks, and `confirmForm` is readable only after sign-in.
   The window lives on the public CFP document. `config/email` remains private

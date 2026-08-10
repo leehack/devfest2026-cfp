@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   decodeHeadshotUpload,
+  isSpeakerConfirmedHeadshotPath,
+  speakerConfirmedHeadshotPath,
+  speakerWorkingHeadshotFrom,
+  speakerWorkingHeadshotMatches,
+  speakerWorkingHeadshotPath,
   workingHeadshotMatches,
 } from '../functions/src/headshots';
 import { FORM_LIMITS, workingHeadshotPath } from '../shared/confirmForm';
@@ -141,5 +146,63 @@ describe('working headshot pointer recovery', () => {
       }),
     ).toBe(false);
     expect(workingHeadshotMatches(uploads, 'other-cfp', 'proposal-1', 'photo', expected)).toBe(false);
+  });
+
+  it('isolates linked-speaker working and confirmed paths by uid', () => {
+    const speakerPath = speakerWorkingHeadshotPath(
+      'my-cfp',
+      'proposal-1',
+      'speaker-a',
+      'photo',
+      'upload-1',
+    );
+    const pointer = { path: speakerPath, generation: '123' };
+    const uploads = { photo: { ...pointer, contentType: 'image/png', size: 8 } };
+
+    expect(
+      speakerWorkingHeadshotFrom(
+        uploads,
+        'my-cfp',
+        'proposal-1',
+        'speaker-a',
+        'photo',
+      ),
+    ).toEqual(pointer);
+    expect(
+      speakerWorkingHeadshotMatches(
+        uploads,
+        'my-cfp',
+        'proposal-1',
+        'speaker-b',
+        'photo',
+        pointer,
+      ),
+    ).toBe(false);
+
+    const confirmed = speakerConfirmedHeadshotPath(
+      'my-cfp',
+      'proposal-1',
+      'speaker-a',
+      'photo',
+      '123',
+    );
+    expect(
+      isSpeakerConfirmedHeadshotPath(
+        confirmed,
+        'my-cfp',
+        'proposal-1',
+        'speaker-a',
+        'photo',
+      ),
+    ).toBe(true);
+    expect(
+      isSpeakerConfirmedHeadshotPath(
+        confirmed,
+        'my-cfp',
+        'proposal-1',
+        'speaker-b',
+        'photo',
+      ),
+    ).toBe(false);
   });
 });

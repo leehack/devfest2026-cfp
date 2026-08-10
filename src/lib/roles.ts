@@ -263,7 +263,7 @@ export const sendTestEmail = httpsCallable<
 >(functions, 'sendTestEmail');
 
 export const headshotImage = httpsCallable<
-  In<{ proposalId: string; key: string }>,
+  In<{ proposalId: string; key: string; speakerUid?: string }>,
   { ok: boolean; dataUrl: string }
 >(functions, 'headshotImage');
 
@@ -279,7 +279,7 @@ export const setSubmissionForm = httpsCallable<
 
 export const sendSpeakerMessage = httpsCallable<
   In<{ proposalId: string; subject: string; body: string }>,
-  { ok: boolean; logId: string }
+  { ok: boolean; logId: string; logIds: string[] }
 >(functions, 'sendSpeakerMessage');
 
 /**
@@ -375,6 +375,17 @@ export async function loadCommittee(
 
 export interface ProposalRow extends Proposal {
   id: string;
+  speakerConfirmations?: Array<{
+    uid: string;
+    response?: 'confirmed' | 'declined';
+    answers?: Record<string, any>;
+  }>;
+  speakerParticipants?: Array<{
+    uid: string;
+    role?: 'primary' | 'coSpeaker';
+    acks?: Record<string, boolean>;
+    attendance?: Record<string, any>;
+  }>;
 }
 
 /**
@@ -383,11 +394,76 @@ export interface ProposalRow extends Proposal {
  * The `!= 'draft'` is not a display choice — the rules deny the whole query
  * without it, because an unsubmitted draft is not the committee's to read.
  */
-export async function loadAllProposals(cfpId: string): Promise<ProposalRow[]> {
+export async function loadAllProposals(
+  cfpId: string,
+  options: { speakerDetails?: boolean } = {},
+): Promise<ProposalRow[]> {
   const snap = await getDocs(
     query(collection(db, 'cfps', cfpId, 'proposals'), where('status', '!=', 'draft')),
   );
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Proposal) }));
+  const multiSpeaker = options.speakerDetails ? snap.docs.filter((proposal) => {
+    const data = proposal.data();
+    return Boolean(data.primarySpeakerId) ||
+      (Array.isArray(data.speakerIds) && data.speakerIds.length > 1);
+  }) : [];
+  const [confirmationReads, participantReads] = await Promise.all([
+    Promise.all(
+      multiSpeaker.map((proposal) =>
+        getDocs(
+          collection(
+            db,
+            'cfps',
+            cfpId,
+            'proposals',
+            proposal.id,
+            'speakerConfirmations',
+          ),
+        ),
+      ),
+    ),
+    Promise.all(
+      multiSpeaker.map((proposal) =>
+        getDocs(
+          collection(
+            db,
+            'cfps',
+            cfpId,
+            'proposals',
+            proposal.id,
+            'speakerParticipants',
+          ),
+        ),
+      ),
+    ),
+  ]);
+  const confirmations = new Map(
+    multiSpeaker.map((proposal, index) => [proposal.id, confirmationReads[index]]),
+  );
+  const participants = new Map(
+    multiSpeaker.map((proposal, index) => [proposal.id, participantReads[index]]),
+  );
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() as Proposal),
+    speakerConfirmations: (confirmations.get(d.id)?.docs ?? [])
+      .filter((confirmation) => {
+        const speakerIds = d.data().speakerIds;
+        return Array.isArray(speakerIds) && speakerIds.includes(confirmation.id);
+      })
+      .map((confirmation) => ({
+        uid: confirmation.id,
+        response: confirmation.data().response,
+        answers: confirmation.data().answers,
+      })),
+    speakerParticipants: (participants.get(d.id)?.docs ?? [])
+      .filter((participant) => participant.data().status === 'active')
+      .map((participant) => ({
+        uid: participant.id,
+        role: participant.data().role,
+        acks: participant.data().acks,
+        attendance: participant.data().attendance,
+      })),
+  }));
 }
 
 export interface ReviewQueue {
@@ -414,7 +490,11 @@ export async function loadReviewQueue(cfpId: string, uid: string): Promise<Revie
     ),
   );
   const all = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Proposal) }));
-  const proposals = all.filter((p) => !(p.speakerIds ?? []).includes(uid));
+  const proposals = all.filter(
+    (p) =>
+      !(p.speakerIds ?? []).includes(uid) &&
+      !((p as Proposal & { formerSpeakerIds?: string[] }).formerSpeakerIds ?? []).includes(uid),
+  );
   return { proposals, own: all.length - proposals.length };
 }
 

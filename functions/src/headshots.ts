@@ -30,6 +30,69 @@ export interface HeadshotUploadPayload {
   contentType: (typeof IMAGE_TYPES)[number];
 }
 
+/** New participant-scoped objects; the proposal-only helpers remain the legacy format. */
+export function speakerWorkingHeadshotPrefix(
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+): string {
+  return `cfps/${cfpId}/workingHeadshots/${proposalId}/${encodeURIComponent(uid)}/${key}/`;
+}
+
+export function speakerWorkingHeadshotPath(
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+  uploadId: string,
+): string {
+  return `${speakerWorkingHeadshotPrefix(cfpId, proposalId, uid, key)}${encodeURIComponent(uploadId)}`;
+}
+
+export function isSpeakerWorkingHeadshotPath(
+  path: string,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+): boolean {
+  const prefix = speakerWorkingHeadshotPrefix(cfpId, proposalId, uid, key);
+  const uploadId = path.slice(prefix.length);
+  return path.startsWith(prefix) && uploadId.length > 0 && !uploadId.includes('/');
+}
+
+export function speakerConfirmedHeadshotPrefix(
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+): string {
+  return `cfps/${cfpId}/confirmedHeadshots/${proposalId}/${encodeURIComponent(uid)}/${key}/`;
+}
+
+export function speakerConfirmedHeadshotPath(
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+  generation: string,
+): string {
+  return `${speakerConfirmedHeadshotPrefix(cfpId, proposalId, uid, key)}${encodeURIComponent(generation)}`;
+}
+
+export function isSpeakerConfirmedHeadshotPath(
+  path: string,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+): boolean {
+  const prefix = speakerConfirmedHeadshotPrefix(cfpId, proposalId, uid, key);
+  const generation = path.slice(prefix.length);
+  return path.startsWith(prefix) && generation.length > 0 && !generation.includes('/');
+}
+
 const MAX_IMAGE_DIMENSION = 8_192;
 const MAX_IMAGE_PIXELS = 16_000_000;
 const SHARP_FORMAT: Record<(typeof IMAGE_TYPES)[number], string> = {
@@ -233,6 +296,40 @@ export function workingHeadshotMatches(
   return current?.path === expected.path && current.generation === expected.generation;
 }
 
+/** A server-written pointer in one speaker's private confirmation document. */
+export function speakerWorkingHeadshotFrom(
+  uploads: unknown,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+): UploadedHeadshot | null {
+  if (!uploads || typeof uploads !== 'object' || Array.isArray(uploads)) return null;
+  const pointer = (uploads as Partial<HeadshotUploads>)[key];
+  if (
+    !pointer ||
+    typeof pointer.path !== 'string' ||
+    typeof pointer.generation !== 'string' ||
+    !pointer.generation ||
+    !isSpeakerWorkingHeadshotPath(pointer.path, cfpId, proposalId, uid, key)
+  ) {
+    return null;
+  }
+  return { path: pointer.path, generation: pointer.generation };
+}
+
+export function speakerWorkingHeadshotMatches(
+  uploads: unknown,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  key: string,
+  expected: UploadedHeadshot,
+): boolean {
+  const current = speakerWorkingHeadshotFrom(uploads, cfpId, proposalId, uid, key);
+  return current?.path === expected.path && current.generation === expected.generation;
+}
+
 /** The current working uploads, with the pre-pointer canonical path as fallback. */
 export async function findUploadedHeadshots(
   bucket: Bucket,
@@ -263,6 +360,45 @@ export async function findUploadedHeadshots(
       }
       const legacy = await uploadedHeadshot(bucket, headshotPath(cfpId, uid, field.key));
       if (legacy) found[field.key] = legacy;
+    }),
+  );
+  return found;
+}
+
+/** Current uploads for one linked speaker. There is no cross-speaker fallback. */
+export async function findSpeakerUploadedHeadshots(
+  bucket: Bucket,
+  cfpId: string,
+  proposalId: string,
+  form: ConfirmForm,
+  uid: string,
+  pointers: unknown,
+): Promise<Record<string, UploadedHeadshot>> {
+  const images = (form.fields ?? []).filter((field) => field.type === 'image');
+  const found: Record<string, UploadedHeadshot> = {};
+
+  await Promise.all(
+    images.map(async (field) => {
+      const pointer = speakerWorkingHeadshotFrom(
+        pointers,
+        cfpId,
+        proposalId,
+        uid,
+        field.key,
+      );
+      if (pointer) {
+        const upload = await uploadedHeadshot(bucket, pointer.path);
+        if (upload?.generation === pointer.generation) found[field.key] = pointer;
+        return;
+      }
+      if (
+        pointers &&
+        typeof pointers === 'object' &&
+        !Array.isArray(pointers) &&
+        Object.prototype.hasOwnProperty.call(pointers, field.key)
+      ) {
+        throw new HttpsError('failed-precondition', 'The saved photo pointer is invalid.');
+      }
     }),
   );
   return found;
@@ -304,6 +440,37 @@ export async function freezeUploadedHeadshots(
         key,
         await freezeHeadshot(bucket, cfpId, proposalId, key, upload),
       ]),
+    ),
+  );
+}
+
+export async function freezeSpeakerUploadedHeadshots(
+  bucket: Bucket,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  uploads: Record<string, UploadedHeadshot>,
+): Promise<Record<string, string>> {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(uploads).map(async ([key, upload]) => {
+        const frozenPath = speakerConfirmedHeadshotPath(
+          cfpId,
+          proposalId,
+          uid,
+          key,
+          upload.generation,
+        );
+        try {
+          await bucket.file(upload.path, { generation: upload.generation }).copy(frozenPath);
+        } catch {
+          throw new HttpsError(
+            'failed-precondition',
+            'The uploaded photo changed while it was being confirmed. Try again.',
+          );
+        }
+        return [key, frozenPath];
+      }),
     ),
   );
 }

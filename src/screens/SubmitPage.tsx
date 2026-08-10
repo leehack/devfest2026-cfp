@@ -20,6 +20,8 @@ import {
   SpeakerProfileSummary,
   speakerProfileComplete,
 } from '../components/SpeakerFields';
+import { CoSpeakerInvitation } from '../components/CoSpeakerInvitation';
+import { CoSpeakerRoster } from '../components/CoSpeakerRoster';
 import { formatCalendarDay, formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { COC_URL } from '../lib/env';
@@ -28,6 +30,7 @@ import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
 import { editScope, type EditScope } from '../lib/lifecycle';
 import { goTo, href } from '../lib/router';
+import { coSpeakerInviteQuery } from '../lib/coSpeakers';
 import {
   loadPublishedSchedule,
   loadSharedSchedule,
@@ -55,6 +58,7 @@ import {
   type LoadedProposal,
 } from '../lib/proposals';
 import type { ProposalStatus } from '@shared/enums';
+import { primarySpeakerIdOf, type ProposalSpeakerRoster } from '@shared/coSpeakers';
 import { calendarDate } from '@shared/cfp';
 import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
 import { HeadshotField } from '../components/HeadshotField';
@@ -73,9 +77,9 @@ import {
 type Errors = Record<string, string>;
 type SaveSource = 'background' | 'manual' | 'transition';
 
-function confirmationAnswersFrom(proposal: Record<string, any>): Answers {
-  const loaded = { ...((proposal.confirmAnswers ?? {}) as Answers) };
-  const uploads = proposal.headshotUploads;
+function confirmationAnswersFrom(talk: LoadedProposal): Answers {
+  const loaded = { ...(talk.ownConfirmation?.answers ?? {}) };
+  const uploads = talk.ownConfirmation?.headshotUploads;
   if (!uploads || typeof uploads !== 'object' || Array.isArray(uploads)) return loaded;
   for (const [key, pointer] of Object.entries(uploads)) {
     if (
@@ -89,6 +93,17 @@ function confirmationAnswersFrom(proposal: Record<string, any>): Answers {
     }
   }
   return loaded;
+}
+
+function proposalForCurrentSpeaker(talk: LoadedProposal): Record<string, any> {
+  const ids = Array.isArray(talk.proposal.speakerIds) ? talk.proposal.speakerIds : [];
+  const perSpeaker = Boolean(talk.proposal.primarySpeakerId) || ids.length > 1;
+  if (!perSpeaker) return talk.proposal;
+  return {
+    ...talk.proposal,
+    acks: talk.ownParticipation?.acks ?? {},
+    attendance: talk.ownParticipation?.attendance ?? {},
+  };
 }
 const PAST_STATUSES = new Set<ProposalStatus>(['withdrawn', 'rejected', 'declined']);
 
@@ -336,6 +351,8 @@ function Questions({
 interface StatusBannerProps {
   status: ProposalStatus;
   scope: EditScope;
+  personalScope: EditScope;
+  isCoSpeaker: boolean;
   busy: boolean;
   /** Absent once withdrawing is no longer something they can do. */
   onWithdraw?: () => void;
@@ -413,6 +430,8 @@ function ProposalJourney({
 function StatusBanner({
   status,
   scope,
+  personalScope,
+  isCoSpeaker,
   busy,
   onWithdraw,
   onRespond,
@@ -548,7 +567,9 @@ function StatusBanner({
         </>
       )}
 
-      <p className="muted">{t.form.editHelp[scope]}</p>
+      <p className="muted">
+        {isCoSpeaker ? t.coSpeakers.personalEditHelp[personalScope] : t.form.editHelp[scope]}
+      </p>
       {onWithdraw && (
         <button type="button" className="btn btn--ghost" disabled={busy} onClick={onWithdraw}>
           {t.form.withdraw}
@@ -587,7 +608,45 @@ interface SubmitPageProps {
   cfpId: string;
 }
 
-export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
+export function SubmitPage(props: SubmitPageProps) {
+  const { t } = useI18n();
+  const [invite, setInvite] = useState<ReturnType<typeof coSpeakerInviteQuery> | undefined>(
+    undefined,
+  );
+  const [preferredProposalId, setPreferredProposalId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setInvite(coSpeakerInviteQuery(window.location.search));
+  }, []);
+
+  if (invite === undefined) return <p className="muted">{t.app.loading}</p>;
+  if (invite) {
+    return (
+      <CoSpeakerInvitation
+        user={props.user}
+        cfpId={props.cfpId}
+        proposalId={invite.proposalId}
+        invitationId={invite.invitationId}
+        onJoined={() => {
+          setPreferredProposalId(invite.proposalId);
+          const url = new URL(window.location.href);
+          url.searchParams.delete('proposal');
+          url.searchParams.delete('speakerInvite');
+          history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+          setInvite(null);
+        }}
+      />
+    );
+  }
+  return <ProposalFormPage {...props} preferredProposalId={preferredProposalId} />;
+}
+
+function ProposalFormPage({
+  user,
+  cfp,
+  cfpId,
+  preferredProposalId,
+}: SubmitPageProps & { preferredProposalId: string | null }) {
   const { t, locale } = useI18n();
 
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -626,7 +685,16 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const [extraFaults, setExtraFaults] = useState<AnswerFaults>({});
   const [asking, setAsking] = useState(false);
   const [speakerEditing, setSpeakerEditing] = useState(true);
+  const [speakerRoster, setSpeakerRoster] = useState<
+    ProposalSpeakerRoster | null | undefined
+  >(undefined);
+  const [speakerRosterRefresh, setSpeakerRosterRefresh] = useState(0);
 
+  const transitionFocus = useRef<
+    'join-waiting' | 'join-loading' | 'leave-waiting' | 'leave-loading' | null
+  >(
+    preferredProposalId ? 'join-waiting' : null,
+  );
   const dirty = useRef(false);
   const revision = useRef(0);
   const activeSave = useRef<Promise<string> | null>(null);
@@ -637,13 +705,32 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const historyGuard = useRef(false);
   const historyTransition = useRef(false);
   const archived = cfp.state === 'archived';
-  const scope = editScope(status, cfp.state === 'open', archived);
+  const selectedTalk = talks.find((talk) => talk.id === proposalId);
+  const selectedPrimaryId = selectedTalk ? primarySpeakerIdOf(selectedTalk.proposal) : user.uid;
+  const isCoSpeaker =
+    proposalId !== null && selectedPrimaryId !== null && selectedPrimaryId !== user.uid;
+  const isPrimarySpeaker = !isCoSpeaker;
+  const usesPersonalConfirmation = Boolean(
+    selectedTalk?.proposal.primarySpeakerId ||
+      (Array.isArray(selectedTalk?.proposal.speakerIds) &&
+        selectedTalk.proposal.speakerIds.length > 1),
+  );
+  const ownResponse = selectedTalk?.ownConfirmation?.response;
+  const speakerStatus: ProposalStatus =
+    usesPersonalConfirmation && (status === 'accepted' || status === 'confirmed')
+      ? (ownResponse ?? (status === 'confirmed' ? 'confirmed' : 'accepted'))
+      : status;
+  const personalScope = editScope(status, cfp.state === 'open', archived);
+  const scope = isCoSpeaker ? 'none' : personalScope;
   const formRef = useRef(form);
   const proposalIdRef = useRef(proposalId);
   const scopeRef = useRef(scope);
   const talksRef = useRef(talks);
   const speakerRef = useRef(speaker);
   const statusRef = useRef(status);
+  const speakerStatusRef = useRef(speakerStatus);
+  const personalLifecycleRef = useRef(usesPersonalConfirmation);
+  const personalScopeRef = useRef(personalScope);
   const answersRef = useRef(answers);
   const savedAnswersRef = useRef<Answers>({});
   const tRef = useRef(t);
@@ -654,15 +741,19 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   talksRef.current = talks;
   speakerRef.current = speaker;
   statusRef.current = status;
+  speakerStatusRef.current = speakerStatus;
+  personalLifecycleRef.current = usesPersonalConfirmation;
+  personalScopeRef.current = personalScope;
   answersRef.current = answers;
   tRef.current = t;
   localeRef.current = locale;
   /** The talk itself: what the committee scores. */
   const readOnly = scope !== 'all';
   /** Travel answers: no bearing on the score, so they outlive the freeze. */
-  const travelReadOnly = scope === 'none';
+  const travelReadOnly = personalScope === 'none';
   const talkDisabled = readOnly || submitting;
   const travelDisabled = travelReadOnly || submitting;
+  const acknowledgementDisabled = personalScope !== 'all' || submitting;
 
   /*
    * Next owns browser Back before this client screen sees `popstate`. A guard
@@ -727,21 +818,25 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
         const currentTalks = found.filter((talk) => !isPastTalk(talk));
+        const preferred = preferredProposalId
+          ? found.find((talk) => talk.id === preferredProposalId)
+          : undefined;
         const open =
-          cfp.state === 'open'
+          preferred ??
+          (cfp.state === 'open'
             ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? found[0])
             : (currentTalks.find((talk) => talk.status === 'accepted') ??
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
               currentTalks[0] ??
-              found[0]);
+              found[0]));
         if (open) {
-          const next = fromDocuments(open.proposal, profile);
+          const next = fromDocuments(proposalForCurrentSpeaker(open), profile);
           setForm(next);
           setSpeakerEditing(!speakerProfileComplete(next));
           setProposalId(open.id);
           proposalIdRef.current = open.id;
           setStatus(open.status);
-          const loadedAnswers = confirmationAnswersFrom(open.proposal);
+          const loadedAnswers = confirmationAnswersFrom(open);
           setAnswers(loadedAnswers);
           savedAnswersRef.current = loadedAnswers;
           answerDirty.current = false;
@@ -769,7 +864,42 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [cfp.publishedScheduleId, cfp.sharedScheduleId, cfp.state, cfpId, loadAttempt, user]);
+  }, [
+    cfp.publishedScheduleId,
+    cfp.sharedScheduleId,
+    cfp.state,
+    cfpId,
+    loadAttempt,
+    preferredProposalId,
+    user,
+  ]);
+
+  useEffect(() => {
+    const transition = transitionFocus.current;
+    if (!transition) return;
+    if (transition.endsWith('waiting')) {
+      if (loading) {
+        transitionFocus.current = transition.startsWith('join')
+          ? 'join-loading'
+          : 'leave-loading';
+      }
+      return;
+    }
+    if (loading) return;
+    const joining = transition === 'join-loading';
+    if (joining && preferredProposalId && proposalId !== preferredProposalId) return;
+    transitionFocus.current = null;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const talkHeading = document.querySelector<HTMLElement>('#submission-talk h2');
+        const target = joining || talks.length > 0
+          ? talkHeading
+          : document.getElementById('main-content');
+        target?.focus({ preventScroll: true });
+      });
+    });
+  }, [loadAttempt, loading, preferredProposalId, proposalId, talks.length]);
 
   // ----------------------------------------------------------------- autosave
 
@@ -785,17 +915,18 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     if (
       id &&
       typeof value === 'string' &&
-      value.startsWith(`cfps/${cfpId}/workingHeadshots/${id}/${key}/`)
+      value.startsWith(`cfps/${cfpId}/workingHeadshots/${id}/`) &&
+      value.includes(`/${key}/`)
     ) {
       const updated = talksRef.current.map((talk) =>
         talk.id === id
           ? {
               ...talk,
-              proposal: {
-                ...talk.proposal,
-                headshotUploads: {
-                  ...(talk.proposal.headshotUploads ?? {}),
-                  [key]: { path: value },
+              ownConfirmation: {
+                ...(talk.ownConfirmation ?? { answers: {} }),
+                answers: {
+                  ...(talk.ownConfirmation?.answers ?? {}),
+                  [key]: value,
                 },
               },
             }
@@ -827,7 +958,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       if (!answerDirty.current) return true;
       if (
         archived ||
-        statusRef.current !== 'confirmed' ||
+        speakerStatusRef.current !== 'confirmed' ||
         uploadingFields.current.size > 0 ||
         proposalIdRef.current === null
       ) {
@@ -876,10 +1007,17 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   useEffect(() => {
-    if (archived || status !== 'confirmed' || uploadingAnswer || !answerDirty.current) return;
+    if (
+      archived ||
+      speakerStatus !== 'confirmed' ||
+      uploadingAnswer ||
+      !answerDirty.current
+    ) {
+      return;
+    }
     const handle = window.setTimeout(() => void saveConfirmationAnswers('background'), 1500);
     return () => clearTimeout(handle);
-  }, [answers, archived, saveConfirmationAnswers, status, uploadingAnswer]);
+  }, [answers, archived, saveConfirmationAnswers, speakerStatus, uploadingAnswer]);
 
   const persist = useCallback(async (source: SaveSource = 'background'): Promise<boolean> => {
     if (scopeRef.current === 'none' && proposalIdRef.current === null) return false;
@@ -902,16 +1040,27 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     const snapshot = formRef.current;
     const currentId = proposalIdRef.current;
     const currentScope = scopeRef.current;
+    const personalLifecycle = personalLifecycleRef.current;
     setSaveState('saving');
     setSaveError('');
 
-    const request = saveDraft(cfpId, user, snapshot, currentId, currentScope, localeRef.current);
+    const request = saveDraft(
+      cfpId,
+      user,
+      snapshot,
+      currentId,
+      currentScope,
+      localeRef.current,
+      personalLifecycle,
+      personalScopeRef.current,
+    );
     activeSave.current = request;
     let shouldFlushAgain = false;
 
     try {
       const id = await request;
       const { proposalDoc, speakerDoc } = toDocuments(snapshot);
+      const { acks, attendance, ...talkDoc } = proposalDoc;
       const cachedSpeaker = {
         ...speakerRef.current,
         ...speakerDoc,
@@ -933,7 +1082,13 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             talk.id === id
               ? {
                   ...talk,
-                  proposal: { ...talk.proposal, ...proposalDoc },
+                  proposal: {
+                    ...talk.proposal,
+                    ...(personalLifecycle ? talkDoc : proposalDoc),
+                  },
+                  ownParticipation: personalLifecycle
+                    ? { ...talk.ownParticipation, acks, attendance }
+                    : talk.ownParticipation,
                   speaker: cachedSpeaker,
                 }
               : talk,
@@ -953,6 +1108,10 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       if (revision.current === savedRevision) {
         dirty.current = false;
         setSaveState('saved');
+        if (personalLifecycle) {
+          setSpeakerRoster(undefined);
+          setSpeakerRosterRefresh((value) => value + 1);
+        }
         if (source === 'manual') {
           showToast(
             currentScope === 'none'
@@ -1187,16 +1346,76 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     setTalks(updated);
   }
 
+  function markOwnResponse(
+    id: string,
+    response: 'confirmed' | 'declined',
+    responseAnswers: Answers,
+  ) {
+    const updated = talksRef.current.map((talk) =>
+      talk.id === id
+        ? {
+            ...talk,
+            ownConfirmation: {
+              ...talk.ownConfirmation,
+              response,
+              answers: responseAnswers,
+            },
+          }
+        : talk,
+    );
+    talksRef.current = updated;
+    setTalks(updated);
+  }
+
+  function applyRoster(next: ProposalSpeakerRoster | null) {
+    setSpeakerRoster(next);
+    const id = proposalIdRef.current;
+    if (!next || !id) return;
+    const activeIds = next.items
+      .filter((item) => item.kind === 'active')
+      .map((item) => item.uid);
+    const { proposalDoc } = toDocuments(formRef.current);
+    const updated = talksRef.current.map((talk) =>
+      talk.id === id
+        ? {
+            ...talk,
+            proposal: {
+              ...talk.proposal,
+              ...(next.usesPersonalLifecycle
+                ? { primarySpeakerId: next.primarySpeakerId }
+                : {}),
+              speakerIds: activeIds,
+            },
+            ownParticipation:
+              next.usesPersonalLifecycle && activeIds.includes(user.uid)
+              ? {
+                  ...talk.ownParticipation,
+                  role:
+                    next.primarySpeakerId === user.uid
+                      ? ('primary' as const)
+                      : ('coSpeaker' as const),
+                  acks: proposalDoc.acks,
+                  attendance: proposalDoc.attendance,
+                }
+              : talk.ownParticipation,
+          }
+        : talk,
+    );
+    talksRef.current = updated;
+    setTalks(updated);
+  }
+
   // -------------------------------------------------------------- switching
 
   function showTalk(talk?: LoadedProposal) {
     revision.current += 1;
+    setSpeakerRoster(undefined);
     if (talk) {
-      setForm(fromDocuments(talk.proposal, speakerRef.current));
+      setForm(fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current));
       setProposalId(talk.id);
       proposalIdRef.current = talk.id;
       setStatus(talk.status);
-      const loadedAnswers = confirmationAnswersFrom(talk.proposal);
+      const loadedAnswers = confirmationAnswersFrom(talk);
       setAnswers(loadedAnswers);
       savedAnswersRef.current = loadedAnswers;
     } else {
@@ -1242,6 +1461,23 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (!isPrimarySpeaker) return;
+    if (proposalId && !speakerRoster) {
+      setBanner(t.coSpeakers.loadFailed);
+      document.getElementById('submission-co-speakers')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+      return;
+    }
+    if (speakerRoster?.pendingBlocksSubmit) {
+      setBanner(t.coSpeakers.pendingBlockHelp);
+      document.getElementById('submission-co-speakers')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+      return;
+    }
     const found = liveErrors;
     const faults = liveExtraFaults;
     setErrors(found);
@@ -1378,7 +1614,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       // and the old answers win if the speaker later confirms again.
       if (
         response === 'decline' &&
-        statusRef.current === 'confirmed' &&
+        speakerStatusRef.current === 'confirmed' &&
         answerDirty.current &&
         !(await saveConfirmationAnswers('transition'))
       ) {
@@ -1396,6 +1632,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       setStatus(data.status);
       statusRef.current = data.status;
       markTalk(proposalId, data.status);
+      markOwnResponse(
+        proposalId,
+        data.response,
+        response === 'confirm' ? responseAnswers : savedAnswersRef.current,
+      );
       if (response === 'confirm') savedAnswersRef.current = responseAnswers;
       answerDirty.current = false;
       setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
@@ -1478,9 +1719,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     );
   }
 
-  const submittedCount = talks.filter((talk) =>
-    inStatusSet('live', talk.status),
-  ).length;
+  const submittedCount = talks.filter((talk) => inStatusSet('live', talk.status)).length;
 
   const picker = (
     <TalkPicker
@@ -1587,6 +1826,16 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       attention:
         showErrors && hasAny(['proposal.deliveryLanguage', 'proposal.languagePreference']),
     },
+    ...(proposalId
+      ? [
+          {
+            id: 'submission-co-speakers',
+            label: t.coSpeakers.title,
+            complete: speakerRoster != null && !speakerRoster.pendingBlocksSubmit,
+            attention: speakerRoster === null || Boolean(speakerRoster?.pendingBlocksSubmit),
+          },
+        ]
+      : []),
     {
       id: 'submission-speaker',
       label: t.sections.speaker,
@@ -1623,19 +1872,19 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   const speakerNext = archived
     ? t.form.nextSteps.archived
-    : status === 'draft'
+    : speakerStatus === 'draft'
       ? cfp.state === 'open'
         ? t.form.nextSteps.draft
         : t.form.nextSteps.draftClosed
-      : status === 'submitted'
+      : speakerStatus === 'submitted'
         ? scope === 'all'
           ? t.form.nextSteps.submittedEditable
           : t.form.nextSteps.submitted
-        : status === 'under_review'
+        : speakerStatus === 'under_review'
           ? t.form.nextSteps.underReview
-          : status === 'accepted'
+          : speakerStatus === 'accepted'
             ? t.form.nextSteps.accepted
-            : status === 'confirmed'
+            : speakerStatus === 'confirmed'
               ? speakerSchedule?.public
                 ? t.form.nextSteps.confirmedPublic
                 : speakerSchedule
@@ -1645,11 +1894,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
                     : hasNewerSharedPreview
                       ? t.form.nextSteps.confirmedPending
                       : t.form.nextSteps.confirmedWaiting
-              : status === 'waitlisted'
+              : speakerStatus === 'waitlisted'
                 ? t.form.nextSteps.waitlisted
-                : status === 'rejected'
+                : speakerStatus === 'rejected'
                   ? t.form.nextSteps.rejected
-                  : status === 'declined'
+                  : speakerStatus === 'declined'
                     ? t.form.nextSteps.declined
                     : t.form.nextSteps.withdrawn;
 
@@ -1661,11 +1910,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <div className="submission-context__identity">
           <span className="submission-context__event">{cfp.name}</span>
           <span
-            className={`submission-context__status submission-context__status--${status === 'draft' && cfp.state === 'open' ? 'open' : 'set'}`}
+            className={`submission-context__status submission-context__status--${speakerStatus === 'draft' && cfp.state === 'open' ? 'open' : 'set'}`}
           >
-            {status === 'draft' && cfp.state === 'open'
+            {speakerStatus === 'draft' && cfp.state === 'open'
               ? t.form.acceptingNow
-              : t.enums.status[status]}
+              : t.enums.status[speakerStatus]}
           </span>
         </div>
         <div className="submission-context__deadline">
@@ -1684,21 +1933,26 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         </div>
       </section>
 
-      <ProposalJourney status={status} next={speakerNext} />
+      <ProposalJourney status={speakerStatus} next={speakerNext} />
 
       {/*
         The talk stays on screen after submitting. A speaker who cannot re-read
         what they sent has no way to check it went in, and the withdraw button
         on its own made the page look like a dead end.
       */}
-      {status !== 'draft' && (
+      {speakerStatus !== 'draft' && (
         <StatusBanner
-          status={status}
+          status={speakerStatus}
           scope={scope}
+          personalScope={personalScope}
+          isCoSpeaker={isCoSpeaker}
           busy={archived || submitting || answerSaveState === 'saving' || uploadingAnswer}
-          onWithdraw={!archived && withdrawable ? onWithdraw : undefined}
+          onWithdraw={
+            !archived && isPrimarySpeaker && withdrawable ? onWithdraw : undefined
+          }
           onRespond={
-            !archived && (status === 'accepted' || inStatusSet('speakerResponse', status))
+            !archived &&
+            (speakerStatus === 'accepted' || inStatusSet('speakerResponse', speakerStatus))
               ? onRespond
               : undefined
           }
@@ -1716,19 +1970,19 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           onAsk={() => setAsking(true)}
           onCancelAsk={cancelConfirmationAnswers}
           onSaveAnswers={
-            !archived && status === 'confirmed'
+            !archived && speakerStatus === 'confirmed'
               ? () => void saveConfirmationAnswers('manual')
               : undefined
           }
           schedule={speakerSchedule}
           schedulePending={
-            status === 'confirmed' &&
+            speakerStatus === 'confirmed' &&
             hasNewerSharedPreview &&
             !sharedEntry &&
             !sharedScheduleFailed
           }
           scheduleUnavailable={
-            status === 'confirmed' && hasNewerSharedPreview && sharedScheduleFailed
+            speakerStatus === 'confirmed' && hasNewerSharedPreview && sharedScheduleFailed
           }
         />
       )}
@@ -1755,7 +2009,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
       {/* ------------------------------------------------------- the talk */}
       <section className="section submission-section" id="submission-talk" tabIndex={-1}>
-        <h2>{t.sections.proposal}</h2>
+        <h2 tabIndex={-1}>{t.sections.proposal}</h2>
         <p className="section__help">{t.sections.proposalHelp}</p>
 
         <TextField
@@ -1821,6 +2075,35 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             required
           />
         </div>
+      </section>
+
+      {/* ----------------------------------------------------- co-speakers */}
+      <section
+        className="section submission-section"
+        id="submission-co-speakers"
+        tabIndex={-1}
+      >
+        <h2>{t.coSpeakers.title}</h2>
+        {proposalId ? (
+          <CoSpeakerRoster
+            key={proposalId}
+            cfpId={cfpId}
+            proposalId={proposalId}
+            refreshKey={speakerRosterRefresh}
+            onChange={applyRoster}
+            onLeft={() => {
+              transitionFocus.current = 'leave-waiting';
+              setSpeakerRoster(undefined);
+              setProposalId(null);
+              proposalIdRef.current = null;
+              setStatus('draft');
+              showToast(t.coSpeakers.leftNotice, 'success');
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+          />
+        ) : (
+          <p className="section__help">{t.coSpeakers.startDraftFirst}</p>
+        )}
       </section>
 
       {/* ------------------------------------------------------- language */}
@@ -1929,16 +2212,12 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               checked={form.acks[ack.key] === true}
               onChange={(v) => set('acks', { ...form.acks, [ack.key]: v })}
               error={err(`acks.${ack.key}`)}
-              disabled={talkDisabled}
+              disabled={acknowledgementDisabled}
             />
           ))}
         </section>
       )}
 
-      {/*
-        §3: attendance follows immediately after the acknowledgements. The
-        question only reads naturally once "travel is not covered" is on screen.
-      */}
       <section className="section submission-section" id="submission-attendance" tabIndex={-1}>
         <h2>{t.sections.attendance}</h2>
 
@@ -2036,6 +2315,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             {banner}
           </p>
         )}
+        {isPrimarySpeaker && status === 'draft' && proposalId && speakerRoster === null && (
+          <p className="field__error" role="status" id="co-speaker-submit-blocked">
+            {t.coSpeakers.loadFailed}
+          </p>
+        )}
 
         <div className="actions__buttons">
           {(!profileOnly || dirty.current) && (
@@ -2046,13 +2330,15 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               onClick={() => void persist('manual')}
             >
               {profileOnly
-                ? t.profile.save
+                ? isCoSpeaker
+                  ? t.coSpeakers.saveDetails
+                  : t.profile.save
                 : status === 'draft'
                   ? t.form.save
                   : t.form.saveChanges}
             </button>
           )}
-          {!archived && status === 'draft' && proposalId !== null && (
+          {!archived && isPrimarySpeaker && status === 'draft' && proposalId !== null && (
             <button
               type="button"
               className="btn btn--danger"
@@ -2062,8 +2348,21 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               {t.form.deleteDraft}
             </button>
           )}
-          {status === 'draft' && (
-            <button type="submit" className="btn btn--primary" disabled={talkDisabled}>
+          {isPrimarySpeaker && status === 'draft' && (
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={
+                talkDisabled ||
+                (proposalId !== null && !speakerRoster) ||
+                Boolean(speakerRoster?.pendingBlocksSubmit)
+              }
+              aria-describedby={
+                proposalId !== null && speakerRoster === null
+                  ? 'co-speaker-submit-blocked'
+                  : undefined
+              }
+            >
               {submitting ? t.form.submitting : t.form.submit}
             </button>
           )}

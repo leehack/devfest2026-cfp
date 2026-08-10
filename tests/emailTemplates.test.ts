@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CO_SPEAKER_INVITATION_KINDS,
   DECISION_KINDS,
   EMAIL_KINDS,
   ROLE_INVITATION_EMAIL_KINDS,
@@ -30,7 +31,10 @@ describe('renderEmail', () => {
       const email = renderEmail(kind, locale, data);
       expect(email.subject).toBeTruthy();
       expect(email.subject).not.toContain('{');
-      if (!ROLE_INVITATION_EMAIL_KINDS.includes(kind)) {
+      if (
+        !ROLE_INVITATION_EMAIL_KINDS.includes(kind) &&
+        !CO_SPEAKER_INVITATION_KINDS.includes(kind)
+      ) {
         expect(email.text).toContain('Ada Lovelace');
       }
       expect(email.html).toMatch(/^<div/);
@@ -48,7 +52,8 @@ describe('renderEmail', () => {
     EMAIL_KINDS.filter(
       (kind) =>
         !STAFF_EMAIL_KINDS.includes(kind) &&
-        !ROLE_INVITATION_EMAIL_KINDS.includes(kind),
+        !ROLE_INVITATION_EMAIL_KINDS.includes(kind) &&
+        !CO_SPEAKER_INVITATION_KINDS.includes(kind),
     ),
   )('%s names the talk it is about', (kind) => {
     // The rejection is the one message people reread. Sending it without the
@@ -166,6 +171,7 @@ describe('renderEmail', () => {
       'committee_schedule_shared',
     ]);
     expect(ROLE_INVITATION_EMAIL_KINDS).toEqual(['committee_role_invited']);
+    expect(CO_SPEAKER_INVITATION_KINDS).toEqual(['co_speaker_invited']);
   });
 });
 

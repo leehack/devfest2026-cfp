@@ -873,7 +873,7 @@ test.describe('a message to one speaker', () => {
 
     await page.getByRole('link', { name: 'Email', exact: true }).click();
 
-    const panel = page.getByRole('region', { name: 'Write to a speaker' });
+    const panel = page.getByRole('region', { name: 'Write to all speakers on a talk' });
     await expect(
       panel.getByText('That service is unavailable right now. Please try again shortly.'),
     ).toBeVisible();
@@ -963,8 +963,8 @@ test.describe('a message to one speaker', () => {
     await stage();
     await signInAs(page, admin, at('/admin/email'));
 
-    const panel = page.locator('.section', { has: page.getByRole('heading', { name: 'Email' }) });
-    const send = panel.getByRole('button', { name: 'Send message' });
+    const panel = page.getByRole('region', { name: 'Write to all speakers on a talk' });
+    const send = panel.getByRole('button', { name: 'Send to all speakers' });
 
     // Nothing to send until there is somebody to send it to and something to
     // say — a message with a blank body is only ever a slip.
@@ -986,7 +986,7 @@ test.describe('a message to one speaker', () => {
     // Cleared, because there is no deterministic id to collapse a second send.
     await expect(panel.getByRole('textbox', { name: /^Subject/ })).toHaveValue('');
 
-    const log = panel.locator('.table__scroll');
+    const log = page.getByRole('table');
     await expect(log.getByRole('row', { name: /About your room/ })).toBeVisible();
   });
 

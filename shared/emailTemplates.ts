@@ -18,6 +18,7 @@
 export const EMAIL_KINDS = [
   'submission_received',
   'committee_role_invited',
+  'co_speaker_invited',
   'committee_proposal_submitted',
   'committee_schedule_shared',
   'withdrawn',
@@ -43,6 +44,9 @@ export const STAFF_EMAIL_KINDS: readonly EmailKind[] = [
 ];
 export const ROLE_INVITATION_EMAIL_KINDS: readonly EmailKind[] = [
   'committee_role_invited',
+];
+export const CO_SPEAKER_INVITATION_KINDS: readonly EmailKind[] = [
+  'co_speaker_invited',
 ];
 
 /**
@@ -126,6 +130,16 @@ const EN: Record<EmailKind, Template> = {
       'You have been invited to help review proposals for {event}.',
       'Sign in with this email address to claim your access:',
       '{reviewUrl}',
+    ),
+  },
+  co_speaker_invited: {
+    subject: 'Invitation to co-present “{title}” at {event}',
+    body: p(
+      'Hello,',
+      'You have been invited to co-present “{title}” at {event}.',
+      'The invitation does not add you to the proposal automatically. Sign in with this exact email address, review the proposal, and accept or decline it yourself:',
+      '{proposalUrl}',
+      'Accepting gives you access to the proposal and means you cannot review it as a committee member.',
     ),
   },
   committee_proposal_submitted: {
@@ -237,6 +251,16 @@ const FR: Record<EmailKind, Template> = {
       'Vous avez été invité·e à participer à l’évaluation des propositions pour {event}.',
       'Connectez-vous avec cette adresse courriel pour accepter votre accès :',
       '{reviewUrl}',
+    ),
+  },
+  co_speaker_invited: {
+    subject: 'Invitation à coprésenter « {title} » à {event}',
+    body: p(
+      'Bonjour,',
+      'Vous avez été invité·e à coprésenter « {title} » à {event}.',
+      'Cette invitation ne vous ajoute pas automatiquement à la proposition. Connectez-vous avec cette adresse courriel précise, consultez la proposition, puis acceptez ou refusez vous-même :',
+      '{proposalUrl}',
+      'En acceptant, vous aurez accès à la proposition et ne pourrez pas l’évaluer comme membre du comité.',
     ),
   },
   committee_proposal_submitted: {

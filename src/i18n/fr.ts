@@ -1001,6 +1001,7 @@ export const fr: Dictionary = {
     emailKinds: {
       submission_received: 'Proposition reçue',
       committee_role_invited: 'Invitation au comité',
+      co_speaker_invited: 'Invitation à coprésenter',
       committee_proposal_submitted: 'Nouvelle proposition pour le comité',
       committee_schedule_shared: 'Aperçu partagé pour le comité',
       withdrawn: 'Retirée',
@@ -1021,16 +1022,18 @@ export const fr: Dictionary = {
     emailDeliveryAutomatic: 'Notification automatique de l’événement',
     emailDeliveryAutomaticHelp:
       'L’action correspondante met ce message en file immédiatement; l’envoi dépend toujours de l’expéditeur configuré.',
-    messageTitle: 'Écrire à une personne',
+    messageTitle: 'Écrire à tous les conférenciers d’une conférence',
     messageHelp:
-      'Pour tout ce que les modèles ne couvrent pas : une question, une correction, un détail sur la journée. Le message part de la même adresse et figure dans le journal ci-dessous, afin que le reste du comité sache qu’il a été envoyé.',
+      'Pour tout ce que les modèles ne couvrent pas : une question, une correction, un détail sur la journée. Chaque conférencier actif de la conférence sélectionnée reçoit sa propre copie, consignée dans le journal ci-dessous.',
+    messageRecipients: (count: number) =>
+      `Les ${count} conférencier${count === 1 ? '' : 's'} recevront ce message`,
     messageTalk: 'Conférence',
     messagePick: 'Choisir une conférence…',
     messageSubject: 'Objet',
     messageBody: 'Message',
     messageBodyHelp:
       'Une ligne vide commence un nouveau paragraphe. {speakerName}, {title} et {proposalUrl} sont remplis automatiquement.',
-    messageSend: 'Envoyer le message',
+    messageSend: 'Envoyer à tous les conférenciers',
     messageSending: 'Envoi…',
     messageConfirm: 'Envoyer ceci à {name} ? Le message part immédiatement.',
     messageSent: 'Envoyé à {name}.',
@@ -1335,6 +1338,139 @@ export const fr: Dictionary = {
     others: 'Notes du comité',
     sortedByDisagreement: 'Triées par désaccord — celles qui méritent discussion sont en tête.',
     conflictDeclared: 'conflit déclaré',
+  },
+
+  coSpeakers: {
+    title: 'Conférenciers de cette proposition',
+    help:
+      'Invitez jusqu’à trois co-conférenciers avant le début de l’évaluation. Chaque personne se joint avec son propre compte et gère son profil et sa confirmation.',
+    adminHelp:
+      'Le conférencier principal est propriétaire du contenu. Les co-conférenciers gèrent leur profil et leur confirmation; les invitations en attente doivent être réglées avant la soumission.',
+    readOnlyHelp:
+      'Vous êtes co-conférencier de cette proposition. Le conférencier principal gère le contenu; votre profil et votre confirmation demeurent les vôtres.',
+    saveDetails: 'Enregistrer mes renseignements',
+    loading: 'Chargement des conférenciers…',
+    loadFailed: 'Impossible de charger la liste des conférenciers.',
+    retry: 'Réessayer',
+    refresh: 'Actualiser les conférenciers',
+    refreshing: 'Actualisation…',
+    refreshed: 'Liste des conférenciers actualisée.',
+    empty: 'Aucun autre conférencier pour le moment.',
+    inviteLabel: 'Courriel du co-conférencier',
+    invitePlaceholder: 'conferencier@exemple.com',
+    invite: 'Envoyer l’invitation',
+    inviting: 'Envoi…',
+    invited: (email: string) => `Invitation envoyée à ${email}.`,
+    deliveryState: {
+      queued: 'Courriel en file d’attente',
+      sending: 'Envoi du courriel…',
+      sent: 'Courriel envoyé',
+      notDelivered: 'Courriel non livré',
+    },
+    retryDelivery: 'Réessayer l’envoi',
+    retryingDelivery: 'Nouvel essai…',
+    retryDeliveryFor: (email: string) => `Réessayer l’envoi de l’invitation à ${email}`,
+    retryingDeliveryFor: (email: string) => `Nouvel essai d’envoi de l’invitation à ${email}…`,
+    deliveryRetried: (email: string) => `Un nouveau courriel d’invitation a été mis en file d’attente pour ${email}.`,
+    alreadyInvited:
+      'Cette personne est déjà conférencière ou possède une invitation active.',
+    inviteLimit:
+      'Aucun autre co-conférencier ni aucune autre invitation ne peut être ajouté à cette proposition.',
+    inviteHelp:
+      'Utilisez l’adresse avec laquelle cette personne se connectera. Elle doit accepter avant la soumission.',
+    atCapacity: 'Cette proposition compte déjà le maximum de quatre conférenciers.',
+    manage: 'Gérer les conférenciers',
+    close: 'Fermer la gestion des conférenciers',
+    lead: 'Conférencier principal',
+    joined: 'A rejoint',
+    pending: 'Invitation en attente',
+    declined: 'Refusée',
+    revoked: 'Invitation révoquée',
+    currentAccount: 'Vous',
+    awaitingConfirmation: 'Confirmation en attente',
+    confirmationFor: (name: string) => `Confirmation — ${name}`,
+    profileReadyLabel: 'Profil prêt',
+    profileNeeded: 'Profil incomplet',
+    detailsReady: 'Renseignements de participation prêts',
+    detailsNeeded: 'Renseignements de participation requis',
+    revoke: 'Révoquer l’invitation',
+    revoking: 'Révocation…',
+    revokeInvitation: (email: string) => `Révoquer l’invitation de ${email}`,
+    revokingInvitation: (email: string) => `Révocation de l’invitation de ${email}…`,
+    revokedNotice: (email: string) => `Invitation de ${email} révoquée.`,
+    revokeConfirm: (email: string) =>
+      `Révoquer l’invitation de co-conférencier envoyée à ${email} ? Ce lien ne permettra plus de rejoindre la proposition.`,
+    remove: 'Retirer le co-conférencier',
+    removing: 'Retrait…',
+    removeSpeaker: (name: string) => `Retirer le co-conférencier ${name}`,
+    removingSpeaker: (name: string) => `Retrait du co-conférencier ${name}…`,
+    removedNotice: (name: string) => `${name} a été retiré de cette proposition.`,
+    removeConfirm: (name: string) =>
+      `Retirer ${name} de cette proposition ? Cette personne perdra son accès et disparaîtra de la liste. Si un aperçu du programme est déjà partagé ou public, vérifiez-le et partagez-le de nouveau.`,
+    leave: 'Quitter la proposition',
+    leaving: 'Départ…',
+    leaveProposal: 'Quitter cette proposition',
+    leavingProposal: 'Départ de cette proposition…',
+    leaveConfirm:
+      'Quitter cette proposition ? Vous perdrez votre accès et ne figurerez plus parmi les conférenciers.',
+    leftNotice: 'Vous avez quitté cette proposition.',
+    pendingBlockTitle: 'Complétez la préparation de chaque conférencier avant de soumettre',
+    pendingBlockHelp:
+      'Attendez l’acceptation des invitations et demandez à chaque personne de compléter son profil et ses renseignements de participation. Vous pouvez révoquer une invitation en attente pour soumettre sans cette personne.',
+    yourSetupTitle: 'Le conférencier principal attend la préparation des participants',
+    yourSetupHelp:
+      'Complétez votre profil et vos renseignements de participation ci-dessous. La proposition ne peut pas être soumise avant que chaque personne soit prête.',
+    waitingOnTeamTitle: 'Votre préparation est terminée',
+    waitingOnTeamHelp:
+      'Le conférencier principal attend qu’une autre personne invitée ou participante termine sa préparation.',
+    startDraftFirst: 'Enregistrez le brouillon avant d’inviter un co-conférencier.',
+    invitationEyebrow: 'Invitation à titre de co-conférencier',
+    invitationTitle: 'Rejoindre cette proposition',
+    invitationFrom: (name: string) =>
+      `${name} vous invite à présenter cette conférence ensemble.`,
+    eventLabel: 'Événement',
+    proposalLabel: 'Proposition',
+    accountLabel: 'Compte invité',
+    talkDetailsTitle: 'Vérifiez la conférence avant de vous joindre',
+    conflictTitle: 'Votre accès au comité change si vous acceptez',
+    conflictHelp:
+      'En acceptant, vous devenez conférencier de cette proposition. Vous ne pourrez pas l’évaluer ni lire les évaluations du comité, même si vous faites aussi partie du comité.',
+    profileTitle: 'Complétez votre profil de conférencier',
+    profileHelp:
+      'Votre nom et votre biographie demeurent liés à votre compte et paraîtront avec la conférence si elle est publiée.',
+    profileReady: 'Votre profil de conférencier est prêt.',
+    join: 'Enregistrer le profil et accepter',
+    joining: 'Acceptation…',
+    decline: 'Refuser l’invitation',
+    declineConfirm: 'Refuser cette invitation de co-conférencier ?',
+    wrongAccountTitle: 'Cette invitation appartient à un autre compte',
+    wrongAccountHelp: (email: string) =>
+      `Connectez-vous avec ${email} pour accepter ou refuser cette invitation.`,
+    switchAccount: 'Changer de compte',
+    expiredTitle: 'Cette invitation est expirée',
+    expiredHelp:
+      'Demandez au conférencier principal ou à l’organisation d’envoyer une nouvelle invitation.',
+    revokedTitle: 'Cette invitation a été révoquée',
+    revokedHelp: 'Le conférencier principal ou l’organisation a retiré cette invitation.',
+    pausedTitle: 'Cette invitation est temporairement indisponible',
+    pausedHelp: 'L’appel à conférences est en pause. Réessayez lorsque celui-ci reprendra.',
+    unavailableTitle: 'Cette invitation est indisponible',
+    unavailableHelp: 'L’événement ne peut plus accepter de réponse à cette invitation.',
+    acceptedTitle: 'Vous avez rejoint cette proposition',
+    acceptedHelp: 'La conférence est maintenant visible avec vos autres propositions.',
+    declinedTitle: 'Invitation refusée',
+    declinedHelp: 'Vous ne figurez pas parmi les conférenciers de cette proposition.',
+    openProposal: 'Ouvrir la proposition',
+    backToEvent: 'Retour à l’événement',
+    personalEditHelp: {
+      all:
+        'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil, vos attestations de participation et vos détails de voyage.',
+      logistics:
+        'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil et vos détails de voyage.',
+      none:
+        'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
+    } as Record<string, string>,
+    manageFor: (title: string) => `Gérer les conférenciers de ${title}`,
   },
 
   schedule: {

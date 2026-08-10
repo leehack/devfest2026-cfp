@@ -20,6 +20,7 @@ import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
 import {
+  CO_SPEAKER_INVITATION_KINDS,
   DECISION_KINDS,
   ROLE_INVITATION_EMAIL_KINDS,
   SCHEDULE_EMAIL_KINDS,
@@ -36,6 +37,7 @@ import {
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
 import { readResendKey } from './secrets';
+import { coSpeakerInvitationStillTrue } from './speakerLifecycle';
 
 /**
  * Neither the key nor the addresses are deploy config: the addresses live in
@@ -189,10 +191,22 @@ export interface QueueRequest {
   };
   /** Schedule releases need one row per version rather than one row forever. */
   dedupeKey?: string;
-  /** Staff notices are revalidated against this claimed event membership before sending. */
+  /** Staff and linked-speaker notices are revalidated against this uid before sending. */
   recipientUid?: string;
+  /**
+   * Extra uniqueness for recipients after the legacy lead-speaker row.
+   *
+   * The first speaker keeps the historical id (`kind__proposal__release`) so a
+   * rollout cannot recreate mail that was already sent. Additional speakers
+   * append their uid without changing `dedupeKey`, which must remain the raw
+   * release id for schedule-validity checks.
+   */
+  logIdSuffix?: string;
   /** Pending role invitations are revalidated against this exact grant before sending. */
   grantEmail?: string;
+  /** Pending co-speaker invitations are revalidated immediately before delivery. */
+  invitationId?: string;
+  invitationEmail?: string;
 }
 
 export function isStaffEmail(kind: unknown): kind is EmailKind {
@@ -201,6 +215,10 @@ export function isStaffEmail(kind: unknown): kind is EmailKind {
 
 export function isRoleInvitationEmail(kind: unknown): kind is EmailKind {
   return ROLE_INVITATION_EMAIL_KINDS.includes(kind as EmailKind);
+}
+
+export function isCoSpeakerInvitationEmail(kind: unknown): kind is EmailKind {
+  return CO_SPEAKER_INVITATION_KINDS.includes(kind as EmailKind);
 }
 
 export function staffEmailLanguage(
@@ -269,8 +287,62 @@ export function roleInvitationStillTrue(
  * One document per (kind, proposal). Two acceptances for the same talk collapse
  * into one row, and therefore one email.
  */
-export const logId = (kind: EmailKind, proposalId: string, dedupeKey?: string) =>
-  [kind, proposalId, dedupeKey].filter(Boolean).join('__');
+export const logId = (
+  kind: EmailKind,
+  proposalId: string,
+  dedupeKey?: string,
+  suffix?: string,
+) => [kind, proposalId, dedupeKey, suffix].filter(Boolean).join('__');
+
+/** Queues a recipient fan-out without attempting a transaction read after its first write. */
+export async function queueEmails(
+  db: Firestore,
+  tx: Transaction,
+  cfpId: string,
+  requests: readonly QueueRequest[],
+): Promise<void> {
+  if (requests.length === 0) return;
+
+  const prepared = requests.map((request) => ({
+    request,
+    ref: db.doc(
+      `cfps/${cfpId}/emailLog/${logId(
+        request.kind,
+        request.proposalId,
+        request.dedupeKey,
+        request.logIdSuffix,
+      )}`,
+    ),
+  }));
+  if (new Set(prepared.map(({ ref }) => ref.path)).size !== prepared.length) {
+    throw new Error('Email fan-out contains duplicate log ids.');
+  }
+  const existing = await tx.getAll(...prepared.map(({ ref }) => ref));
+
+  for (const [index, { request, ref }] of prepared.entries()) {
+    if (existing[index].exists) continue;
+    if (!request.to) {
+      logger.warn('no address to send to', {
+        kind: request.kind,
+        proposalId: request.proposalId,
+        recipientUid: request.recipientUid,
+      });
+      continue;
+    }
+    const stored = { ...request };
+    delete stored.logIdSuffix;
+    tx.create(ref, {
+      ...stored,
+      status: (
+        DECISION_KINDS.includes(request.kind) || SCHEDULE_EMAIL_KINDS.includes(request.kind)
+          ? 'held'
+          : 'queued'
+      ) satisfies EmailStatus,
+      attempts: 0,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+}
 
 /**
  * Queues inside the caller's transaction, so an email is never recorded for a
@@ -283,28 +355,7 @@ export async function queueEmail(
   cfpId: string,
   request: QueueRequest,
 ): Promise<void> {
-  const ref = db.doc(
-    `cfps/${cfpId}/emailLog/${logId(request.kind, request.proposalId, request.dedupeKey)}`,
-  );
-  const existing = await tx.get(ref);
-  if (existing.exists) return;
-
-  if (!request.to) {
-    logger.warn('no address to send to', { kind: request.kind, proposalId: request.proposalId });
-    return;
-  }
-
-  tx.create(ref, {
-    ...request,
-    // Held decisions wait for an admin to release the whole batch.
-    status: (
-      DECISION_KINDS.includes(request.kind) || SCHEDULE_EMAIL_KINDS.includes(request.kind)
-        ? 'held'
-        : 'queued'
-    ) satisfies EmailStatus,
-    attempts: 0,
-    createdAt: FieldValue.serverTimestamp(),
-  });
+  await queueEmails(db, tx, cfpId, [request]);
 }
 
 interface SendOutcome {
@@ -402,7 +453,7 @@ export async function deliver(
   // written, so renaming a CFP or moving the site fixes mail still in the queue.
   const data = {
     ...(row.data as Omit<EmailData, 'proposalUrl' | 'event'>),
-    proposalUrl: cfpUrl(cfp.publicUrl, cfp.id),
+    proposalUrl: claimedProposalUrl(row, cfp),
     reviewUrl: `${cfp.publicUrl}/c/${cfp.id}/review`,
     scheduleUrl: claimedScheduleUrl(row, cfp),
     event: cfp.name,
@@ -411,7 +462,10 @@ export async function deliver(
   // A message carries its own copy on the row. It was written once, for one
   // person, so there is nothing to look up and nothing an override could apply
   // to — but it still goes through the same renderer.
-  const committeeNotice = isStaffEmail(row.kind) || isRoleInvitationEmail(row.kind);
+  const committeeNotice =
+    isStaffEmail(row.kind) ||
+    isRoleInvitationEmail(row.kind) ||
+    isCoSpeakerInvitationEmail(row.kind);
   const email =
     row.kind === MESSAGE_KIND
       ? renderTemplate({ subject: row.subject as string, body: row.body as string }, locale, data)
@@ -420,6 +474,17 @@ export async function deliver(
         : renderEmail(row.kind as EmailKind, locale, data, templates);
 
   return sendViaResend(row.to as string, email, apiKey, settings, idempotencyKey);
+}
+
+function claimedProposalUrl(
+  row: FirebaseFirestore.DocumentData,
+  cfp: { id: string; publicUrl: string },
+): string {
+  if (!isCoSpeakerInvitationEmail(row.kind)) return cfpUrl(cfp.publicUrl, cfp.id);
+  const proposalId = String(row.proposalId ?? '');
+  const invitationId = String(row.invitationId ?? '');
+  const query = new URLSearchParams({ proposal: proposalId, speakerInvite: invitationId });
+  return `${cfpUrl(cfp.publicUrl, cfp.id)}?${query.toString()}`;
 }
 
 function claimedScheduleUrl(
@@ -541,6 +606,71 @@ export const sendQueuedEmail = onDocumentWritten(
         }
         to = grantEmail;
         language = staffEmailLanguage(grant?.data());
+      } else if (isCoSpeakerInvitationEmail(snap.get('kind'))) {
+        const proposalId = String(snap.get('proposalId') ?? '');
+        const invitationId = String(snap.get('invitationId') ?? '');
+        const invitationEmail = String(snap.get('invitationEmail') ?? '');
+        const [invitation, proposal] = await tx.getAll(
+          db.doc(
+            `cfps/${cfpId}/proposals/${proposalId}/speakerInvitations/${invitationId}`,
+          ),
+          db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+        );
+        if (
+          !coSpeakerInvitationStillTrue(
+            snap.get('kind'),
+            invitationId,
+            cfpId,
+            proposalId,
+            invitationEmail,
+            invitation,
+            proposal,
+            cfp,
+          )
+        ) {
+          tx.update(ref, {
+            status: 'failed',
+            error: 'This notification is superseded.',
+            sendingClaimId: FieldValue.delete(),
+            sendingStartedAt: FieldValue.delete(),
+            providerAttemptId: FieldValue.delete(),
+          });
+          return null;
+        }
+        to = invitationEmail;
+        language = { locale: 'en', bilingual: true };
+      } else {
+        const uid = String(snap.get('recipientUid') ?? '');
+        if (uid) {
+          const proposalId = String(snap.get('proposalId') ?? '');
+          const [proposal, speaker] = await tx.getAll(
+            db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+            db.doc(`speakers/${uid}`),
+          );
+          const speakerIds = proposal.get('speakerIds');
+          const latestEmail = speaker.get('email');
+          if (
+            !proposal.exists ||
+            !Array.isArray(speakerIds) ||
+            !speakerIds.includes(uid) ||
+            typeof latestEmail !== 'string' ||
+            !latestEmail
+          ) {
+            tx.update(ref, {
+              status: 'failed',
+              error: 'This notification is superseded.',
+              sendingClaimId: FieldValue.delete(),
+              sendingStartedAt: FieldValue.delete(),
+              providerAttemptId: FieldValue.delete(),
+            });
+            return null;
+          }
+          to = latestEmail;
+          language = {
+            locale: speaker.get('locale') === 'fr' ? 'fr' : 'en',
+            bilingual: false,
+          };
+        }
       }
       const claim =
         claimMode === 'new'
@@ -689,6 +819,81 @@ export const sendQueuedEmail = onDocumentWritten(
         if (!(await updateClaim(language))) return;
       }
       Object.assign(claimed, language);
+    } else if (isCoSpeakerInvitationEmail(claimed.kind)) {
+      const proposalId = String(claimed.proposalId ?? '');
+      const invitationId = String(claimed.invitationId ?? '');
+      const invitationEmail = String(claimed.invitationEmail ?? '');
+      const [invitation, proposal] = await Promise.all([
+        db.doc(
+          `cfps/${cfpId}/proposals/${proposalId}/speakerInvitations/${invitationId}`,
+        ).get(),
+        db.doc(`cfps/${cfpId}/proposals/${proposalId}`).get(),
+      ]);
+      if (
+        !coSpeakerInvitationStillTrue(
+          claimed.kind,
+          invitationId,
+          cfpId,
+          proposalId,
+          invitationEmail,
+          invitation,
+          proposal,
+          cfpSnap,
+        )
+      ) {
+        await updateClaim({
+          status: 'failed',
+          error: 'This notification is superseded.',
+        });
+        return;
+      }
+      const language = { locale: 'en' as const, bilingual: true };
+      if (
+        claimed.to !== invitationEmail ||
+        claimed.locale !== language.locale ||
+        claimed.bilingual !== language.bilingual
+      ) {
+        if (!(await updateClaim({ to: invitationEmail, ...language }))) return;
+      }
+      claimed.to = invitationEmail;
+      Object.assign(claimed, language);
+    } else {
+      const uid = String(claimed.recipientUid ?? '');
+      if (uid) {
+        const proposalId = String(claimed.proposalId ?? '');
+        const [proposal, speaker] = await Promise.all([
+          db.doc(`cfps/${cfpId}/proposals/${proposalId}`).get(),
+          db.doc(`speakers/${uid}`).get(),
+        ]);
+        const speakerIds = proposal.get('speakerIds');
+        const latestEmail = speaker.get('email');
+        if (
+          !proposal.exists ||
+          !Array.isArray(speakerIds) ||
+          !speakerIds.includes(uid) ||
+          typeof latestEmail !== 'string' ||
+          !latestEmail
+        ) {
+          await updateClaim({
+            status: 'failed',
+            error: 'This notification is superseded.',
+          });
+          return;
+        }
+        const language = {
+          locale: (speaker.get('locale') === 'fr' ? 'fr' : 'en') as EmailLocale,
+          bilingual: false,
+        };
+        if (
+          claimed.to !== latestEmail ||
+          claimed.locale !== language.locale ||
+          claimed.bilingual !== language.bilingual
+        ) {
+          if (!(await updateClaim({ to: latestEmail, ...language }))) return;
+        }
+        claimed.to = latestEmail;
+        Object.assign(claimed, language);
+      }
     }
     const finalCfp = await db.doc(`cfps/${cfpId}`).get();
     if (!finalCfp.exists || finalCfp.get('deleting') === true) return;

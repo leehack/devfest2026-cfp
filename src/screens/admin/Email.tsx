@@ -578,7 +578,7 @@ export function Email({
 }
 
 /**
- * A message to one speaker, written here rather than in a personal mail client.
+ * One message fanned out to every active speaker on a talk.
  *
  * The templates cover the lifecycle and nothing else, so a clash in the
  * schedule or a missing detail had no route that the speaker could recognise as
@@ -665,6 +665,9 @@ function WriteToSpeaker({
       .join(', ');
 
   const target = rows.find((row) => row.id === proposalId);
+  const recipients = (target?.speakerSnapshot ?? [])
+    .map((speaker) => speaker.name)
+    .filter(Boolean);
   const to = nameOf(target) || t.admin.emailTo;
 
   async function send() {
@@ -732,6 +735,20 @@ function WriteToSpeaker({
         onChange={setProposalId}
         disabled={busy || readOnly}
       />
+      {target && (
+        <aside className="email-compose__recipients" aria-live="polite">
+          <strong>
+            {t.admin.messageRecipients(target.speakerIds?.length || recipients.length || 1)}
+          </strong>
+          {recipients.length > 0 && (
+            <ul>
+              {recipients.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+          )}
+        </aside>
+      )}
       <TextField
         label={t.admin.messageSubject}
         required
