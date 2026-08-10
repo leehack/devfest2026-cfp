@@ -4136,8 +4136,8 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
     }
     if (!snap.exists) throw new HttpsError('not-found', 'No such proposal.');
 
-    // A draft is nobody's but its author's, and writing to someone about a talk
-    // they have not submitted tells them it was read.
+    // A draft stays within its active speaker roster. Organiser mail would tell
+    // applicants that the committee read something they never submitted.
     if (snap.get('status') === 'draft') {
       throw new HttpsError('failed-precondition', 'That proposal has not been submitted.');
     }

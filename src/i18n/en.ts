@@ -1334,7 +1334,7 @@ export const en = {
   coSpeakers: {
     title: 'Speakers for this proposal',
     help:
-      'Invite up to three co-speakers before review starts. Each person joins with their own account and maintains their own profile and confirmation.',
+      'Invite up to three co-speakers before submitting. Each person joins with their own account and maintains their own profile and confirmation.',
     adminHelp:
       'The lead speaker owns the talk. Joined co-speakers maintain their own profile and confirmation; pending invitations must be resolved before submission.',
     readOnlyHelp:

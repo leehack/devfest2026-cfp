@@ -431,8 +431,8 @@ describe('status and aggregate are function-writable only', () => {
 
   /**
    * Naming a co-presenter is a claim about someone else: it hands them write
-   * access, and disqualifies them from reviewing the talk. Until there is an
-   * invitation flow, the cast is fixed at creation.
+   * access, and disqualifies them from reviewing the talk. Only the verified
+   * invitation callables may change the cast after creation.
    */
   it('denies naming a co-presenter who never agreed', async () => {
     await assertFails(
@@ -785,12 +785,12 @@ describe('a reviewer who is also a speaker', () => {
   });
 });
 
-/** What the admin and review screens read before they can render anything. */
 /**
- * A draft was never handed to anybody. Someone may have typed something into a
- * pitch and thought better of sending it; the committee has no claim on that.
+ * A draft stays within its active speaker roster. Someone may have typed
+ * something into a pitch and thought better of sending it; the committee has
+ * no claim on that.
  */
-describe('unsubmitted drafts are private to their author', () => {
+describe('unsubmitted drafts are private to their active speaker roster', () => {
   it('denies a reviewer reading a draft', async () => {
     await assertFails(getDoc(doc(asReviewer(), `${CFP}/proposals/p-anna`)));
   });

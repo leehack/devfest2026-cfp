@@ -1343,7 +1343,7 @@ export const fr: Dictionary = {
   coSpeakers: {
     title: 'Conférenciers de cette proposition',
     help:
-      'Invitez jusqu’à trois co-conférenciers avant le début de l’évaluation. Chaque personne se joint avec son propre compte et gère son profil et sa confirmation.',
+      'Invitez jusqu’à trois co-conférenciers avant la soumission. Chaque personne se joint avec son propre compte et gère son profil et sa confirmation.',
     adminHelp:
       'Le conférencier principal est propriétaire du contenu. Les co-conférenciers gèrent leur profil et leur confirmation; les invitations en attente doivent être réglées avant la soumission.',
     readOnlyHelp:

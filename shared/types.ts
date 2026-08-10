@@ -178,7 +178,8 @@ export interface Proposal {
 
   /**
    * The speakers as the committee reads them, frozen at submission. Parallel to
-   * `speakerIds`. Absent on a draft, which nobody but its author ever sees.
+   * `speakerIds`. Absent until submission; draft access stays within the active
+   * speaker roster.
    */
   speakerSnapshot?: SpeakerSnapshot[];
 

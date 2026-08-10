@@ -27,7 +27,8 @@ check: there is no second index to keep honest, and no window in which two peopl
 both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
 account, not to any one talk), `platformMembers/{uid}` and
 `platformRoleGrants/{email}` (global creator access), `signInLinks` (a
-platform-wide throttle) and `config/platform` sit outside.
+platform-wide throttle), `speakerInvitationLimits` (hashed invitation-rate
+limits) and `config/platform` sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
 `/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
@@ -52,11 +53,12 @@ Deletion first reserves the archived call, then clears Storage before Firestore;
 if Storage is unavailable the owner can retry without leaving private files
 behind or letting another tab unarchive the call mid-delete.
 
-One speaker, up to three talks. The picker on the form switches between them;
-the speaker profile and the travel answers are shared, so a second submission
-does not mean retyping a bio. The cap is enforced in `submitProposal`, because
-rules cannot count documents — drafts above it are allowed and simply never
-reach a reviewer.
+A speaker may lead up to three talks and invite up to three verified
+co-speakers onto each draft. The picker on the form switches between talks; the
+speaker profile and travel answers carry over, so a second submission does not
+mean retyping a bio. The talk cap is enforced in `submitProposal`, because rules
+cannot count documents — drafts above it are allowed and simply never reach a
+reviewer.
 
 ## Running it locally
 

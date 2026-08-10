@@ -275,12 +275,12 @@ proposals/{proposalId}/speakerInvitations/{invitationId}
 proposals/{proposalId}/speakerParticipants/{uid}
   role                                    // primary | coSpeaker
   status                                  // active | inactive
-  acks, attendance                        // private to this presenter and admins
+  acks, attendance                        // presenter-private; admins after submission
   invitationId?, joinedAt, removedAt?
 
 proposals/{proposalId}/speakerConfirmations/{uid}
   response                                // confirmed | declined
-  answers, headshotUploads                // private per-presenter state
+  answers, headshotUploads                // presenter-private; admins after submission
   respondedAt, confirmedAt?
 
 proposals/{proposalId}/reviews/{reviewerUid}
