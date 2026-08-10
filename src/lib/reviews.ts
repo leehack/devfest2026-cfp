@@ -3,11 +3,10 @@ import {
   doc,
   getDoc,
   getDocs,
-  serverTimestamp,
-  setDoc,
 } from 'firebase/firestore/lite';
+import { httpsCallable } from 'firebase/functions';
 
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import type { Score } from '@shared/enums';
 import type { Review } from '@shared/types';
 
@@ -38,22 +37,30 @@ export async function loadMyReviews(
   return new Map(found.filter((entry): entry is [string, Review] => entry !== null));
 }
 
-/** Full overwrite, not a merge: clearing the comment has to actually clear it. */
+const saveReviewCall = httpsCallable<
+  {
+    cfpId: string;
+    proposalId: string;
+    score: Score;
+    conflictOfInterest: boolean;
+    comment: string;
+  },
+  { ok: true; proposalId: string; status: string }
+>(functions, 'saveReview');
+
+/** The callable writes the review and freezes a first-read proposal atomically. */
 export async function saveReview(
   cfpId: string,
   proposalId: string,
-  uid: string,
+  _uid: string,
   draft: ReviewDraft,
 ): Promise<void> {
-  const comment = draft.comment.trim();
-  await setDoc(doc(db, 'cfps', cfpId, 'proposals', proposalId, 'reviews', uid), {
-    // Denormalised from the path, and pinned to it by the rules: the aggregate
-    // recompute is a collection-group query, which cannot filter by ancestor.
+  await saveReviewCall({
     cfpId,
+    proposalId,
     score: draft.score,
     conflictOfInterest: draft.conflictOfInterest,
-    ...(comment ? { comment } : {}),
-    updatedAt: serverTimestamp(),
+    comment: draft.comment.trim(),
   });
 }
 

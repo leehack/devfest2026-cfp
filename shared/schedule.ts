@@ -1,4 +1,5 @@
 import type { Localised } from './confirmForm';
+import type { CfpRole } from './cfp';
 import type { DeliveryLanguage, ResolvedLanguage } from './enums';
 import type { SpeakerSnapshot } from './types';
 
@@ -77,7 +78,26 @@ export interface PublishedProposalSession {
   format: string;
   level: string;
   language: Exclude<DeliveryLanguage, 'either'>;
-  speakers: SpeakerSnapshot[];
+  speakers: PublicScheduleSpeaker[];
+}
+
+/** The frozen speaker details attendees need, without committee/profile metadata. */
+export interface PublicScheduleSpeaker {
+  name: string;
+  bio: string;
+  company?: string;
+  jobTitle?: string;
+}
+
+export function publicScheduleSpeakers(
+  speakers: readonly SpeakerSnapshot[],
+): PublicScheduleSpeaker[] {
+  return speakers.map((speaker) => ({
+    name: speaker.name,
+    bio: speaker.bio,
+    ...(speaker.company ? { company: speaker.company } : {}),
+    ...(speaker.jobTitle ? { jobTitle: speaker.jobTitle } : {}),
+  }));
 }
 
 export type PublishedScheduleEntry = ScheduleEntryBase &
@@ -103,6 +123,60 @@ export interface PublishedSchedule {
   days: ScheduleDay[];
   rooms: ScheduleRoom[];
   publishedAt: unknown;
+}
+
+/** One immutable working snapshot, shared only through the role-filtered callable. */
+export interface SharedSchedule {
+  id: string;
+  version: number;
+  timeZone: string;
+  days: ScheduleDay[];
+  rooms: ScheduleRoom[];
+  sourceRevision: number;
+  sharedAt: unknown;
+  /** Present after this same snapshot is promoted to the public programme. */
+  publishedAt?: unknown;
+}
+
+export type SharedScheduleAudience = 'committee' | 'speaker';
+
+export function sharedScheduleAudience(role?: CfpRole): SharedScheduleAudience {
+  return role === 'reviewer' || role === 'admin' || role === 'owner'
+    ? 'committee'
+    : 'speaker';
+}
+
+/**
+ * Applies the callable's final disclosure boundary to an already-safe snapshot.
+ * The map contains only proposals that are still confirmed at read time.
+ */
+export function sharedScheduleEntriesFor(
+  entries: readonly PublishedScheduleEntry[],
+  audience: SharedScheduleAudience,
+  uid: string,
+  confirmedSpeakersByProposal: ReadonlyMap<string, readonly string[]>,
+): PublishedScheduleEntry[] {
+  return entries.filter((entry) => {
+    if (entry.kind === 'custom') return audience === 'committee';
+    if (entry.cancelled === true) return false;
+    const speakerIds = confirmedSpeakersByProposal.get(entry.proposalId);
+    if (!speakerIds) return false;
+    return audience === 'committee' || speakerIds.includes(uid);
+  });
+}
+
+/** Removes unreleased days and rooms that are unrelated to a speaker's own placements. */
+export function sharedScheduleForEntries(
+  schedule: SharedSchedule,
+  entries: readonly PublishedScheduleEntry[],
+): SharedSchedule {
+  const dates = new Set(entries.map((entry) => entry.date));
+  const roomIds = new Set(entries.map((entry) => entry.roomId));
+  return {
+    ...schedule,
+    days: schedule.days.filter((day) => dates.has(day.date)),
+    rooms: schedule.rooms.filter((room) => roomIds.has(room.id)),
+  };
 }
 
 /** The local end time attendees need alongside the stored start and duration. */

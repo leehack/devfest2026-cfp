@@ -18,7 +18,7 @@ import type { AdminTab } from './adminTabs';
 
 const PENDING = 'cfp.signInEmail';
 
-export type SignInDestination = 'submit' | 'review' | `admin/${AdminTab}`;
+export type SignInDestination = 'submit' | 'review' | 'schedule' | `admin/${AdminTab}`;
 
 /**
  * `cfpId` is optional and decides only who the message comes from and where the

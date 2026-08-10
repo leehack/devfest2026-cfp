@@ -93,6 +93,7 @@ export function App({
   const [cfpReady, setCfpReady] = useState(initialCfp !== undefined);
   const [cfpError, setCfpError] = useState(false);
   const [cfpAttempt, setCfpAttempt] = useState(0);
+  const currentCfpId = useRef<string | null>(null);
   const seededCfp = useRef(
     initialCfp ? { id: initialCfp.id, stillOnInitialRoute: true } : null,
   );
@@ -109,6 +110,7 @@ export function App({
   const [askConsent, setAskConsent] = useState(false);
   const [analyticsConsent, setAnalyticsConsent] = useState<Consent>('unasked');
   const { route, cfpId } = place;
+  currentCfpId.current = cfpId;
   const placeKey = `${route}:${cfpId ?? ''}:${place.tab}:${place.entryId ?? ''}`;
   const [emailLink, setEmailLink] = useState(false);
   const focusedPlace = useRef(placeKey);
@@ -222,6 +224,21 @@ export function App({
   }), []);
 
   const retryCfp = useCallback(() => setCfpAttempt((attempt) => attempt + 1), []);
+  const refreshCfp = useCallback(async () => {
+    const id = cfpId;
+    if (!id) return;
+    try {
+      const next = await loadCfpWindow(id);
+      if (currentCfpId.current !== id) return;
+      setCfp(next);
+      setLoadedCfpId(id);
+      setCfpError(false);
+    } catch {
+      // The disclosure write already succeeded and the schedule screen has
+      // refreshed its own data. Keep it usable; the next route load retries
+      // this lightweight navigation metadata naturally.
+    }
+  }, [cfpId]);
 
   // Re-read on navigation so an admin who just moved the window does not walk
   // back to a form still rendering the old one. Speakers never change route, so
@@ -354,7 +371,10 @@ export function App({
               place={place}
               cfpName={visibleCfp.name}
               role={role}
-              hasSchedule={Boolean(visibleCfp.publishedScheduleId)}
+              hasSchedule={Boolean(
+                visibleCfp.publishedScheduleId ||
+                  (role && visibleCfp.sharedScheduleId),
+              )}
             />
           )}
 
@@ -373,6 +393,7 @@ export function App({
                 <Routed
                   place={place}
                   user={user}
+                  authReady={authReady}
                   emailLink={emailLink}
                   cfp={visibleCfp}
                   role={role}
@@ -385,6 +406,7 @@ export function App({
                   retryPlatform={retryPlatform}
                   cfpError={cfpError}
                   retryCfp={retryCfp}
+                  refreshCfp={refreshCfp}
                   initialSchedule={initialSchedule}
                 />
               </Suspense>
@@ -420,6 +442,7 @@ export function App({
 interface RoutedProps {
   place: Place;
   user: User | null;
+  authReady: boolean;
   emailLink: boolean;
   cfp: CfpWindow | null;
   role: CfpRole | null;
@@ -432,6 +455,7 @@ interface RoutedProps {
   retryPlatform: () => void;
   cfpError: boolean;
   retryCfp: () => void;
+  refreshCfp: () => Promise<void>;
   initialSchedule?: { releaseId: string; value: PublishedScheduleBundle | null };
 }
 
@@ -442,6 +466,7 @@ interface RoutedProps {
 function Routed({
   place,
   user,
+  authReady,
   emailLink,
   cfp,
   role,
@@ -454,6 +479,7 @@ function Routed({
   retryPlatform,
   cfpError,
   retryCfp,
+  refreshCfp,
   initialSchedule,
 }: RoutedProps) {
   const { t } = useI18n();
@@ -467,9 +493,15 @@ function Routed({
    */
   if (emailLink) {
     const destination: SignInDestination | undefined =
-      route === 'admin' ? `admin/${tab}` : route === 'review' ? 'review' : undefined;
+      route === 'admin'
+        ? `admin/${tab}`
+        : route === 'review'
+          ? 'review'
+          : route === 'schedule' || route === 'session'
+            ? 'schedule'
+            : undefined;
     const purpose =
-      route === 'admin' || route === 'review'
+      route === 'admin' || route === 'review' || route === 'schedule' || route === 'session'
         ? 'committee'
         : route === 'new'
           ? 'organising'
@@ -576,18 +608,43 @@ function Routed({
   if (route === 'cfp') return <CfpPage cfp={cfp} cfpId={cfpId} />;
 
   if (route === 'schedule' || route === 'session') {
+    const newerSharedPreview = Boolean(
+      cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId,
+    );
     return (
-      <SchedulePage
-        cfpId={cfpId}
-        cfpName={cfp.name}
-        releaseId={cfp.publishedScheduleId ?? null}
-        entryId={place.entryId ?? null}
-        initialBundle={
-          initialSchedule && initialSchedule.releaseId === cfp.publishedScheduleId
-            ? initialSchedule.value
-            : undefined
-        }
-      />
+      <>
+        <SchedulePage
+          cfpId={cfpId}
+          cfpName={cfp.name}
+          releaseId={cfp.publishedScheduleId ?? null}
+          sharedReleaseId={cfp.sharedScheduleId ?? null}
+          viewerRole={role}
+          accessReady={Boolean(
+            !newerSharedPreview || (authReady && (!user || roleReady))
+          )}
+          entryId={place.entryId ?? null}
+          initialBundle={
+            initialSchedule && initialSchedule.releaseId === cfp.publishedScheduleId
+              ? initialSchedule.value
+              : undefined
+          }
+        />
+        {authReady && !user && newerSharedPreview && (
+          <section
+            className="schedule-committee-sign-in"
+            aria-labelledby="schedule-committee-sign-in-title"
+          >
+            <h2 id="schedule-committee-sign-in-title">{t.schedule.committeeSignInTitle}</h2>
+            <p>{t.schedule.committeeSignInHelp}</p>
+            <SignIn
+              cfp={cfp}
+              cfpId={cfpId}
+              purpose="committee"
+              destination="schedule"
+            />
+          </section>
+        )}
+      </>
     );
   }
 
@@ -637,7 +694,15 @@ function Routed({
   }
 
   return route === 'admin' ? (
-    <AdminPage user={user} cfpId={cfpId} cfpName={cfp.name} tab={tab} role={role!} />
+    <AdminPage
+      user={user}
+      cfpId={cfpId}
+      cfpName={cfp.name}
+      archived={cfp.state === 'archived'}
+      tab={tab}
+      role={role!}
+      onCfpChange={() => void refreshCfp()}
+    />
   ) : (
     <ReviewPage user={user} cfpId={cfpId} />
   );
@@ -684,7 +749,10 @@ function WindowNotice({ cfp }: { cfp: CfpWindow }) {
       <div className="panel">
         <p>{t.window.notOpen}</p>
         <p>
-          {t.window.opensAt} <strong>{formatDate(cfp.opensAt, locale)}</strong>
+          {t.window.opensAt}{' '}
+          <strong>
+            {formatDate(cfp.opensAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+          </strong>
         </p>
       </div>
     );
@@ -699,7 +767,10 @@ function WindowNotice({ cfp }: { cfp: CfpWindow }) {
       <div className="panel">
         <p>{t.window.closed}</p>
         <p>
-          {t.window.closedAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
+          {t.window.closedAt}{' '}
+          <strong>
+            {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+          </strong>
         </p>
       </div>
     );
@@ -854,7 +925,10 @@ export function SignIn({
       <p>{hint}</p>
       {cfp?.state === 'open' && (
         <p className="muted">
-          {t.window.closesAt} <strong>{formatDate(cfp.closesAt, locale)}</strong>
+          {t.window.closesAt}{' '}
+          <strong>
+            {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+          </strong>
         </p>
       )}
       {/* Google's own button, wording included. What the sign-in is *for* is

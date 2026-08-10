@@ -15,11 +15,15 @@ export type Locale = 'en' | 'fr';
 
 export const dictionaries: Record<Locale, Dictionary> = { en, fr };
 
-export function formatDate(value: Date, locale: Locale): string {
+export function formatDate(
+  value: Date,
+  locale: Locale,
+  timeZone = 'America/Toronto',
+): string {
   return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
     dateStyle: 'long',
     timeStyle: 'short',
-    timeZone: 'America/Toronto',
+    timeZone,
   }).format(value);
 }
 

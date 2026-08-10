@@ -6,8 +6,14 @@ import { useI18n } from '../i18n/context';
 import { formatCalendarDay } from '../i18n';
 import { href } from '../lib/router';
 import { track } from '../lib/analytics';
-import { loadPublishedSchedule, type PublishedScheduleBundle } from '../lib/schedule';
+import {
+  loadPublishedSchedule,
+  loadSharedSchedule,
+  type PublishedScheduleBundle,
+  type SharedScheduleBundle,
+} from '../lib/schedule';
 import { calendarDate } from '@shared/cfp';
+import type { CfpRole } from '@shared/cfp';
 import { localised } from '@shared/confirmForm';
 import { publicEntryTitle, scheduleIcs } from '@shared/calendar';
 import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
@@ -35,12 +41,18 @@ export function SchedulePage({
   cfpId,
   cfpName,
   releaseId,
+  sharedReleaseId,
+  viewerRole,
+  accessReady,
   entryId,
   initialBundle,
 }: {
   cfpId: string;
   cfpName: string;
   releaseId: string | null;
+  sharedReleaseId: string | null;
+  viewerRole: CfpRole | null;
+  accessReady: boolean;
   entryId: string | null;
   initialBundle?: PublishedScheduleBundle | null;
 }) {
@@ -48,34 +60,79 @@ export function SchedulePage({
   const [bundle, setBundle] = useState<PublishedScheduleBundle | null>(initialBundle ?? null);
   const [loaded, setLoaded] = useState(initialBundle !== undefined);
   const [failed, setFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [preview, setPreview] = useState(false);
   const [filters, setFilters] = useState<AgendaFilters>(() => ({
     day: initialBundle?.schedule.days[0]?.date ?? '',
     room: 'all',
     language: 'all',
   }));
-  const filterStorageKey = releaseId ? `cfp.schedule.filters:${cfpId}:${releaseId}` : '';
+  const previewReleaseId =
+    viewerRole && sharedReleaseId && sharedReleaseId !== releaseId ? sharedReleaseId : null;
+  const visibleReleaseId = previewReleaseId ?? releaseId;
+  const filterStorageKey = visibleReleaseId
+    ? `cfp.schedule.filters:${cfpId}:${visibleReleaseId}`
+    : '';
   const [restoredFilterKey, setRestoredFilterKey] = useState('');
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
     setFailed(false);
-    if (!releaseId) {
+    if (!accessReady) return;
+    if (!visibleReleaseId) {
       setBundle(null);
+      setPreview(false);
       setLoaded(true);
       return;
     }
-    if (initialBundle !== undefined && initialBundle?.schedule.id === releaseId) {
+    if (
+      !previewReleaseId &&
+      initialBundle !== undefined &&
+      initialBundle?.schedule.id === releaseId
+    ) {
       setBundle(initialBundle);
+      setPreview(false);
       setLoaded(true);
       return;
     }
-    loadPublishedSchedule(cfpId, releaseId)
+
+    const loadPublic = () =>
+      releaseId ? loadPublishedSchedule(cfpId, releaseId) : Promise.resolve(null);
+    const loadPreview = async (): Promise<PublishedScheduleBundle | null> => {
+      const shared: SharedScheduleBundle = await loadSharedSchedule(cfpId);
+      if (!shared.schedule) return null;
+      return {
+        schedule: {
+          ...shared.schedule,
+          publishedAt: shared.schedule.publishedAt ?? shared.schedule.sharedAt,
+        },
+        entries: shared.entries,
+      };
+    };
+
+    (previewReleaseId ? loadPreview() : loadPublic())
       .then((next) => {
-        if (!cancelled) setBundle(next);
+        if (cancelled) return;
+        setBundle(next);
+        setPreview(Boolean(previewReleaseId && next));
       })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
+      .catch(async () => {
+        // A live public programme remains a safe, useful fallback if the
+        // committee-only projection is temporarily unavailable.
+        if (!previewReleaseId || !releaseId) {
+          if (!cancelled) setFailed(true);
+          return;
+        }
+        try {
+          const next = await loadPublic();
+          if (!cancelled) {
+            setBundle(next);
+            setPreview(false);
+          }
+        } catch {
+          if (!cancelled) setFailed(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoaded(true);
@@ -83,11 +140,16 @@ export function SchedulePage({
     return () => {
       cancelled = true;
     };
-  }, [cfpId, initialBundle, releaseId]);
+  }, [accessReady, cfpId, initialBundle, loadAttempt, previewReleaseId, releaseId, visibleReleaseId]);
 
   useEffect(() => {
-    if (releaseId) track('schedule_viewed', { cfp_id: cfpId, view: entryId ? 'session' : 'agenda' });
-  }, [cfpId, entryId, releaseId]);
+    if (accessReady && loaded && visibleReleaseId && bundle?.schedule.id === visibleReleaseId) {
+      track('schedule_viewed', {
+        cfp_id: cfpId,
+        view: preview ? 'committee_preview' : entryId ? 'session' : 'agenda',
+      });
+    }
+  }, [accessReady, bundle?.schedule.id, cfpId, entryId, loaded, preview, visibleReleaseId]);
 
   useEffect(() => {
     if (!filterStorageKey) {
@@ -153,13 +215,28 @@ export function SchedulePage({
       : `${t.schedule.title} — ${cfpName}`;
   }, [bundle, cfpName, entryId, locale, t.schedule.title]);
 
-  if (!loaded) return <p className="muted">{t.app.loading}</p>;
-  if (failed) return <p className="field__error" role="alert">{t.errors.unavailable}</p>;
+  if (!accessReady || !loaded) return <p className="muted">{t.app.loading}</p>;
+  if (failed) {
+    return (
+      <section className="schedule-empty">
+        <p className="field__error" role="alert">{t.errors.unavailable}</p>
+        <button type="button" className="btn" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+          {t.schedule.reload}
+        </button>
+      </section>
+    );
+  }
   if (!bundle) return <section className="schedule-empty"><h2>{t.schedule.title}</h2><p>{t.schedule.noPublished}</p></section>;
   if (entryId) {
     const entry = bundle.entries.find((candidate) => candidate.id === entryId);
     return entry ? (
-      <SessionDetail cfpId={cfpId} cfpName={cfpName} bundle={bundle} entry={entry} />
+      <SessionDetail
+        cfpId={cfpId}
+        cfpName={cfpName}
+        bundle={bundle}
+        entry={entry}
+        preview={preview}
+      />
     ) : (
       <section className="schedule-empty"><p>{t.errors.notFound}</p><Link className="btn" to={href({ route: 'schedule', cfpId })}>{t.schedule.back}</Link></section>
     );
@@ -171,6 +248,7 @@ export function SchedulePage({
       bundle={bundle}
       filters={filters}
       onFilters={setFilters}
+      preview={preview}
     />
   );
 }
@@ -181,12 +259,14 @@ function PublicAgenda({
   bundle,
   filters,
   onFilters,
+  preview,
 }: {
   cfpId: string;
   cfpName: string;
   bundle: PublishedScheduleBundle;
   filters: AgendaFilters;
   onFilters: (next: AgendaFilters | ((current: AgendaFilters) => AgendaFilters)) => void;
+  preview: boolean;
 }) {
   const { t, locale } = useI18n();
   const { schedule, entries } = bundle;
@@ -250,11 +330,31 @@ function PublicAgenda({
         <div className="public-schedule__rail" aria-hidden="true"><i /><i /><i /><i /></div>
         <div>
           <p>{cfpName}</p>
-          <h2>{t.schedule.title}</h2>
-          <span>{t.schedule.publicHelp} <strong>{schedule.timeZone}</strong></span>
+          <h2>{preview ? t.schedule.committeePreviewTitle : t.schedule.title}</h2>
+          <span>
+            {preview ? t.schedule.committeePreviewHelp : t.schedule.publicHelp}{' '}
+            <strong>{schedule.timeZone}</strong>
+          </span>
         </div>
-        <button type="button" className="btn btn--primary" onClick={saveCalendar}>{t.schedule.calendar}</button>
+        {preview ? (
+          <span className="schedule-preview-badge">{t.schedule.notPublic}</span>
+        ) : (
+          <button type="button" className="btn btn--primary" onClick={saveCalendar}>
+            {t.schedule.calendar}
+          </button>
+        )}
       </header>
+
+      {preview && (
+        <aside
+          className="committee-preview-next"
+          role="note"
+          aria-labelledby="committee-preview-next-title"
+        >
+          <h3 id="committee-preview-next-title">{t.schedule.committeeNextTitle}</h3>
+          <p>{t.schedule.committeeNextHelp}</p>
+        </aside>
+      )}
 
       <div className="public-schedule__days" role="tablist" aria-label={t.schedule.days}>
         {schedule.days.map((item, index) => (
@@ -312,7 +412,7 @@ function PublicAgenda({
   );
 }
 
-function SessionDetail({ cfpId, cfpName, bundle, entry }: { cfpId: string; cfpName: string; bundle: PublishedScheduleBundle; entry: PublishedScheduleEntry }) {
+function SessionDetail({ cfpId, cfpName, bundle, entry, preview }: { cfpId: string; cfpName: string; bundle: PublishedScheduleBundle; entry: PublishedScheduleEntry; preview: boolean }) {
   const { t, locale } = useI18n();
   const room = bundle.schedule.rooms.find((candidate) => candidate.id === entry.roomId);
   const oneCalendar = () => {
@@ -337,15 +437,23 @@ function SessionDetail({ cfpId, cfpName, bundle, entry }: { cfpId: string; cfpNa
       {entry.kind === 'proposal' && entry.session.speakers.length > 0 && (
         <section className="session-speakers">
           <h3>{t.schedule.speakers}</h3>
-          {entry.session.speakers.map((speaker) => (
-            <div className="session-speaker" key={speaker.uid}>
+          {entry.session.speakers.map((speaker, index) => (
+            <div className="session-speaker" key={`${speaker.name}-${index}`}>
               <div className="session-speaker__monogram" aria-hidden="true">{speaker.name.slice(0, 1)}</div>
               <div><h4>{speaker.name}</h4>{(speaker.jobTitle || speaker.company) && <p>{[speaker.jobTitle, speaker.company].filter(Boolean).join(' · ')}</p>}<p>{speaker.bio}</p></div>
             </div>
           ))}
         </section>
       )}
-      <button type="button" className="btn btn--primary" onClick={oneCalendar}>{t.schedule.sessionCalendar}</button>
+      {preview ? (
+        <p className="schedule-preview-note" role="status">
+          <strong>{t.schedule.committeePreviewTitle}</strong>
+          <span>{t.schedule.committeePreviewDetail}</span>
+          <span>{t.schedule.committeeNextHelp}</span>
+        </p>
+      ) : (
+        <button type="button" className="btn btn--primary" onClick={oneCalendar}>{t.schedule.sessionCalendar}</button>
+      )}
     </article>
   );
 }

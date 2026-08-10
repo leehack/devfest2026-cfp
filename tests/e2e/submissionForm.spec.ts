@@ -101,7 +101,7 @@ test.describe('a call that asks its own questions', () => {
     await waitForSave(page);
 
     await page.getByRole('button', { name: /^Submit/ }).click();
-    await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
 
     const stored = await readProposal();
     expect(stored?.category).toBe('ops');
@@ -120,7 +120,7 @@ test.describe('a call that asks its own questions', () => {
     await waitForSave(page);
 
     await page.getByRole('button', { name: /^Submit/ }).click();
-    await expect(page.getByRole('heading', { name: 'Submitted' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toHaveCount(0);
     await expect(page.locator('.field--error')).toHaveCount(1);
   });
 
@@ -171,7 +171,7 @@ test.describe('a call that asks its own questions', () => {
     await fillRequired(page);
     await waitForSave(page);
     await page.getByRole('button', { name: /^Submit/ }).click();
-    await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
   });
 });
 

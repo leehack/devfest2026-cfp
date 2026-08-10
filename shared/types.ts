@@ -14,7 +14,7 @@ import type {
   Score,
   SocialPlatform,
 } from './enums';
-import type { Answers } from './confirmForm';
+import type { Answers, HeadshotUploads } from './confirmForm';
 import type { CfpProfile, CfpRole, GrantableRole, Visibility } from './cfp';
 
 export interface Social {
@@ -80,6 +80,9 @@ export interface Cfp extends CfpProfile {
   /** Opaque id of the stable public programme version, absent until published. */
   publishedScheduleId?: string;
   publishedScheduleAt?: unknown;
+  /** Opaque id of the latest role-filtered working programme, absent until shared. */
+  sharedScheduleId?: string;
+  sharedScheduleAt?: unknown;
 
   createdBy: string;
   createdAt: unknown;
@@ -202,6 +205,8 @@ export interface Proposal {
   confirmedAt?: unknown;
   /** The organiser's own questions, answered on confirmation. */
   confirmAnswers?: Answers;
+  /** Function-written pointers to replaceable post-acceptance image uploads. */
+  headshotUploads?: HeadshotUploads;
   /** Set at scheduling when deliveryLanguage is `either`. */
   assignedLanguage?: ResolvedLanguage;
 

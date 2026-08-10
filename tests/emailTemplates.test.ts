@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   DECISION_KINDS,
   EMAIL_KINDS,
+  ROLE_INVITATION_EMAIL_KINDS,
+  STAFF_EMAIL_KINDS,
   builtInTemplate,
+  renderBilingualEmail,
   renderEmail,
   renderTemplate,
   validateTemplate,
@@ -17,6 +20,8 @@ const data: EmailData = {
   // The CFP's own name, not a constant: every message on the platform is signed
   // with whichever event it is about.
   event: 'DevFest Montréal 2026',
+  reviewUrl: 'https://cfp.example/c/devfest-mtl-2026/review',
+  scheduleUrl: 'https://cfp.example/c/devfest-mtl-2026/schedule',
 };
 
 describe('renderEmail', () => {
@@ -25,7 +30,9 @@ describe('renderEmail', () => {
       const email = renderEmail(kind, locale, data);
       expect(email.subject).toBeTruthy();
       expect(email.subject).not.toContain('{');
-      expect(email.text).toContain('Ada Lovelace');
+      if (!ROLE_INVITATION_EMAIL_KINDS.includes(kind)) {
+        expect(email.text).toContain('Ada Lovelace');
+      }
       expect(email.html).toMatch(/^<div/);
       expect(email.html).toContain('</div>');
     }
@@ -37,12 +44,62 @@ describe('renderEmail', () => {
     );
   });
 
-  it.each(EMAIL_KINDS)('%s names the talk it is about', (kind) => {
+  it.each(
+    EMAIL_KINDS.filter(
+      (kind) =>
+        !STAFF_EMAIL_KINDS.includes(kind) &&
+        !ROLE_INVITATION_EMAIL_KINDS.includes(kind),
+    ),
+  )('%s names the talk it is about', (kind) => {
     // The rejection is the one message people reread. Sending it without the
     // title reads as a form letter that never saw the proposal.
     for (const locale of ['en', 'fr'] as const) {
       expect(renderEmail(kind, locale, data).text).toContain(data.title);
     }
+  });
+
+  it.each([
+    ['committee_role_invited', data.reviewUrl],
+    ['committee_proposal_submitted', data.reviewUrl],
+    ['committee_schedule_shared', data.scheduleUrl],
+  ] as const)('%s is generic, private-data-free, and uses its authenticated deep link', (kind, url) => {
+    const privateData = {
+      ...data,
+      speakerName: 'Active committee recipient',
+      title: 'Secret proposal title',
+      scheduleDate: '2026-11-14',
+      scheduleTime: '10:15',
+      scheduleRoom: 'Private planning room',
+    };
+
+    for (const locale of ['en', 'fr'] as const) {
+      const email = renderEmail(kind, locale, privateData);
+      expect(email.text).toContain(url);
+      expect(email.text).not.toContain(privateData.title);
+      expect(email.text).not.toContain(privateData.proposalUrl);
+      expect(email.text).not.toContain(privateData.scheduleDate);
+      expect(email.text).not.toContain(privateData.scheduleTime);
+      expect(email.text).not.toContain(privateData.scheduleRoom);
+    }
+  });
+
+  it.each([
+    'committee_role_invited',
+    'committee_proposal_submitted',
+    'committee_schedule_shared',
+  ] as const)('%s renders one complete bilingual notice when staff language is unknown', (kind) => {
+    const email = renderBilingualEmail(kind, data, {
+      [kind]: {
+        en: { subject: 'English subject', body: 'English body.\n\n{reviewUrl}' },
+        fr: { subject: 'Objet français', body: 'Corps français.\n\n{reviewUrl}' },
+      },
+    });
+
+    expect(email.subject).toBe('English subject / Objet français');
+    expect(email.text).toContain('English body.');
+    expect(email.text).toContain('Corps français.');
+    expect(email.html).toContain('lang="en"');
+    expect(email.html).toContain('lang="fr"');
   });
 
   it('mentions the visa only when one is needed', () => {
@@ -73,6 +130,16 @@ describe('renderEmail', () => {
     expect(html).toContain(`<a href="${data.proposalUrl}">`);
   });
 
+  it('describes schedule notices as role-shared working placements', () => {
+    const scheduleUrl = data.proposalUrl;
+    for (const locale of ['en', 'fr'] as const) {
+      const email = renderEmail('schedule_assigned', locale, { ...data, scheduleUrl });
+      expect(email.text).toContain(scheduleUrl);
+      expect(email.text.toLowerCase()).toMatch(/working placement|placement de travail/);
+      expect(email.text.toLowerCase()).toMatch(/committee|comité/);
+    }
+  });
+
   it('escapes markup in speaker-supplied values', () => {
     const html = renderEmail('accepted', 'en', {
       ...data,
@@ -91,6 +158,14 @@ describe('renderEmail', () => {
     // A receipt that waited for the batch would arrive weeks after the talk it
     // acknowledges.
     expect(DECISION_KINDS).not.toContain('submission_received');
+    expect(DECISION_KINDS).not.toContain('committee_role_invited');
+    expect(DECISION_KINDS).not.toContain('committee_proposal_submitted');
+    expect(DECISION_KINDS).not.toContain('committee_schedule_shared');
+    expect(STAFF_EMAIL_KINDS).toEqual([
+      'committee_proposal_submitted',
+      'committee_schedule_shared',
+    ]);
+    expect(ROLE_INVITATION_EMAIL_KINDS).toEqual(['committee_role_invited']);
   });
 });
 
@@ -109,7 +184,7 @@ describe('overrides', () => {
   });
 
   it('leaves the languages and messages it does not name alone', () => {
-    expect(renderEmail('accepted', 'fr', data, override).text).toContain('est au programme');
+    expect(renderEmail('accepted', 'fr', data, override).text).toContain('une invitation');
     expect(renderEmail('rejected', 'en', data, override).text).toContain('not able to fit');
   });
 

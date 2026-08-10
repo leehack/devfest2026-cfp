@@ -15,7 +15,6 @@ import {
 import { BarChart, ScoreHistogram, StackedBar } from '../../components/charts';
 import {
   PROPOSAL_STATUSES,
-  STATUS_SETS,
   inStatusSet,
   type ProposalStatus,
 } from '@shared/enums';
@@ -33,7 +32,7 @@ import { DECISION_KINDS } from '@shared/emailTemplates';
 import { compareNormalizedScores } from '@shared/aggregate';
 
 const HIGH_DISAGREEMENT = 1;
-const ADMIN_PROPOSAL_STATUSES = ['submitted', ...STATUS_SETS.decidable] as const;
+const ADMIN_PROPOSAL_STATUSES = ['under_review', 'accepted', 'waitlisted', 'rejected'] as const;
 
 /**
  * One headshot, fetched only when an organiser asks for it.
@@ -45,11 +44,11 @@ const ADMIN_PROPOSAL_STATUSES = ['submitted', ...STATUS_SETS.decidable] as const
  */
 function Headshot({
   cfpId,
-  speakerUid,
+  proposalId,
   fieldKey,
 }: {
   cfpId: string;
-  speakerUid: string;
+  proposalId: string;
   fieldKey: string;
 }) {
   const { t } = useI18n();
@@ -61,7 +60,7 @@ function Headshot({
     setBusy(true);
     setError('');
     try {
-      const { data } = await headshotImage({ cfpId, speakerUid, key: fieldKey });
+      const { data } = await headshotImage({ cfpId, proposalId, key: fieldKey });
       setUrl(data.dataUrl);
     } catch (e) {
       setError(adminError(e, t));
@@ -90,13 +89,13 @@ function Answered({
   cfpId,
   fields,
   answers,
-  speakerUid,
+  proposalId,
   title,
 }: {
   cfpId: string;
   fields: ConfirmField[];
   answers?: Answers;
-  speakerUid?: string;
+  proposalId?: string;
   title: string;
 }) {
   const { t, locale } = useI18n();
@@ -118,14 +117,16 @@ function Answered({
       <dl className="answers">
       {given.map(({ key, field, value }) => {
         const storedImage =
-          typeof value === 'string' && value.startsWith(`cfps/${cfpId}/headshots/`);
+          typeof value === 'string' &&
+          (value.startsWith(`cfps/${cfpId}/headshots/`) ||
+            value.startsWith(`cfps/${cfpId}/confirmedHeadshots/`));
         return (
         <div key={key}>
           <dt>{field ? localised(field.label, locale) : <code className="mono">{key}</code>}</dt>
           <dd>
             {field?.type === 'image' || storedImage ? (
-              speakerUid ? (
-                <Headshot cfpId={cfpId} speakerUid={speakerUid} fieldKey={key} />
+              proposalId ? (
+                <Headshot cfpId={cfpId} proposalId={proposalId} fieldKey={key} />
               ) : null
             ) : typeof value === 'boolean' ? (
               value ? (
@@ -334,6 +335,8 @@ interface UndoDecision {
   action: number;
   proposalId: string;
   title: string;
+  from: ProposalStatus;
+  /** A decision returns to committee review, never to the editable submitted state. */
   previous: ProposalStatus;
   next: ProposalStatus;
 }
@@ -467,11 +470,13 @@ function ReviewCoverage({
 
 export function Proposals({
   cfpId,
+  readOnly = false,
   pendingEmailCount,
   pendingEmailCheckFailed,
   onEmailQueueChange,
 }: {
   cfpId: string;
+  readOnly?: boolean;
   pendingEmailCount?: number | null;
   pendingEmailCheckFailed?: boolean;
   onEmailQueueChange?: () => void | Promise<void>;
@@ -600,6 +605,7 @@ export function Proposals({
   );
 
   async function decide(row: ProposalRow, next: ProposalStatus) {
+    if (readOnly) return;
     const previous = row.status;
     if (previous === next || pending.has(row.id)) return;
     const scope = cfpId;
@@ -625,12 +631,15 @@ export function Proposals({
         action,
         proposalId: row.id,
         title: row.title || t.admin.untitled,
-        previous,
+        from: previous,
+        previous: previous === 'submitted' ? 'under_review' as const : previous,
         next,
       };
-      committedDecisions.current.set(action, decision);
-      const latest = Math.max(...committedDecisions.current.keys());
-      setUndo(committedDecisions.current.get(latest) ?? null);
+      if (!(previous === 'submitted' && next === 'under_review')) {
+        committedDecisions.current.set(action, decision);
+        const latest = Math.max(...committedDecisions.current.keys());
+        setUndo(committedDecisions.current.get(latest) ?? null);
+      }
       void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
@@ -654,7 +663,7 @@ export function Proposals({
   }
 
   async function undoDecision() {
-    if (!undo || pending.has(undo.proposalId)) return;
+    if (readOnly || !undo || pending.has(undo.proposalId)) return;
     const snapshot = undo;
     const scope = cfpId;
     setUndo(null);
@@ -823,6 +832,7 @@ export function Proposals({
           <div>
             <h2>{t.admin.proposals}</h2>
             <p className="section__help">{t.admin.proposalsHelp}</p>
+            <p className="decision-panel__guardrail">{t.admin.speakerResponseGuardrail}</p>
           </div>
         </div>
 
@@ -832,7 +842,7 @@ export function Proposals({
               <span>
                 {t.admin.decisionChanged(
                   undo.title,
-                  t.enums.status[undo.previous],
+                  t.enums.status[undo.from],
                   t.enums.status[undo.next],
                 )}
               </span>
@@ -847,7 +857,7 @@ export function Proposals({
               <button
                 type="button"
                 className="btn btn--ghost"
-                disabled={pending.has(undo.proposalId)}
+                disabled={readOnly || pending.has(undo.proposalId)}
                 onClick={undoDecision}
               >
                 {t.admin.undo}
@@ -1024,19 +1034,22 @@ export function Proposals({
                               className="field__input field__input--select"
                               aria-label={`${t.admin.colStatus}: ${row.title}`}
                               value={row.status}
-                              disabled={saving}
+                              disabled={readOnly || saving}
                               onChange={(event) =>
                                 void decide(row, event.target.value as ProposalStatus)
                               }
                             >
-                              {ADMIN_PROPOSAL_STATUSES.map((status) => (
+                              {(
+                                row.status === 'submitted'
+                                  ? (['submitted', ...ADMIN_PROPOSAL_STATUSES] as const)
+                                  : ADMIN_PROPOSAL_STATUSES
+                              ).map((status) => (
                                 <option key={status} value={status}>
                                   {t.enums.status[status]}
                                 </option>
                               ))}
-                              {!(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(
-                                row.status,
-                              ) && (
+                              {row.status !== 'submitted' &&
+                                !(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(row.status) && (
                                 <option value={row.status} disabled>
                                   {t.enums.status[row.status]}
                                 </option>
@@ -1119,7 +1132,7 @@ export function Proposals({
                   cfpId={cfpId}
                   fields={questions}
                   answers={row.confirmAnswers}
-                  speakerUid={(row.speakerIds ?? [])[0]}
+                  proposalId={row.id}
                   title={t.admin.form}
                 />
               </li>

@@ -18,7 +18,10 @@ import { adminError } from '../lib/errors';
 import { sendTestEmail, setEmailTemplate } from '../lib/roles';
 import {
   EMAIL_KINDS,
+  DECISION_KINDS,
   PLACEHOLDERS,
+  SCHEDULE_EMAIL_KINDS,
+  STAFF_EMAIL_KINDS,
   activeTemplate,
   builtInTemplate,
   renderEmail,
@@ -34,6 +37,7 @@ export function EmailPreview({
   cfpName,
   configured,
   templates,
+  readOnly = false,
   onSaved,
   onDirtyChange,
 }: {
@@ -41,6 +45,7 @@ export function EmailPreview({
   cfpName: string;
   configured: boolean;
   templates: TemplateOverrides;
+  readOnly?: boolean;
   onSaved: () => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -58,7 +63,8 @@ export function EmailPreview({
   const [error, setError] = useState('');
   const selection = `${kind}:${previewLocale}`;
   const previousSelection = useRef(selection);
-  const dirty = draft.subject !== baseline.subject || draft.body !== baseline.body;
+  const dirty =
+    !readOnly && (draft.subject !== baseline.subject || draft.body !== baseline.body);
 
   // A refresh of the queue may carry a new object containing the same templates.
   // It updates a clean editor, but never writes over a sentence in progress.
@@ -97,6 +103,10 @@ export function EmailPreview({
 
   const custom = Boolean(templates?.[kind]?.[previewLocale]);
   const problem = validateTemplate(draft);
+  const staffImmediate = STAFF_EMAIL_KINDS.includes(kind);
+  const heldSpeaker = [...DECISION_KINDS, ...SCHEDULE_EMAIL_KINDS].includes(kind);
+  const deliveryMode = staffImmediate ? 'staff' : heldSpeaker ? 'held' : 'automatic';
+  const sampleOrigin = typeof window === 'undefined' ? 'https://cfp.example.org' : window.location.origin;
 
   // From the draft, not from storage: the point is to see an edit before saving.
   const email = renderEmail(
@@ -105,16 +115,22 @@ export function EmailPreview({
     {
       speakerName: 'Ada Lovelace',
       title: 'Notes on the Analytical Engine',
-      proposalUrl: `${window.location.origin}/c/${cfpId}/submit`,
+      proposalUrl: `${sampleOrigin}/c/${cfpId}/submit`,
       // The real name, because {event} appears in every subject line and a
       // stand-in reads as "Your Your event talk has been accepted".
       event: cfpName,
       needsVisa,
+      scheduleDate: 'Saturday, November 14',
+      scheduleTime: '10:00–10:40',
+      scheduleRoom: 'Room A',
+      scheduleUrl: `${sampleOrigin}/c/${cfpId}/${kind === 'committee_schedule_shared' ? 'schedule' : 'submit'}`,
+      reviewUrl: `${sampleOrigin}/c/${cfpId}/review`,
     },
     { [kind]: { [previewLocale]: draft } },
   );
 
   async function run(fn: () => Promise<string>) {
+    if (readOnly) return;
     setBusy(true);
     setNote('');
     setError('');
@@ -155,9 +171,31 @@ export function EmailPreview({
           <Checkbox label={t.admin.emailPreviewVisa} checked={needsVisa} onChange={setNeedsVisa} />
         )}
         <Checkbox label={t.admin.emailPreviewPlain} checked={plain} onChange={setPlain} />
-        <Checkbox label={t.admin.emailEdit} checked={editing} onChange={setEditing} />
+        <Checkbox
+          label={t.admin.emailEdit}
+          checked={editing}
+          onChange={setEditing}
+          disabled={readOnly}
+        />
         {custom && <span className="muted">{t.admin.emailCustom}</span>}
       </div>
+
+      <aside className={`email-delivery-mode email-delivery-mode--${deliveryMode}`}>
+        <strong>
+          {staffImmediate
+            ? t.admin.emailDeliveryImmediateStaff
+            : heldSpeaker
+              ? t.admin.emailDeliveryHeldSpeaker
+              : t.admin.emailDeliveryAutomatic}
+        </strong>
+        <span>
+          {staffImmediate
+            ? t.admin.emailDeliveryImmediateStaffHelp
+            : heldSpeaker
+              ? t.admin.emailDeliveryHeldSpeakerHelp
+              : t.admin.emailDeliveryAutomaticHelp}
+        </span>
+      </aside>
 
       {editing && (
         <div className="editor">
@@ -166,7 +204,7 @@ export function EmailPreview({
             required
             value={draft.subject}
             onChange={(subject) => setDraft((d) => ({ ...d, subject }))}
-            disabled={busy}
+            disabled={busy || readOnly}
           />
           <TextAreaField
             label={t.admin.emailBodyLabel}
@@ -174,7 +212,7 @@ export function EmailPreview({
             rows={14}
             value={draft.body}
             onChange={(body) => setDraft((d) => ({ ...d, body }))}
-            disabled={busy}
+            disabled={busy || readOnly}
           />
           <p className="field__help">
             {t.admin.emailPlaceholders}{' '}
@@ -196,7 +234,7 @@ export function EmailPreview({
             <button
               type="button"
               className="btn btn--primary"
-              disabled={busy || Boolean(problem)}
+              disabled={busy || readOnly || Boolean(problem)}
               onClick={() =>
                 run(async () => {
                   await setEmailTemplate({ cfpId, kind, locale: previewLocale, ...draft });
@@ -211,7 +249,7 @@ export function EmailPreview({
             <button
               type="button"
               className="btn"
-              disabled={busy || !custom}
+              disabled={busy || readOnly || !custom}
               onClick={() =>
                 run(async () => {
                   await setEmailTemplate({ cfpId, kind, locale: previewLocale, reset: true });
@@ -247,7 +285,7 @@ export function EmailPreview({
       <button
         type="button"
         className="btn"
-        disabled={busy}
+        disabled={busy || readOnly}
         onClick={() =>
           run(async () => {
             const { data } = await sendTestEmail({ cfpId, kind, locale: previewLocale, needsVisa });

@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Checkbox, RadioGroup, TextAreaField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
-import { toDate, toDateTimeInput } from '../../lib/dates';
+import {
+  addZonedCalendarDays,
+  toDate,
+  toZonedDateTimeInput,
+  zonedDateTimeToIso,
+} from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { archiveCfp, deleteCfp, loadCfp, setCfpWindow, updateCfp } from '../../lib/roles';
 import { navigate } from '../../lib/router';
@@ -15,10 +20,12 @@ export function Settings({
   cfpId,
   role,
   onDirtyChange,
+  onCfpChange,
 }: {
   cfpId: string;
   role: CfpRole;
   onDirtyChange?: (dirty: boolean) => void;
+  onCfpChange?: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const tRef = useLatest(t);
@@ -37,7 +44,8 @@ export function Settings({
   const [closesAt, setClosesAt] = useState('');
   const [paused, setPaused] = useState(false);
   const [reviewsVisible, setReviewsVisible] = useState(false);
-  const [timeZone, setTimeZone] = useState('');
+  const [programmePublished, setProgrammePublished] = useState(false);
+  const [windowTimeZone, setWindowTimeZone] = useState('America/Toronto');
   const [loadedCfp, setLoadedCfp] = useState('');
   const [failedCfp, setFailedCfp] = useState('');
   const [identityBaseline, setIdentityBaseline] = useState('');
@@ -106,8 +114,8 @@ export function Settings({
       const nextVenue = cfp.venue ?? '';
       const nextPlace = cfp.location ?? '';
       const nextWebsite = cfp.website ?? '';
-      const nextOpensAt = toDateTimeInput(toDate(cfp.opensAt));
-      const nextClosesAt = toDateTimeInput(toDate(cfp.closesAt));
+      const nextOpensAt = toZonedDateTimeInput(toDate(cfp.opensAt), nextEventTimeZone);
+      const nextClosesAt = toZonedDateTimeInput(toDate(cfp.closesAt), nextEventTimeZone);
 
       setName(nextName);
       setVisibility(nextVisibility);
@@ -116,6 +124,7 @@ export function Settings({
       setEventDate(nextEventDate);
       setEventEndDate(nextEventEndDate);
       setEventTimeZone(nextEventTimeZone);
+      setWindowTimeZone(nextEventTimeZone);
       setVenue(nextVenue);
       setPlace(nextPlace);
       setWebsite(nextWebsite);
@@ -124,6 +133,7 @@ export function Settings({
       setClosesAt(nextClosesAt);
       setPaused(cfp.paused === true);
       setReviewsVisible(cfp.reviewsVisible === true);
+      setProgrammePublished(Boolean(cfp.publishedScheduleId));
       setIdentityBaseline(
         JSON.stringify([
           nextName,
@@ -179,10 +189,6 @@ export function Settings({
     });
   }, [cfpId, refresh]);
 
-  useEffect(() => {
-    setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  }, []);
-
   /** One `busy`, one `Result`: two saves running at once is not a state to design for. */
   async function run(
     work: (current: () => boolean) => Promise<void>,
@@ -218,6 +224,8 @@ export function Settings({
   }
 
   async function saveIdentity() {
+    if (archived) return;
+    const previousWindowTimeZone = windowTimeZone;
     const next = {
       name: name.trim(),
       visibility,
@@ -246,12 +254,38 @@ export function Settings({
         })),
       t.admin.identitySaved,
       () => {
+        const inNextZone = (value: string) => {
+          const instant = zonedDateTimeToIso(value, previousWindowTimeZone);
+          return instant
+            ? toZonedDateTimeInput(new Date(instant), next.eventTimeZone)
+            : value;
+        };
+        const nextOpensAt = inNextZone(opensAt);
+        const nextClosesAt = inNextZone(closesAt);
+        let nextWindowBaseline = windowBaseline;
+        try {
+          const [baselineOpens, baselineCloses, baselinePaused, baselineReviews] = JSON.parse(
+            windowBaseline,
+          ) as [string, string, boolean, boolean];
+          nextWindowBaseline = JSON.stringify([
+            inNextZone(baselineOpens),
+            inNextZone(baselineCloses),
+            baselinePaused,
+            baselineReviews,
+          ]);
+        } catch {
+          // An empty baseline only exists while loading, when the save is disabled.
+        }
         setName(next.name);
         setDescriptionEn(next.descriptionEn);
         setDescriptionFr(next.descriptionFr);
         setEventDate(next.eventDate);
         setEventEndDate(next.eventEndDate);
         setEventTimeZone(next.eventTimeZone);
+        setWindowTimeZone(next.eventTimeZone);
+        setOpensAt(nextOpensAt);
+        setClosesAt(nextClosesAt);
+        setWindowBaseline(nextWindowBaseline);
         setVenue(next.venue);
         setPlace(next.place);
         setWebsite(next.website);
@@ -274,20 +308,48 @@ export function Settings({
   }
 
   async function saveWindow() {
+    if (archived) return;
+    const opensAtIso = zonedDateTimeToIso(opensAt, windowTimeZone);
+    const closesAtIso = zonedDateTimeToIso(closesAt, windowTimeZone);
+    if (
+      !opensAtIso ||
+      !closesAtIso ||
+      new Date(closesAtIso).getTime() <= new Date(opensAtIso).getTime()
+    ) {
+      setNote('');
+      setError(t.admin.windowInvalid);
+      return;
+    }
     await run(
       async () =>
         void (await setCfpWindow({
           cfpId,
-          // ISO, so the server stores an instant rather than a wall-clock
-          // time in whichever zone the admin happens to be sitting in.
-          opensAt: new Date(opensAt).toISOString(),
-          closesAt: new Date(closesAt).toISOString(),
+          opensAt: opensAtIso,
+          closesAt: closesAtIso,
           paused,
           reviewsVisible,
         })),
       t.admin.windowSaved,
       () => setWindowBaseline(JSON.stringify([opensAt, closesAt, paused, reviewsVisible])),
     );
+  }
+
+  function prepareLateIntake() {
+    if (archived) return;
+    const now = new Date();
+    const nextOpensAt = toZonedDateTimeInput(now, windowTimeZone);
+    const nextClosesAt = addZonedCalendarDays(nextOpensAt, windowTimeZone, 7);
+    if (!nextClosesAt) {
+      setNote('');
+      setError(t.admin.windowInvalid);
+      return;
+    }
+    setOpensAt(nextOpensAt);
+    setClosesAt(nextClosesAt);
+    setPaused(false);
+    setReviewsVisible(false);
+    setNote('');
+    setError('');
   }
 
   if (loadedCfp !== cfpId) {
@@ -308,6 +370,17 @@ export function Settings({
     );
   }
 
+  const opensAtIso = zonedDateTimeToIso(opensAt, windowTimeZone);
+  const closesAtIso = zonedDateTimeToIso(closesAt, windowTimeZone);
+  const windowOpenNow = Boolean(
+    !paused &&
+      opensAtIso &&
+      closesAtIso &&
+      new Date(opensAtIso).getTime() <= Date.now() &&
+      Date.now() < new Date(closesAtIso).getTime(),
+  );
+  const eventTimeZoneUnsaved = eventTimeZone.trim() !== windowTimeZone;
+
   return (
     <>
       <section className="section section--form">
@@ -320,7 +393,7 @@ export function Settings({
           onChange={setName}
           required
           maxLength={CFP_LIMITS.nameMax}
-          disabled={busy}
+          disabled={busy || archived}
         />
 
         <RadioGroup
@@ -329,7 +402,7 @@ export function Settings({
           value={visibility}
           onChange={setVisibility}
           required
-          disabled={busy}
+          disabled={busy || archived}
           options={[
             { value: 'public', label: t.platform.visibilityPublic },
             { value: 'private', label: t.platform.visibilityPrivate },
@@ -352,7 +425,7 @@ export function Settings({
           onChange={setDescriptionEn}
           maxLength={CFP_LIMITS.descriptionMax}
           rows={5}
-          disabled={busy}
+          disabled={busy || archived}
         />
         <TextAreaField
           label={t.admin.descriptionFr}
@@ -361,7 +434,7 @@ export function Settings({
           onChange={setDescriptionFr}
           maxLength={CFP_LIMITS.descriptionMax}
           rows={5}
-          disabled={busy}
+          disabled={busy || archived}
         />
 
         <div className="grid grid--2">
@@ -370,7 +443,7 @@ export function Settings({
             type="date"
             value={eventDate}
             onChange={setEventDate}
-            disabled={busy}
+            disabled={busy || archived}
           />
           <TextField
             label={t.admin.eventEndDate}
@@ -378,7 +451,7 @@ export function Settings({
             value={eventEndDate}
             onChange={setEventEndDate}
             min={eventDate || undefined}
-            disabled={busy}
+            disabled={busy || archived}
           />
           <TextField
             label={t.admin.eventTimeZone}
@@ -386,7 +459,7 @@ export function Settings({
             onChange={setEventTimeZone}
             placeholder="America/Toronto"
             maxLength={CFP_LIMITS.timeZoneMax}
-            disabled={busy}
+            disabled={busy || archived}
           />
           <TextField
             label={t.admin.eventWebsite}
@@ -395,14 +468,14 @@ export function Settings({
             onChange={setWebsite}
             maxLength={CFP_LIMITS.websiteMax}
             placeholder="https://"
-            disabled={busy}
+            disabled={busy || archived}
           />
           <TextField
             label={t.admin.eventVenue}
             value={venue}
             onChange={setVenue}
             maxLength={CFP_LIMITS.venueMax}
-            disabled={busy}
+            disabled={busy || archived}
           />
           <TextField
             label={t.admin.eventLocation}
@@ -410,22 +483,50 @@ export function Settings({
             value={place}
             onChange={setPlace}
             maxLength={CFP_LIMITS.locationMax}
-            disabled={busy}
+            disabled={busy || archived}
           />
         </div>
 
         <button
           type="button"
           className="btn btn--primary"
-          disabled={busy || !name.trim()}
+          disabled={busy || archived || !name.trim()}
           onClick={() => void saveIdentity()}
         >
           {t.admin.identitySave}
         </button>
       </section>
 
-      <section className="section section--form">
+      <section className="section section--form" id="late-intake-window">
         <h2>{t.admin.window}</h2>
+
+        {programmePublished && (
+          <aside className="window-lifecycle-note" aria-labelledby="late-intake-window-title">
+            <p className="window-lifecycle-note__eyebrow">{t.admin.lateIntakeEyebrow}</p>
+            <h3 id="late-intake-window-title">
+              {windowOpenNow ? t.admin.lateIntakeWindowOpen : t.admin.lateIntakeWindowClosed}
+            </h3>
+            <p>{t.admin.lateIntakeWindowHelp}</p>
+            {!windowOpenNow && (
+              <div className="window-lifecycle-note__action">
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={busy || archived || eventTimeZoneUnsaved}
+                  onClick={prepareLateIntake}
+                >
+                  {t.admin.prepareLateIntake}
+                </button>
+                <p>{t.admin.prepareLateIntakeHelp}</p>
+              </div>
+            )}
+            {reviewsVisible && (
+              <p className="window-lifecycle-note__warning" role="alert">
+                {t.admin.lateIntakeScoresWarning}
+              </p>
+            )}
+          </aside>
+        )}
 
         <div className="grid grid--2">
           <TextField
@@ -434,7 +535,7 @@ export function Settings({
             value={opensAt}
             onChange={setOpensAt}
             required
-            disabled={busy}
+            disabled={busy || archived}
           />
           <TextField
             label={t.admin.closesAtLabel}
@@ -442,22 +543,24 @@ export function Settings({
             value={closesAt}
             onChange={setClosesAt}
             required
-            disabled={busy}
+            disabled={busy || archived}
           />
         </div>
         <p className="field__help">
-          {t.platform.timeZone.replace(
-            '{zone}',
-            timeZone || t.platform.timeZoneFallback,
-          )}
+          {t.admin.windowTimeZone.replace('{zone}', windowTimeZone)}
         </p>
+        {eventTimeZoneUnsaved && (
+          <p className="field__error" role="alert">
+            {t.admin.windowTimeZoneUnsaved}
+          </p>
+        )}
 
         <Checkbox
           label={t.admin.pausedLabel}
           help={t.admin.pausedHelp}
           checked={paused}
           onChange={setPaused}
-          disabled={busy}
+          disabled={busy || archived}
         />
 
         <Checkbox
@@ -465,13 +568,13 @@ export function Settings({
           help={t.admin.reviewsVisibleHelp}
           checked={reviewsVisible}
           onChange={setReviewsVisible}
-          disabled={busy}
+          disabled={busy || archived}
         />
 
         <button
           type="button"
           className="btn btn--primary"
-          disabled={busy || !opensAt || !closesAt}
+          disabled={busy || archived || !opensAt || !closesAt || eventTimeZoneUnsaved}
           onClick={() => void saveWindow()}
         >
           {t.admin.saveWindow}
@@ -482,6 +585,7 @@ export function Settings({
         cfpId={cfpId}
         role={role}
         archived={archived}
+        onCfpChange={onCfpChange}
         busy={busy}
         run={run}
         note={note}
@@ -501,6 +605,7 @@ function Lifecycle({
   cfpId,
   role,
   archived,
+  onCfpChange,
   busy,
   run,
   note,
@@ -510,6 +615,7 @@ function Lifecycle({
   cfpId: string;
   role: CfpRole;
   archived: boolean;
+  onCfpChange?: () => void | Promise<void>;
   busy: boolean;
   run: (
     work: (current: () => boolean) => Promise<void>,
@@ -534,7 +640,7 @@ function Lifecycle({
 
   return (
     <>
-      <section className="section section--form">
+      <section className="section section--form" id="event-closeout">
         <h2>{t.admin.archive}</h2>
         <p className="section__help">{t.admin.archiveHelp}</p>
         <button
@@ -544,7 +650,10 @@ function Lifecycle({
           onClick={() => {
             if (!archived && !window.confirm(t.admin.archiveConfirm)) return;
             void run(
-              async () => void (await archiveCfp({ cfpId, archived: !archived })),
+              async () => {
+                await archiveCfp({ cfpId, archived: !archived });
+                await onCfpChange?.();
+              },
               archived ? t.admin.unarchived : t.admin.archived,
             );
           }}

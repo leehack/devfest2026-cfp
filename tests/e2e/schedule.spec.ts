@@ -3,13 +3,26 @@ import { expect, test } from '@playwright/test';
 import {
   callAs,
   callJson,
+  callPublic,
+  clearSharedSchedulePointerDirect,
   createAccount,
+  createUnverifiedAccount,
+  inviteRole,
+  readCfp,
+  readEmailLog,
+  readPublicScheduleEntry,
+  readPublicScheduleRelease,
   readScheduleEntry,
+  readScheduleReleaseIds,
   reset,
+  seedPlatformMember,
+  setCfpArchivedDirect,
   seedMember,
   seedProposal,
   seedSpeaker,
+  setEmailStatusDirect,
   setProposalStatusDirect,
+  setScheduleEntryCancelledDirect,
   waitForEmail,
 } from './backend';
 import { at, signInAs, type Identity } from './form';
@@ -24,12 +37,160 @@ const SPEAKER: Identity = {
   email: 'schedule-speaker@example.org',
   name: 'Samira Speaker',
 };
+const OTHER_SPEAKER: Identity = {
+  sub: 'schedule-other-speaker',
+  email: 'schedule-other-speaker@example.org',
+  name: 'Omar Other',
+};
+const TENTATIVE_SPEAKER: Identity = {
+  sub: 'schedule-tentative-speaker',
+  email: 'schedule-tentative-speaker@example.org',
+  name: 'Taylor Tentative',
+};
+const REVIEWER: Identity = {
+  sub: 'schedule-reviewer',
+  email: 'schedule-reviewer@example.org',
+  name: 'Riley Reviewer',
+};
+const PENDING_REVIEWER: Identity = {
+  sub: 'schedule-pending-reviewer',
+  email: 'schedule-pending-reviewer@example.org',
+  name: 'Parker Pending',
+};
+const REVOKED_REVIEWER: Identity = {
+  sub: 'schedule-revoked-reviewer',
+  email: 'schedule-revoked-reviewer@example.org',
+  name: 'Remy Revoked',
+};
+const GLOBAL_OWNER: Identity = {
+  sub: 'schedule-global-owner',
+  email: 'schedule-global-owner@example.org',
+  name: 'Gale Global',
+};
 
 test.beforeEach(async () => {
   await reset();
 });
 
-test('an admin publishes a confirmed programme and later cancellations stay public', async ({
+async function seedDisclosureSchedule() {
+  const [admin, speaker, otherSpeaker, tentativeSpeaker, reviewer, pending, revoked, global] =
+    await Promise.all(
+      [
+        ADMIN,
+        SPEAKER,
+        OTHER_SPEAKER,
+        TENTATIVE_SPEAKER,
+        REVIEWER,
+        PENDING_REVIEWER,
+        REVOKED_REVIEWER,
+        GLOBAL_OWNER,
+      ].map(createAccount),
+    );
+  await Promise.all([
+    seedMember(admin.uid, 'admin', undefined, ADMIN.email),
+    seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email),
+    seedMember(revoked.uid, 'reviewer', undefined, REVOKED_REVIEWER.email),
+    inviteRole(PENDING_REVIEWER.email, 'reviewer'),
+    seedPlatformMember(global.uid, 'owner', GLOBAL_OWNER.email, GLOBAL_OWNER.name),
+    seedSpeaker(speaker.uid, { name: SPEAKER.name, email: SPEAKER.email }),
+    seedSpeaker(otherSpeaker.uid, {
+      name: OTHER_SPEAKER.name,
+      email: OTHER_SPEAKER.email,
+    }),
+    seedSpeaker(tentativeSpeaker.uid, {
+      name: TENTATIVE_SPEAKER.name,
+      email: TENTATIVE_SPEAKER.email,
+    }),
+    seedProposal('modern-web', {
+      speakerUid: speaker.uid,
+      title: 'The modern web, without the maze',
+      status: 'confirmed',
+      speaker: { name: SPEAKER.name },
+    }),
+    seedProposal('other-talk', {
+      speakerUid: otherSpeaker.uid,
+      title: 'A second confirmed session',
+      status: 'confirmed',
+      speaker: { name: OTHER_SPEAKER.name },
+    }),
+    seedProposal('tentative-talk', {
+      speakerUid: tentativeSpeaker.uid,
+      title: 'A tentative session',
+      status: 'accepted',
+      speaker: { name: TENTATIVE_SPEAKER.name },
+    }),
+  ]);
+  const config = {
+    timeZone: 'America/Toronto',
+    revision: 0,
+    days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+    rooms: [
+      { id: 'blue', name: { en: 'Blue room', fr: 'Salle bleue' } },
+      { id: 'amber', name: { en: 'Amber room', fr: 'Salle ambre' } },
+    ],
+  };
+  let state = await callJson(admin.idToken, 'setScheduleConfig', {
+    config,
+    expectedRevision: 0,
+  });
+  for (const entry of [
+    {
+      id: 'modern-web',
+      kind: 'proposal',
+      proposalId: 'modern-web',
+      date: '2026-11-14',
+      startsAt: '10:00',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+    {
+      id: 'other-talk',
+      kind: 'proposal',
+      proposalId: 'other-talk',
+      date: '2026-11-14',
+      startsAt: '11:00',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+    {
+      id: 'tentative-talk',
+      kind: 'proposal',
+      proposalId: 'tentative-talk',
+      date: '2026-11-14',
+      startsAt: '12:00',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+    {
+      id: 'coffee-break',
+      kind: 'custom',
+      customType: 'break',
+      title: { en: 'Coffee break', fr: 'Pause café' },
+      date: '2026-11-14',
+      startsAt: '10:00',
+      durationMinutes: 20,
+      roomId: 'amber',
+    },
+  ]) {
+    state = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: state.revision,
+      entry,
+    });
+  }
+  return {
+    admin,
+    speaker,
+    otherSpeaker,
+    reviewer,
+    pending,
+    revoked,
+    global,
+    config,
+    revision: state.revision as number,
+  };
+}
+
+test('an admin shares and publishes without duplicating notices, and cancellations stay stable', async ({
   page,
 }) => {
   const [admin, speaker] = await Promise.all([createAccount(ADMIN), createAccount(SPEAKER)]);
@@ -89,9 +250,14 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
       roomId: 'blue',
     },
   });
-  let published = await callJson(admin.idToken, 'publishSchedule', {
+  expect(
+    await callAs(admin.idToken, 'publishSchedule', { expectedRevision: scheduled.revision }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+
+  let shared = await callJson(admin.idToken, 'shareSchedulePreview', {
     expectedRevision: scheduled.revision,
   });
+  expect(shared).toMatchObject({ version: 1, sharedCount: 1, omittedCount: 0 });
 
   const queued = await waitForEmail(
     (rows) => rows.some((row) => row.kind === 'schedule_assigned' && row.status === 'held'),
@@ -102,6 +268,13 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
       expect.objectContaining({ kind: 'schedule_assigned', proposalId: 'modern-web', status: 'held' }),
     ]),
   );
+
+  const beforeFirstPublish = await readEmailLog();
+  let published = await callJson(admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+  expect(published.releaseId).toBe(shared.releaseId);
+  expect(await readEmailLog()).toHaveLength(beforeFirstPublish.length);
 
   expect(
     await callAs(admin.idToken, 'publishSchedule', { expectedRevision: published.revision }),
@@ -120,11 +293,11 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
       roomId: 'amber',
     },
   });
-  published = await callJson(admin.idToken, 'publishSchedule', {
+  shared = await callJson(admin.idToken, 'shareSchedulePreview', {
     expectedRevision: withBreak.revision,
   });
+  expect(shared).toMatchObject({ version: 2, sharedCount: 2, omittedCount: 0 });
   const unchangedQueue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
-  expect(unchangedQueue.staleHeld).toBe(1);
   expect(unchangedQueue.held).toEqual([
     expect.objectContaining({
       kind: 'schedule_assigned',
@@ -152,6 +325,13 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
     'released unchanged schedule assignment',
   );
 
+  const beforeSecondPublish = await readEmailLog();
+  published = await callJson(admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+  expect(published.releaseId).toBe(shared.releaseId);
+  expect(await readEmailLog()).toHaveLength(beforeSecondPublish.length);
+
   const adjustedBreak = await callJson(admin.idToken, 'upsertScheduleEntry', {
     expectedRevision: published.revision,
     entry: {
@@ -165,12 +345,11 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
       roomId: 'amber',
     },
   });
-  published = await callJson(admin.idToken, 'publishSchedule', {
+  shared = await callJson(admin.idToken, 'shareSchedulePreview', {
     expectedRevision: adjustedBreak.revision,
   });
-  const retryReleaseId = published.releaseId;
+  const retryReleaseId = shared.releaseId;
   const retryableQueue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
-  expect(retryableQueue.staleHeld).toBe(2);
   expect(retryableQueue.held).toEqual([]);
   expect(retryableQueue.tally['dry_run:schedule_assigned']).toBe(1);
   expect(await callJson(admin.idToken, 'emailQueue', { action: 'retry' })).toMatchObject({
@@ -189,6 +368,9 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
       ),
     'retried schedule assignment after an unrelated release',
   );
+  published = await callJson(admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
 
   const moved = await callJson(admin.idToken, 'upsertScheduleEntry', {
     expectedRevision: published.revision,
@@ -202,14 +384,19 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
       roomId: 'blue',
     },
   });
-  published = await callJson(admin.idToken, 'publishSchedule', {
+  shared = await callJson(admin.idToken, 'shareSchedulePreview', {
     expectedRevision: moved.revision,
   });
   const queue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
-  expect(queue.staleHeld).toBe(3);
   expect(queue.held).toEqual([
     expect.objectContaining({ kind: 'schedule_changed', title: 'The modern web, without the maze' }),
   ]);
+  const beforeFinalPublish = await readEmailLog();
+  published = await callJson(admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+  expect(published.releaseId).toBe(shared.releaseId);
+  expect(await readEmailLog()).toHaveLength(beforeFinalPublish.length);
 
   await signInAs(page, ADMIN, at('/admin/schedule'));
   await expect(page.getByRole('heading', { name: 'Build the programme' })).toBeVisible();
@@ -259,10 +446,9 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
   await speakerSchedule.getByRole('link', { name: 'View session details' }).click();
   await expect(page.getByRole('heading', { name: 'The modern web, without the maze' })).toBeVisible();
 
-  await setProposalStatusDirect('modern-web', 'declined');
+  await setProposalStatusDirect('modern-web', 'withdrawn');
   await expect.poll(async () => (await readScheduleEntry(published.releaseId, 'modern-web'))?.cancelled).toBe(true);
   const cancelledQueue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
-  expect(cancelledQueue.staleHeld).toBe(4);
   expect(cancelledQueue.held).toEqual([
     expect.objectContaining({ kind: 'schedule_cancelled', title: 'The modern web, without the maze' }),
   ]);
@@ -270,7 +456,625 @@ test('an admin publishes a confirmed programme and later cancellations stay publ
   await expect(page.getByText('Cancelled', { exact: true })).toBeVisible();
 });
 
-test('an accepted speaker confirms and follows their published session into its calendar file', async ({
+test('keeps private, shared, and public schedule releases isolated by audience', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+
+  await page.goto(at(''));
+  await expect(page.getByRole('link', { name: 'Schedule' })).toHaveCount(0);
+  await page.goto(at('/schedule'));
+  await expect(page.getByText('The programme has not been published yet.')).toBeVisible();
+  await expect(page.getByText('The modern web, without the maze')).toHaveCount(0);
+  expect(await callPublic('getSharedSchedule', {})).toEqual({
+    ok: false,
+    code: 'UNAUTHENTICATED',
+  });
+  expect(
+    await callAs(fixture.admin.idToken, 'publishSchedule', {
+      expectedRevision: fixture.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+
+  let shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  expect(shared).toMatchObject({ version: 1, sharedCount: 3, omittedCount: 1 });
+  await page.reload();
+  await expect(page.getByText('The programme has not been published yet.')).toBeVisible();
+  await expect(page.getByText('A tentative session')).toHaveCount(0);
+
+  const moved = await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: shared.revision,
+    entry: {
+      id: 'modern-web',
+      kind: 'proposal',
+      proposalId: 'modern-web',
+      date: '2026-11-14',
+      startsAt: '10:15',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+  });
+  expect(
+    await callAs(fixture.admin.idToken, 'publishSchedule', {
+      expectedRevision: moved.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+  const stale = await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {});
+  expect(stale.stale).toBe(true);
+  expect(stale.entries.find((entry: { id: string }) => entry.id === 'modern-web')).toMatchObject({
+    startsAt: '10:00',
+  });
+
+  shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: moved.revision,
+  });
+  expect(shared).toMatchObject({ version: 2, sharedCount: 3, omittedCount: 1 });
+  const emailRowsBeforePublish = await readEmailLog();
+  const published = await callJson(fixture.admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+  expect(published).toMatchObject({ releaseId: shared.releaseId, version: shared.version });
+  expect(await readEmailLog()).toHaveLength(emailRowsBeforePublish.length);
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Programme' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'The modern web, without the maze' })).toBeVisible();
+  await expect(page.getByText('A tentative session')).toHaveCount(0);
+
+  // An event published before shared previews existed has only the public pointer.
+  // Archiving freezes that public record too; it cannot be taken offline afterward.
+  await clearSharedSchedulePointerDirect();
+  await setCfpArchivedDirect(true);
+  expect(
+    await callAs(fixture.admin.idToken, 'setScheduleConfig', {
+      config: fixture.config,
+      expectedRevision: shared.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+  expect(
+    await callAs(fixture.admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: shared.revision,
+      entry: {
+        id: 'archived-item',
+        kind: 'custom',
+        customType: 'break',
+        title: { en: 'Archived change' },
+        date: '2026-11-14',
+        startsAt: '14:00',
+        durationMinutes: 20,
+        roomId: 'amber',
+      },
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+  expect(
+    await callAs(fixture.admin.idToken, 'removeScheduleEntry', {
+      expectedRevision: shared.revision,
+      entryId: 'modern-web',
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+  expect(
+    await callAs(fixture.admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: shared.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+  expect(
+    await callAs(fixture.admin.idToken, 'publishSchedule', {
+      expectedRevision: shared.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+
+  expect(await callAs(fixture.admin.idToken, 'unpublishSchedule', {})).toMatchObject({
+    ok: false,
+    code: 'FAILED_PRECONDITION',
+  });
+  await setProposalStatusDirect('modern-web', 'withdrawn');
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  expect((await readPublicScheduleEntry(shared.releaseId, 'modern-web'))?.cancelled).not.toBe(true);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Programme' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'The modern web, without the maze' })).toBeVisible();
+  const internal = await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {});
+  expect(internal.schedule.id).toBe(shared.releaseId);
+});
+
+test('an anonymous public release contains no organiser provenance or private speaker fields', async () => {
+  const fixture = await seedDisclosureSchedule();
+  await seedProposal('modern-web', {
+    speakerUid: fixture.speaker.uid,
+    title: 'The modern web, without the maze',
+    status: 'confirmed',
+    speaker: {
+      name: SPEAKER.name,
+      bio: 'Attendee-facing biography.',
+      company: 'Example Co',
+      jobTitle: 'Engineer',
+      basedIn: 'Private profile location',
+      socials: [{ platform: 'linkedin', handle: 'private-handle' }],
+      isGde: true,
+      pastTalks: 'Private committee notes about earlier talks.',
+      sessionizeUrl: 'https://sessionize.com/private-speaker',
+    },
+  });
+  const shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  await callJson(fixture.admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+
+  const release = await readPublicScheduleRelease(shared.releaseId);
+  expect(Object.keys(release ?? {}).sort()).toEqual(
+    ['days', 'publishedAt', 'rooms', 'timeZone', 'version'].sort(),
+  );
+  expect(release).not.toHaveProperty('sharedBy');
+  expect(release).not.toHaveProperty('sharedAt');
+  expect(release).not.toHaveProperty('sourceRevision');
+  expect(release).not.toHaveProperty('sourceFingerprint');
+
+  const entry = await readPublicScheduleEntry(shared.releaseId, 'modern-web');
+  expect(entry?.session.speakers).toEqual([
+    {
+      name: SPEAKER.name,
+      bio: 'Attendee-facing biography.',
+      company: 'Example Co',
+      jobTitle: 'Engineer',
+    },
+  ]);
+  expect(entry?.session.speakers[0]).not.toHaveProperty('uid');
+  expect(entry?.session.speakers[0]).not.toHaveProperty('basedIn');
+  expect(entry?.session.speakers[0]).not.toHaveProperty('socials');
+  expect(entry?.session.speakers[0]).not.toHaveProperty('pastTalks');
+  expect(entry?.session.speakers[0]).not.toHaveProperty('sessionizeUrl');
+  expect(entry?.session.speakers[0]).not.toHaveProperty('isGde');
+});
+
+test('sharing and archiving cannot leave an orphan schedule release', async () => {
+  const fixture = await seedDisclosureSchedule();
+  await seedMember(fixture.global.uid, 'owner', undefined, GLOBAL_OWNER.email);
+  const before = await readScheduleReleaseIds();
+
+  const [share, archive] = await Promise.all([
+    callAs(fixture.admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: fixture.revision,
+    }),
+    callAs(fixture.global.idToken, 'archiveCfp', { archived: true }),
+  ]);
+
+  expect(archive).toMatchObject({ ok: true });
+  const cfp = await readCfp();
+  const created = (await readScheduleReleaseIds()).filter((id) => !before.includes(id));
+  if (share.ok) {
+    expect(created).toHaveLength(1);
+    expect(cfp).toMatchObject({ archived: true, sharedScheduleId: created[0] });
+  } else {
+    expect(created).toEqual([]);
+    expect(cfp).toMatchObject({ archived: true });
+  }
+});
+
+test('a shared schedule exposes only each confirmed speaker\'s own placement', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  const configured = await callJson(fixture.admin.idToken, 'setScheduleConfig', {
+    expectedRevision: fixture.revision,
+    config: {
+      ...fixture.config,
+      days: [
+        ...fixture.config.days,
+        { date: '2026-11-15', startsAt: '09:00', endsAt: '17:00' },
+      ],
+    },
+  });
+  let shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: configured.revision,
+  });
+
+  const own = await callJson(fixture.speaker.idToken, 'getSharedSchedule', {});
+  expect(own).toMatchObject({ audience: 'speaker', stale: false });
+  expect(own.entries.map((entry: { id: string }) => entry.id)).toEqual(['modern-web']);
+  expect(own.schedule.days).toEqual([
+    { date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' },
+  ]);
+  expect(own.schedule.rooms).toEqual([
+    { id: 'blue', name: { en: 'Blue room', fr: 'Salle bleue' } },
+  ]);
+  const other = await callJson(fixture.otherSpeaker.idToken, 'getSharedSchedule', {});
+  expect(other).toMatchObject({ audience: 'speaker', stale: false });
+  expect(other.entries.map((entry: { id: string }) => entry.id)).toEqual(['other-talk']);
+
+  await signInAs(page, SPEAKER, at());
+  let placement = page.locator('.submission-schedule');
+  await expect(placement.getByRole('heading', { name: 'Your working schedule' })).toBeVisible();
+  await expect(placement).toContainText('Not public');
+  await expect(placement).toContainText('10:00–10:40');
+  await expect(page.getByText('A second confirmed session')).toHaveCount(0);
+  await expect(page.getByText('Coffee break')).toHaveCount(0);
+  await expect(page.getByText('A tentative session')).toHaveCount(0);
+  await expect(placement.getByRole('link', { name: 'View session details' })).toHaveCount(0);
+
+  const moved = await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: shared.revision,
+    entry: {
+      id: 'modern-web',
+      kind: 'proposal',
+      proposalId: 'modern-web',
+      date: '2026-11-14',
+      startsAt: '10:15',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+  });
+  await page.reload();
+  placement = page.locator('.submission-schedule');
+  await expect(placement).toContainText('10:00–10:40');
+  await expect(placement).not.toContainText('10:15–10:55');
+
+  shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: moved.revision,
+  });
+  expect(shared.version).toBe(2);
+  await page.reload();
+  placement = page.locator('.submission-schedule');
+  await expect(placement).toContainText('10:15–10:55');
+  await expect(page.getByText('A second confirmed session')).toHaveCount(0);
+});
+
+test('does not fall back to an obsolete public placement after a speaker is removed from the shared preview', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  let shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  await callJson(fixture.admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+
+  await signInAs(page, SPEAKER, at());
+  await expect(page.locator('.submission-schedule')).toContainText('10:00–10:40');
+
+  const removed = await callJson(fixture.admin.idToken, 'removeScheduleEntry', {
+    expectedRevision: shared.revision,
+    entryId: 'modern-web',
+  });
+  shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: removed.revision,
+  });
+  const current = await callJson(fixture.speaker.idToken, 'getSharedSchedule', {});
+  expect(current).toMatchObject({ audience: 'speaker', stale: false });
+  expect(current.schedule.id).toBe(shared.releaseId);
+  expect(current.entries).toEqual([]);
+
+  await page.reload();
+  await expect(page.locator('.submission-schedule')).toHaveCount(0);
+  await expect(page.getByText('10:00–10:40')).toHaveCount(0);
+  await expect(
+    page.getByText(
+      'You are confirmed, but the current shared preview does not assign this session a time yet. Organisers will share another update when that changes.',
+    ),
+  ).toBeVisible();
+
+  await page.route('**/getSharedSchedule', (route) => route.abort('failed'));
+  await page.reload();
+  await expect(
+    page.getByText(
+      'We could not load the current shared placement. Reload this page before relying on an older programme time.',
+    ),
+  ).toBeVisible();
+  await expect(page.locator('.submission-schedule')).toHaveCount(0);
+  await expect(page.getByText('10:00–10:40')).toHaveCount(0);
+  await page.unroute('**/getSharedSchedule');
+
+  await page.goto(at('/schedule'));
+  await expect(page.getByRole('heading', { name: 'Programme' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'The modern web, without the maze' })).toBeVisible();
+});
+
+test('requires a new shared release when an omitted speaker confirms without a draft edit', async () => {
+  const fixture = await seedDisclosureSchedule();
+  const first = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  expect(first).toMatchObject({ sharedCount: 3, omittedCount: 1 });
+
+  await setProposalStatusDirect('tentative-talk', 'confirmed');
+  await expect
+    .poll(async () => (await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {})).stale)
+    .toBe(true);
+  expect(
+    await callAs(fixture.admin.idToken, 'publishSchedule', {
+      expectedRevision: first.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+
+  const second = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: first.revision,
+  });
+  expect(second).toMatchObject({ version: 2, sharedCount: 4, omittedCount: 0 });
+  const committee = await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {});
+  expect(committee.entries.map((entry: { id: string }) => entry.id)).toContain('tentative-talk');
+});
+
+test('queues changed-placement notices when shared room metadata changes', async () => {
+  const fixture = await seedDisclosureSchedule();
+  const first = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  await waitForEmail(
+    (rows) => rows.filter((row) => row.kind === 'schedule_assigned' && row.status === 'held').length === 2,
+    'initial shared schedule assignments',
+  );
+
+  const renamed = await callJson(fixture.admin.idToken, 'setScheduleConfig', {
+    expectedRevision: first.revision,
+    config: {
+      ...fixture.config,
+      rooms: fixture.config.rooms.map((room) =>
+        room.id === 'blue'
+          ? { ...room, name: { en: 'Azure room', fr: 'Salle azur' } }
+          : room,
+      ),
+    },
+  });
+  const second = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: renamed.revision,
+  });
+  const queue = await callJson(fixture.admin.idToken, 'emailQueue', { action: 'preview' });
+  expect(queue.held).toHaveLength(2);
+  expect(queue.held).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ kind: 'schedule_changed', title: 'The modern web, without the maze' }),
+      expect.objectContaining({ kind: 'schedule_changed', title: 'A second confirmed session' }),
+    ]),
+  );
+  const beforePublish = await readEmailLog();
+  await callJson(fixture.admin.idToken, 'publishSchedule', {
+    expectedRevision: second.revision,
+  });
+  expect(await readEmailLog()).toHaveLength(beforePublish.length);
+});
+
+test('blocks held schedule assignment and change mail once proposals are no longer confirmed', async () => {
+  const fixture = await seedDisclosureSchedule();
+  const first = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  await waitForEmail(
+    (rows) =>
+      rows.filter(
+        (row) =>
+          row.dedupeKey === first.releaseId &&
+          row.kind === 'schedule_assigned' &&
+          row.status === 'held',
+      ).length === 2,
+    'initial schedule assignments',
+  );
+
+  const moved = await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: first.revision,
+    entry: {
+      id: 'modern-web',
+      kind: 'proposal',
+      proposalId: 'modern-web',
+      date: '2026-11-14',
+      startsAt: '10:15',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+  });
+  const second = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: moved.revision,
+  });
+  const currentRows = await waitForEmail(
+    (rows) =>
+      rows.filter(
+        (row) =>
+          row.dedupeKey === second.releaseId &&
+          ['schedule_assigned', 'schedule_changed'].includes(row.kind) &&
+          row.status === 'held',
+      ).length === 2,
+    'current assigned and changed schedule messages',
+  );
+  const actionable = currentRows.filter(
+    (row) =>
+      row.dedupeKey === second.releaseId &&
+      ['schedule_assigned', 'schedule_changed'].includes(row.kind),
+  );
+  expect(actionable.map((row) => row.kind).sort()).toEqual([
+    'schedule_assigned',
+    'schedule_changed',
+  ]);
+
+  await Promise.all([
+    setProposalStatusDirect('modern-web', 'withdrawn'),
+    setProposalStatusDirect('other-talk', 'declined'),
+  ]);
+  await expect
+    .poll(async () =>
+      Promise.all([
+        readScheduleEntry(second.releaseId, 'modern-web'),
+        readScheduleEntry(second.releaseId, 'other-talk'),
+      ]).then((entries) => entries.every((entry) => entry?.cancelled === true)),
+    )
+    .toBe(true);
+
+  // Restore the immutable entries to their pre-trigger shape. The queue must
+  // still reject both messages based on current proposal status alone.
+  await Promise.all([
+    setScheduleEntryCancelledDirect(second.releaseId, 'modern-web', false),
+    setScheduleEntryCancelledDirect(second.releaseId, 'other-talk', false),
+  ]);
+  expect(await readScheduleEntry(second.releaseId, 'modern-web')).toMatchObject({
+    cancelled: false,
+  });
+  expect(await readScheduleEntry(second.releaseId, 'other-talk')).toMatchObject({
+    cancelled: false,
+  });
+
+  for (const row of actionable) {
+    expect(
+      await callAs(fixture.admin.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: row.id,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+  }
+  expect(
+    await callJson(fixture.admin.idToken, 'emailQueue', {
+      action: 'release',
+      logIds: actionable.map((row) => row.id),
+    }),
+  ).toMatchObject({ ok: true, released: 0, stale: 2 });
+  for (const row of actionable) {
+    await setEmailStatusDirect(row.id, 'dry_run');
+    expect(
+      await callAs(fixture.admin.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: row.id,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+  }
+});
+
+test('committee preview follows active event membership and remains read only', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+
+  const committee = await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {});
+  expect(committee).toMatchObject({ audience: 'committee', stale: false });
+  expect(
+    committee.entries.map((entry: { id: string }) => entry.id).sort(),
+  ).toEqual(['coffee-break', 'modern-web', 'other-talk']);
+  expect(
+    await callAs(fixture.reviewer.idToken, 'upsertScheduleEntry', {
+      expectedRevision: fixture.revision,
+      entry: {
+        id: 'reviewer-change',
+        kind: 'custom',
+        customType: 'break',
+        title: { en: 'Reviewer change' },
+        date: '2026-11-14',
+        startsAt: '15:00',
+        durationMinutes: 20,
+        roomId: 'amber',
+      },
+    }),
+  ).toEqual({ ok: false, code: 'PERMISSION_DENIED' });
+
+  await signInAs(page, REVIEWER, at('/schedule'));
+  await expect(page.getByRole('heading', { name: 'Committee preview' })).toBeVisible();
+  await expect(page.getByText('Not public', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Confirmed sessions only\. This read-only working programme/)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'The modern web, without the maze' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'A second confirmed session' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Coffee break' })).toBeVisible();
+  await expect(page.getByText('A tentative session')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Download calendar' })).toHaveCount(0);
+
+  await signInAs(page, ADMIN, at('/admin/schedule'));
+  await expect(page.getByText('A tentative session')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Private draft' })).toBeVisible();
+
+  expect(await callAs(fixture.pending.idToken, 'getSharedSchedule', {})).toEqual({
+    ok: false,
+    code: 'PERMISSION_DENIED',
+  });
+  expect(await callAs(fixture.global.idToken, 'getSharedSchedule', {})).toEqual({
+    ok: false,
+    code: 'PERMISSION_DENIED',
+  });
+  await callJson(fixture.admin.idToken, 'revokeRole', {
+    email: REVOKED_REVIEWER.email,
+  });
+  expect(await callAs(fixture.revoked.idToken, 'getSharedSchedule', {})).toEqual({
+    ok: false,
+    code: 'PERMISSION_DENIED',
+  });
+
+  await signInAs(page, REVOKED_REVIEWER, at('/schedule'));
+  await expect(page.getByText('The programme has not been published yet.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Committee preview' })).toHaveCount(0);
+});
+
+test('a failed committee-preview load offers an in-page retry', async ({ page }) => {
+  const fixture = await seedDisclosureSchedule();
+  await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+
+  let unavailable = true;
+  await page.route('**/getSharedSchedule', (route) =>
+    unavailable ? route.abort('failed') : route.continue(),
+  );
+  await signInAs(page, REVIEWER, at('/schedule'));
+
+  await expect(
+    page.getByText('That service is unavailable right now. Please try again shortly.'),
+  ).toBeVisible();
+  const retry = page.getByRole('button', { name: 'Reload schedule' });
+  await expect(retry).toBeVisible();
+
+  unavailable = false;
+  await retry.click();
+  await expect(page.getByRole('heading', { name: 'Committee preview' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'The modern web, without the maze' })).toBeVisible();
+});
+
+test('requires a verified account for shared schedule reads and admin mutations', async () => {
+  const fixture = await seedDisclosureSchedule();
+  await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  const unverified = await createUnverifiedAccount({
+    email: 'unverified-schedule-admin@example.org',
+  });
+  await seedMember(
+    unverified.uid,
+    'admin',
+    undefined,
+    'unverified-schedule-admin@example.org',
+  );
+
+  expect(await callAs(unverified.idToken, 'getSharedSchedule', {})).toEqual({
+    ok: false,
+    code: 'FAILED_PRECONDITION',
+  });
+  expect(await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {})).toMatchObject({
+    ok: true,
+    audience: 'committee',
+  });
+
+  const edit = {
+    expectedRevision: fixture.revision,
+    entry: {
+      id: 'verified-admin-item',
+      kind: 'custom',
+      customType: 'other',
+      title: { en: 'Verified admin item' },
+      date: '2026-11-14',
+      startsAt: '15:00',
+      durationMinutes: 20,
+      roomId: 'amber',
+    },
+  };
+  expect(await callAs(unverified.idToken, 'upsertScheduleEntry', edit)).toEqual({
+    ok: false,
+    code: 'FAILED_PRECONDITION',
+  });
+  expect(await callJson(fixture.admin.idToken, 'upsertScheduleEntry', edit)).toMatchObject({
+    ok: true,
+    entryId: 'verified-admin-item',
+  });
+});
+
+test('an accepted speaker confirms and follows their shared session into the published calendar file', async ({
   page,
 }) => {
   const [admin, speaker] = await Promise.all([createAccount(ADMIN), createAccount(SPEAKER)]);
@@ -325,11 +1129,29 @@ test('an accepted speaker confirms and follows their published session into its 
   });
 
   await signInAs(page, ADMIN, at('/admin/schedule'));
+  const share = page.getByRole('button', { name: 'Review and share' });
+  await expect(share).toBeEnabled();
+  await share.click();
+  const shareReview = page.getByRole('dialog', { name: 'Share this confirmed preview?' });
+  await expect(shareReview).toContainText('1 items shared');
+  await shareReview.getByRole('button', { name: 'Share preview' }).click();
+  await expect(page.getByText(/Preview shared\. Shared version 1/)).toBeVisible();
+
+  await signInAs(page, SPEAKER, at());
+  const working = page.locator('.submission-schedule');
+  await expect(working.getByRole('heading', { name: 'Your working schedule' })).toBeVisible();
+  await expect(working).toContainText('Not public');
+  await expect(working).toContainText('13:45–14:25');
+  await expect(working).toContainText('Main room');
+  await expect(working.getByRole('link', { name: 'View session details' })).toHaveCount(0);
+
+  await signInAs(page, ADMIN, at('/admin/schedule'));
   const review = page.getByRole('button', { name: 'Review and publish' });
   await expect(review).toBeEnabled();
   await review.click();
   const publish = page.getByRole('dialog', { name: 'Publish this programme?' });
   await expect(publish).toContainText('1 scheduled');
+  await expect(publish).toContainText('Proposals are still open');
   await publish.getByRole('button', { name: 'Publish programme' }).click();
   await expect(page.getByText(/The public programme is live\. Public version 1/)).toBeVisible();
 
@@ -414,7 +1236,10 @@ test('the public agenda stays within a narrow mobile viewport', async ({ page })
       roomId: 'main',
     },
   });
-  await callJson(admin.idToken, 'publishSchedule', { expectedRevision: scheduled.revision });
+  const shared = await callJson(admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: scheduled.revision,
+  });
+  await callJson(admin.idToken, 'publishSchedule', { expectedRevision: shared.revision });
 
   await page.setViewportSize({ width: 320, height: 844 });
   await page.goto(at('/schedule'));

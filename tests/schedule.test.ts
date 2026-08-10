@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  publicScheduleSpeakers,
   resolvedScheduleLanguage,
   scheduleEndTime,
   scheduleConflicts,
+  sharedScheduleAudience,
+  sharedScheduleEntriesFor,
+  sharedScheduleForEntries,
   suggestedDuration,
   validateScheduleConfig,
   validateScheduleEntry,
   type ScheduleConfig,
   type ScheduleEntry,
+  type PublishedScheduleEntry,
+  type SharedSchedule,
 } from '@shared/schedule';
 
 const config: ScheduleConfig = {
@@ -115,5 +121,126 @@ describe('schedule helpers', () => {
     expect(resolvedScheduleLanguage('either')).toBeNull();
     expect(resolvedScheduleLanguage('either', 'fr')).toBe('fr');
     expect(resolvedScheduleLanguage('bilingual')).toBe('bilingual');
+  });
+});
+
+describe('shared schedule disclosure', () => {
+  const proposal = (id: string, proposalId: string, cancelled = false): PublishedScheduleEntry => ({
+    id,
+    kind: 'proposal',
+    proposalId,
+    date: '2026-11-14',
+    startsAt: '09:00',
+    durationMinutes: 40,
+    roomId: 'blue',
+    ...(cancelled ? { cancelled: true } : {}),
+    session: {
+      proposalId,
+      title: proposalId,
+      abstract: 'Abstract',
+      category: 'app_dev',
+      format: 'session_40',
+      level: 'intermediate',
+      language: 'en',
+      speakers: [],
+    },
+  });
+  const custom: PublishedScheduleEntry = {
+    id: 'lunch',
+    kind: 'custom',
+    customType: 'meal',
+    title: { en: 'Lunch' },
+    date: '2026-11-14',
+    startsAt: '12:00',
+    durationMinutes: 60,
+    roomId: 'blue',
+  };
+  const confirmed = new Map<string, readonly string[]>([
+    ['own-talk', ['speaker-one']],
+    ['other-talk', ['speaker-two']],
+    ['cancelled-talk', ['speaker-one']],
+  ]);
+
+  it('gives active event roles the confirmed agenda and public-safe custom items', () => {
+    expect(sharedScheduleAudience('reviewer')).toBe('committee');
+    expect(sharedScheduleAudience('admin')).toBe('committee');
+    expect(sharedScheduleAudience('owner')).toBe('committee');
+    expect(
+      sharedScheduleEntriesFor(
+        [proposal('own', 'own-talk'), proposal('other', 'other-talk'), custom],
+        'committee',
+        'reviewer',
+        confirmed,
+      ).map((item) => item.id),
+    ).toEqual(['own', 'other', 'lunch']);
+  });
+
+  it('gives a speaker only their still-confirmed, non-cancelled placement', () => {
+    expect(sharedScheduleAudience()).toBe('speaker');
+    expect(
+      sharedScheduleEntriesFor(
+        [
+          proposal('own', 'own-talk'),
+          proposal('other', 'other-talk'),
+          proposal('cancelled', 'cancelled-talk', true),
+          proposal('stale', 'no-longer-confirmed'),
+          custom,
+        ],
+        'speaker',
+        'speaker-one',
+        confirmed,
+      ).map((item) => item.id),
+    ).toEqual(['own']);
+  });
+
+  it('keeps only attendee-facing speaker details in an immutable release', () => {
+    expect(
+      publicScheduleSpeakers([
+        {
+          uid: 'speaker-one',
+          name: 'Ada Speaker',
+          bio: 'Builds reliable systems.',
+          company: 'Example Co',
+          jobTitle: 'Engineer',
+          basedIn: 'Montréal',
+          socials: [{ platform: 'linkedin', handle: 'ada' }],
+          isGde: true,
+          pastTalks: 'Private committee context',
+          sessionizeUrl: 'https://sessionize.com/ada',
+        },
+      ]),
+    ).toEqual([
+      {
+        name: 'Ada Speaker',
+        bio: 'Builds reliable systems.',
+        company: 'Example Co',
+        jobTitle: 'Engineer',
+      },
+    ]);
+  });
+
+  it('returns only the days and rooms referenced by a speaker own entries', () => {
+    const schedule: SharedSchedule = {
+      id: 'shared-one',
+      version: 1,
+      timeZone: 'America/Toronto',
+      sourceRevision: 4,
+      sharedAt: 0,
+      days: [
+        { date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' },
+        { date: '2026-11-15', startsAt: '09:00', endsAt: '17:00' },
+      ],
+      rooms: [
+        { id: 'blue', name: { en: 'Blue room' } },
+        { id: 'green', name: { en: 'Green room' } },
+      ],
+    };
+    const own = proposal('own', 'own-talk');
+
+    expect(sharedScheduleForEntries(schedule, [own])).toMatchObject({
+      days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+      rooms: [{ id: 'blue', name: { en: 'Blue room' } }],
+    });
+    expect(sharedScheduleForEntries(schedule, [])).toMatchObject({ days: [], rooms: [] });
   });
 });

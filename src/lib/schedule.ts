@@ -7,6 +7,7 @@ import type {
   PublishedScheduleEntry,
   ScheduleConfig,
   ScheduleEntry,
+  SharedSchedule,
 } from '@shared/schedule';
 
 type WithCfp<T> = T & { cfpId: string };
@@ -31,6 +32,25 @@ export const publishSchedule = httpsCallable<
   { ok: boolean; revision: number; releaseId: string; version: number }
 >(functions, 'publishSchedule');
 
+export const shareSchedulePreview = httpsCallable<
+  WithCfp<{ expectedRevision: number }>,
+  {
+    ok: boolean;
+    releaseId: string;
+    version: number;
+    revision: number;
+    sharedCount: number;
+    omittedCount: number;
+    committeeNotificationCount: number;
+    speakerNotificationCount: number;
+  }
+>(functions, 'shareSchedulePreview');
+
+export const unpublishSchedule = httpsCallable<
+  { cfpId: string },
+  { ok: boolean; releaseId: string | null; version: number | null }
+>(functions, 'unpublishSchedule');
+
 export interface ScheduleDraft {
   config: ScheduleConfig | null;
   entries: ScheduleEntry[];
@@ -53,6 +73,30 @@ export async function loadScheduleDraft(cfpId: string): Promise<ScheduleDraft> {
 export interface PublishedScheduleBundle {
   schedule: PublishedSchedule;
   entries: PublishedScheduleEntry[];
+}
+
+export type SharedScheduleMetadata = SharedSchedule;
+
+export interface SharedScheduleBundle {
+  audience: 'committee' | 'speaker';
+  schedule: SharedScheduleMetadata | null;
+  entries: PublishedScheduleEntry[];
+  stale: boolean;
+}
+
+const getSharedSchedule = httpsCallable<
+  { cfpId: string },
+  { ok: true } & SharedScheduleBundle
+>(functions, 'getSharedSchedule');
+
+export async function loadSharedSchedule(cfpId: string): Promise<SharedScheduleBundle> {
+  const { data } = await getSharedSchedule({ cfpId });
+  return {
+    audience: data.audience,
+    schedule: data.schedule,
+    entries: data.entries,
+    stale: data.stale,
+  };
 }
 
 export async function loadPublishedSchedule(

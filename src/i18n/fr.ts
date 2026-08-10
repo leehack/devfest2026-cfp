@@ -445,19 +445,90 @@ export const fr: Dictionary = {
     submissionContext: 'Détails de la soumission',
     acceptingNow: 'Soumissions ouvertes',
     deadline: 'Date limite',
-    deadlineTimeZone: 'heure de Montréal',
+    deadlineTimeZone: 'Fuseau horaire de l’événement : {zone}',
     profileReady: 'Profil prêt',
     editProfile: 'Modifier le profil',
     submit: 'Soumettre la proposition',
     submitting: 'Soumission…',
     submittedHelp: 'Nous vous avons envoyé une copie par courriel.',
+    journeyLabel: 'Parcours de la proposition',
+    journeySteps: ['Proposition', 'Comité', 'Décision', 'Programme'],
+    journeyOutcome: 'Résultat',
+    nextStep: 'Prochaine étape',
+    nextSteps: {
+      archived: {
+        title: 'Cet événement est archivé',
+        help: 'La proposition est conservée en lecture seule. Communiquez avec l’équipe si quelque chose est incorrect.',
+      },
+      draft: {
+        title: 'Terminez et soumettez votre proposition',
+        help: 'Votre brouillon est privé. Remplissez les sections obligatoires, puis soumettez-le avant l’échéance.',
+      },
+      draftClosed: {
+        title: 'Ce brouillon n’a pas été soumis',
+        help: 'La période est fermée. Gardez le brouillon pour vos dossiers ou supprimez-le si vous n’en avez plus besoin.',
+      },
+      submittedEditable: {
+        title: 'Vérifiez ce que vous avez soumis',
+        help: 'Le comité n’a pas commencé sa lecture; vous pouvez encore corriger la proposition avant son verrouillage.',
+      },
+      submitted: {
+        title: 'Attendez le comité',
+        help: 'Votre proposition est bien soumise. Nous vous écrirons lorsque l’équipe enregistrera une décision.',
+      },
+      underReview: {
+        title: 'Le comité l’évalue',
+        help: 'Le contenu est verrouillé pour une évaluation équitable. Votre profil et vos détails de voyage restent modifiables.',
+      },
+      accepted: {
+        title: 'Confirmez si vous pouvez présenter',
+        help: 'Répondez à l’invitation ici et remplissez chaque détail obligatoire avant la planification de la séance.',
+      },
+      confirmedPublic: {
+        title: 'Vérifiez votre séance publiée',
+        help: 'Votre séance est publique. Vérifiez l’heure et la salle finales, puis téléchargez son entrée de calendrier.',
+      },
+      confirmedShared: {
+        title: 'Vérifiez votre plage de travail',
+        help: 'Vérifiez l’heure, la salle et la langue. Signalez tout conflit par le canal convenu; ce placement n’est pas encore public.',
+      },
+      confirmedUnavailable: {
+        title: 'Rechargez avant de vous fier à une heure',
+        help: 'Impossible de charger la plage partagée actuelle; une ancienne heure publique n’est donc pas affichée.',
+      },
+      confirmedPending: {
+        title: 'Attendez une nouvelle plage',
+        help: 'L’horaire de travail actuel n’attribue aucune heure à cette séance. L’équipe partagera une nouvelle version.',
+      },
+      confirmedWaiting: {
+        title: 'Attendez l’horaire de travail',
+        help: 'Votre présence est confirmée. Votre plage paraîtra ici après le partage d’un aperçu confirmé.',
+      },
+      waitlisted: {
+        title: 'Surveillez vos courriels',
+        help: 'La proposition reste en considération si une place se libère. L’équipe vous écrira si son statut change.',
+      },
+      rejected: {
+        title: 'Cette proposition n’a pas été retenue',
+        help: 'Aucune action n’est requise. Votre profil reste à vous et pourra servir pour un autre événement.',
+      },
+      declined: {
+        title: 'Vous avez décliné l’invitation',
+        help: 'L’équipe peut offrir la place ailleurs. Communiquez directement avec elle si vos disponibilités changent.',
+      },
+      withdrawn: {
+        title: 'Cette proposition est retirée',
+        help: 'Elle ne sera ni évaluée ni planifiée. L’équipe en conserve le dossier; aucune action n’est requise.',
+      },
+    },
 
     statusHelp: {
       submitted: 'C’est envoyé. Le comité n’a pas encore commencé sa lecture.',
       under_review: 'Le comité est en train de la lire.',
       accepted:
         'Votre proposition a été acceptée. Dites-nous si vous pouvez toujours être présent afin que l’équipe puisse planifier une plage.',
-      confirmed: 'Votre présence est confirmée. Les détails paraîtront ici après la publication du programme.',
+      confirmed:
+        'Votre présence est confirmée. Les détails paraîtront ici lorsque l’équipe partagera un aperçu confirmé.',
       waitlisted:
         'Pas encore retenue, mais pas écartée — nous revenons à la liste d’attente dès qu’une place se libère.',
       rejected:
@@ -467,7 +538,16 @@ export const fr: Dictionary = {
         'Vous avez retiré celle-ci. Elle n’est plus évaluée ni comptée dans votre limite; les organisateurs en conservent le dossier.',
     } as Record<string, string>,
     scheduledHelp: 'Votre présence est confirmée et cette séance figure maintenant au programme publié.',
+    sharedScheduledHelp:
+      'Votre présence est confirmée et l’équipe vous a communiqué votre plage actuelle.',
+    sharedUnscheduledHelp:
+      'Votre présence est confirmée, mais l’aperçu partagé actuel n’attribue pas encore d’heure à cette séance. L’équipe communiquera une nouvelle mise à jour lorsque cela changera.',
+    sharedScheduleUnavailable:
+      'Impossible de charger la plage partagée actuelle. Rechargez cette page avant de vous fier à une ancienne heure du programme.',
     scheduleDetails: 'Votre séance publiée',
+    sharedScheduleDetails: 'Votre horaire de travail',
+    sharedScheduleHelp:
+      'Cette plage vous est communiquée pour la planification. Elle n’est pas encore publique et peut changer.',
     viewScheduledSession: 'Voir les détails de la séance',
 
     editHelp: {
@@ -554,8 +634,122 @@ export const fr: Dictionary = {
     metricScored: 'Évaluées',
     metricDecided: 'Décidées',
     metricDeadline: 'Échéance',
+    metricNeedsReview: 'Sans évaluation',
+    metricNeedsDecision: 'Décision requise',
+    metricAwaitingConfirmation: 'Réponse attendue',
+    metricConfirmed: 'Confirmées',
+    metricUnscheduled: (count: number) =>
+      count === 1 ? ' · 1 non planifiée' : ` · ${count} non planifiées`,
     notSet: 'Non définie',
+    lifecycle: {
+      step: (current: number, total: number) =>
+        `Prochaine action recommandée · Étape ${current} sur ${total}`,
+      allSteps: 'Afficher les 17 étapes du cycle',
+      skipLateIntake: 'Ignorer les ajouts tardifs et préparer la clôture de l’événement',
+      programmeLabel: 'Programme',
+      programmePrivate: 'Planification privée',
+      programmeShared: 'Aperçu partagé',
+      programmeLive: 'Public et à jour',
+      programmeUpdate: 'Mise à jour publique requise',
+      lateIntakeTitle: 'Le programme est public pendant que les propositions sont ouvertes',
+      lateIntakeHelp:
+        'Rouvrir les propositions ne change pas le programme public. Les ajouts tardifs passent toujours par l’évaluation, la confirmation, l’horaire privé, un nouvel aperçu partagé, puis une nouvelle publication explicite.',
+      publicUpdateTitle: 'Le programme public comporte du travail non publié',
+      publicUpdateHelp:
+        'Gardez la version publique actuelle stable pendant les changements privés. Partagez un aperçu confirmé, recueillez les commentaires, puis publiez exactement cette version.',
+      scheduleUnknown:
+        'Impossible de vérifier l’état de l’horaire. Ouvrez Horaire avant de vous fier à cette position du cycle.',
+      steps: [
+        {
+          title: 'Configurer l’événement',
+          help: 'Terminez les détails publics, la période de propositions, les formulaires, le comité et l’envoi des courriels.',
+          action: 'Terminer la configuration',
+        },
+        {
+          title: 'Recevoir les propositions',
+          help: 'Partagez la page de l’événement et surveillez les propositions complètes prêtes pour le comité.',
+          action: 'Ouvrir la page publique',
+        },
+        {
+          title: 'Évaluer les propositions',
+          help: 'Les membres répondent de façon indépendante. Un conflit compte comme réponse, pas comme note.',
+          action: 'Ouvrir les évaluations',
+        },
+        {
+          title: 'Décider des résultats',
+          help: 'Choisissez acceptée, sur la liste d’attente ou refusée. La confirmation appartient au conférencier.',
+          action: 'Décider des propositions',
+        },
+        {
+          title: 'Aviser et confirmer',
+          help: 'Vérifiez les décisions retenues, envoyez-les et attendez que les conférenciers acceptés remplissent chaque détail obligatoire.',
+          action: 'Vérifier la file de courriels',
+        },
+        {
+          title: 'Construire l’horaire privé',
+          help: 'Placez provisoirement les conférences acceptées et planifiez les conférences confirmées.',
+          action: 'Ouvrir l’horaire',
+        },
+        {
+          title: 'Partager l’horaire de travail',
+          help: 'Créez un aperçu réservé aux conférences confirmées sans changer ce que voit le public.',
+          action: 'Vérifier et partager',
+        },
+        {
+          title: 'Vérifier l’horaire de travail',
+          help: 'Demandez au comité et aux conférenciers planifiés de vérifier l’heure, la salle et la langue, puis de répondre par le canal convenu.',
+          action: 'Fermer les propositions après les vérifications',
+        },
+        {
+          title: 'Fermer les propositions',
+          help: 'Fermez la période lorsque la collecte prévue est terminée. L’aperçu de travail reste privé.',
+          action: 'Gérer la période',
+        },
+        {
+          title: 'Publier le programme',
+          help: 'Publiez exactement l’aperçu partagé actuel après avoir vérifié son horaire et son contenu.',
+          action: 'Vérifier la publication',
+        },
+        {
+          title: 'Ajouter des conférenciers à la dernière minute',
+          help: 'Utilisez le même parcours de proposition et de confirmation pour ne contourner aucun détail obligatoire.',
+          action: 'Préparer les ajouts tardifs',
+        },
+        {
+          title: 'Recevoir les propositions tardives',
+          help: 'Gardez la période tardive limitée ouverte sans changer le programme déjà public.',
+          action: 'Ouvrir la page publique',
+        },
+        {
+          title: 'Évaluer les nouvelles propositions',
+          help: 'Évaluez les ajouts tardifs de façon indépendante; le programme public actuel reste stable.',
+          action: 'Évaluer les ajouts',
+        },
+        {
+          title: 'Décider des ajouts',
+          help: 'Acceptez, mettez en attente ou refusez les ajouts selon les mêmes règles.',
+          action: 'Décider des ajouts',
+        },
+        {
+          title: 'Aviser et confirmer les ajouts',
+          help: 'Envoyez les décisions retenues et recueillez les détails obligatoires avant de planifier.',
+          action: 'Vérifier la file de courriels',
+        },
+        {
+          title: 'Mettre à jour le programme public',
+          help: 'Ajoutez les conférences confirmées en privé, partagez de nouveau pour vérification, puis publiez la nouvelle version.',
+          action: 'Mettre à jour l’horaire',
+        },
+        {
+          title: 'Clore l’événement',
+          help: 'Après l’événement, conservez le dossier et archivez l’espace de travail lorsque les opérations sont terminées.',
+          action: 'Vérifier l’archivage',
+        },
+      ],
+    },
     setupChecklist: 'Liste de préparation',
+    setupChecklistSummary: (done: number, total: number) =>
+      `Liste de préparation · ${done} essentiels sur ${total} terminés`,
     setupChecklistHelp: 'Chaque élément mène exactement à l’endroit où le terminer.',
     refreshOverview: 'Actualiser l’état',
     optional: 'Facultatif',
@@ -565,7 +759,7 @@ export const fr: Dictionary = {
     setupDetailsAction: 'Modifier l’événement',
     setupWindow: 'Confirmer la période de soumission',
     setupWindowDone: (opens: string, closes: string) =>
-      `Du ${opens} au ${closes}, heure de Montréal.`,
+      `Du ${opens} au ${closes}.`,
     setupWindowTodo: 'Choisissez des heures d’ouverture et de fermeture valides.',
     setupWindowAction: 'Modifier la période',
     setupSubmission: 'Vérifier le formulaire de soumission',
@@ -632,10 +826,10 @@ export const fr: Dictionary = {
 
     archive: 'Archivage',
     archiveHelp:
-      'Un appel archivé est en lecture seule et disparaît de la liste publique. Tout reste en place, et vous pouvez le réactiver.',
+      'Un appel archivé est en lecture seule et disparaît de la liste publique. Son programme public existant reste accessible par son lien direct à titre d’archive figée. Vous pourrez réactiver l’événement plus tard.',
     archiveAction: 'Archiver',
     archiveConfirm:
-      'Archiver cet appel ? Plus personne ne pourra soumettre, et il disparaîtra de la liste publique.',
+      'Archiver cet appel ? Plus personne ne pourra soumettre, et il disparaîtra de la liste publique. Tout programme public existant restera accessible par son lien direct et sera figé jusqu’à la réactivation de l’événement.',
     archived: 'Archivé. Il est désormais en lecture seule.',
     unarchiveAction: 'Le réactiver',
     unarchived: 'De nouveau en service.',
@@ -652,6 +846,21 @@ export const fr: Dictionary = {
     dangerDeleting: 'Suppression…',
 
     window: 'Période de soumission',
+    lateIntakeEyebrow: 'Ajouts tardifs',
+    lateIntakeWindowOpen: 'Les propositions sont ouvertes avec un programme public',
+    lateIntakeWindowClosed: 'Rouvrir les propositions sans perturber le programme public',
+    lateIntakeWindowHelp:
+      'Modifier cette période ne change pas le programme en ligne. Les nouvelles propositions passent toujours par l’évaluation, la confirmation, l’horaire privé, un nouvel aperçu partagé, puis une nouvelle publication explicite.',
+    lateIntakeScoresWarning:
+      'Les notes des évaluateurs sont actuellement visibles. Désactivez-les avant une nouvelle ronde pour éviter d’influencer les évaluations suivantes. Votre choix final est enregistré uniquement avec Enregistrer la période.',
+    prepareLateIntake: 'Préparer 7 jours d’ajouts tardifs',
+    prepareLateIntakeHelp:
+      'Remplit une ouverture immédiate et une fermeture dans sept jours, reprend les soumissions et masque les notes. Vérifiez les champs, puis appuyez sur Enregistrer la période.',
+    windowTimeZone: 'Les heures de la période utilisent le fuseau de l’événement : {zone}.',
+    windowTimeZoneUnsaved:
+      'Enregistrez d’abord les détails de l’événement avant de modifier la période afin que son fuseau soit sans ambiguïté.',
+    windowInvalid:
+      'Choisissez une ouverture valide et une fermeture ultérieure dans le fuseau de l’événement.',
     opensAtLabel: 'Ouverture',
     closesAtLabel: 'Fermeture',
     pausedLabel: 'Suspendre les soumissions',
@@ -781,14 +990,19 @@ export const fr: Dictionary = {
     emailStatus: {
       held: 'En attente de libération',
       queued: 'En file',
+      sending: 'Envoi en cours',
       sent: 'Envoyés',
       dry_run: 'Non envoyés — expéditeur non configuré',
       failed: 'Échecs',
     },
+    emailRecoverableStatus: 'Envoi interrompu — nouvelle tentative possible',
     emailKind: 'Message',
     emailTo: 'Destinataire',
     emailKinds: {
       submission_received: 'Proposition reçue',
+      committee_role_invited: 'Invitation au comité',
+      committee_proposal_submitted: 'Nouvelle proposition pour le comité',
+      committee_schedule_shared: 'Aperçu partagé pour le comité',
       withdrawn: 'Retirée',
       accepted: 'Acceptée',
       waitlisted: 'Liste d’attente',
@@ -798,6 +1012,15 @@ export const fr: Dictionary = {
       schedule_cancelled: 'Séance annulée',
       message: 'Message',
     } as Record<string, string>,
+    emailDeliveryImmediateStaff: 'Notification interne immédiate',
+    emailDeliveryImmediateStaffHelp:
+      'Elle part directement aux membres actifs et admissibles du comité lorsque l’action réussit. Elle ne fait pas partie du lot retenu pour les conférenciers.',
+    emailDeliveryHeldSpeaker: 'Notification retenue pour le conférencier',
+    emailDeliveryHeldSpeakerHelp:
+      'Les nouveaux messages restent dans Courriel pour vérification et libération. Prévisualiser ou publier ne les envoie pas.',
+    emailDeliveryAutomatic: 'Notification automatique de l’événement',
+    emailDeliveryAutomaticHelp:
+      'L’action correspondante met ce message en file immédiatement; l’envoi dépend toujours de l’expéditeur configuré.',
     messageTitle: 'Écrire à une personne',
     messageHelp:
       'Pour tout ce que les modèles ne couvrent pas : une question, une correction, un détail sur la journée. Le message part de la même adresse et figure dans le journal ci-dessous, afin que le reste du comité sache qu’il a été envoyé.',
@@ -841,6 +1064,8 @@ export const fr: Dictionary = {
     proposals: 'Décisions sur les propositions',
     proposalsHelp:
       'Les notes se mettent à jour automatiquement à chaque évaluation. Trouvez les conférences qui demandent votre attention, puis prenez une décision explicite à la fois.',
+    speakerResponseGuardrail:
+      'Acceptée est la décision de l’organisation. Confirmée et déclinée sont les réponses du conférencier dans Mes propositions, où les détails obligatoires sont recueillis.',
     overview: 'La ronde en un coup d’œil',
     overviewHelp:
       'Couverture, résultats et équilibre du programme avant de prendre la prochaine décision.',
@@ -1028,10 +1253,24 @@ export const fr: Dictionary = {
 
   review: {
     help: 'Notez chaque proposition que vous pouvez juger. Les vôtres n’apparaissent jamais.',
+    workload: 'Votre charge d’évaluation',
+    caughtUp: 'Vous êtes à jour',
+    remainingTitle: (count: number) =>
+      count === 1 ? '1 proposition attend votre réponse' : `${count} propositions attendent votre réponse`,
+    responses: 'Réponses',
+    conflicts: 'Conflits',
+    remaining: 'Restantes',
+    refresh: 'Actualiser les propositions',
+    intakeOpenHelp:
+      'Les propositions sont encore ouvertes; de nouveaux éléments peuvent arriver. Actualisez avant de terminer une séance d’évaluation.',
+    intakeClosedHelp:
+      'Les propositions sont fermées. Lorsque chaque élément a une réponse, l’organisation peut décider.',
+    scoresVisibleDuringIntake:
+      'Les notes du comité sont visibles pendant que les propositions sont ouvertes. Pour une ronde tardive indépendante, demandez à l’organisation de masquer les notes avant de continuer.',
     allCategories: 'Toutes les catégories',
     empty: 'Rien à évaluer pour l’instant — aucune conférence n’a été soumise.',
     onlyYours: 'Rien à évaluer pour l’instant. Vous ne pouvez pas noter votre propre conférence, et c’est la seule soumise jusqu’ici.',
-    progress: (scored: number, total: number) => `${scored} sur ${total} évaluées`,
+    progress: (handled: number, total: number) => `${handled} sur ${total} avec réponse`,
     scoreLabel: 'Noter cette proposition',
     scores: {
       1: '1 — Non',
@@ -1053,13 +1292,14 @@ export const fr: Dictionary = {
     previous: 'Proposition précédente',
     next: 'Proposition suivante',
     queue: 'File d’évaluation',
-    queueHelp: 'Passez à n’importe quelle conférence et voyez lesquelles restent à noter.',
+    queueHelp: 'Passez à n’importe quelle conférence et voyez lesquelles attendent une réponse.',
     queueClose: 'Fermer la file',
-    nextUnscored: 'Prochaine sans note',
+    nextUnscored: 'Prochaine sans réponse',
     queueCurrent: 'En cours',
-    queueScored: 'Évaluée',
-    queueWaiting: 'Sans note',
-    complete: 'Toutes les conférences de cette vue ont une note.',
+    queueScored: 'Réponse donnée',
+    queueConflict: 'Conflit déclaré',
+    queueWaiting: 'Réponse requise',
+    complete: 'Chaque proposition de cette vue a une réponse.',
     shortcuts: 'Raccourcis',
     shortcutScore: 'Noter, puis passer à la suivante',
     shortcutMove: 'Reculer et avancer sans noter',
@@ -1083,7 +1323,7 @@ export const fr: Dictionary = {
     save: 'Enregistrer',
     saving: 'Enregistrement…',
     saved: 'Enregistré',
-    notScored: 'Pas encore évaluée',
+    notScored: 'Aucune réponse pour l’instant',
     untitled: 'Proposition sans titre',
     saveFailedTitle: 'Certaines évaluations ne sont pas enregistrées',
     saveFailedHelp:
@@ -1101,7 +1341,72 @@ export const fr: Dictionary = {
     title: 'Programme',
     adminTitle: 'Construire le programme',
     adminHelp:
-      'Placez les conférences retenues en privé, fixez leur langue, puis publiez un horaire stable.',
+      'Placez les conférences en privé, partagez un aperçu confirmé, puis publiez exactement cette version vérifiée.',
+    releaseFlowEyebrow: 'Diffusion de l’horaire',
+    releaseFlowTitle: 'Faites avancer le programme en trois étapes volontaires',
+    releaseFlowHelp:
+      'Planifiez en privé, partagez un aperçu confirmé, puis publiez exactement cette version.',
+    privateBadge: 'Privé',
+    sharedBadge: 'Partagé',
+    notSharedBadge: 'Non partagé',
+    liveBadge: 'En ligne',
+    offlineBadge: 'Hors ligne',
+    privateDraftTitle: 'Brouillon privé',
+    privateDraftHelp:
+      'Votre tableau de travail. Les plages acceptées, provisoires et confirmées restent ici avec l’administration.',
+    sharedPreviewTitle: 'Aperçu partagé',
+    sharedPreviewHelp:
+      'Une version figée des séances confirmées pour les conférenciers et le comité. Les changements du brouillon n’y paraissent pas.',
+    publicProgrammeTitle: 'Programme public',
+    publicProgrammeHelp:
+      'La version destinée au public. La publication promeut exactement l’aperçu partagé, sans le reconstruire.',
+    versionLabel: 'Version',
+    revision: (n: number) => `Brouillon r${n}`,
+    audienceLabel: 'Public visé',
+    privateAudience: 'Administrateurs et propriétaires',
+    sharedAudience: 'Comité; chaque conférencier confirmé ne voit que sa propre plage',
+    publicAudience: 'Tout le monde',
+    updatedLabel: 'Mise à jour',
+    privateTentative: (n: number) => `${n} ${n === 1 ? 'plage provisoire reste' : 'plages provisoires restent'} privée${n === 1 ? '' : 's'}`,
+    sharedStale: 'Le brouillon privé a changé. Partagez un nouvel aperçu avant de publier.',
+    archivedTitle: 'Programme archivé — lecture seule',
+    archivedHelp:
+      'Le tableau de planification et l’historique du programme public sont figés. Réactivez d’abord l’événement si une modification urgente est nécessaire.',
+    share: 'Vérifier et partager',
+    shareTitle: 'Partager cet aperçu confirmé?',
+    shareHelp:
+      'Une version figée est créée avec les séances confirmées et les éléments publics. Les plages provisoires restent privées.',
+    shareDeliveryHelp:
+      'Après le partage, l’envoi au comité commence immédiatement. Les nouveaux messages de placement restent retenus dans Courriel pour vérification.',
+    shareConfirm: 'Partager l’aperçu',
+    shareBlocked: 'Résolvez les conflits entre les séances confirmées avant de partager.',
+    shareNoChanges: 'L’aperçu partagé correspond déjà à ce brouillon.',
+    shareSpeakerAudience: 'Chaque conférencier confirmé voit seulement sa date, son heure, sa salle et sa langue.',
+    shareCommitteeAudience: 'Les évaluateurs, administrateurs et propriétaires voient le programme confirmé en lecture seule.',
+    sharePublicAudience: 'Le public continue de voir uniquement le programme actuellement publié.',
+    sharedCount: (n: number) => `${n} éléments partagés`,
+    omittedCount: (n: number) => `${n} provisoires omis`,
+    shared: 'Aperçu partagé.',
+    sharedVersion: (n: number) => `Version partagée ${n}`,
+    sharedSummary: (shared: number, omitted: number) => `${shared} éléments partagés; ${omitted} provisoires omis.`,
+    sharedChannels: (committee: number, speakers: number) =>
+      `L’envoi a commencé pour ${committee} membre${committee === 1 ? '' : 's'} admissible${committee === 1 ? '' : 's'} du comité. ${speakers} message${speakers === 1 ? '' : 's'} de placement ${speakers === 1 ? 'est géré' : 'sont gérés'} dans Courriel; les nouveaux restent retenus pour vérification.`,
+    publishNeedsShare: 'Vérifiez et partagez d’abord l’aperçu confirmé.',
+    publishNeedsReshare: 'Le brouillon privé a changé. Partagez un nouvel aperçu avant de publier.',
+    publishWaitingHelp: 'Rien n’est encore prêt pour le public. Partagez d’abord un aperçu confirmé.',
+    publishReadyHelp: 'Le dernier aperçu partagé est prêt à être publié.',
+    viewPublic: 'Voir le programme public',
+    takeOffline: 'Retirer du public',
+    takeOfflineTitle: 'Retirer le programme public?',
+    takeOfflineHelp:
+      'Le programme disparaîtra immédiatement de la vue publique. Les liens de séance n’afficheront plus son contenu.',
+    takeOfflineKept:
+      'Le brouillon privé, l’aperçu partagé et l’historique des versions restent intacts. Vous pourrez republier plus tard.',
+    takeOfflineConfirm: 'Retirer le programme public',
+    unpublishedSuccess: 'Le programme public est hors ligne. L’aperçu partagé et l’historique ont été conservés.',
+    publishOpenTitle: 'Les propositions sont encore ouvertes',
+    publishOpenHelp:
+      'Publier maintenant expose le programme pendant que des personnes peuvent encore soumettre. Confirmez que ce moment est intentionnel.',
     configure: 'Configuration de l’horaire',
     configureHelp: 'Les salles sont les parcours visibles du public. Les heures suivent le fuseau de l’événement.',
     timeZone: 'Fuseau horaire de l’événement',
@@ -1119,9 +1424,11 @@ export const fr: Dictionary = {
     removeRoom: 'Retirer la salle',
     saveSetup: 'Enregistrer la configuration',
     setupSaved: 'Configuration de l’horaire enregistrée.',
+    saveSetupFirst: 'Enregistrez la configuration avant de partager ou de publier.',
     needsSetup: 'Définissez les jours et au moins une salle avant de placer les séances.',
     unassigned: 'Séances non programmées',
-    unassignedHelp: 'Les conférences acceptées peuvent être planifiées; seules les confirmées peuvent être publiées.',
+    unassignedHelp:
+      'Les conférences acceptées peuvent être planifiées ici; seules les confirmées entrent dans le programme partagé ou public.',
     noUnassigned: 'Chaque conférence retenue a une place.',
     tentative: 'Confirmation en attente',
     confirmed: 'Confirmée',
@@ -1151,16 +1458,27 @@ export const fr: Dictionary = {
     unassignedCount: (n: number) => `${n} non programmées`,
     tentativeCount: (n: number) => `${n} provisoires`,
     conflictCount: (n: number) => `${n} conflits`,
-    unpublished: 'Modifications non publiées',
+    unpublished: 'Modifications non partagées',
     publishedVersion: (n: number) => `Version publique ${n}`,
     publish: 'Vérifier et publier',
     publishTitle: 'Publier ce programme?',
     publishHelp:
       'Le public verra immédiatement cette version. Les courriels resteront en attente de vérification.',
-    publishBlocked: 'Toutes les conférences doivent être confirmées et sans conflit avant la publication.',
+    publishBlocked: 'L’aperçu partagé doit être à jour et sans conflit avant la publication.',
     publishNoChanges: 'Le programme public est déjà à jour.',
     publishConfirm: 'Publier le programme',
     published: 'Le programme public est en ligne.',
+    committeePreviewTitle: 'Aperçu du comité',
+    committeePreviewHelp: 'Séances confirmées seulement. Ce programme de travail en lecture seule n’est pas public.',
+    committeePreviewDetail:
+      'Il s’agit de la version de travail partagée du comité. Les téléchargements de calendrier seront offerts après la publication.',
+    committeeNextTitle: 'Vérifiez les détails de travail',
+    committeeNextHelp:
+      'Vérifiez l’heure, la salle et la langue. Signalez tout conflit ou correction par le canal convenu avec l’équipe; il n’y a aucune approbation dans l’application.',
+    committeeSignInTitle: 'Un aperçu du comité est disponible',
+    committeeSignInHelp:
+      'Connectez-vous avec votre compte du comité pour ouvrir l’horaire de travail confirmé actuel. Vous resterez sur cette page.',
+    notPublic: 'Non public',
     publicHelp: 'Choisissez un jour, une salle ou une langue. Les heures suivent le fuseau de l’événement.',
     allRooms: 'Toutes les salles',
     allLanguages: 'Toutes les langues',

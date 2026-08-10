@@ -46,7 +46,11 @@ slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
 the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
 creator access), `signInLinks` (a platform-wide throttle) and `config/platform`
-sit outside. Storage matches: `cfps/{cfpId}/headshots/{uid}/{key}`.
+sit outside. Storage keeps server-only working versions under
+`cfps/{cfpId}/workingHeadshots/{proposalId}/{key}/{uploadId}` and confirmed
+copies under `cfps/{cfpId}/confirmedHeadshots/{proposalId}/{key}/{generation}`.
+`headshots/{uid}/{key}` is a read-only compatibility fallback for uploads made
+before proposal pointers existed.
 
 Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
 to start one, `/platform` for global creator access, `/me` the speaker's own
@@ -57,6 +61,12 @@ tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId
 `owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
 until its holder first visits. Only an owner archives, deletes or is written by
 `createCfp`; `owner` is deliberately not grantable through `grantRole`.
+
+A pending event grant carries an opaque `invitationId`. The grant trigger uses
+that id for one generic committee invitation and revalidates the exact pending
+grant before delivery. Changing a pending role does not spam another invite;
+revoking and later inviting again creates a fresh id. A claimed grant is already
+active and receives later proposal/schedule staff notices instead.
 
 Platform roles are separate: `owner`, `admin` and `creator` answer who may
 delegate platform access and create a CFP. They grant no access to event data.
@@ -86,13 +96,20 @@ An accepted speaker answers with `respondToDecision` — `confirmed` or `decline
 from `accepted` only. No token in the link: the CFP is behind Google sign-in and
 the proposal is already theirs, so the session is the authentication. Idempotent,
 and reversible, because plans change and the alternative is an organiser editing
-a status by hand from an email.
+a status by hand from an email. Admins cannot set either speaker response: doing
+so would bypass every required confirmation answer and image. Moving a committee
+decision back re-enters `under_review`, never editable `submitted`.
 
-Email is a queue, not a send: callables write `emailLog/{kind}__{proposalId}`
-inside their own transaction and the `sendQueuedEmail` trigger delivers. Copy
-lives in `shared/emailTemplates.ts` (pure, both languages); transport and status
-machine in `functions/src/email.ts`. Decisions queue `held` until an admin
-releases them together — see the README for why, and for the Resend setup.
+Email is a queue, not a send: callables write a deterministic `emailLog` row and
+the `sendQueuedEmail` trigger delivers. Proposal decisions key by proposal;
+schedule placement rows also key by immutable release, and staff notices by
+recipient. Copy lives in `shared/emailTemplates.ts` (pure, both languages);
+transport and status machine in `functions/src/email.ts`. Decisions and speaker
+schedule changes queue `held` until an admin releases them together. Generic
+committee invitations, proposal-ready notices and shared-preview notices are
+immediate, but re-check the grant/member, proposal or shared pointer before send.
+An explicit `locale` on the event member or pending grant is honoured; otherwise
+one notice renders both EN and FR, including both organiser overrides.
 
 Email setup is entirely `/admin`, no redeploy: key, domain, sender, wording.
 Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
@@ -201,15 +218,16 @@ collection — the rule names the two readable documents one at a time.
   real, the field has to move to its own document (`proposals/{id}/aggregate/…`,
   gated on `reviewsVisible || isAdmin`), which means the rules,
   `recomputeAggregates`, the Proposals dashboard, the review sort, and a backfill.
-- **A review document carries exactly five keys**, pinned by `hasOnly` in the
-  rules: `cfpId`, `score`, `conflictOfInterest`, `comment`, `updatedAt`. Without
-  that the `comment` cap is decorative, because the same text goes in under any
-  other name. The cap itself is `LIMITS.reviewCommentMax`, duplicated as a literal
-  in the rules because rules cannot import TypeScript, and pinned to it by
-  `tests/reviewComment.test.ts`.
+- **A review save is a callable transaction, not a browser write.** It writes
+  exactly `cfpId`, `score`, `conflictOfInterest`, optional `comment`, and
+  `updatedAt`, while atomically moving the first `submitted` review to
+  `under_review`. Direct review writes are denied: an acknowledged score followed
+  by a delayed lifecycle trigger left a real edit race. The comment cap remains
+  `LIMITS.reviewCommentMax`, pinned by `tests/reviewComment.test.ts`.
 - **`status` is function-writable only**, so every decision is a callable.
-  `setProposalStatus` is admin-only and refuses `draft` and `withdrawn` — the
-  first is not the committee's to touch, the second is the speaker's call.
+  `setProposalStatus` is admin-only and refuses `draft`, `submitted`,
+  `withdrawn`, `confirmed` and `declined`. Undo returns to `under_review`:
+  `submitted` is still speaker-editable and ends permanently at the first review.
 - **A rules test that writes the same value it seeded proves nothing.**
   `affectedKeys()` never names an unchanged field, so a `hasOnly` guard passes
   either way. Always write a value that differs.
@@ -256,11 +274,10 @@ collection — the rule names the two readable documents one at a time.
   (`app.all("/favicon.ico|/robots.txt", … 404)`), was real and is now irrelevant:
   nothing here is served by a function. Do not generalise it to Cloud Run — App
   Hosting serves both paths from the app.
-- **`firebase/storage` is loaded on demand, from `lib/storage.ts`.** It is ~34 KB
-  and the only thing that uses it is the image answer on the *confirmation*
-  form — an accepted speaker, once, and only if asked for a photo. `firebase.ts`
-  must not import it, or the bundler puts it back in the main chunk and every
-  visitor pays for it again.
+- **The app bundle does not import `firebase/storage`.** Confirmation photos go
+  through callable upload and preview paths, so browser rules can keep the whole
+  bucket closed and Admin SDK writes never need a public download token. Keep
+  Storage out of `firebase.ts`; it would add the client SDK back to every page.
 - **Analytics is off until somebody says yes, and off by default entirely.**
   `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` is the single switch: with no id the
   module is inert and the consent banner does not render, which is the state of
@@ -391,13 +408,34 @@ collection — the rule names the two readable documents one at a time.
 - **`archived` is a boolean that is always written, never an absent timestamp.**
   Absence-testing does not work inside a `list` rule: `keys().hasAny`, `in` and
   `get(k, null)` all read true for every document, so an archived CFP stayed on
-  the public listing. The timestamp beside it is for display only.
+  the public listing. The timestamp beside it is for display only. Archive is a
+  historical write fence: reads and the current public programme remain, while
+  only role revocation, owner unarchive and confirmed deletion may mutate event
+  data. Delayed triggers and email claims re-read the CFP transactionally; a
+  provider request already in flight is the one unavoidable handoff race.
+  Storage, Secret Manager and Resend mutations take the private
+  `config/externalMutation` lease, whose duration exceeds the callable timeout;
+  archive refuses a live lease and reclaims an expired one. Delete reserves the
+  root with `deleting: true`, clears Storage first, and keeps the owner/member
+  tree intact when that step fails so the same confirmed delete can retry.
 - **An image answer is a fact about the bucket, not a value the browser sends.**
-  The file goes straight to `cfps/{cfpId}/headshots/{uid}/{key}`, which the rules
-  confine to its owner, and `respondToDecision` asks the bucket what is there rather than
-  believing the answer it was handed. A forged path is worth nothing.
-- **Organisers read headshots through `headshotImage`, which returns the bytes.**
-  Storage rules cannot read Firestore, so the committee cannot be named there.
+  `uploadHeadshot` verifies the speaker, their accepted/confirmed/declined
+  proposal and current image question, validates both MIME and magic bytes, and
+  writes a unique working object under the CFP external-mutation lease. Its
+  finishing transaction revalidates the proposal/form and atomically changes
+  `headshotUploads[key]`; a failed or ambiguous replacement never deletes the
+  previously referenced object. Browser Storage reads and writes are closed.
+  `respondToDecision` follows only that server pointer (with a legacy canonical
+  fallback), checks the recorded generation, then copies it to
+  `confirmedHeadshots` and stores the immutable answer. Unreferenced working
+  versions may remain until the CFP's bounded Storage prefix is deleted.
+- **`headshotImage` returns private bytes through two explicit branches.** A
+  verified accepted/confirmed/declined speaker may request `working: true` only
+  for their own proposal's current image field. The default organiser branch
+  checks the event role and reads only the immutable answer recorded on that
+  proposal, so neither branch is an arbitrary bucket reader. A legacy live-path
+  answer is upgraded under the CFP external-mutation lease, including after
+  archive, so deletion cannot clear the bucket and then race a late copy back.
   Not a signed URL: `getSignedUrl` needs a private key the emulator lacks, and a
   deployed function only signs by calling IAM `signBlob` — a role the runtime
   service account does not have by default. It would pass here and fail there.
@@ -415,13 +453,25 @@ collection — the rule names the two readable documents one at a time.
   *next* card and clicked again, scoring the whole queue. Use `click()`. The
   control is a button with `aria-pressed` rather than a radio for the same
   reason: radios are expected to stay put.
-- **The schedule draft and the public programme are different data.** Admins
-  edit `config/schedule` and `scheduleDraft` through revision-checked callables;
-  publishing writes an immutable `scheduleReleases/{releaseId}` and only then
-  flips `cfps/{id}.publishedScheduleId`. Anonymous rules open only that release.
-  A later status change marks its session cancelled rather than deleting it, so
-  attendee links and calendar UIDs remain stable. Schedule emails are held for
-  admin release and dedupe by release id.
+- **The schedule has three disclosure stages, not one visibility toggle.**
+  Admins edit `config/schedule` and `scheduleDraft` through revision-checked
+  callables. Sharing writes an immutable `scheduleReleases/{releaseId}` and
+  flips `cfps/{id}.sharedScheduleId`; a callable returns a confirmed speaker's
+  own entries or the active committee's public-safe preview, never the live
+  draft. Publishing can only promote that exact, still-current release through
+  `publishedScheduleId`, which is the only pointer anonymous rules open. A later
+  status change marks shared and public copies cancelled rather than deleting
+  them, so links and calendar UIDs remain stable. Schedule emails are held when
+  sharing, not while editing or promoting, and dedupe by release id.
+- **An email send is leased and idempotent at the provider.** The queue claim
+  stores the CloudEvent id, `sendingStartedAt`, and a durable provider-attempt
+  id. Automatic retries and recovery of an ambiguous failure use the same
+  Resend idempotency key even when re-queuing creates a new CloudEvent; an
+  explicit one-row resend clears it and deliberately starts a new delivery.
+  After ten minutes an admin retry may reclaim an abandoned `sending` row,
+  while a fresh claim remains untouchable. Resend retains idempotency keys for
+  24 hours, so the remaining ambiguity is a process that stays lost beyond that
+  provider window.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.
@@ -436,7 +486,7 @@ collection — the rule names the two readable documents one at a time.
   destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
-- Project `devfest-mtl-2026-cfp`; Firestore and the 42 functions both in
+- Project `devfest-mtl-2026-cfp`; Firestore and the Cloud Functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
 - **App Hosting runs in `us-east4`, and there was no choice.** The API offers six
   regions and no Canadian one. Firestore and every callable stay in Montréal, so

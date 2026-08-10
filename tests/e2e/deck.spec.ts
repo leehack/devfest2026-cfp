@@ -10,9 +10,12 @@ import { expect, test, type Page } from '@playwright/test';
 
 import {
   createAccount,
+  deleteReviewDirect,
   inviteRole,
+  readProposalById,
   readReviews,
   reset,
+  seedMember,
   seedProposal,
   seedSpeaker,
   seedSubmittedProposal,
@@ -40,6 +43,41 @@ async function stage(page: Page) {
 const heading = (page: Page, title: string) => page.getByRole('heading', { name: title });
 
 test.describe('the review deck', () => {
+  test('the first real review freezes talk content and deleting the review does not reopen it', async ({
+    page,
+  }) => {
+    await reset();
+    const reviewer = await createAccount(REVIEWER);
+    const speaker = await createAccount(SPEAKER);
+    await Promise.all([
+      seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email),
+      seedSpeaker(speaker.uid, { name: SPEAKER.name, email: SPEAKER.email }),
+      seedSubmittedProposal('first-review-lock', {
+        speakerUid: speaker.uid,
+        title: 'The first review starts the round',
+      }),
+    ]);
+
+    await signInAs(page, REVIEWER, at('/review'));
+    await page.getByRole('button', { name: '3 — Yes' }).click();
+    await expect(page.getByText('1 of 1 responded')).toBeVisible();
+    await expect
+      .poll(async () => (await readProposalById('first-review-lock'))?.status)
+      .toBe('under_review');
+
+    await signInAs(page, SPEAKER);
+    await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
+    await expect(page.getByText(/talk itself is locked now/)).toBeVisible();
+
+    await deleteReviewDirect('first-review-lock', reviewer.uid);
+    await expect.poll(async () => (await readReviews('first-review-lock')).length).toBe(0);
+    await page.reload();
+
+    expect((await readProposalById('first-review-lock'))?.status).toBe('under_review');
+    await expect(page.getByRole('textbox', { name: /^Title/ })).toBeDisabled();
+    await expect(page.getByText(/talk itself is locked now/)).toBeVisible();
+  });
+
   test('shows one proposal at a time and moves with the arrow keys', async ({ page }) => {
     await stage(page);
 
@@ -65,7 +103,7 @@ test.describe('the review deck', () => {
     await page.keyboard.press('3');
     // The counter first, always: it is the signal that the write has landed,
     // and anything asserted before it is reading a frame that has not caught up.
-    await expect(page.getByText('1 of 3 scored')).toBeVisible();
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
     await expect(heading(page, TITLES[1])).toBeVisible();
 
     // The score went to the proposal that was on screen when the key was
@@ -80,7 +118,7 @@ test.describe('the review deck', () => {
     await stage(page);
 
     await page.keyboard.press('4');
-    await expect(page.getByText('1 of 3 scored')).toBeVisible();
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
     await page.keyboard.press('ArrowLeft');
     await expect(heading(page, TITLES[0])).toBeVisible();
     await expect(page.getByRole('button', { name: '4 — Strong yes' })).toHaveAttribute(
@@ -100,7 +138,7 @@ test.describe('the review deck', () => {
     await stage(page);
 
     await page.keyboard.press('2');
-    await expect(page.getByText('1 of 3 scored')).toBeVisible();
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
     await expect(heading(page, TITLES[1])).toBeVisible();
     await page.keyboard.press('ArrowLeft');
     await expect(heading(page, TITLES[0])).toBeVisible();
@@ -120,7 +158,7 @@ test.describe('the review deck', () => {
     // the person writing, not to the shortcut handler.
     await expect(heading(page, TITLES[0])).toBeVisible();
     await expect(comment).toHaveValue('3');
-    await expect(page.getByText('0 of 3 scored')).toBeVisible();
+    await expect(page.getByText('0 of 3 responded')).toBeVisible();
     expect(await readReviews('deck-0')).toHaveLength(0);
   });
 
@@ -135,7 +173,7 @@ test.describe('the review deck', () => {
     // card and score that one too.
     await page.getByRole('button', { name: '3 — Yes' }).click();
     await expect(heading(page, TITLES[1])).toBeVisible();
-    await expect(page.getByText('1 of 3 scored')).toBeVisible();
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
 
     const reviews = await readReviews('deck-0');
     expect(reviews[0]).toMatchObject({ score: 3, comment: 'Wants a tighter close.' });
@@ -152,13 +190,13 @@ test.describe('the review deck', () => {
     const note = page.getByRole('textbox', { name: /^Notes for the committee/ });
     await note.fill(comment);
 
-    let failNextCommit = true;
-    await page.route('**/documents:commit**', async (route) => {
-      if (!failNextCommit) {
+    let failNextSave = true;
+    await page.route('**/saveReview', async (route) => {
+      if (!failNextSave) {
         await route.continue();
         return;
       }
-      failNextCommit = false;
+      failNextSave = false;
       await route.abort('failed');
     });
     await page.getByRole('button', { name: '3 — Yes' }).click();
@@ -168,10 +206,10 @@ test.describe('the review deck', () => {
     });
     await expect(recovery).toBeVisible();
     await expect(recovery.getByText(title, { exact: true })).toBeVisible();
-    expect(failNextCommit).toBe(false);
+    expect(failNextSave).toBe(false);
     expect(await readReviews('deck-0')).toHaveLength(0);
 
-    await page.unroute('**/documents:commit**');
+    await page.unroute('**/saveReview');
     await recovery.getByRole('button', { name: 'Open proposal' }).click();
     await expect(heading(page, title)).toBeVisible();
     await expect(note).toHaveValue(comment);
@@ -239,13 +277,13 @@ test.describe('the review deck', () => {
   }) => {
     await stage(page);
     await page.keyboard.press('3');
-    await expect(page.getByText('1 of 3 scored')).toBeVisible();
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
 
     await page.getByRole('button', { name: 'Review queue', exact: true }).click();
     const queue = page.getByRole('region', { name: 'Review queue' });
     await expect(queue).toBeVisible();
     const first = queue.getByRole('button', { name: /Alpha on caching/ });
-    await expect(first).toContainText('Scored');
+    await expect(first).toContainText('Responded');
     await first.click();
 
     await expect(heading(page, TITLES[0])).toBeVisible();
@@ -271,18 +309,18 @@ test.describe('the review deck', () => {
     await expect(toggle).toBeFocused();
 
     const current = page.locator('#review-queue [aria-current="true"]');
-    await expect(current).toContainText('Current · Not scored');
+    await expect(current).toContainText('Current · Needs response');
     await expect(current.getByRole('button')).toHaveCount(0);
   });
 
-  test('says plainly when every talk in the current view is scored', async ({ page }) => {
+  test('says plainly when every proposal in the current view has a response', async ({ page }) => {
     await stage(page);
 
     for (const count of [1, 2, 3]) {
       await page.keyboard.press('3');
-      await expect(page.getByText(`${count} of 3 scored`)).toBeVisible();
+      await expect(page.getByText(`${count} of 3 responded`)).toBeVisible();
     }
-    await expect(page.getByText('Every talk in this view has a score.')).toBeVisible();
+    await expect(page.getByText('Every proposal in this view has a response.')).toBeVisible();
   });
 
   /*

@@ -21,14 +21,24 @@ import {
   createAccount,
   invitePlatformRole,
   inviteRole,
+  readCfp,
+  readEmailLog,
+  readExternalMutationLease,
+  readMember,
   readProposalById,
+  readProposalUpdateTime,
   readStoredObjects,
+  reserveCfpDeletionDirect,
   reset,
   seedCfp,
+  seedEmailLog,
+  seedExternalMutationLease,
   seedMember,
   seedProposal,
   seedReview,
   seedSpeaker,
+  setSendingDomainDirect,
+  setSubmissionFormDirect,
   storeObjectDirect,
 } from './backend';
 import { at, signInAs, alerts } from './form';
@@ -36,6 +46,11 @@ import { at, signInAs, alerts } from './form';
 const OTHER = 'someone-elses-conf';
 
 const OWNER = { sub: 'plat-owner', email: 'owner@devfest.test', name: 'Ora Owner' };
+const SECOND_OWNER = {
+  sub: 'plat-owner-two',
+  email: 'owner-two@devfest.test',
+  name: 'Owen Owner',
+};
 const OUTSIDER = { sub: 'plat-outsider', email: 'outsider@other.test', name: 'Otto Outsider' };
 const SPEAKER = { sub: 'plat-speaker', email: 'speaker@example.test', name: 'Sam Speaker' };
 const THEME_KEY = 'cfp.theme';
@@ -201,7 +216,7 @@ test.describe('the front door', () => {
     await expect(
       page.getByRole('heading', { name: 'Finish the essentials before you share' }),
     ).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Setup checklist' })).toBeVisible();
+    await expect(page.getByText(/^Setup checklist · \d+ of \d+ essentials complete$/)).toBeVisible();
     expect(page.url()).toContain('/c/test-conf-2027/admin/overview');
   });
 
@@ -266,7 +281,7 @@ test.describe('nothing crosses between two calls', () => {
       ['grantRole', { email: 'friend@evil.test', role: 'admin' }],
       ['setConfirmForm', { fields: [] }],
       ['sendSpeakerMessage', { proposalId: 'theirs', subject: 's', body: 'b' }],
-      ['headshotImage', { speakerUid: speaker.uid, key: 'headshot' }],
+      ['headshotImage', { proposalId: 'theirs', key: 'headshot' }],
       ['setEmailSettings', { from: 'x@evil.test', replyTo: '' }],
       ['setEmailTemplate', { kind: 'accepted', locale: 'en', subject: 's', body: 'b' }],
     ] as const) {
@@ -381,6 +396,278 @@ test.describe('archiving and deleting', () => {
     });
   });
 
+  test('archive freezes event writes while preserving inspection, revocation, and unarchive', async () => {
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, SPEAKER);
+    await seedProposal('p-history', {
+      speakerUid: speaker.uid,
+      title: 'History stays readable',
+      status: 'under_review',
+    });
+    const invitee = await createAccount({
+      sub: 'archived-invitee',
+      email: 'archived-invitee@example.org',
+      name: 'Invited Reviewer',
+    });
+    await inviteRole('archived-invitee@example.org', 'reviewer');
+    await setSendingDomainDirect('event.example');
+    await Promise.all([
+      seedEmailLog('held-history', { status: 'held', proposalId: 'p-history' }),
+      seedEmailLog('failed-history', { status: 'failed', proposalId: 'p-history' }),
+      seedEmailLog('dry-history', { status: 'dry_run', proposalId: 'p-history' }),
+    ]);
+
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: true,
+    });
+
+    const refused: [string, Record<string, unknown>][] = [
+      ['updateCfp', { name: 'Changed after archive', visibility: 'private' }],
+      ['setCfpWindow', { paused: true }],
+      ['setConfirmForm', { fields: [] }],
+      ['setSubmissionForm', {}],
+      ['recomputeAggregates', {}],
+      ['grantRole', { email: 'new-reviewer@example.org', role: 'reviewer' }],
+      ['setProposalStatus', { proposalId: 'p-history', status: 'accepted' }],
+      [
+        'sendSpeakerMessage',
+        { proposalId: 'p-history', subject: 'Question', body: 'Can you reply?' },
+      ],
+      ['setEmailSettings', { from: 'Event <cfp@event.example>', replyTo: '' }],
+      [
+        'setEmailTemplate',
+        { kind: 'accepted', locale: 'en', subject: 'Accepted', body: 'Hello.' },
+      ],
+      ['sendTestEmail', { kind: 'accepted', locale: 'en' }],
+      ['setEmailSecret', { apiKey: 're_archived_test_key' }],
+      ['emailDomain', { action: 'add', domain: 'event.example' }],
+      ['emailDomain', { action: 'verify' }],
+      ['emailQueue', { action: 'release', logIds: ['held-history'] }],
+      ['emailQueue', { action: 'retry' }],
+      ['emailQueue', { action: 'resend', logId: 'failed-history' }],
+    ];
+    for (const [callable, data] of refused) {
+      expect(await callAs(owner.idToken, callable, data), callable).toMatchObject({
+        ok: false,
+        code: 'FAILED_PRECONDITION',
+      });
+    }
+
+    expect(await callAs(invitee.idToken, 'claimRole', {})).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
+    expect(
+      await callAs(owner.idToken, 'revokeRole', { email: 'archived-invitee@example.org' }),
+    ).toMatchObject({ ok: true });
+
+    expect(await callJson(owner.idToken, 'emailQueue', { action: 'readiness' })).toMatchObject({
+      ok: true,
+    });
+    expect(await callJson(owner.idToken, 'emailQueue', { action: 'summary' })).toMatchObject({
+      waiting: 0,
+    });
+    const preview = await callJson(owner.idToken, 'emailQueue', { action: 'preview' });
+    for (const logId of ['held-history', 'failed-history', 'dry-history']) {
+      expect(preview.rows.find((row: { logId: string }) => row.logId === logId)).toMatchObject({
+        stale: true,
+      });
+    }
+    expect(preview.held).toEqual([]);
+
+    await seedEmailLog('queued-after-archive', { status: 'queued', proposalId: 'p-history' });
+    await expect
+      .poll(async () => (await readEmailLog()).find((row) => row.id === 'queued-after-archive'))
+      .toMatchObject({ status: 'failed', error: expect.stringContaining('archived') });
+
+    expect(await readProposalById('p-history')).toMatchObject({ title: 'History stays readable' });
+    expect((await readCfp())?.name).toBe('DevFest Montréal 2026');
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: false })).toMatchObject({
+      ok: true,
+      code: '200',
+    });
+    expect(
+      await callAs(owner.idToken, 'updateCfp', {
+        name: 'Writable again',
+        visibility: 'private',
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  test('archive and provider mutations respect the external side-effect fence', async () => {
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
+    await setSendingDomainDirect('event.example');
+    await seedExternalMutationLease(new Date(Date.now() + 60_000));
+
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: false,
+      code: 'ABORTED',
+    });
+    for (const [callable, data] of [
+      ['setEmailSecret', { apiKey: 're_fenced_test_key' }],
+      ['emailDomain', { action: 'add', domain: 'fenced.example' }],
+      ['emailDomain', { action: 'verify' }],
+    ] as const) {
+      expect(await callAs(owner.idToken, callable, data), callable).toMatchObject({
+        ok: false,
+        code: 'ABORTED',
+      });
+    }
+    expect(await readCfp()).toMatchObject({ archived: false });
+    expect(await readExternalMutationLease()).toMatchObject({
+      id: 'seeded-external-mutation',
+    });
+
+    await seedExternalMutationLease(new Date(Date.now() - 1_000));
+    expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
+      ok: true,
+    });
+    expect(await readExternalMutationLease()).toBeNull();
+  });
+
+  test('a failed provider mutation releases an expired fence it reclaimed', async () => {
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
+    await setSendingDomainDirect('event.example');
+    await seedExternalMutationLease(new Date(Date.now() - 1_000));
+
+    // The emulator intentionally has no Resend key. Reaching this refusal proves
+    // the expired fence was reclaimed; the token-matched finally path clears it.
+    expect(await callAs(owner.idToken, 'emailDomain', { action: 'verify' })).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
+    expect(await readExternalMutationLease()).toBeNull();
+  });
+
+  test('delayed profile and aggregate triggers cannot rewrite archived history', async () => {
+    const owner = await createAccount(OWNER);
+    const speaker = await createAccount(SPEAKER);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
+    await seedSpeaker(speaker.uid, { ...SPEAKER, name: 'Before review' });
+    await seedProposal('p-frozen-history', {
+      speakerUid: speaker.uid,
+      title: 'A frozen record',
+      status: 'under_review',
+    });
+    await seedSpeaker(speaker.uid, { ...SPEAKER, name: 'Committee version' });
+    await seedReview('p-frozen-history', owner.uid, 2);
+    await expect
+      .poll(async () => await readProposalById('p-frozen-history'))
+      .toMatchObject({
+        speakerSnapshot: [expect.objectContaining({ name: 'Committee version' })],
+        aggregate: expect.objectContaining({ reviewCount: 1, avgScore: 2 }),
+      });
+
+    await callJson(owner.idToken, 'archiveCfp', { archived: true });
+    await seedSpeaker(speaker.uid, { ...SPEAKER, name: 'Changed after event' });
+    await seedReview('p-frozen-history', owner.uid, 4);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    expect(await readProposalById('p-frozen-history')).toMatchObject({
+      speakerSnapshot: [expect.objectContaining({ name: 'Committee version' })],
+      aggregate: expect.objectContaining({ reviewCount: 1, avgScore: 2 }),
+    });
+  });
+
+  test('submission and a required form edit serialize without a stale commit', async () => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, SPEAKER);
+    await Promise.all([
+      seedProposal('racing-submit', {
+        speakerUid: speaker.uid,
+        title: 'The proposal being submitted',
+        status: 'draft',
+      }),
+      ...Array.from({ length: 80 }, (_, index) =>
+        seedProposal(`draft-${index}`, {
+          speakerUid: speaker.uid,
+          title: `Draft ${index}`,
+          status: 'draft',
+        }),
+      ),
+    ]);
+
+    const submission = callAs(speaker.idToken, 'submitProposal', {
+      proposalId: 'racing-submit',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const formUpdatedAt = await setSubmissionFormDirect({
+      fields: [
+        {
+          key: 'late_required',
+          type: 'text',
+          label: { en: 'A newly required answer' },
+          required: true,
+        },
+      ],
+    });
+
+    const result = await submission;
+    if (result.ok) {
+      // A 200 is valid only when the submission won and committed before the
+      // edit. If the form won, the transaction retries against its required
+      // field and the branch below must refuse the stale answers.
+      const proposalUpdatedAt = await readProposalUpdateTime('racing-submit');
+      expect(Date.parse(proposalUpdatedAt!)).toBeLessThanOrEqual(Date.parse(formUpdatedAt));
+      expect(await readProposalById('racing-submit')).toMatchObject({ status: 'submitted' });
+    } else {
+      expect(result).toMatchObject({ code: 'INVALID_ARGUMENT' });
+      expect(await readProposalById('racing-submit')).toMatchObject({ status: 'draft' });
+    }
+  });
+
+  test('email retry recovers an expired sending lease but leaves a fresh claim alone', async () => {
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
+    await seedProposal('recover-email', {
+      speakerUid: 'email-speaker',
+      title: 'Recover this notification',
+      status: 'accepted',
+    });
+    await Promise.all([
+      seedEmailLog('expired-send', {
+        status: 'sending',
+        proposalId: 'recover-email',
+        attempts: 1,
+        sendingClaimId: 'abandoned-event',
+        providerAttemptId: 'ambiguous-provider-attempt',
+        sendingStartedAt: new Date(Date.now() - 11 * 60_000),
+      }),
+      seedEmailLog('fresh-send', {
+        status: 'sending',
+        proposalId: 'recover-email',
+        attempts: 1,
+        sendingClaimId: 'active-event',
+        sendingStartedAt: new Date(),
+      }),
+    ]);
+
+    const preview = await callJson(owner.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview).toMatchObject({ recoverableSending: 1 });
+    expect(preview.rows.find((row: { logId: string }) => row.logId === 'expired-send')).toMatchObject({
+      status: 'sending',
+      recoverable: true,
+    });
+    expect(await callJson(owner.idToken, 'emailQueue', { action: 'retry' })).toMatchObject({
+      released: 1,
+    });
+
+    await expect
+      .poll(async () => (await readEmailLog()).find((row) => row.id === 'expired-send'))
+      .toMatchObject({ status: 'dry_run', attempts: 2 });
+    expect((await readEmailLog()).find((row) => row.id === 'expired-send')).not.toHaveProperty(
+      'providerAttemptId',
+    );
+    expect((await readEmailLog()).find((row) => row.id === 'fresh-send')).toMatchObject({
+      status: 'sending',
+      attempts: 1,
+    });
+  });
+
   test('an admin cannot archive or delete — that is the owner’s alone', async () => {
     await inviteRole(OUTSIDER.email, 'admin');
     const chair = await createAccount(OUTSIDER);
@@ -397,6 +684,7 @@ test.describe('archiving and deleting', () => {
   test('deleting takes two steps, and takes the proposals and photos with it', async () => {
     const owner = await createAccount(OWNER);
     await seedMember(owner.uid, 'owner');
+    await seedMember('departing-reviewer', 'reviewer');
 
     const speaker = await createAccount(SPEAKER);
     await seedProposal('p-1', { speakerUid: speaker.uid, title: 'A talk', status: 'submitted' });
@@ -420,7 +708,71 @@ test.describe('archiving and deleting', () => {
     expect(await callAs(owner.idToken, 'deleteCfp', { confirm: CFP_ID })).toMatchObject({
       ok: true,
     });
+    expect(await readCfp()).toBeNull();
+    expect(await readMember(owner.uid)).toBeNull();
+    expect(await readMember('departing-reviewer')).toBeNull();
     expect(await readProposalById('p-1')).toBeNull();
     expect(await readStoredObjects('cfps/')).toEqual([]);
+  });
+
+  test('delete and unarchive serialize so a deletion reservation cannot be revived', async () => {
+    const [owner, secondOwner] = await Promise.all([
+      createAccount(OWNER),
+      createAccount(SECOND_OWNER),
+    ]);
+    await Promise.all([
+      seedMember(owner.uid, 'owner', undefined, OWNER.email),
+      seedMember(secondOwner.uid, 'owner', undefined, SECOND_OWNER.email),
+    ]);
+    await callJson(owner.idToken, 'archiveCfp', { archived: true });
+
+    const [deletion, unarchive] = await Promise.all([
+      callAs(owner.idToken, 'deleteCfp', { confirm: CFP_ID }),
+      callAs(secondOwner.idToken, 'archiveCfp', { archived: false }),
+    ]);
+    expect(Number(deletion.ok) + Number(unarchive.ok)).toBe(1);
+
+    const cfp = await readCfp();
+    if (deletion.ok) {
+      expect(cfp).toBeNull();
+    } else {
+      expect(unarchive).toMatchObject({ ok: true });
+      expect(cfp).toMatchObject({ archived: false });
+      expect(cfp).not.toHaveProperty('deleting', true);
+    }
+  });
+
+  test('only the reserved owner can resume an interrupted deletion', async () => {
+    const [owner, secondOwner] = await Promise.all([
+      createAccount(OWNER),
+      createAccount(SECOND_OWNER),
+    ]);
+    await Promise.all([
+      seedMember(owner.uid, 'owner', undefined, OWNER.email),
+      seedMember(secondOwner.uid, 'owner', undefined, SECOND_OWNER.email),
+      seedProposal('delete-race-talk', {
+        speakerUid: 'delete-race-speaker',
+        title: 'Delete exactly once',
+        status: 'submitted',
+      }),
+    ]);
+    await reserveCfpDeletionDirect(owner.uid);
+
+    expect(await callAs(secondOwner.idToken, 'deleteCfp', { confirm: CFP_ID })).toMatchObject({
+      ok: false,
+      code: 'ABORTED',
+    });
+    expect(await readCfp()).toMatchObject({ archived: true, deleting: true });
+    expect(await readMember(owner.uid)).toMatchObject({ deletionReserved: true });
+    expect(await readMember(secondOwner.uid)).toMatchObject({ role: 'owner' });
+    expect(await readProposalById('delete-race-talk')).not.toBeNull();
+
+    expect(await callAs(owner.idToken, 'deleteCfp', { confirm: CFP_ID })).toMatchObject({
+      ok: true,
+    });
+    expect(await readCfp()).toBeNull();
+    expect(await readMember(owner.uid)).toBeNull();
+    expect(await readMember(secondOwner.uid)).toBeNull();
+    expect(await readProposalById('delete-race-talk')).toBeNull();
   });
 });

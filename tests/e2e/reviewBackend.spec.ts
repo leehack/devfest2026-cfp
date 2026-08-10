@@ -132,6 +132,59 @@ test.describe('review backend operations', () => {
     await expect.poll(async () => (await readProposalById('two'))?.aggregate).toBeUndefined();
   });
 
+  test('a concurrent withdrawal or decision is never overwritten by the first review', async () => {
+    const [admin, reviewer, speaker] = await Promise.all([
+      createAccount(ADMIN),
+      createAccount(FIRST),
+      createAccount(SPEAKER),
+    ]);
+    await Promise.all([
+      seedMember(admin.uid, 'admin', undefined, ADMIN.email),
+      seedMember(reviewer.uid, 'reviewer', undefined, FIRST.email),
+      seedProposal('withdraw-race', {
+        speakerUid: speaker.uid,
+        title: 'Withdrawal wins the race',
+        status: 'submitted',
+      }),
+      seedProposal('decision-race', {
+        speakerUid: speaker.uid,
+        title: 'Decision wins the race',
+        status: 'submitted',
+      }),
+    ]);
+
+    const [withdrawReview, withdrawal] = await Promise.all([
+      callAs(reviewer.idToken, 'saveReview', {
+        proposalId: 'withdraw-race',
+        score: 3,
+        conflictOfInterest: false,
+        comment: 'Concurrent review',
+      }),
+      callAs(speaker.idToken, 'withdrawProposal', { proposalId: 'withdraw-race' }),
+    ]);
+    expect(withdrawal.ok).toBe(true);
+    expect(
+      withdrawReview.ok || withdrawReview.code === 'FAILED_PRECONDITION',
+    ).toBe(true);
+    expect((await readProposalById('withdraw-race'))?.status).toBe('withdrawn');
+
+    const [decisionReview, decision] = await Promise.all([
+      callAs(reviewer.idToken, 'saveReview', {
+        proposalId: 'decision-race',
+        score: 4,
+        conflictOfInterest: false,
+        comment: 'Concurrent review',
+      }),
+      callAs(admin.idToken, 'setProposalStatus', {
+        proposalId: 'decision-race',
+        status: 'accepted',
+      }),
+    ]);
+    expect(decision.ok).toBe(true);
+    expect(decisionReview.ok || decisionReview.code === 'FAILED_PRECONDITION').toBe(true);
+    expect((await readProposalById('decision-race'))?.status).toBe('accepted');
+  });
+
   test('deletes only a pristine draft owned by the caller', async () => {
     const author = await createAccount(SPEAKER);
     const other = await createAccount(FIRST);

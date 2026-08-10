@@ -177,7 +177,9 @@ function deadlineLine(
     return (
       <>
         {t.window.notOpen} {t.window.opensAt}{' '}
-        <time dateTime={cfp.opensAt.toISOString()}>{formatDate(cfp.opensAt, locale)}</time>
+        <time dateTime={cfp.opensAt.toISOString()}>
+          {formatDate(cfp.opensAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+        </time>
       </>
     );
   }
@@ -185,14 +187,18 @@ function deadlineLine(
     return (
       <>
         {t.window.closed} {t.window.closedAt}{' '}
-        <time dateTime={cfp.closesAt.toISOString()}>{formatDate(cfp.closesAt, locale)}</time>
+        <time dateTime={cfp.closesAt.toISOString()}>
+          {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+        </time>
       </>
     );
   }
   return (
     <>
       {t.window.closesAt}{' '}
-      <time dateTime={cfp.closesAt.toISOString()}>{formatDate(cfp.closesAt, locale)}</time>
+      <time dateTime={cfp.closesAt.toISOString()}>
+        {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+      </time>
     </>
   );
 }

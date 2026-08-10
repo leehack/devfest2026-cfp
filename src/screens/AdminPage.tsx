@@ -45,14 +45,18 @@ export function AdminPage({
   user,
   cfpId,
   cfpName,
+  archived,
   tab,
   role,
+  onCfpChange,
 }: {
   user: User;
   cfpId: string;
   cfpName: string;
+  archived: boolean;
   tab: AdminTab;
   role: CfpRole;
+  onCfpChange?: () => void;
 }) {
   const { t } = useI18n();
   const [dirty, setDirty] = useState(false);
@@ -205,6 +209,13 @@ export function AdminPage({
         <span className="admin-shell-header__role">{t.enums.role[role]}</span>
       </header>
 
+      {archived && (
+        <section className="admin-read-only" role="status">
+          <strong>{t.admin.archived}</strong>
+          <span>{t.admin.archiveHelp}</span>
+        </section>
+      )}
+
       <nav className="admin-section-menu" aria-label={t.admin.sections}>
         <details
           key={tab}
@@ -356,24 +367,42 @@ export function AdminPage({
         {tab === 'proposals' && (
           <Proposals
             cfpId={cfpId}
+            readOnly={archived}
             pendingEmailCount={pendingEmailCount}
             pendingEmailCheckFailed={pendingEmailCheckFailed}
             onEmailQueueChange={refreshPendingEmails}
           />
         )}
         {tab === 'schedule' && (
-          <Schedule cfpId={cfpId} onPublished={refreshPendingEmails} />
+          <Schedule
+            cfpId={cfpId}
+            readOnly={archived}
+            onDisclosureChanged={async (stage) => {
+              if (stage === 'shared') await refreshPendingEmails();
+              onCfpChange?.();
+            }}
+          />
         )}
-        {tab === 'committee' && <Committee user={user} cfpId={cfpId} />}
+        {tab === 'committee' && <Committee user={user} cfpId={cfpId} readOnly={archived} />}
         {tab === 'settings' && (
-          <Settings cfpId={cfpId} role={role} onDirtyChange={setDirty} />
+          <Settings
+            cfpId={cfpId}
+            role={role}
+            onDirtyChange={setDirty}
+            onCfpChange={onCfpChange}
+          />
         )}
-        {tab === 'submission' && <Submission cfpId={cfpId} onDirtyChange={setDirty} />}
-        {tab === 'confirmation' && <Confirmation cfpId={cfpId} onDirtyChange={setDirty} />}
+        {tab === 'submission' && (
+          <Submission cfpId={cfpId} readOnly={archived} onDirtyChange={setDirty} />
+        )}
+        {tab === 'confirmation' && (
+          <Confirmation cfpId={cfpId} readOnly={archived} onDirtyChange={setDirty} />
+        )}
         {tab === 'email' && (
           <Email
             cfpId={cfpId}
             cfpName={cfpName}
+            readOnly={archived}
             onDirtyChange={setDirty}
             onPendingChange={publishPendingEmailCount}
           />

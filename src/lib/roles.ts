@@ -186,6 +186,8 @@ export const emailQueue = httpsCallable<
     held?: HeldEmail[];
     /** Held rows whose proposal no longer has that decision. */
     staleHeld?: number;
+    /** Sending rows whose delivery lease expired and can be retried safely. */
+    recoverableSending?: number;
     released?: number;
     settings?: EmailSettings;
     /** Last four characters of the API key — never the key. */
@@ -214,6 +216,8 @@ export interface EmailRow {
   error: string;
   /** Retained in storage, but not currently eligible for release. */
   stale?: boolean;
+  /** Its sending lease expired, so the bulk retry action can recover it. */
+  recoverable?: boolean;
 }
 
 export const setEmailSettings = httpsCallable<In<EmailSettings>, { ok: boolean }>(
@@ -259,7 +263,7 @@ export const sendTestEmail = httpsCallable<
 >(functions, 'sendTestEmail');
 
 export const headshotImage = httpsCallable<
-  In<{ speakerUid: string; key: string }>,
+  In<{ proposalId: string; key: string }>,
   { ok: boolean; dataUrl: string }
 >(functions, 'headshotImage');
 

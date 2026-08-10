@@ -280,7 +280,7 @@ emailLog/{logId}
   proposalId, template, to, sentAt, providerId
 
 config/schedule
-  timeZone, days[], rooms[], revision, publishedVersion, needsAttention
+  timeZone, days[], rooms[], revision, sharedVersion, needsAttention
 
 scheduleDraft/{entryId}
   kind, date, startsAt, durationMinutes, roomId
@@ -288,8 +288,15 @@ scheduleDraft/{entryId}
   customType, title, description            // custom item
 
 scheduleReleases/{releaseId}
-  version, timeZone, days[], rooms[], publishedAt
-  entries/{entryId}                         // immutable attendee-facing snapshot
+  version, timeZone, days[], rooms[], publishedAt?
+  entries/{entryId}                         // immutable confirmed-session snapshot;
+                                             // speaker name, bio, company, job title only
+  internal/source                           // admin-only sharedAt, sourceRevision,
+                                             // fingerprint, sharedBy
+
+cfps/{cfpId}
+  sharedScheduleId, sharedScheduleAt         // authenticated internal preview
+  publishedScheduleId, publishedScheduleAt  // anonymous public programme
 ```
 
 ### Indexes
@@ -351,52 +358,90 @@ Reviewers should not see each other's scores until the round closes, to avoid an
 
 ```
 submitted
-   ↓  deadline passes
-under_review          ← reviewers score independently
+   ↓  first committed review, atomically
+under_review          ← reviewers score independently; speaker content is frozen
    ↓  aggregates refresh automatically as scores arrive
 committee meeting     ← sorted by disagreement; track & language balance applied
    ↓
 accepted / waitlisted / rejected
-   ↓  acceptance email with confirmation deadline
-confirmed | declined | (timeout → waitlisted, promote next)
+   ↓  reviewed decision batch is released
+confirmed | declined  ← the speaker answers and completes required follow-up fields
    ↓
-public programme
+private schedule → shared preview → public programme
+   ↳ bounded late intake → review → decision → confirmation → republish
 ```
 
 At the committee stage, the dashboard needs to show — alongside scores — the counts that drive balance decisions: proposals per category, per delivery language, count of `either`, and the `attendance.status` distribution among likely accepts.
+
+The first review and the `submitted` → `under_review` transition are one server
+transaction. A reviewer must never be told that a score was saved while the
+speaker can still edit the content underneath it. Direct browser writes to the
+review document are denied. Organisers decide `accepted`, `waitlisted` or
+`rejected`; `confirmed` and `declined` belong to the authenticated speaker so a
+required confirmation answer or headshot cannot be bypassed from the admin
+table.
+
+Submitting a proposal queues one generic, private-data-free notice for each
+active claimed event owner, admin and reviewer except its author. Pending,
+revoked, unverified and platform-only identities receive nothing. The notice is
+deduplicated per proposal and recipient, revalidated immediately before
+delivery, and links to the authenticated review workspace. Sharing a schedule
+preview applies the same rule per immutable release, excluding the organiser
+who performed the share. Speaker placement messages remain held for review;
+committee notices are immediate.
 
 ### Email templates
 
 | Template | Trigger | Conditional content |
 |---|---|---|
 | Submission received | On submit | Bilingual, echo of what was submitted |
-| Accepted | Manual, batch | Confirmation deadline + link; visa invitation letter note if `needsVisa` |
+| Committee invitation | On a new pending event role | Generic authenticated review link; invalidated if revoked or already claimed |
+| Proposal ready for review | On submit | Generic authenticated review link; no proposal or speaker data |
+| Accepted | Manual, batch | Confirmation link; visa invitation letter note if `needsVisa` |
 | Waitlisted | Manual, batch | Honest about odds and timing |
 | Rejected | Manual, batch | Send these at the same time as acceptances |
-| Confirmation reminder | 2 days before `confirmDeadline` | Automated |
-| Waitlist promotion | On timeout or decline | Shorter confirmation window |
+| Shared schedule ready | On preview share | Generic authenticated committee schedule link |
+| Schedule assigned / changed / cancelled | On preview share | Held for organiser review; working-placement details |
+
+Confirmation reminders, deadlines and automatic waitlist promotion remain a
+future scheduled-job layer. They are not implied by an acceptance today.
 
 Every send goes through `emailLog` to prevent duplicates. Build a dry-run/preview mode before the first real batch.
 
 ---
 
-## 9. Public programme and schedule
+## 9. Programme and schedule disclosure
 
 Organisers build the programme privately from accepted and confirmed talks.
 Room, speaker and duplicate-talk overlaps are hard publication errors. An
 `either` proposal must be assigned `en` or `fr`; accepted-but-unconfirmed talks
-may be placed tentatively but cannot be published.
+may be placed tentatively but are never copied into a shared release.
 
-Publication is versioned: a complete immutable release is written first, then
-one pointer on the CFP document makes it public atomically. Only the pointed-to
-release is anonymously readable. The public agenda supports day, room and
+Disclosure has three explicit stages. The mutable private draft is visible only
+to event admins and owners. **Share preview** writes a complete immutable
+confirmed-session release, then advances `sharedScheduleId`; confirmed speakers
+receive only their own placement and active committee members receive the
+public-safe agenda. Neither audience reads the live draft. **Publish** may only
+promote that exact, still-current shared release by advancing
+`publishedScheduleId`. A changed draft or proposal status must be shared again
+before it can become public. Only the published pointer is anonymously readable.
+
+The submission window and programme disclosure are deliberately independent: a
+rolling event may publish confirmed sessions while submissions remain open, but
+the admin review warns before doing so. The public agenda supports day, room and
 language filters, stable session URLs, bilingual labels, and whole-event or
 per-session iCalendar downloads in the event time zone.
 
 Schedule assignment, movement and cancellation messages use the held email
-queue. A confirmed proposal that later leaves `confirmed` remains visible as
-cancelled in the current release and calendar feed until an organiser publishes
-a replacement, avoiding a silent disappearance for attendees.
+queue when a preview is shared, never while the draft is being edited and never
+again merely because the reviewed preview becomes public. A confirmed proposal
+that later leaves `confirmed` remains visible as cancelled in the current shared
+and public releases until an organiser shares a replacement, avoiding a silent
+disappearance for speakers, committee members and attendees. While an event is
+active, emergency unpublishing clears only the public pointer; the immutable
+release and internal preview remain available. Archiving freezes all event
+mutation while retaining the current programme at its direct public URL. The
+owner must reactivate the event before taking that historical programme offline.
 
 ---
 

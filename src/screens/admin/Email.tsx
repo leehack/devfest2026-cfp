@@ -34,11 +34,13 @@ import { Result } from './Result';
 export function Email({
   cfpId,
   cfpName,
+  readOnly = false,
   onDirtyChange,
   onPendingChange,
 }: {
   cfpId: string;
   cfpName: string;
+  readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   onPendingChange?: (count: number) => void;
 }) {
@@ -47,6 +49,7 @@ export function Email({
   const [tally, setTally] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<HeldEmail[]>([]);
   const [staleHeld, setStaleHeld] = useState(0);
+  const [recoverableSending, setRecoverableSending] = useState(0);
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [storedSettings, setStoredSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [keyHint, setKeyHint] = useState('');
@@ -70,7 +73,7 @@ export function Email({
   activeCfp.current = cfpId;
   const senderDirty =
     settings.from !== storedSettings.from || settings.replyTo !== storedSettings.replyTo;
-  const dirty = senderDirty || setupDirty || wordingDirty || messageDirty;
+  const dirty = !readOnly && (senderDirty || setupDirty || wordingDirty || messageDirty);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -89,6 +92,7 @@ export function Email({
       logId?: string,
       reviewedLogIds?: string[],
     ) => {
+      if (readOnly && action !== 'preview') return;
       const scope = cfpId;
       setBusy(true);
       setError('');
@@ -111,6 +115,7 @@ export function Email({
           setReady(true);
           setTally(data.tally ?? {});
           setStaleHeld(data.staleHeld ?? 0);
+          setRecoverableSending(data.recoverableSending ?? 0);
           setHeld(nextHeld);
           onPendingChange?.(nextHeld.length);
           // Never over the top of someone mid-sentence: this load is async, and
@@ -136,6 +141,7 @@ export function Email({
           );
           setTally(after.tally ?? {});
           setStaleHeld(after.staleHeld ?? 0);
+          setRecoverableSending(after.recoverableSending ?? 0);
           setHeld(nextHeld);
           onPendingChange?.(nextHeld.length);
           if (after.settings && !editing.current) {
@@ -155,7 +161,7 @@ export function Email({
         if (activeCfp.current === scope) setBusy(false);
       }
     },
-    [cfpId, onPendingChange, tRef],
+    [cfpId, onPendingChange, readOnly, tRef],
   );
 
   useEffect(() => {
@@ -165,6 +171,7 @@ export function Email({
     setTally({});
     setHeld([]);
     setStaleHeld(0);
+    setRecoverableSending(0);
     setSettings(EMPTY_SETTINGS);
     setStoredSettings(EMPTY_SETTINGS);
     setKeyHint('');
@@ -199,7 +206,7 @@ export function Email({
   const waiting = held.length;
   // A `dry_run` row is a message that was never sent, so it belongs with the
   // failures on the retry button rather than looking like a delivery.
-  const unsent = count('failed') + count('dry_run');
+  const unsent = count('failed') + count('dry_run') + recoverableSending;
 
   /*
    * Its own function rather than another `run` action: resend answers with an
@@ -207,6 +214,7 @@ export function Email({
    * the tally and the rows the moment it returned.
    */
   async function resend(row: EmailRow) {
+    if (readOnly) return;
     if (!window.confirm(t.admin.emailResendConfirm.replace('{to}', row.to))) return;
     const scope = cfpId;
     setBusy(true);
@@ -225,6 +233,7 @@ export function Email({
   }
 
   async function saveSender() {
+    if (readOnly) return;
     const scope = cfpId;
     setSenderNote('');
     setSenderError('');
@@ -313,7 +322,7 @@ export function Email({
         </div>
 
         <dl className="stats">
-          {(['held', 'queued', 'sent', 'dry_run', 'failed'] as const).map((status) => (
+          {(['held', 'queued', 'sending', 'sent', 'dry_run', 'failed'] as const).map((status) => (
             <div key={status} className="stats__item">
               <dt>{t.admin.emailStatus[status]}</dt>
               <dd>{count(status)}</dd>
@@ -367,7 +376,7 @@ export function Email({
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy || waiting === 0}
+            disabled={busy || readOnly || waiting === 0}
             onClick={() => {
               if (confirm(t.admin.emailConfirm.replace('{count}', String(waiting)))) {
                 void run(
@@ -383,7 +392,12 @@ export function Email({
               : t.admin.emailRelease(waiting)}
           </button>
           {unsent > 0 && (
-            <button type="button" className="btn" disabled={busy} onClick={() => run('retry')}>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || readOnly}
+              onClick={() => run('retry')}
+            >
               {t.admin.emailRetry.replace('{count}', String(unsent))}
             </button>
           )}
@@ -397,6 +411,7 @@ export function Email({
         cfpId={cfpId}
         keyHint={keyHint}
         domainId={domainId}
+        readOnly={readOnly}
         onKeySet={setKeyHint}
         onDomainChanged={() => run('preview')}
         onDirtyChange={setSetupDirty}
@@ -414,7 +429,7 @@ export function Email({
             editing.current = true;
             setSettings((s) => ({ ...s, from }));
           }}
-          disabled={busy}
+          disabled={busy || readOnly}
         />
         <TextField
           label={t.admin.emailReplyTo}
@@ -423,7 +438,7 @@ export function Email({
             editing.current = true;
             setSettings((s) => ({ ...s, replyTo }));
           }}
-          disabled={busy}
+          disabled={busy || readOnly}
         />
       </div>
       <p className="field__help">{t.admin.emailFromHelp}</p>
@@ -433,7 +448,7 @@ export function Email({
         </p>
       )}
 
-      <button type="button" className="btn" disabled={busy} onClick={saveSender}>
+      <button type="button" className="btn" disabled={busy || readOnly} onClick={saveSender}>
         {t.admin.emailSaveSender}
       </button>
       <Result ok={senderNote} error={senderError} />
@@ -444,6 +459,7 @@ export function Email({
         cfpName={cfpName}
         configured={Boolean(keyHint && settings.from)}
         templates={templates}
+        readOnly={readOnly}
         onSaved={() => run('preview')}
         onDirtyChange={setWordingDirty}
       />
@@ -455,6 +471,7 @@ export function Email({
         <WriteToSpeaker
           cfpId={cfpId}
           replyTo={settings.replyTo}
+          readOnly={readOnly}
           onSent={() => run('preview')}
           onDirtyChange={setMessageDirty}
         />
@@ -516,6 +533,8 @@ export function Email({
                       <td className="table__wrap" data-label={t.admin.emailStatusColumn}>
                         {row.stale
                           ? t.admin.emailStaleStatus
+                          : row.recoverable
+                            ? t.admin.emailRecoverableStatus
                           : (t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
                         {/* The provider's reason: the only thing on screen that
                             says what to fix. */}
@@ -530,6 +549,7 @@ export function Email({
                           className="btn btn--ghost"
                           disabled={
                             busy ||
+                            readOnly ||
                             row.stale ||
                             row.status === 'held' ||
                             row.status === 'queued' ||
@@ -571,11 +591,13 @@ export function Email({
 function WriteToSpeaker({
   cfpId,
   replyTo,
+  readOnly = false,
   onSent,
   onDirtyChange,
 }: {
   cfpId: string;
   replyTo: string;
+  readOnly?: boolean;
   onSent: () => void;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -593,7 +615,7 @@ function WriteToSpeaker({
   const [error, setError] = useState('');
   const activeCfp = useRef(cfpId);
   activeCfp.current = cfpId;
-  const dirty = subject !== '' || body !== '';
+  const dirty = !readOnly && (subject !== '' || body !== '');
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -646,6 +668,7 @@ function WriteToSpeaker({
   const to = nameOf(target) || t.admin.emailTo;
 
   async function send() {
+    if (readOnly) return;
     if (!target) return;
     if (!confirm(t.admin.messageConfirm.replace('{name}', to))) return;
 
@@ -707,7 +730,7 @@ function WriteToSpeaker({
           })),
         ]}
         onChange={setProposalId}
-        disabled={busy}
+        disabled={busy || readOnly}
       />
       <TextField
         label={t.admin.messageSubject}
@@ -715,7 +738,7 @@ function WriteToSpeaker({
         value={subject}
         onChange={setSubject}
         maxLength={LIMITS.messageSubjectMax}
-        disabled={busy}
+        disabled={busy || readOnly}
       />
       <TextAreaField
         label={t.admin.messageBody}
@@ -725,13 +748,13 @@ function WriteToSpeaker({
         onChange={setBody}
         maxLength={LIMITS.messageBodyMax}
         rows={6}
-        disabled={busy}
+        disabled={busy || readOnly}
       />
 
       <button
         type="button"
         className="btn btn--primary"
-        disabled={busy || !proposalId || !subject.trim() || !body.trim()}
+        disabled={busy || readOnly || !proposalId || !subject.trim() || !body.trim()}
         onClick={send}
       >
         {busy ? t.admin.messageSending : t.admin.messageSend}

@@ -63,6 +63,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
+  const [intakeOpen, setIntakeOpen] = useState(false);
   const [index, setIndex] = useState(0);
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [savedId, setSavedId] = useState('');
@@ -107,6 +108,18 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       );
       if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
       const visible = cfp?.reviewsVisible === true;
+      const opens = toDate(cfp?.opensAt);
+      const closes = toDate(cfp?.closesAt);
+      const now = Date.now();
+      const open = Boolean(
+        cfp &&
+          cfp.archived !== true &&
+          cfp.paused !== true &&
+          opens &&
+          closes &&
+          opens.getTime() <= now &&
+          now < closes.getTime(),
+      );
 
       // Decided once, here. Once the round is open, disagreement is the point of
       // the meeting, so the widest spreads come first; until then, work through
@@ -130,6 +143,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setMine(reviews);
       setDrafts(loadedDrafts);
       setReviewsVisible(visible);
+      setIntakeOpen(open);
       setShape(form);
       setIndex(0);
       setFailures(new Map());
@@ -170,7 +184,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     : scopedOrder;
   const current = filteredOrder[index] ?? filteredOrder[0];
   const displayIndex = current ? filteredOrder.indexOf(current) : 0;
-  const filteredScored = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
+  const filteredHandled = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
   const unscored = filteredOrder
     .map((proposal, proposalIndex) => ({ proposal, proposalIndex }))
     .filter(({ proposal }) => !mine.has(proposal.id));
@@ -351,22 +365,66 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     );
   }
   if (scopedOrder.length === 0) {
-    // "Nothing to review" reads as a bug when the one submission on the system
-    // is your own. Say which of the two it is.
-    return <p className="muted">{own > 0 ? t.review.onlyYours : t.review.empty}</p>;
+    return (
+      <section className="review-empty" aria-labelledby="review-empty-title">
+        <p className="review-workload__eyebrow">{t.review.workload}</p>
+        <h2 id="review-empty-title">{t.review.caughtUp}</h2>
+        <p>{own > 0 ? t.review.onlyYours : t.review.empty}</p>
+        <p className="muted">
+          {intakeOpen ? t.review.intakeOpenHelp : t.review.intakeClosedHelp}
+        </p>
+        <button type="button" className="btn" onClick={() => void load()}>
+          {t.review.refresh}
+        </button>
+      </section>
+    );
   }
   if (!current) return null;
 
   const draft = drafts.get(current.id) ?? draftOf(mine.get(current.id));
+  const handled = filteredHandled;
+  const conflicts = filteredOrder.filter(
+    (proposal) => mine.get(proposal.id)?.conflictOfInterest,
+  ).length;
+  const remaining = Math.max(filteredOrder.length - handled, 0);
 
   return (
     <div className="deck">
+      <section className="review-workload" aria-labelledby="review-workload-title">
+        <div className="review-workload__copy">
+          <p className="review-workload__eyebrow">{t.review.workload}</p>
+          <h2 id="review-workload-title">
+            {remaining === 0 ? t.review.caughtUp : t.review.remainingTitle(remaining)}
+          </h2>
+          <p>{intakeOpen ? t.review.intakeOpenHelp : t.review.intakeClosedHelp}</p>
+        </div>
+        <dl className="review-workload__stats">
+          <div><dt>{t.review.responses}</dt><dd>{handled}</dd></div>
+          <div><dt>{t.review.conflicts}</dt><dd>{conflicts}</dd></div>
+          <div><dt>{t.review.remaining}</dt><dd>{remaining}</dd></div>
+        </dl>
+        <button
+          type="button"
+          className="btn btn--ghost review-workload__refresh"
+          disabled={savingIds.size > 0}
+          onClick={() => void load()}
+        >
+          {t.review.refresh}
+        </button>
+      </section>
+
+      {intakeOpen && reviewsVisible && (
+        <p className="review-round-warning" role="alert">
+          {t.review.scoresVisibleDuringIntake}
+        </p>
+      )}
+
       <div className="deck__bar">
         <p className="deck__progress">
           <strong>{t.review.position(displayIndex + 1, filteredOrder.length)}</strong>
           <span className="muted">
             {' '}
-            · {t.review.progress(filteredScored, filteredOrder.length)}
+            · {t.review.progress(filteredHandled, filteredOrder.length)}
           </span>
         </p>
         <div className="deck__nav">
@@ -450,8 +508,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           <ol className="deck-queue__list">
             {filteredOrder.map((proposal, proposalIndex) => {
               const currentProposal = proposalIndex === displayIndex;
-              const scored = mine.has(proposal.id);
-              const reviewState = scored ? t.review.queueScored : t.review.queueWaiting;
+              const review = mine.get(proposal.id);
+              const scored = Boolean(review);
+              const reviewState = review?.conflictOfInterest
+                ? t.review.queueConflict
+                : scored
+                  ? t.review.queueScored
+                  : t.review.queueWaiting;
               const content = (
                 <>
                   <span className="deck-queue__number">{proposalIndex + 1}</span>
@@ -496,7 +559,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         </section>
       )}
 
-      {filteredScored === filteredOrder.length && (
+      {filteredHandled === filteredOrder.length && (
         <p className="note deck__complete" role="status">
           {t.review.complete}
         </p>

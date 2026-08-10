@@ -35,10 +35,12 @@ export function withKeys(fields: ConfirmField[]): ConfirmField[] {
 export function ConfirmFormEditor({
   cfpId,
   fields: saved,
+  readOnly = false,
   onDirtyChange,
 }: {
   cfpId: string;
   fields: ConfirmField[];
+  readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -48,8 +50,8 @@ export function ConfirmFormEditor({
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const dirty = useMemo(
-    () => JSON.stringify(fields) !== JSON.stringify(stored),
-    [fields, stored],
+    () => !readOnly && JSON.stringify(fields) !== JSON.stringify(stored),
+    [fields, readOnly, stored],
   );
 
   useEffect(() => {
@@ -64,6 +66,7 @@ export function ConfirmFormEditor({
   );
 
   async function save() {
+    if (readOnly) return;
     setNote('');
     setError('');
 
@@ -96,7 +99,7 @@ export function ConfirmFormEditor({
       <FieldRows
         fields={fields}
         onChange={setFields}
-        busy={busy}
+        busy={busy || readOnly}
         labels={{
           empty: t.admin.formEmpty,
           untitled: t.admin.formUntitled,
@@ -111,7 +114,7 @@ export function ConfirmFormEditor({
         <button
           type="button"
           className="btn btn--primary"
-          disabled={busy || !dirty}
+          disabled={busy || readOnly || !dirty}
           onClick={save}
         >
           {busy ? t.admin.formSaving : t.admin.formSave}

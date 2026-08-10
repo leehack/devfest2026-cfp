@@ -58,7 +58,9 @@ Provision persona documents with the same helper order used by focused specs:
 `reset` only at the beginning of an isolated seed, then `createAccount`, then
 `seedSpeaker`/`seedProposal`, and finally `inviteRole` or `seedMember`;
 platform states use `invitePlatformRole` or `seedPlatformMember`. Schedule and
-email fixtures follow `schedule.spec.ts` and `email.spec.ts`. These helpers live
+email fixtures follow `schedule.spec.ts` and `email.spec.ts`: build the private
+draft first, call `shareSchedulePreview` for the internal snapshot, and call
+`publishSchedule` only when that exact shared revision is current. These helpers live
 in `tests/e2e/backend.ts` and deliberately talk only to emulators. A full manual
 seed orchestrator is not currently committed, so do not claim the whole catalog
 is runnable from one command; use `BLOCKED-SEED` when the pre-provisioned state
@@ -75,13 +77,20 @@ For example, `PLATFORM-CREATOR-PENDING` becomes `PLATFORM-CREATOR` after claim.
 | `SPK-DRAFT` | `qa-spk-draft` | `qa-spk-draft@example.org` | Drew Draft |
 | `SPK-SUBMITTED` | `qa-spk-submitted` | `qa-spk-submitted@example.org` | Sam Submitted |
 | `SPK-WITHDRAWN` | `qa-spk-withdrawn` | `qa-spk-withdrawn@example.org` | Wynn Withdrawn |
-| `SPK-ACCEPTED` | `qa-spk-accepted` | `qa-spk-accepted@example.org` | Alex Accepted |
+| `SPK-ACCEPTED` / `SPK-INITIAL-ACCEPTED` | `qa-spk-accepted` | `qa-spk-accepted@example.org` | Alex Accepted |
 | `SPK-CONFIRMED` | `qa-spk-confirmed` | `qa-spk-confirmed@example.org` | Casey Confirmed |
+| `SPK-CONFIRMED-OTHER` | `qa-spk-confirmed-other` | `qa-spk-confirmed-other@example.org` | Cameron Confirmed |
 | `SPK-DECLINED` | `qa-spk-declined` | `qa-spk-declined@example.org` | Devon Declined |
 | `SPK-WAITLISTED` | `qa-spk-waitlisted` | `qa-spk-waitlisted@example.org` | Wai Waitlisted |
-| `SPK-REJECTED` | `qa-spk-rejected` | `qa-spk-rejected@example.org` | Robin Rejected |
+| `SPK-REJECTED` / `SPK-INITIAL-REJECTED` | `qa-spk-rejected` | `qa-spk-rejected@example.org` | Robin Rejected |
+| `SPK-LATE-ACCEPTED` | `qa-spk-late-accepted` | `qa-spk-late-accepted@example.org` | Lane Late |
+| `SPK-LATE-REJECTED` | `qa-spk-late-rejected` | `qa-spk-late-rejected@example.org` | Reese Late |
 | `REVIEWER-PENDING` / `REVIEWER` | `qa-reviewer` | `qa-reviewer@example.org` | Riley Reviewer |
+| `COMMITTEE-INVITEE-PENDING` | `qa-committee-invitee` | `qa-committee-invitee@example.org` | Casey Invitee |
+| `REVIEWER-REVOKED` | `qa-reviewer-revoked` | `qa-reviewer-revoked@example.org` | Remy Revoked |
+| `REVIEWER-SELF-SPEAKER` | `qa-reviewer-self-speaker` | `qa-reviewer-self-speaker@example.org` | Sawyer Speaker Reviewer |
 | `EVENT-ADMIN` | `qa-event-admin` | `qa-event-admin@example.org` | Ari Admin |
+| `EVENT-ADMIN-NOTIFIED` | `qa-event-admin-notified` | `qa-event-admin-notified@example.org` | Noel Admin |
 | `EVENT-OWNER` | `qa-event-owner` | `qa-event-owner@example.org` | Oak Owner |
 | `PLATFORM-CREATOR-PENDING` / `PLATFORM-CREATOR` | `qa-platform-creator` | `qa-platform-creator@example.org` | Chris Creator |
 | `PLATFORM-CREATOR-TARGET` | `qa-platform-creator-target` | `qa-platform-creator-target@example.org` | Taylor Creator |
@@ -89,6 +98,7 @@ For example, `PLATFORM-CREATOR-PENDING` becomes `PLATFORM-CREATOR` after claim.
 | `PLATFORM-ADMIN-TARGET` | `qa-platform-admin-target` | `qa-platform-admin-target@example.org` | Morgan Admin |
 | `PLATFORM-OWNER` | `qa-platform-owner` | `qa-platform-owner@example.org` | Olive Owner |
 | `PLATFORM-OWNER-SECOND` | `qa-platform-owner-second` | `qa-platform-owner-second@example.org` | Sidney Owner |
+| `PLATFORM-GLOBAL-ONLY` | `qa-platform-global-only` | `qa-platform-global-only@example.org` | Gale Global |
 
 `ANON-PUBLIC` has no account. All other accounts are verified. Use a unique
 email suffix per concurrent run if the environment is shared, but keep the
@@ -99,19 +109,38 @@ persona prefix so evidence remains attributable.
 Map every logical fixture in the handbook to one actual slug. Verify this list
 before the first browser opens:
 
-- `CFP-OPEN`, `CFP-CLOSED`, `CFP-PRIVATE`, `CFP-ARCHIVED`, `CFP-SCHEDULED`, and
+- `CFP-OPEN`, `CFP-CLOSED`, `CFP-PRIVATE`, `CFP-ARCHIVED`,
+  `CFP-SCHEDULE-DRAFT`, `CFP-SCHEDULE-SHARED`, `CFP-SCHEDULED`, and
   `CFP-DISPOSABLE` all exist with the documented window and visibility.
+- `CFP-CRITICAL-PATH` is one disposable tenant reserved for the ordered
+  [`critical-path-17.md`](critical-path-17.md) run. It starts unconfigured and
+  moves through initial intake, close, first publication, bounded late intake,
+  second publication, and archive without being reset between steps.
 - Every proposal belongs to the matching returned speaker UID and has a
   complete speaker snapshot where committee or programme pages need it.
 - `REVIEWER-PENDING` has only a pending exact-email grant and no prior review;
   `REVIEWER` has the active role, prior review, eligible queue, and excluded own
-  proposal described in the handbook.
+  proposal described in the handbook. `REVIEWER-REVOKED` has no remaining
+  member document or grant after the revocation checkpoint.
+- `COMMITTEE-INVITEE-PENDING` has no Auth account or event member yet. Record
+  the pending grant's invitation id and its deterministic notification id;
+  changing the pending role keeps both ids, revoking makes the row stale, and
+  re-inviting creates fresh ids.
 - Platform target identities start verified and platform-role-free. The creator
   target already owns its disposable event so revocation can prove that event
   ownership survives; the admin target has no event role. Seed a pending global
   grant only when the flow says it already exists.
-- The scheduled release is immutable public data; its draft and release IDs are
-  recorded separately. Held email rows remain unsent.
+- The schedule draft, shared preview, and public programme are separate states.
+  Record the draft revision plus `sharedScheduleId` and `publishedScheduleId`
+  independently. A shared snapshot contains confirmed talks and public-safe
+  custom items only; speakers are filtered to their own entry at read time.
+  Keep held email rows unsent, and record which release id each row deduplicates.
+- For `CFP-CRITICAL-PATH`, record the initial and late proposal IDs; both intake
+  windows; both shared and public release IDs; required T-shirt, headshot, and
+  other confirmation-answer keys; and every staff/speaker notice ID. The
+  reviewer who also authored a proposal is active but excluded from that
+  proposal's ready-for-review notice and review queue. The second admin is an
+  eligible notice recipient but never the acting sharer.
 - The disposable tenant is unique to one `MT` or `MX` flow and is discarded
   afterward.
 
@@ -135,13 +164,14 @@ await page.route('**/documents:commit**', (route) => {
   return route.abort();
 });
 
-// Fill the note first, then set this immediately before the Save/score action.
+// Fill the draft field first, then set this immediately before its Save action.
 failNextCommit = true;
 ```
 
 For a callable failure, use its existing path as the narrow route pattern (for
-example `**/emailQueue`) rather than aborting every emulator request. Always
-`unroute` the pattern before proving the retry.
+example `**/emailQueue`). Review recovery specifically intercepts only
+`**/saveReview`; it must not abort `documents:commit`, because review writes are
+callable-only. Always `unroute` the pattern before proving the retry.
 
 For provider-dependent email flows, use the emulator/dry-run behavior. Never
 substitute a real provider key or recipient just to make a persona flow pass.
@@ -161,14 +191,41 @@ fixtures:
   CFP-CLOSED: actual-slug
   CFP-PRIVATE: actual-slug
   CFP-ARCHIVED: actual-slug
+  CFP-SCHEDULE-DRAFT: actual-slug
+  CFP-SCHEDULE-SHARED: actual-slug
   CFP-SCHEDULED: actual-slug
   CFP-DISPOSABLE: actual-slug-per-mutating-flow
+  CFP-CRITICAL-PATH: actual-disposable-slug
 auth_local_ids:
   SPK-DRAFT: emulator-localId
+  SPK-CONFIRMED: emulator-localId
+  SPK-CONFIRMED-OTHER: emulator-localId
   REVIEWER: emulator-localId
+  REVIEWER-REVOKED: emulator-localId
+  REVIEWER-SELF-SPEAKER: emulator-localId
   EVENT-ADMIN: emulator-localId
+  EVENT-ADMIN-NOTIFIED: emulator-localId
+  SPK-LATE-ACCEPTED: emulator-localId
+  SPK-LATE-REJECTED: emulator-localId
   # Add every selected persona; never record tokens or one-time links.
-selected_flows: [PUB-01, SPK-02, REV-05]
+schedule_versions:
+  draft_revision: integer
+  initial_shared_release_id: opaque-id-or-null
+  initial_public_release_id: opaque-id-or-null
+  late_shared_release_id: opaque-id-or-null
+  late_public_release_id: opaque-id-or-null
+intake_windows:
+  initial_opens_at: ISO-8601
+  initial_closes_at: ISO-8601
+  late_opens_at: ISO-8601
+  late_closes_at: ISO-8601
+notification_ids:
+  committee_invitation: invitation-to-log-id-map
+  proposal_ready: recipient-to-log-id-map
+  preview_ready: recipient-to-log-id-map
+  speaker_decision: proposal-to-log-id-map
+  speaker_placement: proposal-to-log-id-map
+selected_flows: [PUB-01, PUB-04, SPK-13, REV-07]
 failure_injection: none-or-intercepted-pattern
 ```
 

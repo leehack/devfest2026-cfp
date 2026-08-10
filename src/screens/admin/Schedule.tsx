@@ -9,9 +9,11 @@ import {
 } from 'react';
 
 import { SelectField, TextAreaField, TextField } from '../../components/fields';
+import { Link } from '../../components/Link';
 import { useI18n } from '../../i18n/context';
-import { formatCalendarDay } from '../../i18n';
+import { formatCalendarDay, formatDate } from '../../i18n';
 import { calendarDate } from '@shared/cfp';
+import { cfpState } from '@shared/cfpWindow';
 import { localised } from '@shared/confirmForm';
 import {
   CUSTOM_SCHEDULE_TYPES,
@@ -25,16 +27,25 @@ import {
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
 import {
+  loadPublishedSchedule,
   loadScheduleDraft,
+  loadSharedSchedule,
   publishSchedule,
   removeScheduleEntry,
   setScheduleConfig,
+  shareSchedulePreview,
+  unpublishSchedule,
   upsertScheduleEntry,
+  type PublishedScheduleBundle,
+  type SharedScheduleBundle,
 } from '../../lib/schedule';
+import { toDate } from '../../lib/dates';
+import { href } from '../../lib/router';
 import { scheduleError } from '../../lib/errors';
 import { track } from '../../lib/analytics';
 import { Result } from './Result';
 import { downloadScheduleCsv } from './scheduleExport';
+import type { Cfp } from '@shared/types';
 
 const SLOT_MINUTES = 15;
 const SLOT_HEIGHT = 30;
@@ -154,16 +165,22 @@ function useModalFocus(onClose: () => void) {
 
 export function Schedule({
   cfpId,
-  onPublished,
+  readOnly = false,
+  onDisclosureChanged,
 }: {
   cfpId: string;
-  onPublished?: () => void | Promise<void>;
+  readOnly?: boolean;
+  onDisclosureChanged?: (stage: 'shared' | 'published' | 'offline') => void | Promise<void>;
 }) {
   const { t, locale } = useI18n();
   const [config, setConfig] = useState<ScheduleConfig | null>(null);
   const [workingConfig, setWorkingConfig] = useState<ScheduleConfig | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
+  const [cfp, setCfp] = useState<Cfp | null>(null);
+  const [sharedPreview, setSharedPreview] = useState<SharedScheduleBundle | null>(null);
+  const [publicProgramme, setPublicProgramme] =
+    useState<PublishedScheduleBundle | null>(null);
   const [selectedDay, setSelectedDay] = useState('');
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<ScheduleEntry | null>(null);
@@ -172,20 +189,30 @@ export function Schedule({
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [dragging, setDragging] = useState<DragPayload | null>(null);
+  const [reviewingShare, setReviewingShare] = useState(false);
   const [reviewingPublish, setReviewingPublish] = useState(false);
+  const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
 
   const refresh = useCallback(async () => {
     const request = ++generation.current;
     setError('');
     try {
-      const [cfp, draft, proposalRows] = await Promise.all([
+      const [nextCfp, draft, proposalRows, nextShared] = await Promise.all([
         loadCfp(cfpId),
         loadScheduleDraft(cfpId),
         loadAllProposals(cfpId),
+        loadSharedSchedule(cfpId),
       ]);
       if (request !== generation.current) return;
-      const next = draft.config ?? initialConfig(cfp);
+      const nextPublic = nextCfp?.publishedScheduleId
+        ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId)
+        : null;
+      if (request !== generation.current) return;
+      const next = draft.config ?? initialConfig(nextCfp);
+      setCfp(nextCfp);
+      setSharedPreview(nextShared);
+      setPublicProgramme(nextPublic);
       setConfig(draft.config);
       setWorkingConfig(next);
       setEntries(draft.entries);
@@ -232,11 +259,66 @@ export function Schedule({
   const tentative = entries.filter(
     (entry) => entry.kind === 'proposal' && byId.get(entry.proposalId)?.status !== 'confirmed',
   );
-  const publishReady = Boolean(config && entries.length && !conflicts.length && !tentative.length);
-  const canPublish = Boolean(publishReady && config?.needsAttention);
+  const shareableEntries = entries.filter(
+    (entry) =>
+      entry.kind === 'custom' || byId.get(entry.proposalId)?.status === 'confirmed',
+  );
+  const shareConflicts = scheduleConflicts(shareableEntries, speakerMap);
+  const setupDirty = Boolean(
+    config &&
+      JSON.stringify({ timeZone: config.timeZone, days: config.days, rooms: config.rooms }) !==
+        JSON.stringify({
+          timeZone: workingConfig?.timeZone,
+          days: workingConfig?.days,
+          rooms: workingConfig?.rooms,
+        }),
+  );
+  const archived = readOnly || cfp?.archived === true;
+  const opens = toDate(cfp?.opensAt);
+  const closes = toDate(cfp?.closesAt);
+  const callOpen = Boolean(
+    cfp &&
+      opens &&
+      closes &&
+      cfpState(
+        {
+          archived: cfp.archived,
+          paused: cfp.paused,
+          opensAtMs: opens.getTime(),
+          closesAtMs: closes.getTime(),
+        },
+        Date.now(),
+      ) === 'open',
+  );
+  const shareReady = Boolean(config && shareableEntries.length && !shareConflicts.length);
+  const hasSharedPreview = Boolean(sharedPreview?.schedule);
+  const sharedStale = Boolean(
+    hasSharedPreview && (config?.needsAttention || sharedPreview?.stale),
+  );
+  const effectiveSharedScheduleId = cfp?.sharedScheduleId ?? cfp?.publishedScheduleId;
+  const publicMatchesShared = Boolean(
+    cfp?.publishedScheduleId &&
+      effectiveSharedScheduleId &&
+      cfp.publishedScheduleId === effectiveSharedScheduleId,
+  );
+  const canShare = Boolean(
+    !archived &&
+      !setupDirty &&
+      config?.needsAttention &&
+      shareReady &&
+      (!hasSharedPreview || sharedStale),
+  );
+  const canPublish = Boolean(
+    !archived &&
+      !setupDirty &&
+      shareReady &&
+      hasSharedPreview &&
+      !sharedStale &&
+      !publicMatchesShared,
+  );
 
   async function saveConfig() {
-    if (!workingConfig) return;
+    if (!workingConfig || archived) return;
     setBusy(true);
     setError('');
     setNote('');
@@ -261,7 +343,7 @@ export function Schedule({
   }
 
   async function saveEntry(entry: ScheduleEntry) {
-    if (!config) return;
+    if (!config || archived) return;
     setBusy(true);
     setError('');
     setNote('');
@@ -285,7 +367,7 @@ export function Schedule({
   }
 
   async function removeEntry(entry: ScheduleEntry) {
-    if (!config || !window.confirm(t.schedule.removeConfirm)) return;
+    if (!config || archived || !window.confirm(t.schedule.removeConfirm)) return;
     setBusy(true);
     setError('');
     try {
@@ -326,7 +408,8 @@ export function Schedule({
       );
       setNote(`${t.schedule.published} ${t.schedule.publishedVersion(data.version)}`);
       setReviewingPublish(false);
-      await onPublished?.();
+      await refresh();
+      await onDisclosureChanged?.('published');
       track('schedule_published', { cfp_id: cfpId, version: data.version });
     } catch (caught) {
       setError(scheduleError(caught, t));
@@ -335,14 +418,58 @@ export function Schedule({
     }
   }
 
+  async function sharePreview() {
+    if (!config || !canShare) return;
+    setBusy(true);
+    setError('');
+    setNote('');
+    try {
+      const { data } = await shareSchedulePreview({
+        cfpId,
+        expectedRevision: config.revision,
+      });
+      setNote(
+        `${t.schedule.shared} ${t.schedule.sharedVersion(data.version)} ${t.schedule.sharedSummary(data.sharedCount, data.omittedCount)} ${t.schedule.sharedChannels(data.committeeNotificationCount, data.speakerNotificationCount)}`,
+      );
+      setReviewingShare(false);
+      await refresh();
+      await onDisclosureChanged?.('shared');
+      track('schedule_shared', { cfp_id: cfpId, version: data.version });
+    } catch (caught) {
+      setError(scheduleError(caught, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function takeOffline() {
+    if (archived || !cfp?.publishedScheduleId) return;
+    setBusy(true);
+    setError('');
+    setNote('');
+    try {
+      await unpublishSchedule({ cfpId });
+      setReviewingOffline(false);
+      setNote(t.schedule.unpublishedSuccess);
+      await refresh();
+      await onDisclosureChanged?.('offline');
+      track('schedule_unpublished', { cfp_id: cfpId });
+    } catch (caught) {
+      setError(scheduleError(caught, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function editEntry(entry: ScheduleEntry) {
+    if (archived) return;
     setError('');
     setNote('');
     setEditing(entry);
   }
 
   function startProposal(proposal: ProposalRow, date = selectedDay, roomId = config?.rooms[0]?.id, startsAt?: string) {
-    if (!config || !date || !roomId) return;
+    if (archived || !config || !date || !roomId) return;
     const day = config.days.find((candidate) => candidate.date === date)!;
     editEntry({
       id: `proposal-${proposal.id}`,
@@ -357,7 +484,7 @@ export function Schedule({
   }
 
   function startCustom(date = selectedDay, roomId = config?.rooms[0]?.id, startsAt?: string) {
-    if (!config || !date || !roomId) return;
+    if (archived || !config || !date || !roomId) return;
     const day = config.days.find((candidate) => candidate.date === date)!;
     editEntry({
       id: `custom-${Date.now()}`,
@@ -373,7 +500,7 @@ export function Schedule({
   }
 
   function dropped(roomId: string, startsAt: string) {
-    if (!dragging) return;
+    if (archived || !dragging) return;
     if (dragging.kind === 'proposal') {
       const proposal = byId.get(dragging.proposalId);
       if (proposal) startProposal(proposal, selectedDay, roomId, startsAt);
@@ -386,6 +513,11 @@ export function Schedule({
 
   if (!loaded) return <p className="muted">{t.app.loading}</p>;
   if (!workingConfig) return null;
+
+  const draftAt = toDate(config?.updatedAt);
+  const sharedAt = toDate(sharedPreview?.schedule?.sharedAt);
+  const publishedAt = toDate(publicProgramme?.schedule.publishedAt);
+  const controlsBusy = busy || archived;
 
   return (
     <div className="schedule-admin">
@@ -405,29 +537,177 @@ export function Schedule({
               {t.schedule.csv}
             </button>
           )}
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={busy || !canPublish}
-            title={
-              canPublish
-                ? undefined
-                : config?.needsAttention
-                  ? t.schedule.publishBlocked
-                  : t.schedule.publishNoChanges
-            }
-            onClick={() => {
-              setError('');
-              setNote('');
-              setReviewingPublish(true);
-            }}
-          >
-            {t.schedule.publish}
-          </button>
         </div>
       </section>
 
-      {!editing && !reviewingPublish && <Result ok={note} error={error} />}
+      {!editing && !reviewingShare && !reviewingPublish && !reviewingOffline && (
+        <Result ok={note} error={error} />
+      )}
+
+      <section className="schedule-release-flow" aria-labelledby="schedule-release-flow-title">
+        <div className="schedule-release-flow__heading">
+          <div>
+            <p className="schedule-command__eyebrow">{t.schedule.releaseFlowEyebrow}</p>
+            <h3 id="schedule-release-flow-title">{t.schedule.releaseFlowTitle}</h3>
+          </div>
+          <p>{t.schedule.releaseFlowHelp}</p>
+        </div>
+        <ol className="schedule-stages">
+          <li className="schedule-stage schedule-stage--private">
+            <div className="schedule-stage__topline">
+              <span className="schedule-stage__number" aria-hidden="true">1</span>
+              <span className="schedule-stage__badge">{t.schedule.privateBadge}</span>
+            </div>
+            <div>
+              <h4>{t.schedule.privateDraftTitle}</h4>
+              <p>{t.schedule.privateDraftHelp}</p>
+            </div>
+            <dl className="schedule-stage__meta">
+              <div><dt>{t.schedule.versionLabel}</dt><dd>{t.schedule.revision(config?.revision ?? 0)}</dd></div>
+              <div><dt>{t.schedule.audienceLabel}</dt><dd>{t.schedule.privateAudience}</dd></div>
+              {draftAt && <div><dt>{t.schedule.updatedLabel}</dt><dd>{formatDate(draftAt, locale)}</dd></div>}
+            </dl>
+            {tentative.length > 0 && (
+              <p className="schedule-stage__note">{t.schedule.privateTentative(tentative.length)}</p>
+            )}
+          </li>
+
+          <li className={`schedule-stage schedule-stage--shared${sharedStale ? ' schedule-stage--stale' : ''}`}>
+            <div className="schedule-stage__topline">
+              <span className="schedule-stage__number" aria-hidden="true">2</span>
+              <span className="schedule-stage__badge">
+                {hasSharedPreview ? t.schedule.sharedBadge : t.schedule.notSharedBadge}
+              </span>
+            </div>
+            <div>
+              <h4>{t.schedule.sharedPreviewTitle}</h4>
+              <p>{t.schedule.sharedPreviewHelp}</p>
+            </div>
+            <dl className="schedule-stage__meta">
+              <div>
+                <dt>{t.schedule.versionLabel}</dt>
+                <dd>
+                  {sharedPreview?.schedule
+                    ? t.schedule.sharedVersion(sharedPreview.schedule.version)
+                    : '—'}
+                </dd>
+              </div>
+              <div><dt>{t.schedule.audienceLabel}</dt><dd>{t.schedule.sharedAudience}</dd></div>
+              {sharedAt && <div><dt>{t.schedule.updatedLabel}</dt><dd>{formatDate(sharedAt, locale)}</dd></div>}
+            </dl>
+            {sharedStale && (
+              <p className="schedule-stage__warning" role="status">
+                {t.schedule.sharedStale}
+              </p>
+            )}
+            {setupDirty && (
+              <p className="schedule-stage__warning" role="status">
+                {t.schedule.saveSetupFirst}
+              </p>
+            )}
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy || !canShare}
+              title={
+                archived
+                  ? t.schedule.archivedHelp
+                  : setupDirty
+                    ? t.schedule.saveSetupFirst
+                  : !shareReady
+                    ? t.schedule.shareBlocked
+                    : hasSharedPreview && !sharedStale
+                      ? t.schedule.shareNoChanges
+                      : undefined
+              }
+              onClick={() => {
+                setError('');
+                setNote('');
+                setReviewingShare(true);
+              }}
+            >
+              {t.schedule.share}
+            </button>
+          </li>
+
+          <li className={`schedule-stage schedule-stage--public${cfp?.publishedScheduleId ? ' schedule-stage--live' : ''}`}>
+            <div className="schedule-stage__topline">
+              <span className="schedule-stage__number" aria-hidden="true">3</span>
+              <span className="schedule-stage__badge">
+                {cfp?.publishedScheduleId ? t.schedule.liveBadge : t.schedule.offlineBadge}
+              </span>
+            </div>
+            <div>
+              <h4>{t.schedule.publicProgrammeTitle}</h4>
+              <p>{t.schedule.publicProgrammeHelp}</p>
+            </div>
+            <dl className="schedule-stage__meta">
+              <div>
+                <dt>{t.schedule.versionLabel}</dt>
+                <dd>{publicProgramme ? t.schedule.publishedVersion(publicProgramme.schedule.version) : '—'}</dd>
+              </div>
+              <div><dt>{t.schedule.audienceLabel}</dt><dd>{t.schedule.publicAudience}</dd></div>
+              {publishedAt && <div><dt>{t.schedule.updatedLabel}</dt><dd>{formatDate(publishedAt, locale)}</dd></div>}
+            </dl>
+            {!hasSharedPreview && (
+              <p className="schedule-stage__note">{t.schedule.publishWaitingHelp}</p>
+            )}
+            {hasSharedPreview && !sharedStale && !publicMatchesShared && (
+              <p className="schedule-stage__ready" role="status">
+                {t.schedule.publishReadyHelp}
+              </p>
+            )}
+            <div className="schedule-stage__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={busy || !canPublish}
+                title={
+                  archived
+                    ? t.schedule.archivedHelp
+                    : setupDirty
+                      ? t.schedule.saveSetupFirst
+                    : !hasSharedPreview
+                      ? t.schedule.publishNeedsShare
+                      : sharedStale
+                        ? t.schedule.publishNeedsReshare
+                        : publicMatchesShared
+                          ? t.schedule.publishNoChanges
+                          : !shareReady
+                            ? t.schedule.publishBlocked
+                            : undefined
+                }
+                onClick={() => {
+                  setError('');
+                  setNote('');
+                  setReviewingPublish(true);
+                }}
+              >
+                {t.schedule.publish}
+              </button>
+              {cfp?.publishedScheduleId && (
+                <>
+                  <Link className="btn btn--ghost" to={href({ route: 'schedule', cfpId })}>
+                    {t.schedule.viewPublic}
+                  </Link>
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    disabled={busy || archived}
+                    onClick={() => {
+                      setError('');
+                      setNote('');
+                      setReviewingOffline(true);
+                    }}
+                  >
+                    {t.schedule.takeOffline}
+                  </button>
+                </>
+              )}
+            </div>
+          </li>
+        </ol>
+      </section>
 
       <div className="schedule-metrics" aria-label={t.schedule.metrics}>
         <strong>{t.schedule.scheduledCount(entries.length)}</strong>
@@ -438,7 +718,7 @@ export function Schedule({
         <span className={conflicts.length ? 'schedule-metric--danger' : ''}>
           {t.schedule.conflictCount(conflicts.length)}
         </span>
-        {config?.needsAttention && <span className="schedule-metric--accent">{t.schedule.unpublished}</span>}
+        {sharedStale && <span className="schedule-metric--accent">{t.schedule.unpublished}</span>}
       </div>
 
       <details className="section schedule-setup" open={!config}>
@@ -451,7 +731,7 @@ export function Schedule({
             label={t.schedule.timeZone}
             value={workingConfig.timeZone}
             onChange={(timeZone) => setWorkingConfig({ ...workingConfig, timeZone })}
-            disabled={busy}
+            disabled={controlsBusy}
             required
           />
           <div className="schedule-setup__heading">
@@ -459,7 +739,7 @@ export function Schedule({
             <button
               type="button"
               className="btn btn--ghost btn--compact"
-              disabled={busy || workingConfig.days.length >= 10}
+              disabled={controlsBusy || workingConfig.days.length >= 10}
               onClick={() => {
                 const previous = workingConfig.days.at(-1);
                 setWorkingConfig({
@@ -493,7 +773,7 @@ export function Schedule({
                       days: workingConfig.days.map((item, at) => (at === index ? { ...item, date } : item)),
                     })
                   }
-                  disabled={busy}
+                  disabled={controlsBusy}
                   required
                 />
                 <TextField
@@ -509,7 +789,7 @@ export function Schedule({
                     })
                   }
                   placeholder="09:00"
-                  disabled={busy}
+                  disabled={controlsBusy}
                   required
                 />
                 <TextField
@@ -525,14 +805,14 @@ export function Schedule({
                     })
                   }
                   placeholder="17:00"
-                  disabled={busy}
+                  disabled={controlsBusy}
                   required
                 />
                 {workingConfig.days.length > 1 && (
                   <button
                     type="button"
                     className="btn btn--danger btn--compact"
-                    disabled={busy || hasEntries}
+                    disabled={controlsBusy || hasEntries}
                     title={hasEntries ? t.schedule.dayHasItems : undefined}
                     onClick={() =>
                       setWorkingConfig({
@@ -553,7 +833,7 @@ export function Schedule({
             <button
               type="button"
               className="btn btn--ghost btn--compact"
-              disabled={busy || workingConfig.rooms.length >= 20}
+              disabled={controlsBusy || workingConfig.rooms.length >= 20}
               onClick={() =>
                 setWorkingConfig({
                   ...workingConfig,
@@ -581,7 +861,7 @@ export function Schedule({
                       ),
                     })
                   }
-                  disabled={busy}
+                  disabled={controlsBusy}
                   required
                 />
                 <TextField
@@ -595,12 +875,13 @@ export function Schedule({
                       ),
                     })
                   }
-                  disabled={busy}
+                  disabled={controlsBusy}
                 />
                 {workingConfig.rooms.length > 1 && (
                   <button
                     type="button"
                     className="btn btn--danger btn--compact"
+                    disabled={controlsBusy}
                     onClick={() =>
                       setWorkingConfig({
                         ...workingConfig,
@@ -614,7 +895,7 @@ export function Schedule({
               </div>
             ))}
           </div>
-          <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void saveConfig()}>
+          <button type="button" className="btn btn--primary" disabled={controlsBusy} onClick={() => void saveConfig()}>
             {t.schedule.saveSetup}
           </button>
         </div>
@@ -628,7 +909,7 @@ export function Schedule({
                 <h3>{t.schedule.unassigned}</h3>
                 <p>{t.schedule.unassignedHelp}</p>
               </div>
-              <button type="button" className="btn btn--ghost btn--compact" onClick={() => startCustom()}>
+              <button type="button" className="btn btn--ghost btn--compact" disabled={controlsBusy} onClick={() => startCustom()}>
                 {t.schedule.custom}
               </button>
             </div>
@@ -639,7 +920,7 @@ export function Schedule({
                   <li
                     key={proposal.id}
                     className="schedule-pool-card"
-                    draggable
+                    draggable={!archived}
                     onDragStart={(event) => {
                       const payload: DragPayload = { kind: 'proposal', proposalId: proposal.id };
                       setDragging(payload);
@@ -655,7 +936,7 @@ export function Schedule({
                         {proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative}
                       </small>
                     </div>
-                    <button type="button" className="btn btn--ghost btn--compact" onClick={() => startProposal(proposal)}>
+                    <button type="button" className="btn btn--ghost btn--compact" disabled={controlsBusy} onClick={() => startProposal(proposal)}>
                       {t.schedule.edit}
                     </button>
                   </li>
@@ -688,7 +969,7 @@ export function Schedule({
               entries={entries}
               proposals={byId}
               locale={locale}
-              busy={busy}
+              busy={controlsBusy}
               onEdit={editEntry}
               onDrag={(payload) => setDragging(payload)}
               onDrop={dropped}
@@ -702,7 +983,7 @@ export function Schedule({
         <p className="panel">{t.schedule.needsSetup}</p>
       )}
 
-      {!editing && !reviewingPublish && error === t.schedule.stale && (
+      {!editing && !reviewingShare && !reviewingPublish && !reviewingOffline && error === t.schedule.stale && (
         <button type="button" className="btn" onClick={() => void refresh()}>
           {t.schedule.reload}
         </button>
@@ -728,14 +1009,36 @@ export function Schedule({
 
       {reviewingPublish && config && (
         <PublishReview
-          scheduled={entries.length}
+          scheduled={shareableEntries.length}
           unscheduled={unscheduled.length}
           tentative={tentative.length}
-          conflicts={conflicts.length}
+          conflicts={shareConflicts.length}
+          callOpen={callOpen}
           busy={busy}
           error={error}
           onCancel={() => setReviewingPublish(false)}
           onPublish={() => void publish()}
+        />
+      )}
+
+      {reviewingShare && config && (
+        <ShareReview
+          scheduled={shareableEntries.length}
+          tentative={tentative.length}
+          conflicts={shareConflicts.length}
+          busy={busy}
+          error={error}
+          onCancel={() => setReviewingShare(false)}
+          onShare={() => void sharePreview()}
+        />
+      )}
+
+      {reviewingOffline && (
+        <OfflineReview
+          busy={busy}
+          error={error}
+          onCancel={() => setReviewingOffline(false)}
+          onConfirm={() => void takeOffline()}
         />
       )}
     </div>
@@ -824,7 +1127,8 @@ function TimeGrid({
                     key={entry.id}
                     className={`schedule-card schedule-card--${entry.kind}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}`}
                     style={{ top, height }}
-                    draggable
+                    draggable={!busy}
+                    disabled={busy}
                     aria-label={`${moveLabel}: ${entryTitle(entry, proposals, locale)}`}
                     onClick={() => onEdit(entry)}
                     onDragStart={(event: DragEvent<HTMLElement>) => {
@@ -1025,6 +1329,7 @@ function PublishReview({
   unscheduled,
   tentative,
   conflicts,
+  callOpen,
   busy,
   error,
   onCancel,
@@ -1034,6 +1339,7 @@ function PublishReview({
   unscheduled: number;
   tentative: number;
   conflicts: number;
+  callOpen: boolean;
   busy: boolean;
   error: string;
   onCancel: () => void;
@@ -1062,6 +1368,12 @@ function PublishReview({
           </button>
         </div>
         <p id="schedule-publish-help">{t.schedule.publishHelp}</p>
+        {callOpen && (
+          <div className="schedule-publish-warning" role="status">
+            <strong>{t.schedule.publishOpenTitle}</strong>
+            <span>{t.schedule.publishOpenHelp}</span>
+          </div>
+        )}
         <div className="schedule-metrics" aria-label={t.schedule.metrics}>
           <strong>{t.schedule.scheduledCount(scheduled)}</strong>
           <span>{t.schedule.unassignedCount(unscheduled)}</span>
@@ -1075,6 +1387,122 @@ function PublishReview({
           </button>
           <button type="button" className="btn btn--primary" disabled={busy} onClick={onPublish}>
             {t.schedule.publishConfirm}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ShareReview({
+  scheduled,
+  tentative,
+  conflicts,
+  busy,
+  error,
+  onCancel,
+  onShare,
+}: {
+  scheduled: number;
+  tentative: number;
+  conflicts: number;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onShare: () => void;
+}) {
+  const { t } = useI18n();
+  const dialogRef = useModalFocus(onCancel);
+  return (
+    <div className="schedule-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+      <section
+        ref={dialogRef}
+        className="schedule-dialog schedule-publish-review"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="schedule-share-title"
+        aria-describedby="schedule-share-help schedule-share-delivery"
+        tabIndex={-1}
+      >
+        <div className="schedule-dialog__heading">
+          <div>
+            <p>{t.schedule.sharedPreviewTitle}</p>
+            <h3 id="schedule-share-title">{t.schedule.shareTitle}</h3>
+          </div>
+          <button data-autofocus type="button" className="btn btn--ghost btn--compact" onClick={onCancel}>
+            {t.schedule.cancelEdit}
+          </button>
+        </div>
+        <p id="schedule-share-help">{t.schedule.shareHelp}</p>
+        <p id="schedule-share-delivery" className="schedule-share-delivery">
+          {t.schedule.shareDeliveryHelp}
+        </p>
+        <ul className="schedule-audience-list">
+          <li>{t.schedule.shareSpeakerAudience}</li>
+          <li>{t.schedule.shareCommitteeAudience}</li>
+          <li>{t.schedule.sharePublicAudience}</li>
+        </ul>
+        <div className="schedule-metrics" aria-label={t.schedule.metrics}>
+          <strong>{t.schedule.sharedCount(scheduled)}</strong>
+          <span>{t.schedule.omittedCount(tentative)}</span>
+          <span>{t.schedule.conflictCount(conflicts)}</span>
+        </div>
+        {error && <Result ok="" error={error} />}
+        <div className="schedule-dialog__actions">
+          <button type="button" className="btn" disabled={busy} onClick={onCancel}>
+            {t.schedule.cancelEdit}
+          </button>
+          <button type="button" className="btn btn--primary" disabled={busy} onClick={onShare}>
+            {t.schedule.shareConfirm}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function OfflineReview({
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useI18n();
+  const dialogRef = useModalFocus(onCancel);
+  return (
+    <div className="schedule-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+      <section
+        ref={dialogRef}
+        className="schedule-dialog schedule-offline-review"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="schedule-offline-title"
+        aria-describedby="schedule-offline-help"
+        tabIndex={-1}
+      >
+        <div className="schedule-dialog__heading">
+          <div>
+            <p>{t.schedule.publicProgrammeTitle}</p>
+            <h3 id="schedule-offline-title">{t.schedule.takeOfflineTitle}</h3>
+          </div>
+          <button data-autofocus type="button" className="btn btn--ghost btn--compact" onClick={onCancel}>
+            {t.schedule.cancelEdit}
+          </button>
+        </div>
+        <p id="schedule-offline-help">{t.schedule.takeOfflineHelp}</p>
+        <p className="schedule-offline-review__kept">{t.schedule.takeOfflineKept}</p>
+        {error && <Result ok="" error={error} />}
+        <div className="schedule-dialog__actions">
+          <button type="button" className="btn" disabled={busy} onClick={onCancel}>
+            {t.schedule.cancelEdit}
+          </button>
+          <button type="button" className="btn btn--danger" disabled={busy} onClick={onConfirm}>
+            {t.schedule.takeOfflineConfirm}
           </button>
         </div>
       </section>

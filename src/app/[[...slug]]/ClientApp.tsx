@@ -21,6 +21,7 @@ export interface InitialPublicCfp {
   eventStartDate: string | null;
   eventEndDate: string | null;
   timeZone: string | null;
+  sharedScheduleId: string | null;
   publishedScheduleId: string | null;
   paused: boolean;
   archived: boolean;
@@ -46,6 +47,7 @@ function toCfpWindow(cfp: InitialPublicCfp): CfpWindow {
       location: cfp.location ?? undefined,
       website: cfp.website ?? undefined,
     },
+    sharedScheduleId: cfp.sharedScheduleId ?? undefined,
     publishedScheduleId: cfp.publishedScheduleId ?? undefined,
   };
 }

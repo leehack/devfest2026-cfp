@@ -5,13 +5,23 @@ process.env.TZ = 'America/Toronto';
 import { describe, expect, it } from 'vitest';
 import { Timestamp } from 'firebase/firestore';
 
-import { toDate, toDateTimeInput } from '../src/lib/dates';
+import {
+  addZonedCalendarDays,
+  toDate,
+  toDateTimeInput,
+  toZonedDateTimeInput,
+  zonedDateTimeToIso,
+} from '../src/lib/dates';
 import {
   adminError,
   friendlyError,
   platformAdminError,
   resendError,
 } from '../src/lib/errors';
+import {
+  isLateIntakeWindow,
+  publishedProgrammeLifecycleStep,
+} from '../src/lib/adminLifecycle';
 import { en } from '../src/i18n/en';
 import { fr } from '../src/i18n/fr';
 
@@ -49,6 +59,93 @@ describe('toDateTimeInput', () => {
 
   it('renders nothing for a missing date', () => {
     expect(toDateTimeInput(null)).toBe('');
+  });
+});
+
+describe('event-zone datetime inputs', () => {
+  const zone = 'America/Toronto';
+
+  it('round-trips through the named IANA zone', () => {
+    const instant = new Date('2026-08-09T18:30:00.000Z');
+    const input = toZonedDateTimeInput(instant, zone);
+
+    expect(input).toBe('2026-08-09T14:30');
+    expect(zonedDateTimeToIso(input, zone)).toBe(instant.toISOString());
+  });
+
+  it('rejects a wall-clock time skipped by the daylight-saving jump', () => {
+    expect(zonedDateTimeToIso('2026-03-08T02:30', zone)).toBeNull();
+  });
+
+  it('keeps a seven-day preset on the same wall clock across DST', () => {
+    const opens = '2026-10-31T12:00';
+    const closes = addZonedCalendarDays(opens, zone, 7);
+
+    expect(closes).toBe('2026-11-07T12:00');
+    const elapsedHours =
+      (Date.parse(zonedDateTimeToIso(closes!, zone)!) -
+        Date.parse(zonedDateTimeToIso(opens, zone)!)) /
+      3_600_000;
+    expect(elapsedHours).toBe(169);
+  });
+});
+
+describe('the published-programme lifecycle', () => {
+  const published = {
+    publishedScheduleId: 'release-1',
+    publishedScheduleAt: '2026-08-01T16:00:00.000Z',
+  };
+
+  it('does not call an original still-open window late intake', () => {
+    const lateIntake = isLateIntakeWindow(
+      { ...published, opensAt: '2026-07-01T16:00:00.000Z' },
+      'open',
+    );
+
+    expect(lateIntake).toBe(false);
+    expect(
+      publishedProgrammeLifecycleStep({
+        status: 'open',
+        lateIntake,
+        awaitingConfirmation: 0,
+        undecided: 0,
+        needsFirstReview: 0,
+        publicNeedsUpdate: false,
+        waitingEmails: 0,
+      }),
+    ).toBe(9);
+  });
+
+  it('keeps a window reopened after publication at the late-intake collection step', () => {
+    const lateIntake = isLateIntakeWindow(
+      { ...published, opensAt: '2026-08-02T16:00:00.000Z' },
+      'open',
+    );
+
+    expect(lateIntake).toBe(true);
+    expect(
+      publishedProgrammeLifecycleStep({
+        status: 'open',
+        lateIntake,
+        awaitingConfirmation: 0,
+        undecided: 0,
+        needsFirstReview: 0,
+        publicNeedsUpdate: false,
+        waitingEmails: 0,
+      }),
+    ).toBe(12);
+  });
+
+  it('does not infer late intake from legacy publication data with no timestamp', () => {
+    expect(
+      isLateIntakeWindow(
+        {
+          publishedScheduleId: 'legacy-release',
+          opensAt: '2026-08-02T16:00:00.000Z',
+        },
+        'open',
+      ),
+    ).toBe(false);
   });
 });
 

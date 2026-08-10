@@ -10,8 +10,10 @@ does not describe one seed run.
 - [`persona-fixture-manifest.md`](persona-fixture-manifest.md) defines synthetic
   identities, fixture provisioning boundaries, failure injection, and the
   uncommitted run manifest.
+- [`critical-path-17.md`](critical-path-17.md) maps the release-spanning event
+  lifecycle to personas, state boundaries, and automated evidence.
 - [`minimum-release-rerun.md`](minimum-release-rerun.md) is the executable
-  20-flow automation and screenshot evidence selection for release smoke runs.
+  23-flow automation and screenshot evidence selection for release smoke runs.
 - [`voiceover-baseline.md`](voiceover-baseline.md) records the native Safari and
   VoiceOver announcements that browser automation cannot substitute for.
 

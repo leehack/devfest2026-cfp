@@ -19,6 +19,7 @@ import {
   inviteRole,
   readEmailLog,
   reset,
+  seedEmailLog,
   seedProposal,
   seedSpeaker,
   setEmailStatusDirect,
@@ -459,9 +460,13 @@ test.describe('email pipeline', () => {
     expect(retried.ok).toBe(true);
 
     // Requeued and processed again — a second attempt, not a second row.
-    const rows = await waitForEmail((r) => r[0]?.attempts === 2, 'the retry');
-    expect(rows).toHaveLength(1);
-    expect(rows[0].kind).toBe('submission_received');
+    const rows = await waitForEmail(
+      (r) => r.some((row) => row.kind === 'submission_received' && row.attempts === 2),
+      'the retry',
+    );
+    const receipts = rows.filter((row) => row.kind === 'submission_received');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].attempts).toBe(2);
   });
 
   test('the sending address is set from the admin page, not a deploy', async ({ page }) => {
@@ -806,6 +811,32 @@ test.describe('email pipeline', () => {
       logId: 'accepted__talk-1',
     });
     expect(refused).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+  });
+
+  test('an expired in-flight message is visibly recoverable from the email workspace', async ({
+    page,
+  }) => {
+    await stage();
+    await seedEmailLog('stalled-receipt', {
+      status: 'sending',
+      kind: 'submission_received',
+      proposalId: 'talk-1',
+      attempts: 1,
+      sendingClaimId: 'abandoned-claim',
+      sendingStartedAt: new Date(Date.now() - 11 * 60 * 1_000),
+    });
+
+    await signInAs(page, admin);
+    await page.goto(at('/admin/email'));
+    await expect(page.getByText('Delivery stalled — retry available')).toBeVisible();
+    const retry = page.getByRole('button', { name: 'Retry 1 unsent' });
+    await expect(retry).toBeEnabled();
+    await retry.click();
+
+    await expect
+      .poll(async () => (await readEmailLog()).find((row) => row.id === 'stalled-receipt'))
+      .toMatchObject({ status: 'dry_run', attempts: 2 });
+    await expect(page.getByText('Delivery stalled — retry available')).toHaveCount(0);
   });
 
   test('resending something that was never queued says so', async () => {

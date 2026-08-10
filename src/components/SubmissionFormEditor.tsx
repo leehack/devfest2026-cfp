@@ -352,10 +352,12 @@ function LanguageList({
 export function SubmissionFormEditor({
   cfpId,
   form: saved,
+  readOnly = false,
   onDirtyChange,
 }: {
   cfpId: string;
   form: SubmissionForm;
+  readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -369,8 +371,8 @@ export function SubmissionFormEditor({
   // organiser who types a word and deletes it again has not changed anything,
   // and telling them they have is how a save prompt stops being believed.
   const dirty = useMemo(
-    () => JSON.stringify(form) !== JSON.stringify(stored),
-    [form, stored],
+    () => !readOnly && JSON.stringify(form) !== JSON.stringify(stored),
+    [form, readOnly, stored],
   );
 
   useEffect(() => {
@@ -388,6 +390,7 @@ export function SubmissionFormEditor({
     setForm((prev) => ({ ...prev, [key]: value }));
 
   async function save() {
+    if (readOnly) return;
     setNote('');
     setError('');
 
@@ -457,14 +460,14 @@ export function SubmissionFormEditor({
           legend={t.admin.taxonomy[key]}
           options={form[key]}
           onChange={(options) => set(key, options)}
-          busy={busy}
+          busy={busy || readOnly}
         />
       ))}
 
       <LanguageList
         options={form.deliveryLanguage}
         onChange={(options) => set('deliveryLanguage', options)}
-        busy={busy}
+        busy={busy || readOnly}
       />
 
       <fieldset className="fieldset optionlist">
@@ -473,7 +476,7 @@ export function SubmissionFormEditor({
         <FieldRows
           fields={form.acks}
           onChange={(acks) => set('acks', acks)}
-          busy={busy}
+          busy={busy || readOnly}
           consent
           max={FORM_LIMITS.fields}
           labels={{
@@ -493,7 +496,7 @@ export function SubmissionFormEditor({
         <FieldRows
           fields={form.fields}
           onChange={(fields) => set('fields', fields)}
-          busy={busy}
+          busy={busy || readOnly}
           types={EXTRA_TYPES}
           labels={{
             empty: t.admin.extraEmpty,
@@ -528,7 +531,7 @@ export function SubmissionFormEditor({
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy || !dirty}
+            disabled={busy || readOnly || !dirty}
             onClick={save}
           >
             {busy ? t.admin.formSaving : t.admin.submissionSave}

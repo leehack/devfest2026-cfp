@@ -54,6 +54,7 @@ export interface PublicCfp {
   eventStartDate: string | null;
   eventEndDate: string | null;
   timeZone: string | null;
+  sharedScheduleId: string | null;
   publishedScheduleId: string | null;
   updatedAtMs: number | null;
   paused: boolean;
@@ -92,6 +93,8 @@ function shape(id: string, data: Record<string, unknown>): PublicCfp {
             ? data.eventDate
             : null,
     timeZone: typeof data.timeZone === 'string' ? data.timeZone : null,
+    sharedScheduleId:
+      typeof data.sharedScheduleId === 'string' ? data.sharedScheduleId : null,
     publishedScheduleId:
       typeof data.publishedScheduleId === 'string' ? data.publishedScheduleId : null,
     updatedAtMs: ms(data.updatedAt),
@@ -142,10 +145,17 @@ export const readPublishedSchedule = cache(
     const ref = db().doc(`cfps/${cfpId}/scheduleReleases/${cfp.publishedScheduleId}`);
     const [release, entries] = await Promise.all([ref.get(), ref.collection('entries').get()]);
     if (!release.exists) return null;
+    const data = release.data() as Pick<
+      PublishedSchedule,
+      'version' | 'timeZone' | 'days' | 'rooms'
+    >;
     return {
       schedule: {
         id: release.id,
-        ...(release.data() as Omit<PublishedSchedule, 'id'>),
+        version: data.version,
+        timeZone: data.timeZone,
+        days: data.days,
+        rooms: data.rooms,
         publishedAt: ms(release.get('publishedAt')) ?? 0,
       },
       entries: entries.docs.map((entry) => {

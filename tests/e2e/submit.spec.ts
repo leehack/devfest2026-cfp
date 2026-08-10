@@ -64,7 +64,7 @@ test.describe('submitting', () => {
     await fillRequired(page);
     await waitForSave(page);
     await page.getByRole('button', { name: 'Submit proposal' }).click();
-    await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
   }
 
   test('a complete proposal submits and stays on screen', async ({ page }) => {
@@ -83,7 +83,7 @@ test.describe('submitting', () => {
   test('the submitted state survives a reload', async ({ page }) => {
     await submit(page);
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Submitted' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
     await expect(field(page, 'Title')).toHaveValue(COMPLETE.title);
   });
 
@@ -93,7 +93,7 @@ test.describe('submitting', () => {
     page.once('dialog', (d) => d.accept());
     await page.getByRole('button', { name: 'Withdraw proposal' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Withdrawn' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Withdrawn', exact: true })).toBeVisible();
     expect((await readProposal())?.status).toBe('withdrawn');
     await expect(page.getByRole('button', { name: 'Save changes' })).toHaveCount(0);
     await expect(page.getByText('Past talks (1)')).toBeVisible();
@@ -110,11 +110,10 @@ test.describe('submitting', () => {
     }
 
     await page.reload();
-    await expect(field(page, 'Title')).toHaveValue('');
-    await page.getByText('Past talks (1)').click();
-    await page.getByRole('button', { name: new RegExp(COMPLETE.title) }).click();
-    await expect(page.getByRole('heading', { name: 'Withdrawn' })).toBeVisible();
+    await expect(field(page, 'Title')).toHaveValue(COMPLETE.title);
+    await expect(page.getByRole('heading', { name: 'Withdrawn', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save changes' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '+ Another talk', exact: true })).toBeVisible();
   });
 
   test('a persisted draft can be deleted without deleting the speaker profile', async ({ page }) => {

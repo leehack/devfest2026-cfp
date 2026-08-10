@@ -42,6 +42,7 @@ export function EmailSetup({
   cfpId,
   keyHint,
   domainId,
+  readOnly = false,
   onKeySet,
   onDomainChanged,
   onDirtyChange,
@@ -49,6 +50,7 @@ export function EmailSetup({
   cfpId: string;
   keyHint: string;
   domainId: string;
+  readOnly?: boolean;
   onKeySet: (hint: string) => void;
   onDomainChanged?: () => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
@@ -65,7 +67,7 @@ export function EmailSetup({
   const activeCfp = useRef(cfpId);
   const refreshGeneration = useRef(0);
   activeCfp.current = cfpId;
-  const dirty = apiKey !== '' || name !== '';
+  const dirty = !readOnly && (apiKey !== '' || name !== '');
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -119,6 +121,7 @@ export function EmailSetup({
   }, [cfpId, keyHint, refresh]);
 
   async function run(fn: (current: () => boolean) => Promise<string>) {
+    if (readOnly) return;
     const scope = cfpId;
     const current = () => activeCfp.current === scope;
     setBusy(true);
@@ -152,13 +155,13 @@ export function EmailSetup({
             required
             value={apiKey}
             onChange={setApiKey}
-            disabled={busy}
+            disabled={busy || readOnly}
           />
         </div>
         <button
           type="button"
           className="btn"
-          disabled={busy || !apiKey.trim()}
+          disabled={busy || readOnly || !apiKey.trim()}
           onClick={() =>
             run(async (current) => {
               const { data } = await setEmailSecret({ cfpId, apiKey: apiKey.trim() });
@@ -189,14 +192,14 @@ export function EmailSetup({
                 required
                 value={name}
                 onChange={setName}
-                disabled={busy}
+                disabled={busy || readOnly}
               />
             </div>
             <div className="row row--wrap">
               <button
                 type="button"
                 className="btn"
-                disabled={busy || !name.trim()}
+                disabled={busy || readOnly || !name.trim()}
                 onClick={() =>
                   run(async (current) => {
                     await emailDomain({ cfpId, action: 'add', domain: name.trim() });
@@ -271,7 +274,7 @@ export function EmailSetup({
               <button
                 type="button"
                 className="btn"
-                disabled={busy}
+                disabled={busy || readOnly}
                 onClick={() =>
                   run(async (current) => {
                     const { data } = await emailDomain({ cfpId, action: 'verify' });
@@ -289,7 +292,7 @@ export function EmailSetup({
               <button
                 type="button"
                 className="btn btn--ghost"
-                disabled={busy}
+                disabled={busy || readOnly}
                 onClick={() => {
                   setName('');
                   setChanging(true);
