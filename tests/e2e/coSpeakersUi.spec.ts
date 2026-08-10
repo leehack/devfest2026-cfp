@@ -194,7 +194,7 @@ test.describe('co-speaker UI', () => {
     page,
   }) => {
     const { lead } = await stagedInvitation();
-    const secondEmail = 'second-ui@example.org';
+    const secondEmail = 'second.co-speaker.with-a-long-address@example.org';
     await callJson(lead.idToken, 'inviteCoSpeaker', {
       proposalId: 'ui-linked-talk',
       email: secondEmail,
@@ -212,6 +212,18 @@ test.describe('co-speaker UI', () => {
     for (const email of [GUEST.email, secondEmail]) {
       const row = page.locator('.co-speaker-person').filter({ hasText: email });
       await expect(row).toHaveCount(1);
+      const identity = row.locator('.co-speaker-person__identity strong');
+      await expect(identity).toHaveText(email);
+      expect(
+        await identity.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return (
+            style.whiteSpace === 'normal' &&
+            style.textOverflow === 'clip' &&
+            element.scrollWidth <= element.clientWidth + 1
+          );
+        }),
+      ).toBe(true);
       await expect(
         row.getByRole('button', { name: `Revoke invitation for ${email}`, exact: true }),
       ).toBeVisible();
