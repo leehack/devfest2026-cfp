@@ -119,9 +119,9 @@ export function href(place: {
 }
 
 /** The one place that moves the address bar. `Link` and `navigate` both land here. */
-export function goTo(path: string): void {
+export function goTo(path: string, state: unknown = null): void {
   if (path === window.location.pathname) return;
-  window.history.pushState(null, '', path);
+  window.history.pushState(state, '', path);
   // `pushState` deliberately fires nothing, so the subscribers below would
   // never hear about our own navigations without this.
   window.dispatchEvent(new PopStateEvent('popstate'));

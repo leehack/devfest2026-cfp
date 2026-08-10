@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SCHEDULE_LIMITS,
   publicScheduleSpeakers,
+  nextScheduleRoomId,
   resolvedScheduleLanguage,
+  scheduleDurationBounds,
   scheduleEndTime,
   scheduleConflicts,
+  scheduleRoomIdsInUse,
+  scheduleTaxonomyLabel,
   sharedScheduleAudience,
   sharedScheduleEntriesFor,
   sharedScheduleForEntries,
+  snapScheduleDuration,
   suggestedDuration,
   validateScheduleConfig,
   validateScheduleEntry,
@@ -48,9 +54,27 @@ describe('schedule validation', () => {
     expect(
       validateScheduleConfig({ ...config, days: [{ ...config.days[0], endsAt: '08:00' }] }),
     ).toBe('dayTime');
+    expect(
+      validateScheduleConfig({
+        ...config,
+        days: [{ ...config.days[0], startsAt: '09:00', endsAt: '09:04' }],
+      }),
+    ).toBe('dayTime');
     expect(validateScheduleEntry(entry('talk-one', 'blue', '17:45'), config)).toBe(
       'entryDuration',
     );
+    expect(
+      validateScheduleEntry(
+        { ...entry('talk-one', 'blue', '17:40'), durationMinutes: 20 },
+        config,
+      ),
+    ).toBeNull();
+    expect(
+      validateScheduleEntry(
+        { ...entry('talk-one', 'blue', '17:41'), durationMinutes: 20 },
+        config,
+      ),
+    ).toBe('entryDuration');
   });
 
   it('requires a real room and localized content for custom items', () => {
@@ -73,6 +97,164 @@ describe('schedule validation', () => {
       ),
     ).toBe('entryTitle');
   });
+
+  it('accepts an optional settled language for custom items', () => {
+    const custom: ScheduleEntry = {
+      id: 'opening',
+      kind: 'custom',
+      customType: 'opening',
+      title: { en: 'Opening remarks', fr: "Mot d'ouverture" },
+      date: '2026-11-14',
+      startsAt: '09:00',
+      durationMinutes: 20,
+      roomId: 'blue',
+    };
+
+    expect(validateScheduleEntry(custom, config)).toBeNull();
+    expect(validateScheduleEntry({ ...custom, language: 'en' }, config)).toBeNull();
+    expect(validateScheduleEntry({ ...custom, language: 'fr' }, config)).toBeNull();
+    expect(validateScheduleEntry({ ...custom, language: 'bilingual' }, config)).toBeNull();
+    expect(
+      validateScheduleEntry({ ...custom, language: 'either' } as unknown as ScheduleEntry, config),
+    ).toBe('entryLanguage');
+  });
+
+  it('validates optional attendee-facing speakers on custom items', () => {
+    const custom: ScheduleEntry = {
+      id: 'keynote',
+      kind: 'custom',
+      customType: 'keynote',
+      title: { en: 'Opening keynote' },
+      date: '2026-11-14',
+      startsAt: '09:00',
+      durationMinutes: 40,
+      roomId: 'blue',
+    };
+    const speaker = {
+      name: 'Grace Hopper',
+      jobTitle: 'Rear admiral',
+      company: 'United States Navy',
+      bio: 'Computer scientist and compiler pioneer.',
+    };
+
+    expect(validateScheduleEntry({ ...custom, speakers: [speaker] }, config)).toBeNull();
+    expect(validateScheduleEntry({ ...custom, speakers: [{ name: 'Host' }] }, config)).toBeNull();
+    expect(validateScheduleEntry({ ...custom, speakers: [{ name: '' }] }, config)).toBe(
+      'entrySpeakers',
+    );
+    expect(
+      validateScheduleEntry(
+        {
+          ...custom,
+          speakers: [{ name: 'Host', bio: 42 }],
+        } as unknown as ScheduleEntry,
+        config,
+      ),
+    ).toBe('entrySpeakers');
+    expect(
+      validateScheduleEntry(
+        {
+          ...custom,
+          speakers: Array.from({ length: SCHEDULE_LIMITS.customSpeakers + 1 }, (_, index) => ({
+            name: `Speaker ${index + 1}`,
+          })),
+        },
+        config,
+      ),
+    ).toBe('entrySpeakers');
+    expect(
+      validateScheduleEntry(
+        {
+          ...custom,
+          speakers: [{ name: 'x'.repeat(SCHEDULE_LIMITS.speakerName + 1) }],
+        },
+        config,
+      ),
+    ).toBe('entrySpeakers');
+    expect(
+      validateScheduleEntry(
+        {
+          ...custom,
+          speakers: [{ name: 'Host', bio: 'x'.repeat(SCHEDULE_LIMITS.speakerBio + 1) }],
+        },
+        config,
+      ),
+    ).toBe('entrySpeakers');
+    expect(
+      validateScheduleEntry(
+        {
+          ...custom,
+          speakers: [
+            { name: 'Host', company: 'x'.repeat(SCHEDULE_LIMITS.speakerCompany + 1) },
+          ],
+        },
+        config,
+      ),
+    ).toBe('entrySpeakers');
+    expect(
+      validateScheduleEntry(
+        {
+          ...custom,
+          speakers: [
+            { name: 'Host', jobTitle: 'x'.repeat(SCHEDULE_LIMITS.speakerJobTitle + 1) },
+          ],
+        },
+        config,
+      ),
+    ).toBe('entrySpeakers');
+  });
+
+  it('keeps room ids stable across reordering and refuses a removed room in use', () => {
+    const placed = entry('talk-one', 'blue', '09:00');
+    const reordered = { ...config, rooms: [...config.rooms].reverse() };
+    expect(validateScheduleConfig(reordered)).toBeNull();
+    expect(validateScheduleEntry(placed, reordered)).toBeNull();
+
+    const withoutBlue = {
+      ...config,
+      rooms: config.rooms.filter((room) => room.id !== 'blue'),
+    };
+    expect(scheduleRoomIdsInUse([placed])).toEqual(new Set(['blue']));
+    expect(validateScheduleEntry(placed, withoutBlue)).toBe('entryRoom');
+  });
+
+  it('generates a room id that cannot collide after a middle room is removed', () => {
+    expect(nextScheduleRoomId([{ id: 'main' }, { id: 'room-2' }, { id: 'room-3' }])).toBe(
+      'room-4',
+    );
+    expect(nextScheduleRoomId([{ id: 'main' }, { id: 'room-3' }])).toBe('room-2');
+  });
+
+  it('exposes five-minute resize bounds capped at the configured end of day', () => {
+    expect(scheduleDurationBounds('2026-11-14', '17:42', config)).toEqual({
+      min: 5,
+      max: 18,
+      step: 5,
+    });
+    expect(scheduleDurationBounds('2026-11-14', '17:58', config)).toBeNull();
+    expect([15, 20, 45].map((duration) => snapScheduleDuration(duration))).toEqual([15, 20, 45]);
+    expect(snapScheduleDuration(43)).toBe(45);
+    expect(snapScheduleDuration(2)).toBe(5);
+    expect(snapScheduleDuration(500)).toBe(480);
+    expect(
+      snapScheduleDuration(40, scheduleDurationBounds('2026-11-14', '17:42', config)!),
+    ).toBe(18);
+    expect(snapScheduleDuration(42, undefined, 42)).toBe(42);
+    expect(snapScheduleDuration(47, undefined, 42)).toBe(47);
+    expect(snapScheduleDuration(37, undefined, 42)).toBe(37);
+  });
+
+  it('keeps server compatibility for existing integer durations between bounds', () => {
+    expect(
+      validateScheduleEntry({ ...entry('talk-one', 'blue', '09:00'), durationMinutes: 42 }, config),
+    ).toBeNull();
+    expect(
+      validateScheduleEntry({ ...entry('talk-one', 'blue', '09:00'), durationMinutes: 4 }, config),
+    ).toBe('entryDuration');
+    expect(
+      validateScheduleEntry({ ...entry('talk-one', 'blue', '09:00'), durationMinutes: 481 }, config),
+    ).toBe('entryDuration');
+  });
 });
 
 describe('schedule conflicts', () => {
@@ -83,6 +265,13 @@ describe('schedule conflicts', () => {
     expect(scheduleConflicts([entry('one', 'blue', '09:00'), entry('two', 'blue', '09:35')])).toEqual(
       [{ kind: 'room', entryIds: ['one', 'two'] }],
     );
+
+    const first = { ...entry('first', 'green', '10:20'), durationMinutes: 15 };
+    const second = { ...entry('second', 'green', '10:35'), durationMinutes: 20 };
+    expect(scheduleConflicts([first, second])).toEqual([]);
+    expect(scheduleConflicts([{ ...first, durationMinutes: 20 }, second])).toEqual([
+      { kind: 'room', entryIds: ['first', 'second'] },
+    ]);
   });
 
   it('catches duplicate proposals and speakers booked in different rooms', () => {
@@ -107,6 +296,9 @@ describe('schedule conflicts', () => {
 
 describe('schedule helpers', () => {
   it('calculates attendee-facing end times', () => {
+    expect(scheduleEndTime({ startsAt: '10:20', durationMinutes: 15 })).toBe('10:35');
+    expect(scheduleEndTime({ startsAt: '10:20', durationMinutes: 20 })).toBe('10:40');
+    expect(scheduleEndTime({ startsAt: '10:20', durationMinutes: 45 })).toBe('11:05');
     expect(scheduleEndTime({ startsAt: '09:35', durationMinutes: 40 })).toBe('10:15');
     expect(scheduleEndTime({ startsAt: '23:10', durationMinutes: 30 })).toBe('23:40');
   });
@@ -121,6 +313,21 @@ describe('schedule helpers', () => {
     expect(resolvedScheduleLanguage('either')).toBeNull();
     expect(resolvedScheduleLanguage('either', 'fr')).toBe('fr');
     expect(resolvedScheduleLanguage('bilingual')).toBe('bilingual');
+  });
+
+  it('freezes localized taxonomy labels and falls back to legacy codes', () => {
+    const options = [
+      { value: 'web', label: { en: '  Web platform  ', fr: '  Plateforme Web  ' } },
+      { value: 'cloud', label: { en: 'Cloud' } },
+    ];
+    expect(scheduleTaxonomyLabel(options, 'web')).toEqual({
+      en: 'Web platform',
+      fr: 'Plateforme Web',
+    });
+    expect(scheduleTaxonomyLabel(options, 'cloud')).toEqual({ en: 'Cloud' });
+    expect(scheduleTaxonomyLabel(options, 'legacy_category')).toEqual({
+      en: 'legacy_category',
+    });
   });
 });
 

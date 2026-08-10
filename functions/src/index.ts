@@ -28,6 +28,7 @@ import {
   mergeSubmissionForm,
   normaliseSubmissionForm,
   validateSubmissionForm,
+  type SubmissionForm,
 } from '../../shared/submissionForm';
 import { aggregateReviews, type Aggregate, type ReviewRecord } from '../../shared/aggregate';
 import { parseSessionizeProfile, parseSessionizeUrl } from '../../shared/sessionize';
@@ -124,16 +125,19 @@ import {
   SCHEDULE_LIMITS,
   publicScheduleSpeakers,
   resolvedScheduleLanguage,
+  scheduleTaxonomyLabel,
   scheduleConflicts,
   sharedScheduleAudience,
   sharedScheduleEntriesFor,
   sharedScheduleForEntries,
   validateScheduleConfig,
   validateScheduleEntry,
+  type PublicScheduleSpeaker,
   type PublishedScheduleEntry,
   type ScheduleConfig,
   type ScheduleDay,
   type ScheduleEntry,
+  type ScheduleLanguage,
   type ScheduleRoom,
   type SharedSchedule,
 } from '../../shared/schedule';
@@ -1847,7 +1851,20 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
 
   await db.runTransaction(async (tx) => {
     await assertCfpNotArchived(tx, cfpId);
-    tx.set(db.doc(`cfps/${cfpId}/config/submissionForm`), form);
+    const formRef = db.doc(`cfps/${cfpId}/config/submissionForm`);
+    const scheduleRef = db.doc(`cfps/${cfpId}/config/schedule`);
+    const [currentForm, schedule] = await tx.getAll(formRef, scheduleRef);
+    const taxonomyChanged =
+      scheduleTaxonomyFingerprint(scheduleFormFrom(currentForm)) !==
+      scheduleTaxonomyFingerprint(form);
+    tx.set(formRef, form);
+    if (schedule.exists && taxonomyChanged) {
+      tx.set(
+        scheduleRef,
+        { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+    }
   });
   logger.info('submission form saved', {
     byUid,
@@ -3846,6 +3863,8 @@ export const setCfpWindow = onCall(CALLABLE, async (request) => {
 // --------------------------------------------------------------- schedule
 
 const scheduleConfigRef = (cfpId: string) => db.doc(`cfps/${cfpId}/config/schedule`);
+const scheduleSubmissionFormRef = (cfpId: string) =>
+  db.doc(`cfps/${cfpId}/config/submissionForm`);
 const scheduleDraft = (cfpId: string) => db.collection(`cfps/${cfpId}/scheduleDraft`);
 const scheduleReleaseSourceRef = (cfpId: string, releaseId: string) =>
   db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`);
@@ -3876,6 +3895,31 @@ function scheduleConfigFrom(value: unknown): ScheduleConfig {
   };
 }
 
+function scheduleSpeakersFrom(value: unknown): PublicScheduleSpeaker[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return [null as unknown as PublicScheduleSpeaker];
+  return value.slice(0, SCHEDULE_LIMITS.customSpeakers + 1).map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return item as PublicScheduleSpeaker;
+    }
+    const data = item as Record<string, unknown>;
+    const text = (key: 'name' | 'bio' | 'company' | 'jobTitle'): unknown => {
+      const field = data[key];
+      return typeof field === 'string' ? field.trim() || undefined : field;
+    };
+    const name = text('name');
+    const bio = text('bio');
+    const company = text('company');
+    const jobTitle = text('jobTitle');
+    return {
+      name: name as string,
+      ...(bio !== undefined ? { bio: bio as string } : {}),
+      ...(company !== undefined ? { company: company as string } : {}),
+      ...(jobTitle !== undefined ? { jobTitle: jobTitle as string } : {}),
+    };
+  });
+}
+
 function scheduleEntryFrom(value: unknown): ScheduleEntry {
   const data = (value ?? {}) as Record<string, unknown>;
   const base = {
@@ -3896,10 +3940,14 @@ function scheduleEntryFrom(value: unknown): ScheduleEntry {
   }
   const title = (data.title ?? {}) as Record<string, unknown>;
   const description = (data.description ?? {}) as Record<string, unknown>;
+  const language = String(data.language ?? '').trim();
+  const speakers = scheduleSpeakersFrom(data.speakers);
   return {
     ...base,
     kind: 'custom',
     customType: String(data.customType ?? '') as ScheduleEntry & never,
+    ...(language ? { language: language as ScheduleLanguage } : {}),
+    ...(speakers !== undefined ? { speakers } : {}),
     title: { en: String(title.en ?? '').trim(), fr: String(title.fr ?? '').trim() },
     description: {
       en: String(description.en ?? '').trim(),
@@ -4072,10 +4120,50 @@ function scheduleProjectionFingerprint(
   return createHash('sha256').update(JSON.stringify(source)).digest('hex');
 }
 
+function scheduleTaxonomySource(form: SubmissionForm): unknown {
+  const options = (items: SubmissionForm['category']) =>
+    items.map((item) => ({ value: item.value, label: item.label }));
+  return {
+    category: options(form.category),
+    format: options(form.format),
+    level: options(form.level),
+  };
+}
+
+function scheduleTaxonomyFingerprint(form: SubmissionForm): string {
+  return createHash('sha256')
+    .update(JSON.stringify(stableScheduleValue(scheduleTaxonomySource(form))))
+    .digest('hex');
+}
+
+function scheduleFormFrom(snapshot: DocumentSnapshot): SubmissionForm {
+  return mergeSubmissionForm(snapshot.exists ? snapshot.data() : undefined);
+}
+
+function scheduleEntriesWithTaxonomyLabels(
+  entries: readonly PublishedScheduleEntry[],
+  form: SubmissionForm,
+): PublishedScheduleEntry[] {
+  return entries.map((entry) =>
+    entry.kind === 'custom'
+      ? entry
+      : {
+          ...entry,
+          session: {
+            ...entry.session,
+            categoryLabel: scheduleTaxonomyLabel(form.category, entry.session.category),
+            formatLabel: scheduleTaxonomyLabel(form.format, entry.session.format),
+            levelLabel: scheduleTaxonomyLabel(form.level, entry.session.level),
+          },
+        },
+  );
+}
+
 function sharedProjection(
   config: ScheduleConfig,
   entries: readonly ScheduleEntry[],
   proposals: ReadonlyMap<string, DocumentSnapshot>,
+  form: SubmissionForm,
 ): { entries: PublishedScheduleEntry[]; omittedCount: number; fingerprint: string } {
   const projected: PublishedScheduleEntry[] = [];
   const eligibleDraft: ScheduleEntry[] = [];
@@ -4100,6 +4188,9 @@ function sharedProjection(
       throw new HttpsError('failed-precondition', 'Assign a language to every flexible session.');
     }
     eligibleDraft.push(entry);
+    const category = String(data.category ?? '');
+    const format = String(data.format ?? '');
+    const level = String(data.level ?? '');
     projected.push({
       id: entry.id,
       kind: 'proposal',
@@ -4112,9 +4203,12 @@ function sharedProjection(
         proposalId: entry.proposalId,
         title: String(data.title ?? ''),
         abstract: String(data.abstract ?? ''),
-        category: String(data.category ?? ''),
-        format: String(data.format ?? ''),
-        level: String(data.level ?? ''),
+        category,
+        categoryLabel: scheduleTaxonomyLabel(form.category, category),
+        format,
+        formatLabel: scheduleTaxonomyLabel(form.format, format),
+        level,
+        levelLabel: scheduleTaxonomyLabel(form.level, level),
         language,
         speakers: publicScheduleSpeakers(
           (data.speakerSnapshot ?? []) as SpeakerSnapshot[],
@@ -4140,10 +4234,11 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireScheduleAdmin(request, cfpId, 'share the schedule preview');
   const input = (request.data ?? {}) as Record<string, unknown>;
-  const [configSnap, entriesSnap, cfpBefore] = await Promise.all([
+  const [configSnap, entriesSnap, cfpBefore, formSnap] = await Promise.all([
     scheduleConfigRef(cfpId).get(),
     scheduleDraft(cfpId).get(),
     db.doc(`cfps/${cfpId}`).get(),
+    scheduleSubmissionFormRef(cfpId).get(),
   ]);
   if (!cfpBefore.exists) throw new HttpsError('not-found', 'No such call for proposals.');
   if (cfpBefore.get('archived') === true) {
@@ -4153,6 +4248,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
   const current = Number(configSnap.get('revision') ?? 0);
   assertScheduleRevision(current, input.expectedRevision);
   const config = scheduleConfigFrom(configSnap.data());
+  const form = scheduleFormFrom(formSnap);
   const configProblem = validateScheduleConfig(config);
   if (configProblem) throw new HttpsError('invalid-argument', configProblem);
   const entries = entriesSnap.docs.map((doc) => scheduleEntryFrom({ id: doc.id, ...doc.data() }));
@@ -4167,7 +4263,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       )
     : [];
   const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap]));
-  const projection = sharedProjection(config, entries, proposals);
+  const projection = sharedProjection(config, entries, proposals, form);
   const sharedEntries = projection.entries;
   if (!sharedEntries.length) {
     throw new HttpsError(
@@ -4354,6 +4450,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     const snapshots = await tx.getAll(
       scheduleConfigRef(cfpId),
       db.doc(`cfps/${cfpId}`),
+      scheduleSubmissionFormRef(cfpId),
       ...comparisonRefs,
       ...proposalRefs,
       ...speakerRefs,
@@ -4363,9 +4460,11 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     );
     const freshConfig = snapshots[0];
     const cfpSnap = snapshots[1];
-    const dataStart = 2 + comparisonRefs.length;
-    const freshPreviousRelease = previousReleaseId ? snapshots[2] : null;
-    const freshPreviousSource = previousReleaseId ? snapshots[3] : null;
+    const freshForm = snapshots[2];
+    const freshFormValue = scheduleFormFrom(freshForm);
+    const dataStart = 3 + comparisonRefs.length;
+    const freshPreviousRelease = previousReleaseId ? snapshots[3] : null;
+    const freshPreviousSource = previousReleaseId ? snapshots[4] : null;
     const freshProposals = snapshots.slice(dataStart, dataStart + proposalRefs.length);
     const freshSpeakers = snapshots.slice(
       dataStart + proposalRefs.length,
@@ -4397,11 +4496,12 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       scheduleConfigFrom(freshConfig.data()),
       entries,
       new Map(freshProposals.map((snap) => [snap.id, snap])),
+      freshFormValue,
     );
     if (freshProjection.fingerprint !== projection.fingerprint) {
       throw new HttpsError(
         'aborted',
-        'A speaker response changed while the schedule preview was being shared. Try again.',
+        'The schedule content changed while the preview was being shared. Try again.',
       );
     }
     const freshPreviousFingerprint = String(
@@ -4440,6 +4540,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     tx.create(scheduleReleaseSourceRef(cfpId, releaseRef.id), {
       sourceRevision: current,
       sourceFingerprint: projection.fingerprint,
+      taxonomyFingerprint: scheduleTaxonomyFingerprint(freshFormValue),
       sharedBy: byUid,
       sharedAt: FieldValue.serverTimestamp(),
     });
@@ -4454,6 +4555,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       sharedVersion: version,
       sharedRevision: current,
       sharedFingerprint: projection.fingerprint,
+      sharedTaxonomyFingerprint: scheduleTaxonomyFingerprint(freshFormValue),
       needsAttention: false,
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -4633,147 +4735,159 @@ const callableTime = (value: unknown): unknown =>
 export const getSharedSchedule = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const uid = requireVerifiedUid(request, 'view the shared schedule');
-  const [cfpSnap, role] = await Promise.all([
-    db.doc(`cfps/${cfpId}`).get(),
-    roleOn(cfpId, uid),
-  ]);
-  if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+  const role = await roleOn(cfpId, uid);
   const audience = sharedScheduleAudience(role);
-  const releaseId = (cfpSnap.get('sharedScheduleId') ??
-    cfpSnap.get('publishedScheduleId')) as string | undefined;
-  if (!releaseId) {
-    return { ok: true, audience, schedule: null, entries: [], stale: false };
-  }
-
-  const [release, releaseSource, releaseEntriesSnap, ownProposals] = await Promise.all([
-    db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`).get(),
-    scheduleReleaseSourceRef(cfpId, releaseId).get(),
-    db.collection(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries`).get(),
-    audience === 'speaker'
-      ? db
-          .collection(`cfps/${cfpId}/proposals`)
-          .where('speakerIds', 'array-contains', uid)
-          .get()
-      : Promise.resolve(null),
-  ]);
-  if (!release.exists) {
-    throw new HttpsError('failed-precondition', 'The shared schedule is unavailable.');
-  }
-  const sourceRevision = Number(
-    releaseSource.get('sourceRevision') ?? release.get('sourceRevision') ?? 0,
-  );
-  const sourceFingerprint = String(
-    releaseSource.get('sourceFingerprint') ?? release.get('sourceFingerprint') ?? '',
-  );
-  const releaseEntries = releaseEntriesSnap.docs.map(
-    (entry) => ({ id: entry.id, ...entry.data() }) as PublishedScheduleEntry,
-  );
-  const ownConfirmedSpeakers = new Map(
-    (ownProposals?.docs ?? [])
-      .filter((proposal) => proposal.get('status') === 'confirmed')
-      .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
-  );
-  if (audience === 'speaker') {
-    if (ownConfirmedSpeakers.size === 0) {
-      throw new HttpsError(
-        'permission-denied',
-        'You have no confirmed proposal for this shared schedule.',
-      );
+  return db.runTransaction(async (tx) => {
+    const cfpSnap = await tx.get(db.doc(`cfps/${cfpId}`));
+    if (!cfpSnap.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+    const releaseId = (cfpSnap.get('sharedScheduleId') ??
+      cfpSnap.get('publishedScheduleId')) as string | undefined;
+    if (!releaseId) {
+      return { ok: true, audience, schedule: null, entries: [], stale: false };
     }
-  }
 
-  const schedule: SharedSchedule = {
-    id: release.id,
-    version: Number(release.get('version') ?? 0),
-    timeZone: String(release.get('timeZone') ?? ''),
-    days: (release.get('days') ?? []) as ScheduleDay[],
-    rooms: (release.get('rooms') ?? []) as ScheduleRoom[],
-    sourceRevision,
-    sharedAt: callableTime(releaseSource.get('sharedAt') ?? release.get('sharedAt')),
-    ...(release.get('publishedAt')
-      ? { publishedAt: callableTime(release.get('publishedAt')) }
-      : {}),
-  };
+    const releaseRef = db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`);
+    const [release, releaseSource, releaseEntriesSnap, configSnap, formSnap] =
+      await Promise.all([
+        tx.get(releaseRef),
+        tx.get(scheduleReleaseSourceRef(cfpId, releaseId)),
+        tx.get(releaseRef.collection('entries')),
+        tx.get(scheduleConfigRef(cfpId)),
+        tx.get(scheduleSubmissionFormRef(cfpId)),
+      ]);
+    if (!release.exists) {
+      throw new HttpsError('failed-precondition', 'The shared schedule is unavailable.');
+    }
 
-  if (audience === 'speaker') {
-    const configSnap = await scheduleConfigRef(cfpId).get();
+    const sourceRevision = Number(
+      releaseSource.get('sourceRevision') ?? release.get('sourceRevision') ?? 0,
+    );
+    const sourceFingerprint = String(
+      releaseSource.get('sourceFingerprint') ?? release.get('sourceFingerprint') ?? '',
+    );
+    const releaseEntries = releaseEntriesSnap.docs.map(
+      (entry) => ({ id: entry.id, ...entry.data() }) as PublishedScheduleEntry,
+    );
+    const form = scheduleFormFrom(formSnap);
+    const sourceTaxonomyFingerprint = String(
+      releaseSource.get('taxonomyFingerprint') ?? '',
+    );
+    const taxonomyChanged =
+      Boolean(sourceTaxonomyFingerprint) &&
+      sourceTaxonomyFingerprint !== scheduleTaxonomyFingerprint(form);
+    const schedule: SharedSchedule = {
+      id: release.id,
+      version: Number(release.get('version') ?? 0),
+      timeZone: String(release.get('timeZone') ?? ''),
+      days: (release.get('days') ?? []) as ScheduleDay[],
+      rooms: (release.get('rooms') ?? []) as ScheduleRoom[],
+      sourceRevision,
+      sharedAt: callableTime(releaseSource.get('sharedAt') ?? release.get('sharedAt')),
+      ...(release.get('publishedAt')
+        ? { publishedAt: callableTime(release.get('publishedAt')) }
+        : {}),
+    };
+
+    if (audience === 'speaker') {
+      const ownProposals = await tx.get(
+        db
+          .collection(`cfps/${cfpId}/proposals`)
+          .where('speakerIds', 'array-contains', uid),
+      );
+      const ownConfirmedSpeakers = new Map(
+        ownProposals.docs
+          .filter((proposal) => proposal.get('status') === 'confirmed')
+          .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
+      );
+      if (ownConfirmedSpeakers.size === 0) {
+        throw new HttpsError(
+          'permission-denied',
+          'You have no confirmed proposal for this shared schedule.',
+        );
+      }
+      const visibleEntries = sharedScheduleEntriesFor(
+        releaseEntries,
+        audience,
+        uid,
+        ownConfirmedSpeakers,
+      );
+      const releaseConfig = scheduleConfigFrom(release.data());
+      const stale =
+        !configSnap.exists ||
+        configSnap.get('needsAttention') === true ||
+        taxonomyChanged ||
+        sourceRevision !== Number(configSnap.get('revision') ?? 0) ||
+        sourceFingerprint !== scheduleProjectionFingerprint(releaseConfig, releaseEntries) ||
+        (Boolean(sourceTaxonomyFingerprint) &&
+          sourceFingerprint !==
+            scheduleProjectionFingerprint(
+              releaseConfig,
+              scheduleEntriesWithTaxonomyLabels(releaseEntries, form),
+            ));
+      return {
+        ok: true,
+        audience,
+        schedule: sharedScheduleForEntries(schedule, visibleEntries),
+        entries: visibleEntries,
+        stale,
+      };
+    }
+
+    const draftSnap = await tx.get(scheduleDraft(cfpId));
+    const draftEntries = draftSnap.docs.map((entry) =>
+      scheduleEntryFrom({ id: entry.id, ...entry.data() }),
+    );
+    const proposalIds = [
+      ...new Set([
+        ...releaseEntries
+          .filter((entry) => entry.kind === 'proposal')
+          .map((entry) => entry.proposalId),
+        ...draftEntries
+          .filter(
+            (entry): entry is Extract<ScheduleEntry, { kind: 'proposal' }> =>
+              entry.kind === 'proposal',
+          )
+          .map((entry) => entry.proposalId),
+      ]),
+    ];
+    const proposalSnaps = proposalIds.length
+      ? await tx.getAll(
+          ...proposalIds.map((proposalId) =>
+            db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+          ),
+        )
+      : [];
+    const proposals = new Map(proposalSnaps.map((proposal) => [proposal.id, proposal]));
+    const confirmedSpeakers = new Map(
+      proposalSnaps
+        .filter((proposal) => proposal.exists && proposal.get('status') === 'confirmed')
+        .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
+    );
     const visibleEntries = sharedScheduleEntriesFor(
       releaseEntries,
       audience,
       uid,
-      ownConfirmedSpeakers,
+      confirmedSpeakers,
     );
-    const stale =
-      !configSnap.exists ||
-      configSnap.get('needsAttention') === true ||
-      sourceRevision !== Number(configSnap.get('revision') ?? 0) ||
-      sourceFingerprint !==
-        scheduleProjectionFingerprint(scheduleConfigFrom(release.data()), releaseEntries);
-    return {
-      ok: true,
-      audience,
-      schedule: sharedScheduleForEntries(schedule, visibleEntries),
-      entries: visibleEntries,
-      stale,
-    };
-  }
 
-  const [configSnap, draftSnap] = await Promise.all([
-    scheduleConfigRef(cfpId).get(),
-    scheduleDraft(cfpId).get(),
-  ]);
-  const draftEntries = draftSnap.docs.map((entry) =>
-    scheduleEntryFrom({ id: entry.id, ...entry.data() }),
-  );
-  const proposalIds = [
-    ...new Set([
-      ...releaseEntries
-        .filter((entry) => entry.kind === 'proposal')
-        .map((entry) => entry.proposalId),
-      ...draftEntries
-        .filter(
-          (entry): entry is Extract<ScheduleEntry, { kind: 'proposal' }> =>
-            entry.kind === 'proposal',
-        )
-        .map((entry) => entry.proposalId),
-    ]),
-  ];
-  const proposalSnaps = proposalIds.length
-    ? await db.getAll(
-        ...proposalIds.map((proposalId) =>
-          db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
-        ),
-      )
-    : [];
-  const proposals = new Map(proposalSnaps.map((proposal) => [proposal.id, proposal]));
-  const confirmedSpeakers = new Map(
-    proposalSnaps
-      .filter((proposal) => proposal.exists && proposal.get('status') === 'confirmed')
-      .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
-  );
-  const visibleEntries = sharedScheduleEntriesFor(
-    releaseEntries,
-    audience,
-    uid,
-    confirmedSpeakers,
-  );
-
-  let stale = !configSnap.exists || configSnap.get('needsAttention') === true;
-  if (configSnap.exists) {
-    try {
-      const config = scheduleConfigFrom(configSnap.data());
-      const currentProjection = sharedProjection(config, draftEntries, proposals);
-      const releaseConfig = scheduleConfigFrom(release.data());
-      stale =
-        stale ||
-        sourceRevision !== Number(configSnap.get('revision') ?? 0) ||
-        sourceFingerprint !== currentProjection.fingerprint ||
-        sourceFingerprint !== scheduleProjectionFingerprint(releaseConfig, releaseEntries);
-    } catch {
-      stale = true;
+    let stale =
+      !configSnap.exists || configSnap.get('needsAttention') === true || taxonomyChanged;
+    if (configSnap.exists) {
+      try {
+        const config = scheduleConfigFrom(configSnap.data());
+        const currentProjection = sharedProjection(config, draftEntries, proposals, form);
+        const releaseConfig = scheduleConfigFrom(release.data());
+        stale =
+          stale ||
+          sourceRevision !== Number(configSnap.get('revision') ?? 0) ||
+          sourceFingerprint !== currentProjection.fingerprint ||
+          sourceFingerprint !== scheduleProjectionFingerprint(releaseConfig, releaseEntries);
+      } catch {
+        stale = true;
+      }
     }
-  }
-  return { ok: true, audience, schedule, entries: visibleEntries, stale };
+    return { ok: true, audience, schedule, entries: visibleEntries, stale };
+  });
 });
 
 export const publishSchedule = onCall(CALLABLE, async (request) => {
@@ -4808,16 +4922,18 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
     }
 
     const releaseRef = db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`);
-    const [release, releaseSource, releaseEntriesSnap, draftSnap] = await Promise.all([
+    const [release, releaseSource, releaseEntriesSnap, draftSnap, formSnap] = await Promise.all([
       tx.get(releaseRef),
       tx.get(scheduleReleaseSourceRef(cfpId, releaseId)),
       tx.get(releaseRef.collection('entries')),
       tx.get(scheduleDraft(cfpId)),
+      tx.get(scheduleSubmissionFormRef(cfpId)),
     ]);
     if (!release.exists) {
       throw new HttpsError('failed-precondition', 'The shared schedule is unavailable.');
     }
     const config = scheduleConfigFrom(configSnap.data());
+    const form = scheduleFormFrom(formSnap);
     const configProblem = validateScheduleConfig(config);
     if (configProblem) throw new HttpsError('invalid-argument', configProblem);
     const draftEntries = draftSnap.docs.map((entry) =>
@@ -4844,6 +4960,7 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
       config,
       draftEntries,
       new Map(proposalSnaps.map((proposal) => [proposal.id, proposal])),
+      form,
     );
     const releaseEntries = releaseEntriesSnap.docs.map(
       (entry) => ({ id: entry.id, ...entry.data() }) as PublishedScheduleEntry,
@@ -4854,6 +4971,10 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
     const sourceRevision = Number(
       releaseSource.get('sourceRevision') ?? release.get('sourceRevision') ?? -1,
     );
+    const sourceTaxonomyFingerprint = String(
+      releaseSource.get('taxonomyFingerprint') ?? '',
+    );
+    const currentTaxonomyFingerprint = scheduleTaxonomyFingerprint(form);
     const releaseFingerprint = scheduleProjectionFingerprint(
       scheduleConfigFrom(release.data()),
       releaseEntries,
@@ -4862,6 +4983,10 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
       sourceRevision !== revision ||
       Number(configSnap.get('sharedRevision') ?? -1) !== revision ||
       String(configSnap.get('sharedFingerprint') ?? '') !== sourceFingerprint ||
+      (sourceTaxonomyFingerprint &&
+        sourceTaxonomyFingerprint !== currentTaxonomyFingerprint) ||
+      (String(configSnap.get('sharedTaxonomyFingerprint') ?? '') &&
+        String(configSnap.get('sharedTaxonomyFingerprint')) !== currentTaxonomyFingerprint) ||
       projection.fingerprint !== sourceFingerprint ||
       releaseFingerprint !== sourceFingerprint
     ) {

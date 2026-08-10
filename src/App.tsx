@@ -23,6 +23,11 @@ import { CfpPage } from './screens/CfpPage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { usePlatformAccess, useRole } from './lib/roles';
 import { navigate, usePlace, type Place } from './lib/router';
+import {
+  AGENDA_RETURN_STATE,
+  agendaReturnContext,
+  historyStateWithout,
+} from './lib/scheduleHistory';
 import { ConsentBanner } from './components/ConsentBanner';
 import { ConsentControl } from './components/ConsentControl';
 import { applyConsent, trackPageView } from './lib/analytics';
@@ -215,8 +220,23 @@ export function App({
   useEffect(() => {
     if (focusedPlace.current === placeKey) return;
     focusedPlace.current = placeKey;
+    const scheduleReturn = agendaReturnContext(AGENDA_RETURN_STATE);
+    if (route === 'schedule' && scheduleReturn?.cfpId === cfpId) {
+      const visibleScheduleId =
+        role &&
+        visibleCfp?.sharedScheduleId &&
+        visibleCfp.sharedScheduleId !== visibleCfp.publishedScheduleId
+          ? visibleCfp?.sharedScheduleId
+          : visibleCfp?.publishedScheduleId;
+      if (scheduleReturn.scheduleId === visibleScheduleId) return;
+      window.history.replaceState(
+        historyStateWithout(AGENDA_RETURN_STATE),
+        '',
+        window.location.href,
+      );
+    }
     requestAnimationFrame(() => document.getElementById('main-content')?.focus());
-  }, [placeKey]);
+  }, [cfpId, placeKey, role, route, visibleCfp?.publishedScheduleId, visibleCfp?.sharedScheduleId]);
 
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 import {
   callAs,
@@ -189,6 +189,67 @@ async function seedDisclosureSchedule() {
     revision: state.revision as number,
   };
 }
+
+test('custom item language is validated, filterable, and frozen into each schedule release', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  const coffeeBreak = {
+    id: 'coffee-break',
+    kind: 'custom',
+    customType: 'break',
+    title: { en: 'Coffee break', fr: 'Pause café' },
+    date: '2026-11-14',
+    startsAt: '10:00',
+    durationMinutes: 20,
+    roomId: 'amber',
+  };
+
+  expect(
+    await callAs(fixture.admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: fixture.revision,
+      entry: { ...coffeeBreak, language: 'either' },
+    }),
+  ).toEqual({ ok: false, code: 'INVALID_ARGUMENT' });
+
+  const updated = await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: fixture.revision,
+    entry: { ...coffeeBreak, language: 'bilingual' },
+  });
+  const shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: updated.revision,
+  });
+  expect(await readScheduleEntry(shared.releaseId, coffeeBreak.id)).toMatchObject({
+    kind: 'custom',
+    language: 'bilingual',
+  });
+
+  const published = await callJson(fixture.admin.idToken, 'publishSchedule', {
+    expectedRevision: shared.revision,
+  });
+  const changed = await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: published.revision,
+    entry: { ...coffeeBreak, language: 'fr' },
+  });
+  expect(changed.revision).toBeGreaterThan(published.revision);
+  expect(await readPublicScheduleEntry(published.releaseId, coffeeBreak.id)).toMatchObject({
+    kind: 'custom',
+    language: 'bilingual',
+  });
+
+  await page.goto(at('/schedule'));
+  const languageFilter = page.getByRole('combobox', { name: 'Scheduled language' });
+  await expect(languageFilter.locator('option[value="bilingual"]')).toHaveText('Bilingual');
+  await languageFilter.selectOption('bilingual');
+  const coffeeBreakLink = page.getByRole('link', { name: 'Coffee break' });
+  await expect(coffeeBreakLink).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ has: coffeeBreakLink }).locator('.language-chip')).toHaveText('Bilingual');
+  await languageFilter.selectOption('en');
+  await expect(coffeeBreakLink).toHaveCount(0);
+  await languageFilter.selectOption('all');
+  await page.getByRole('link', { name: 'Coffee break' }).click();
+  await expect(page.getByRole('article').locator('.language-chip')).toHaveText('Bilingual');
+});
 
 test('an admin shares and publishes without duplicating notices, and cancellations stay stable', async ({
   page,
@@ -400,7 +461,9 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
 
   await signInAs(page, ADMIN, at('/admin/schedule'));
   await expect(page.getByRole('heading', { name: 'Build the programme' })).toBeVisible();
-  await expect(page.getByText('The modern web, without the maze')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /Move or edit: The modern web, without the maze/ }),
+  ).toBeVisible();
 
   await page.goto(at('/schedule'));
   await expect(page.getByRole('heading', { name: 'Programme' })).toBeVisible();
@@ -979,7 +1042,9 @@ test('committee preview follows active event membership and remains read only', 
   await expect(page.getByRole('button', { name: 'Download calendar' })).toHaveCount(0);
 
   await signInAs(page, ADMIN, at('/admin/schedule'));
-  await expect(page.getByText('A tentative session')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /Move or edit: A tentative session/ }),
+  ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Private draft' })).toBeVisible();
 
   expect(await callAs(fixture.pending.idToken, 'getSharedSchedule', {})).toEqual({
@@ -1252,4 +1317,118 @@ test('the public agenda stays within a narrow mobile viewport', async ({ page })
   const firstItem = await page.locator('.agenda-item').first().boundingBox();
   expect(firstItem).not.toBeNull();
   expect(firstItem!.y).toBeLessThan(844);
+});
+
+test('unbroken schedule content stays contained for speakers, committee, and public session details', async ({
+  page,
+}) => {
+  const longTitle = `Title-${'T'.repeat(180)}`;
+  const longAbstract = `Abstract-${'A'.repeat(480)}`;
+  const longBio = `Biography-${'B'.repeat(360)}`;
+  const longRoom = `Room-${'R'.repeat(70)}`;
+  const longNotice = `Notice-${'N'.repeat(420)}`;
+  const [admin, speaker, reviewer] = await Promise.all([
+    createAccount(ADMIN),
+    createAccount(SPEAKER),
+    createAccount(REVIEWER),
+  ]);
+  await Promise.all([
+    seedMember(admin.uid, 'admin', undefined, ADMIN.email),
+    seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email),
+    seedSpeaker(speaker.uid, { name: SPEAKER.name, email: SPEAKER.email, bio: longBio }),
+    seedProposal('overflow-session', {
+      speakerUid: speaker.uid,
+      title: longTitle,
+      abstract: longAbstract,
+      status: 'confirmed',
+      speaker: {
+        name: SPEAKER.name,
+        bio: longBio,
+        company: 'GDG Montréal',
+        jobTitle: 'Community organiser',
+      },
+    }),
+  ]);
+  const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+    expectedRevision: 0,
+    config: {
+      timeZone: 'America/Toronto',
+      revision: 0,
+      days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+      rooms: [{ id: 'main', name: { en: longRoom, fr: longRoom } }],
+    },
+  });
+  const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: configured.revision,
+    entry: {
+      id: 'overflow-session',
+      kind: 'proposal',
+      proposalId: 'overflow-session',
+      date: '2026-11-14',
+      startsAt: '09:00',
+      durationMinutes: 40,
+      roomId: 'main',
+    },
+  });
+  const shared = await callJson(admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: scheduled.revision,
+  });
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  const expectNoPageOverflow = async () => {
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBe(0);
+  };
+  const expectContained = async (locator: Locator) => {
+    await expect(locator).toBeVisible();
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+    expect(
+      await locator.evaluate((node) => node.scrollWidth <= node.clientWidth + 1),
+    ).toBe(true);
+  };
+
+  await signInAs(page, SPEAKER, at());
+  const speakerSchedule = page.getByRole('complementary', { name: 'Your working schedule' });
+  await expect(speakerSchedule).toContainText(longRoom);
+  const speakerNotice = speakerSchedule.locator(':scope > p');
+  await speakerNotice.evaluate((node, text) => {
+    node.textContent = text;
+  }, longNotice);
+  await expectContained(speakerSchedule);
+  await expectContained(speakerNotice);
+  await expectNoPageOverflow();
+
+  await signInAs(page, REVIEWER, at('/schedule/overflow-session'));
+  const committeeDetail = page.getByRole('article');
+  const committeeNotice = committeeDetail.getByRole('status');
+  await committeeNotice.locator('span').last().evaluate((node, text) => {
+    node.textContent = text;
+  }, longNotice);
+  await expectContained(committeeDetail);
+  await expectContained(committeeDetail.getByRole('heading', { name: longTitle }));
+  await expectContained(committeeDetail.getByText(longAbstract, { exact: true }));
+  await expectContained(committeeDetail.getByText(longBio, { exact: true }));
+  await expectContained(committeeNotice);
+  await expectNoPageOverflow();
+
+  await callJson(admin.idToken, 'publishSchedule', { expectedRevision: shared.revision });
+  await page.goto(at('/schedule'));
+  const agendaLink = page.getByRole('link', { name: longTitle });
+  await expectContained(agendaLink.locator('..'));
+  await expectNoPageOverflow();
+  await agendaLink.click();
+
+  const publicDetail = page.getByRole('article');
+  await expect(publicDetail.getByRole('button', { name: 'Add session to calendar' })).toBeVisible();
+  await expectContained(publicDetail);
+  await expectContained(publicDetail.getByRole('heading', { name: longTitle }));
+  await expectContained(publicDetail.getByText(longAbstract, { exact: true }));
+  await expectContained(publicDetail.getByText(longBio, { exact: true }));
+  await expectNoPageOverflow();
 });
