@@ -1,11 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link } from '../components/Link';
 import { sessionDocumentTitle } from '../components/AppNavigation';
 import { useI18n } from '../i18n/context';
 import { formatCalendarDay } from '../i18n';
-import { href } from '../lib/router';
+import { goTo, href } from '../lib/router';
 import { track } from '../lib/analytics';
+import {
+  AGENDA_RETURN_STATE,
+  DETAIL_RETURN_STATE,
+  agendaEntryLinkId,
+  agendaReturnContext,
+  historyStateWith,
+  historyStateWithout,
+  type AgendaReturnContext,
+} from '../lib/scheduleHistory';
 import {
   loadPublishedSchedule,
   loadSharedSchedule,
@@ -16,14 +25,84 @@ import { calendarDate } from '@shared/cfp';
 import type { CfpRole } from '@shared/cfp';
 import { localised } from '@shared/confirmForm';
 import { publicEntryTitle, scheduleIcs } from '@shared/calendar';
-import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
+import {
+  SCHEDULE_LANGUAGES,
+  scheduleEndTime,
+  type PublishedProposalSession,
+  type PublishedScheduleEntry,
+  type ScheduleLanguage,
+} from '@shared/schedule';
 
-type PublicLanguage = 'en' | 'fr' | 'bilingual';
+function scrollInstantly(top: number) {
+  const root = document.documentElement;
+  const previous = root.style.scrollBehavior;
+  root.style.scrollBehavior = 'auto';
+  try {
+    window.scrollTo(0, Math.max(0, top));
+  } finally {
+    root.style.scrollBehavior = previous;
+  }
+}
 
 interface AgendaFilters {
   day: string;
   room: string;
-  language: 'all' | PublicLanguage;
+  language: 'all' | ScheduleLanguage;
+}
+
+function plainLinkClick(event: React.MouseEvent<HTMLAnchorElement>): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+function openSessionFromAgenda(
+  event: React.MouseEvent<HTMLAnchorElement>,
+  cfpId: string,
+  scheduleId: string,
+  entryId: string,
+  filters: AgendaFilters,
+) {
+  if (!plainLinkClick(event)) return;
+  event.preventDefault();
+  const context: AgendaReturnContext = {
+    version: 1,
+    cfpId,
+    scheduleId,
+    entryId,
+    navigationId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    scrollY: window.scrollY,
+    viewportTop: event.currentTarget.getBoundingClientRect().top,
+    filters: { ...filters },
+  };
+  window.history.replaceState(
+    historyStateWith(AGENDA_RETURN_STATE, context),
+    '',
+    window.location.href,
+  );
+  goTo(href({ route: 'session', cfpId, entryId }), {
+    [DETAIL_RETURN_STATE]: context,
+  });
+}
+
+function humaniseTaxonomyCode(value: string): string {
+  return value
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function taxonomyLabel(
+  value: string,
+  label: PublishedProposalSession['categoryLabel'],
+  locale: 'en' | 'fr',
+): string {
+  const resolved = localised(label, locale);
+  return resolved && resolved !== value ? resolved : humaniseTaxonomyCode(value);
 }
 
 function download(name: string, contents: string, type: string) {
@@ -57,8 +136,14 @@ export function SchedulePage({
   initialBundle?: PublishedScheduleBundle | null;
 }) {
   const { t, locale } = useI18n();
+  const previewReleaseId =
+    viewerRole && sharedReleaseId && sharedReleaseId !== releaseId ? sharedReleaseId : null;
+  const visibleReleaseId = previewReleaseId ?? releaseId;
   const [bundle, setBundle] = useState<PublishedScheduleBundle | null>(initialBundle ?? null);
   const [loaded, setLoaded] = useState(initialBundle !== undefined);
+  const [settledReleaseId, setSettledReleaseId] = useState<string | null>(() =>
+    initialBundle?.schedule.id === visibleReleaseId ? visibleReleaseId : null,
+  );
   const [failed, setFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [preview, setPreview] = useState(false);
@@ -67,17 +152,16 @@ export function SchedulePage({
     room: 'all',
     language: 'all',
   }));
-  const previewReleaseId =
-    viewerRole && sharedReleaseId && sharedReleaseId !== releaseId ? sharedReleaseId : null;
-  const visibleReleaseId = previewReleaseId ?? releaseId;
   const filterStorageKey = visibleReleaseId
     ? `cfp.schedule.filters:${cfpId}:${visibleReleaseId}`
     : '';
   const [restoredFilterKey, setRestoredFilterKey] = useState('');
+  const restoredNavigation = useRef('');
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
+    setSettledReleaseId(null);
     setFailed(false);
     if (!accessReady) return;
     if (!visibleReleaseId) {
@@ -94,6 +178,7 @@ export function SchedulePage({
       setBundle(initialBundle);
       setPreview(false);
       setLoaded(true);
+      setSettledReleaseId(visibleReleaseId);
       return;
     }
 
@@ -135,7 +220,10 @@ export function SchedulePage({
         }
       })
       .finally(() => {
-        if (!cancelled) setLoaded(true);
+        if (!cancelled) {
+          setLoaded(true);
+          setSettledReleaseId(visibleReleaseId);
+        }
       });
     return () => {
       cancelled = true;
@@ -163,19 +251,26 @@ export function SchedulePage({
     } catch {
       // A blocked or malformed browser store should never block the programme.
     }
-    setFilters((current) => ({
-      day: typeof saved.day === 'string' ? saved.day : current.day,
-      room: typeof saved.room === 'string' ? saved.room : current.room,
-      language:
-        saved.language === 'all' ||
-        saved.language === 'en' ||
-        saved.language === 'fr' ||
-        saved.language === 'bilingual'
-          ? saved.language
-          : current.language,
-    }));
+    const agendaReturn = agendaReturnContext(AGENDA_RETURN_STATE);
+    const returnedFilters =
+      agendaReturn?.cfpId === cfpId && agendaReturn.scheduleId === visibleReleaseId
+        ? agendaReturn.filters
+        : null;
+    setFilters((current) =>
+      returnedFilters ?? {
+        day: typeof saved.day === 'string' ? saved.day : current.day,
+        room: typeof saved.room === 'string' ? saved.room : current.room,
+        language:
+          saved.language === 'all' ||
+          saved.language === 'en' ||
+          saved.language === 'fr' ||
+          saved.language === 'bilingual'
+            ? saved.language
+            : current.language,
+      },
+    );
     setRestoredFilterKey(filterStorageKey);
-  }, [filterStorageKey]);
+  }, [cfpId, filterStorageKey, visibleReleaseId]);
 
   useEffect(() => {
     if (!filterStorageKey || restoredFilterKey !== filterStorageKey) return;
@@ -187,10 +282,14 @@ export function SchedulePage({
   }, [filterStorageKey, filters, restoredFilterKey]);
 
   useEffect(() => {
-    if (!bundle) return;
+    if (!bundle || bundle.schedule.id !== visibleReleaseId) return;
     const languages = new Set(
       bundle.entries.flatMap((entry) =>
-        entry.kind === 'proposal' ? [entry.session.language] : [],
+        entry.kind === 'proposal'
+          ? [entry.session.language]
+          : entry.language
+            ? [entry.language]
+            : [],
       ),
     );
     setFilters((current) => ({
@@ -205,7 +304,70 @@ export function SchedulePage({
           ? current.language
           : 'all',
     }));
-  }, [bundle]);
+  }, [bundle, visibleReleaseId]);
+
+  useEffect(() => {
+    if (entryId) {
+      restoredNavigation.current = '';
+      return;
+    }
+    if (!bundle || !filterStorageKey || restoredFilterKey !== filterStorageKey) return;
+    const context = agendaReturnContext(AGENDA_RETURN_STATE);
+    if (!context || context.cfpId !== cfpId) return;
+    if (context.scheduleId !== visibleReleaseId) {
+      window.history.replaceState(
+        historyStateWithout(AGENDA_RETURN_STATE),
+        '',
+        window.location.href,
+      );
+      document.getElementById('main-content')?.focus();
+      return;
+    }
+    // The server can initially render the public release while an authenticated
+    // committee member's newer shared preview is still loading. Do not consume
+    // the return marker against that temporary bundle.
+    if (!loaded || settledReleaseId !== visibleReleaseId) return;
+    if (bundle.schedule.id !== visibleReleaseId) {
+      window.history.replaceState(
+        historyStateWithout(AGENDA_RETURN_STATE),
+        '',
+        window.location.href,
+      );
+      document.getElementById('main-content')?.focus();
+      return;
+    }
+    if (restoredNavigation.current === context.navigationId) return;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const target = document.getElementById(agendaEntryLinkId(context.entryId));
+        if (!target) {
+          restoredNavigation.current = context.navigationId;
+          scrollInstantly(context.scrollY);
+          document.getElementById('main-content')?.focus({ preventScroll: true });
+          window.history.replaceState(
+            historyStateWithout(AGENDA_RETURN_STATE),
+            '',
+            window.location.href,
+          );
+          return;
+        }
+        restoredNavigation.current = context.navigationId;
+        const top = window.scrollY + target.getBoundingClientRect().top - context.viewportTop;
+        scrollInstantly(top);
+        target.focus({ preventScroll: true });
+        window.history.replaceState(
+          historyStateWithout(AGENDA_RETURN_STATE),
+          '',
+          window.location.href,
+        );
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [bundle, cfpId, entryId, filterStorageKey, loaded, restoredFilterKey, settledReleaseId, visibleReleaseId]);
 
   useEffect(() => {
     if (!entryId) return;
@@ -276,8 +438,10 @@ function PublicAgenda({
     () => new Map(schedule.rooms.map((item, index) => [item.id, index])),
     [schedule.rooms],
   );
-  const availableLanguages = (['en', 'fr', 'bilingual'] as const).filter((value) =>
-    entries.some((entry) => entry.kind === 'proposal' && entry.session.language === value),
+  const availableLanguages = SCHEDULE_LANGUAGES.filter((value) =>
+    entries.some((entry) =>
+      entry.kind === 'proposal' ? entry.session.language === value : entry.language === value,
+    ),
   );
   const visible = useMemo(
     () =>
@@ -287,8 +451,9 @@ function PublicAgenda({
         .filter(
           (entry) =>
             language === 'all' ||
-            entry.kind === 'custom' ||
-            entry.session.language === language,
+            (entry.kind === 'custom'
+              ? entry.language === undefined || entry.language === language
+              : entry.session.language === language),
         )
         .sort(
           (a, b) =>
@@ -298,6 +463,15 @@ function PublicAgenda({
         ),
     [day, entries, language, room, roomOrder],
   );
+  const timeGroups = useMemo(() => {
+    const groups = new Map<string, PublishedScheduleEntry[]>();
+    for (const entry of visible) {
+      const group = groups.get(entry.startsAt);
+      if (group) group.push(entry);
+      else groups.set(entry.startsAt, [entry]);
+    }
+    return [...groups].map(([startsAt, groupEntries]) => ({ startsAt, entries: groupEntries }));
+  }, [visible]);
 
   const selectDay = (nextDay: string) => {
     onFilters((current) => ({ ...current, day: nextDay }));
@@ -377,7 +551,7 @@ function PublicAgenda({
 
       <div className="public-schedule__filters">
         <label>{t.schedule.room}<select value={room} onChange={(event) => { onFilters((current) => ({ ...current, room: event.target.value })); track('schedule_filtered', { cfp_id: cfpId, filter: 'room' }); }}><option value="all">{t.schedule.allRooms}</option>{schedule.rooms.map((item) => <option key={item.id} value={item.id}>{rooms.get(item.id)}</option>)}</select></label>
-        <label>{t.schedule.language}<select value={language} onChange={(event) => { onFilters((current) => ({ ...current, language: event.target.value as AgendaFilters['language'] })); track('schedule_filtered', { cfp_id: cfpId, filter: 'language' }); }}><option value="all">{t.schedule.allLanguages}</option>{availableLanguages.map((value) => <option key={value} value={value}>{t.enums.deliveryLanguage[value]}</option>)}</select></label>
+        <label>{t.schedule.language}<select value={language} onChange={(event) => { onFilters((current) => ({ ...current, language: event.target.value as AgendaFilters['language'] })); track('schedule_filtered', { cfp_id: cfpId, filter: 'language' }); }}><option value="all">{t.schedule.allLanguages}</option>{availableLanguages.map((value) => <option key={value} value={value}>{t.schedule.languageNames[value]}</option>)}</select></label>
       </div>
 
       <div
@@ -386,35 +560,123 @@ function PublicAgenda({
         aria-labelledby={`schedule-day-${Math.max(schedule.days.findIndex((item) => item.date === day), 0)}`}
       >
         {visible.length ? (
-          <ol className="agenda-list">
-          {visible.map((entry) => (
-            <li key={entry.id} className={`agenda-item${entry.kind === 'proposal' && entry.cancelled ? ' agenda-item--cancelled' : ''}`}>
-              <time dateTime={`${entry.date}T${entry.startsAt}`}>
-                {entry.startsAt}–{scheduleEndTime(entry)}
-              </time>
-              <span className="agenda-item__line" aria-hidden="true" />
-              <div className="agenda-item__body">
-                <div className="agenda-item__meta">
-                  <span>{rooms.get(entry.roomId)}</span>
-                  {entry.kind === 'proposal' && <span className={`language-chip language-chip--${entry.session.language}`}>{t.enums.deliveryLanguage[entry.session.language]}</span>}
-                  {entry.kind === 'custom' && <span>{t.schedule.types[entry.customType]}</span>}
-                </div>
-                <h3><Link to={href({ route: 'session', cfpId, entryId: entry.id })}>{publicEntryTitle(entry, locale)}</Link></h3>
-                {entry.kind === 'proposal' && <p>{entry.session.speakers.map((speaker) => speaker.name).join(', ')}</p>}
-                {entry.kind === 'proposal' && entry.cancelled && <strong className="agenda-item__cancelled">{t.schedule.cancelled}</strong>}
-              </div>
-            </li>
-          ))}
-          </ol>
+          room === 'all' ? (
+            <ol className="agenda-list agenda-list--all-rooms">
+              {timeGroups.map((group) => (
+                <li
+                  className="agenda-group"
+                  key={group.startsAt}
+                  aria-label={t.schedule.sessionsAt(group.startsAt)}
+                >
+                  <time dateTime={`${day}T${group.startsAt}`}>{group.startsAt}</time>
+                  <span className="agenda-item__line" aria-hidden="true" />
+                  <ol className="agenda-group__sessions">
+                    {group.entries.map((entry) => (
+                      <li
+                        key={entry.id}
+                        className={`agenda-item agenda-item--card agenda-item--room-${(roomOrder.get(entry.roomId) ?? 0) % 4}${entry.kind === 'proposal' && entry.cancelled ? ' agenda-item--cancelled' : ''}`}
+                      >
+                        <AgendaEntryBody
+                          cfpId={cfpId}
+                          scheduleId={schedule.id}
+                          filters={filters}
+                          entry={entry}
+                          roomName={rooms.get(entry.roomId) ?? entry.roomId}
+                          showRange
+                        />
+                      </li>
+                    ))}
+                  </ol>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <ol className="agenda-list agenda-list--one-room">
+              {visible.map((entry) => (
+                <li key={entry.id} className={`agenda-item${entry.kind === 'proposal' && entry.cancelled ? ' agenda-item--cancelled' : ''}`}>
+                  <time dateTime={`${entry.date}T${entry.startsAt}`}>
+                    {entry.startsAt}–{scheduleEndTime(entry)}
+                  </time>
+                  <span className="agenda-item__line" aria-hidden="true" />
+                  <AgendaEntryBody
+                    cfpId={cfpId}
+                    scheduleId={schedule.id}
+                    filters={filters}
+                    entry={entry}
+                    roomName={rooms.get(entry.roomId) ?? entry.roomId}
+                  />
+                </li>
+              ))}
+            </ol>
+          )
         ) : <p className="schedule-empty">{t.schedule.noMatches}</p>}
       </div>
     </div>
   );
 }
 
+function AgendaEntryBody({
+  cfpId,
+  scheduleId,
+  filters,
+  entry,
+  roomName,
+  showRange = false,
+}: {
+  cfpId: string;
+  scheduleId: string;
+  filters: AgendaFilters;
+  entry: PublishedScheduleEntry;
+  roomName: string;
+  showRange?: boolean;
+}) {
+  const { t, locale } = useI18n();
+  const speakers = entry.kind === 'proposal' ? entry.session.speakers : entry.speakers ?? [];
+  const category = entry.kind === 'proposal'
+    ? taxonomyLabel(entry.session.category, entry.session.categoryLabel, locale)
+    : t.schedule.types[entry.customType];
+  return (
+    <article className="agenda-item__body">
+      <div className="agenda-item__meta">
+        {showRange && (
+          <time className="agenda-item__range" dateTime={`${entry.date}T${entry.startsAt}`}>
+            {entry.startsAt}–{scheduleEndTime(entry)}
+          </time>
+        )}
+        <span className="agenda-item__room">{roomName}</span>
+        <span
+          className="taxonomy-chip agenda-item__category"
+          aria-label={`${entry.kind === 'proposal' ? t.proposal.category : t.schedule.itemType}: ${category}`}
+        >
+          {category}
+        </span>
+        {entry.kind === 'proposal' && <span className={`language-chip language-chip--${entry.session.language}`}>{t.schedule.languageNames[entry.session.language]}</span>}
+        {entry.kind === 'custom' && entry.language && <span className={`language-chip language-chip--${entry.language}`}>{t.schedule.languageNames[entry.language]}</span>}
+      </div>
+      <h3>
+        <Link
+          id={agendaEntryLinkId(entry.id)}
+          to={href({ route: 'session', cfpId, entryId: entry.id })}
+          onClick={(event) =>
+            openSessionFromAgenda(event, cfpId, scheduleId, entry.id, filters)
+          }
+        >
+          {publicEntryTitle(entry, locale)}
+        </Link>
+      </h3>
+      {speakers.length > 0 && <p>{speakers.map((speaker) => speaker.name).join(', ')}</p>}
+      {entry.kind === 'proposal' && entry.cancelled && <strong className="agenda-item__cancelled">{t.schedule.cancelled}</strong>}
+    </article>
+  );
+}
+
 function SessionDetail({ cfpId, cfpName, bundle, entry, preview }: { cfpId: string; cfpName: string; bundle: PublishedScheduleBundle; entry: PublishedScheduleEntry; preview: boolean }) {
   const { t, locale } = useI18n();
   const room = bundle.schedule.rooms.find((candidate) => candidate.id === entry.roomId);
+  const speakers = entry.kind === 'proposal' ? entry.session.speakers : entry.speakers ?? [];
+  const category = entry.kind === 'proposal'
+    ? taxonomyLabel(entry.session.category, entry.session.categoryLabel, locale)
+    : t.schedule.types[entry.customType];
   const oneCalendar = () => {
     track('schedule_calendar_downloaded', { cfp_id: cfpId, scope: 'session' });
     download(
@@ -423,24 +685,66 @@ function SessionDetail({ cfpId, cfpName, bundle, entry, preview }: { cfpId: stri
       'text/calendar;charset=utf-8',
     );
   };
+  const backToAgenda = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!plainLinkClick(event)) return;
+    const context = agendaReturnContext(DETAIL_RETURN_STATE);
+    if (
+      !context ||
+      context.cfpId !== cfpId ||
+      context.scheduleId !== bundle.schedule.id ||
+      context.entryId !== entry.id
+    ) {
+      return;
+    }
+    event.preventDefault();
+    window.history.back();
+  };
   return (
     <article className={`session-detail${entry.kind === 'proposal' && entry.cancelled ? ' session-detail--cancelled' : ''}`}>
-      <Link className="session-detail__back" to={href({ route: 'schedule', cfpId })}>← {t.schedule.back}</Link>
+      <Link
+        className="session-detail__back"
+        to={href({ route: 'schedule', cfpId })}
+        onClick={backToAgenda}
+      >
+        ← {t.schedule.back}
+      </Link>
       <div className="session-detail__meta">
         <time dateTime={`${entry.date}T${entry.startsAt}`}>{formatCalendarDay(calendarDate(entry.date)!, locale)} · {entry.startsAt}–{scheduleEndTime(entry)}</time>
         <span>{room ? localised(room.name, locale) : entry.roomId}</span>
-        {entry.kind === 'proposal' && <span className={`language-chip language-chip--${entry.session.language}`}>{t.enums.deliveryLanguage[entry.session.language]}</span>}
+        {entry.kind === 'custom' && (
+          <span className="taxonomy-chip" aria-label={`${t.schedule.itemType}: ${category}`}>
+            {category}
+          </span>
+        )}
+        {entry.kind === 'proposal' && <span className={`language-chip language-chip--${entry.session.language}`}>{t.schedule.languageNames[entry.session.language]}</span>}
+        {entry.kind === 'custom' && entry.language && <span className={`language-chip language-chip--${entry.language}`}>{t.schedule.languageNames[entry.language]}</span>}
       </div>
       <h2>{publicEntryTitle(entry, locale)}</h2>
+      {entry.kind === 'proposal' && (
+        <dl className="session-detail__facts" aria-label={t.schedule.sessionFacts}>
+          <div>
+            <dt>{t.proposal.category}</dt>
+            <dd>{category}</dd>
+          </div>
+          <div>
+            <dt>{t.proposal.format}</dt>
+            <dd>{taxonomyLabel(entry.session.format, entry.session.formatLabel, locale)}</dd>
+          </div>
+          <div>
+            <dt>{t.proposal.level}</dt>
+            <dd>{taxonomyLabel(entry.session.level, entry.session.levelLabel, locale)}</dd>
+          </div>
+        </dl>
+      )}
       {entry.kind === 'proposal' && entry.cancelled && <div className="session-cancelled" role="status"><strong>{t.schedule.cancelled}</strong><p>{t.schedule.cancelledHelp}</p></div>}
       <p className="session-detail__abstract">{entry.kind === 'proposal' ? entry.session.abstract : localised(entry.description, locale)}</p>
-      {entry.kind === 'proposal' && entry.session.speakers.length > 0 && (
+      {speakers.length > 0 && (
         <section className="session-speakers">
           <h3>{t.schedule.speakers}</h3>
-          {entry.session.speakers.map((speaker, index) => (
+          {speakers.map((speaker, index) => (
             <div className="session-speaker" key={`${speaker.name}-${index}`}>
               <div className="session-speaker__monogram" aria-hidden="true">{speaker.name.slice(0, 1)}</div>
-              <div><h4>{speaker.name}</h4>{(speaker.jobTitle || speaker.company) && <p>{[speaker.jobTitle, speaker.company].filter(Boolean).join(' · ')}</p>}<p>{speaker.bio}</p></div>
+              <div><h4>{speaker.name}</h4>{(speaker.jobTitle || speaker.company) && <p>{[speaker.jobTitle, speaker.company].filter(Boolean).join(' · ')}</p>}{speaker.bio && <p>{speaker.bio}</p>}</div>
             </div>
           ))}
         </section>

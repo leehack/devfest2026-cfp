@@ -900,7 +900,15 @@ export async function createCompleteDraftAs(
 }
 
 async function patch(path: string, fields: Record<string, unknown>) {
-  const mask = Object.keys(fields)
+  await patchWithMask(path, fields, Object.keys(fields));
+}
+
+async function patchWithMask(
+  path: string,
+  fields: Record<string, unknown>,
+  fieldPaths: readonly string[],
+) {
+  const mask = fieldPaths
     .map((key) => `updateMask.fieldPaths=${key}`)
     .join('&');
   await expectOk(
@@ -1021,6 +1029,64 @@ export async function readScheduleEntry(
   await expectOk(response, 'readScheduleEntry');
   const { fields } = await response.json();
   return unwrap(fields ?? {});
+}
+
+/** Rewrites one release into the shape produced before taxonomy labels were frozen. */
+export async function makeScheduleReleaseLegacyDirect(
+  releaseId: string,
+  entryIds: readonly string[],
+  cfpId = CFP_ID,
+) {
+  const releaseResponse = await fetch(
+    `${DOCS}/cfps/${cfpId}/scheduleReleases/${releaseId}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  await expectOk(releaseResponse, 'makeScheduleReleaseLegacyDirect release');
+  const releaseBody = (await releaseResponse.json()) as { fields?: Record<string, any> };
+  const release = unwrap(releaseBody.fields ?? {});
+  const entries = await Promise.all(
+    entryIds.map(async (entryId) => {
+      const stored = await readScheduleEntry(releaseId, entryId, cfpId);
+      if (!stored) throw new Error(`missing schedule entry ${entryId}`);
+      const session = { ...(stored.session ?? {}) };
+      delete session.categoryLabel;
+      delete session.formatLabel;
+      delete session.levelLabel;
+      await patch(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries/${entryId}`, {
+        session: encode(session),
+      });
+      return { id: entryId, ...stored, session };
+    }),
+  );
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stable(item)]),
+    );
+  };
+  const source = stable({
+    timeZone: release.timeZone,
+    days: release.days,
+    rooms: release.rooms,
+    entries: [...entries].sort((left, right) => left.id.localeCompare(right.id)),
+  });
+  const { createHash } = await import('node:crypto');
+  const fingerprint = createHash('sha256').update(JSON.stringify(source)).digest('hex');
+  await Promise.all([
+    patchWithMask(
+      `cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`,
+      { sourceFingerprint: { stringValue: fingerprint } },
+      ['sourceFingerprint', 'taxonomyFingerprint'],
+    ),
+    patchWithMask(
+      `cfps/${cfpId}/config/schedule`,
+      { sharedFingerprint: { stringValue: fingerprint } },
+      ['sharedFingerprint', 'sharedTaxonomyFingerprint'],
+    ),
+  ]);
 }
 
 /** Release ids, including private previews, for atomic-share assertions. */

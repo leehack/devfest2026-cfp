@@ -1549,7 +1549,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           room: displayedRoom
             ? localised(displayedRoom.name, locale)
             : displayedEntry.roomId,
-          language: t.enums.deliveryLanguage[displayedEntry.session.language],
+          language: t.schedule.languageNames[displayedEntry.session.language],
           timeZone: displayedSchedule?.timeZone ?? cfp.profile.timeZone ?? 'America/Toronto',
           public: !isSharedPlacement,
           ...(!isSharedPlacement

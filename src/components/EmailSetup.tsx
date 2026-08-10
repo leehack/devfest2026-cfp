@@ -232,7 +232,7 @@ export function EmailSetup({
           </>
         ) : (
           <>
-            <p className={verified ? 'note note--inline' : 'muted'}>
+            <p className={verified ? 'note note--inline email-domain__state' : 'muted email-domain__state'}>
               <strong>{active.name}</strong> — {t.admin.emailDomainStatus[active.status] ?? active.status}
             </p>
 

@@ -201,7 +201,7 @@ export function FieldRows({
         <fieldset key={index} className="fieldset formfield">
           <legend>{field.label.en || labels.untitled}</legend>
 
-          <div className="grid grid--2">
+          <div className="grid grid--2 grid--align-controls">
             <TextField
               label={labels.labelEn}
               required
@@ -239,7 +239,7 @@ export function FieldRows({
                 />
               </div>
 
-              <div className="grid grid--2">
+              <div className="grid grid--2 formfield__type-row">
                 <SelectField
                   label={t.admin.formType}
                   required
@@ -248,12 +248,14 @@ export function FieldRows({
                   onChange={(type) => patch(index, { type: type as FieldType })}
                   disabled={busy}
                 />
-                <Checkbox
-                  label={t.admin.formRequired}
-                  checked={field.required}
-                  onChange={(required) => patch(index, { required })}
-                  disabled={busy}
-                />
+                <div className="formfield__required-toggle">
+                  <Checkbox
+                    label={t.admin.formRequired}
+                    checked={field.required}
+                    onChange={(required) => patch(index, { required })}
+                    disabled={busy}
+                  />
+                </div>
               </div>
             </>
           )}

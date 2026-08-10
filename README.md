@@ -354,10 +354,14 @@ window and organisers are managed from `/admin`. An approved creator's
 ## Schedule
 
 The Schedule tab in `/admin` is a private planning board. Set the event time
-zone, day hours and rooms, then drag accepted or confirmed talks into 15-minute
-slots. A form behind every card provides the keyboard/touch fallback and edits
-the exact start, duration, room and resolved language. Custom programme items
-cover breaks, meals, opening/closing remarks, keynotes and social events.
+zone and day hours, then add, order, rename or remove unused rooms and tracks.
+Drag accepted or confirmed talks to a 5-minute placement guide and resize them
+in 5-minute steps. A form behind every card provides the keyboard/touch fallback
+and edits the start, duration, room and resolved language. Planner cards keep the
+title, speakers, category, format, level, language and confirmation state visible.
+Custom programme items cover breaks, meals, opening/closing remarks, keynotes and
+social events, with optional language, description and attendee-facing speaker
+names, roles, organisations and bios.
 
 Draft writes are admin-only callables with an optimistic `revision`; a stale tab
 must reload instead of overwriting another organiser. The server rejects room,
@@ -373,7 +377,10 @@ role-filtered callable and can never list the private release or draft directly.
 **Publish** then promotes that exact, still-current release by moving
 `publishedScheduleId`. Anonymous readers can read only that public pointer. If
 the draft or a scheduled proposal changes, it must be shared again before it can
-be published.
+be published. The release freezes proposal taxonomy labels and public-safe
+speaker details, so the public agenda can show category, language and speakers
+while each detail page retains format, level, abstract or description, and full
+speaker introductions.
 
 The CFP submission window is a separate control. A rolling event may publish a
 programme while submissions remain open, but the publish review calls that out

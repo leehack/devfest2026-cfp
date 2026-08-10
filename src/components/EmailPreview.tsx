@@ -145,7 +145,7 @@ export function EmailPreview({
 
   return (
     <div className="email-editor">
-      <div className="grid grid--3">
+      <div className="grid grid--2">
         <SelectField
           label={t.admin.emailKind}
           required
@@ -165,7 +165,7 @@ export function EmailPreview({
         />
       </div>
 
-      <div className="row row--wrap">
+      <div className="row row--wrap email-preview__toggles">
         {/* Only an acceptance has a conditional paragraph, so only it gets a toggle. */}
         {kind === 'accepted' && (
           <Checkbox label={t.admin.emailPreviewVisa} checked={needsVisa} onChange={setNeedsVisa} />

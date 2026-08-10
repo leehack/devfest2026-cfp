@@ -1,11 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type CSSProperties,
+  type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 
 import { SelectField, TextAreaField, TextField } from '../../components/fields';
@@ -15,17 +18,29 @@ import { formatCalendarDay, formatDate } from '../../i18n';
 import { calendarDate } from '@shared/cfp';
 import { cfpState } from '@shared/cfpWindow';
 import { localised } from '@shared/confirmForm';
+import { labelOf, type SubmissionForm } from '@shared/submissionForm';
 import {
   CUSTOM_SCHEDULE_TYPES,
+  SCHEDULE_LANGUAGES,
+  SCHEDULE_LIMITS,
+  nextScheduleRoomId,
+  scheduleDurationBounds,
+  scheduleEndTime,
   scheduleConflicts,
+  scheduleRoomIdsInUse,
+  snapScheduleDuration,
   suggestedDuration,
+  resolvedScheduleLanguage,
   type CustomScheduleType,
   type ScheduleConfig,
   type ScheduleEntry,
+  type ScheduleLanguage,
   type ScheduleRoom,
+  type PublicScheduleSpeaker,
 } from '@shared/schedule';
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
+import { loadSubmissionForm } from '../../lib/proposals';
 import {
   loadPublishedSchedule,
   loadScheduleDraft,
@@ -48,9 +63,24 @@ import { downloadScheduleCsv } from './scheduleExport';
 import type { Cfp } from '@shared/types';
 
 const SLOT_MINUTES = 15;
-const SLOT_HEIGHT = 30;
+const SLOT_HEIGHT = 24;
+const PIXELS_PER_MINUTE = SLOT_HEIGHT / SLOT_MINUTES;
 
 type DragPayload = { kind: 'proposal'; proposalId: string } | { kind: 'entry'; entryId: string };
+
+interface DropTarget {
+  roomId: string;
+  startsAt: string;
+}
+
+interface ResizeGesture {
+  entryId: string;
+  pointerId: number;
+  axis: 'horizontal' | 'vertical';
+  startPosition: number;
+  initialDuration: number;
+  durationMinutes: number;
+}
 
 function datesBetween(start: string, end: string): string[] {
   const first = calendarDate(start);
@@ -85,6 +115,28 @@ const timeOf = (value: number) =>
 
 function proposalName(row: ProposalRow): string {
   return (row.speakerSnapshot ?? []).map((speaker) => speaker.name).filter(Boolean).join(', ');
+}
+
+function customSpeakerNames(entry: Extract<ScheduleEntry, { kind: 'custom' }>): string {
+  return (entry.speakers ?? []).map((speaker) => speaker.name).filter(Boolean).join(', ');
+}
+
+function scheduledProposalLanguage(
+  proposal: ProposalRow,
+  entry?: Extract<ScheduleEntry, { kind: 'proposal' }>,
+) {
+  return resolvedScheduleLanguage(proposal.deliveryLanguage, entry?.assignedLanguage);
+}
+
+function optionLabel(
+  options: SubmissionForm['category'] | undefined,
+  value: string,
+  locale: 'en' | 'fr',
+): string {
+  const label = labelOf(options, value, locale);
+  return label === value
+    ? value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+    : label;
 }
 
 function roomName(room: ScheduleRoom, locale: 'en' | 'fr'): string {
@@ -177,6 +229,7 @@ export function Schedule({
   const [workingConfig, setWorkingConfig] = useState<ScheduleConfig | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
+  const [submissionForm, setSubmissionForm] = useState<SubmissionForm | null>(null);
   const [cfp, setCfp] = useState<Cfp | null>(null);
   const [sharedPreview, setSharedPreview] = useState<SharedScheduleBundle | null>(null);
   const [publicProgramme, setPublicProgramme] =
@@ -189,20 +242,24 @@ export function Schedule({
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [dragging, setDragging] = useState<DragPayload | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [pendingRoomFocus, setPendingRoomFocus] = useState('');
   const [reviewingShare, setReviewingShare] = useState(false);
   const [reviewingPublish, setReviewingPublish] = useState(false);
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
+  const setupRef = useRef<HTMLDetailsElement>(null);
 
   const refresh = useCallback(async () => {
     const request = ++generation.current;
     setError('');
     try {
-      const [nextCfp, draft, proposalRows, nextShared] = await Promise.all([
+      const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
         loadCfp(cfpId),
         loadScheduleDraft(cfpId),
         loadAllProposals(cfpId),
         loadSharedSchedule(cfpId),
+        loadSubmissionForm(cfpId),
       ]);
       if (request !== generation.current) return;
       const nextPublic = nextCfp?.publishedScheduleId
@@ -214,8 +271,10 @@ export function Schedule({
       setSharedPreview(nextShared);
       setPublicProgramme(nextPublic);
       setConfig(draft.config);
+      setSetupOpen((current) => current || !draft.config);
       setWorkingConfig(next);
       setEntries(draft.entries);
+      setSubmissionForm(nextSubmissionForm);
       setProposals(
         proposalRows.filter((proposal) => ['accepted', 'confirmed'].includes(proposal.status)),
       );
@@ -241,15 +300,46 @@ export function Schedule({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfpId]);
 
+  useEffect(() => {
+    if (!setupOpen || !pendingRoomFocus) return;
+    const row = setupRef.current?.querySelector<HTMLElement>(
+      `[data-room-id="${pendingRoomFocus}"]`,
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: 'nearest' });
+    row.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
+    setPendingRoomFocus('');
+  }, [pendingRoomFocus, setupOpen, workingConfig]);
+
   const byId = useMemo(() => new Map(proposals.map((proposal) => [proposal.id, proposal])), [proposals]);
+  const categoryLabel = (proposal: ProposalRow) =>
+    optionLabel(submissionForm?.category, proposal.category, locale);
+  const formatLabel = (proposal: ProposalRow) =>
+    optionLabel(submissionForm?.format, proposal.format, locale);
+  const levelLabel = (proposal: ProposalRow) =>
+    optionLabel(submissionForm?.level, proposal.level, locale);
+  const deliveryLanguageLabel = (proposal: ProposalRow) =>
+    optionLabel(submissionForm?.deliveryLanguage, proposal.deliveryLanguage, locale);
   const scheduledProposalIds = useMemo(
     () => new Set(entries.flatMap((entry) => (entry.kind === 'proposal' ? [entry.proposalId] : []))),
     [entries],
   );
   const unscheduled = proposals.filter(
-    (proposal) =>
-      !scheduledProposalIds.has(proposal.id) &&
-      `${proposal.title} ${proposalName(proposal)}`.toLowerCase().includes(search.toLowerCase()),
+    (proposal) => {
+      const searchText = [
+        proposal.title,
+        proposalName(proposal),
+        proposal.category,
+        proposal.format,
+        proposal.level,
+        proposal.deliveryLanguage,
+        categoryLabel(proposal),
+        formatLabel(proposal),
+        levelLabel(proposal),
+        deliveryLanguageLabel(proposal),
+      ].join(' ').toLowerCase();
+      return !scheduledProposalIds.has(proposal.id) && searchText.includes(search.toLowerCase());
+    },
   );
   const speakerMap = useMemo(
     () => new Map(proposals.map((proposal) => [proposal.id, proposal.speakerIds ?? []])),
@@ -264,6 +354,7 @@ export function Schedule({
       entry.kind === 'custom' || byId.get(entry.proposalId)?.status === 'confirmed',
   );
   const shareConflicts = scheduleConflicts(shareableEntries, speakerMap);
+  const roomIdsInUse = useMemo(() => scheduleRoomIdsInUse(entries), [entries]);
   const setupDirty = Boolean(
     config &&
       JSON.stringify({ timeZone: config.timeZone, days: config.days, rooms: config.rooms }) !==
@@ -304,7 +395,7 @@ export function Schedule({
   const canShare = Boolean(
     !archived &&
       !setupDirty &&
-      config?.needsAttention &&
+      (config?.needsAttention || sharedPreview?.stale) &&
       shareReady &&
       (!hasSharedPreview || sharedStale),
   );
@@ -342,8 +433,8 @@ export function Schedule({
     }
   }
 
-  async function saveEntry(entry: ScheduleEntry) {
-    if (!config || archived) return;
+  async function saveEntry(entry: ScheduleEntry): Promise<boolean> {
+    if (!config || archived) return false;
     setBusy(true);
     setError('');
     setNote('');
@@ -359,8 +450,10 @@ export function Schedule({
         current ? { ...current, revision: data.revision, needsAttention: true } : current,
       );
       setEditing(null);
+      return true;
     } catch (caught) {
       setError(scheduleError(caught, t));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -518,6 +611,29 @@ export function Schedule({
   const sharedAt = toDate(sharedPreview?.schedule?.sharedAt);
   const publishedAt = toDate(publicProgramme?.schedule.publishedAt);
   const controlsBusy = busy || archived;
+  const activeConfig = workingConfig;
+
+  function addRoom() {
+    if (controlsBusy || activeConfig.rooms.length >= SCHEDULE_LIMITS.rooms) return;
+    const roomId = nextScheduleRoomId(activeConfig.rooms);
+    setWorkingConfig({
+      ...activeConfig,
+      rooms: [
+        ...activeConfig.rooms,
+        { id: roomId, name: { en: '', fr: '' } },
+      ],
+    });
+    setSetupOpen(true);
+    setPendingRoomFocus(roomId);
+  }
+
+  function moveRoom(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (controlsBusy || target < 0 || target >= activeConfig.rooms.length) return;
+    const rooms = [...activeConfig.rooms];
+    [rooms[index], rooms[target]] = [rooms[target], rooms[index]];
+    setWorkingConfig({ ...activeConfig, rooms });
+  }
 
   return (
     <div className="schedule-admin">
@@ -532,7 +648,17 @@ export function Schedule({
             <button
               type="button"
               className="btn btn--ghost"
-              onClick={() => downloadScheduleCsv(cfpId, config, entries, byId, locale)}
+              onClick={() =>
+                downloadScheduleCsv(
+                  cfpId,
+                  config,
+                  entries,
+                  byId,
+                  locale,
+                  submissionForm,
+                  t.schedule.languageNames,
+                )
+              }
             >
               {t.schedule.csv}
             </button>
@@ -721,7 +847,27 @@ export function Schedule({
         {sharedStale && <span className="schedule-metric--accent">{t.schedule.unpublished}</span>}
       </div>
 
-      <details className="section schedule-setup" open={!config}>
+      <div className="schedule-setup-quick">
+        <div>
+          <strong>{t.schedule.roomCount(workingConfig.rooms.length)}</strong>
+          <span>{t.schedule.configureHelp}</span>
+        </div>
+        <button
+          type="button"
+          className="btn btn--ghost btn--compact"
+          disabled={controlsBusy || workingConfig.rooms.length >= SCHEDULE_LIMITS.rooms}
+          onClick={addRoom}
+        >
+          {t.schedule.addRoom}
+        </button>
+      </div>
+
+      <details
+        ref={setupRef}
+        className="section schedule-setup"
+        open={setupOpen}
+        onToggle={(event) => setSetupOpen(event.currentTarget.open)}
+      >
         <summary>
           <strong>{t.schedule.configure}</strong>
           <span>{t.schedule.configureHelp}</span>
@@ -830,26 +976,23 @@ export function Schedule({
           </div>
           <div className="schedule-setup__heading">
             <h3>{t.schedule.rooms}</h3>
-            <button
-              type="button"
-              className="btn btn--ghost btn--compact"
-              disabled={controlsBusy || workingConfig.rooms.length >= 20}
-              onClick={() =>
-                setWorkingConfig({
-                  ...workingConfig,
-                  rooms: [
-                    ...workingConfig.rooms,
-                    { id: `room-${workingConfig.rooms.length + 1}`, name: { en: '', fr: '' } },
-                  ],
-                })
-              }
-            >
-              {t.schedule.addRoom}
-            </button>
+            <span>{t.schedule.roomCount(workingConfig.rooms.length)}</span>
           </div>
           <div className="schedule-config-rows">
-            {workingConfig.rooms.map((room, index) => (
-              <div className="schedule-config-row" key={room.id}>
+            {workingConfig.rooms.map((room, index) => {
+              const displayName = roomName(room, locale) || t.schedule.roomNumber(index + 1);
+              const inUse = roomIdsInUse.has(room.id);
+              const removalReason = inUse
+                ? t.schedule.roomHasItems
+                : workingConfig.rooms.length === 1
+                  ? t.schedule.oneRoomRequired
+                  : undefined;
+              return (
+              <div
+                className="schedule-config-row schedule-config-row--room"
+                key={room.id}
+                data-room-id={room.id}
+              >
                 <TextField
                   label={t.schedule.roomNameEn}
                   value={room.name.en}
@@ -877,11 +1020,37 @@ export function Schedule({
                   }
                   disabled={controlsBusy}
                 />
-                {workingConfig.rooms.length > 1 && (
+                <div
+                  className="schedule-room-actions"
+                  role="group"
+                  aria-label={t.schedule.roomOrder(displayName)}
+                >
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--compact schedule-room-order"
+                    aria-label={t.schedule.moveRoomUp(displayName)}
+                    title={t.schedule.moveRoomUp(displayName)}
+                    disabled={controlsBusy || index === 0}
+                    onClick={() => moveRoom(index, -1)}
+                  >
+                    <span aria-hidden="true">&#8593;</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--compact schedule-room-order"
+                    aria-label={t.schedule.moveRoomDown(displayName)}
+                    title={t.schedule.moveRoomDown(displayName)}
+                    disabled={controlsBusy || index === workingConfig.rooms.length - 1}
+                    onClick={() => moveRoom(index, 1)}
+                  >
+                    <span aria-hidden="true">&#8595;</span>
+                  </button>
                   <button
                     type="button"
                     className="btn btn--danger btn--compact"
-                    disabled={controlsBusy}
+                    disabled={controlsBusy || Boolean(removalReason)}
+                    title={removalReason}
+                    aria-describedby={removalReason ? `schedule-room-status-${room.id}` : undefined}
                     onClick={() =>
                       setWorkingConfig({
                         ...workingConfig,
@@ -891,9 +1060,15 @@ export function Schedule({
                   >
                     {t.schedule.removeRoom}
                   </button>
+                </div>
+                {removalReason && (
+                  <small id={`schedule-room-status-${room.id}`} className="schedule-room-status">
+                    {removalReason}
+                  </small>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
           <button type="button" className="btn btn--primary" disabled={controlsBusy} onClick={() => void saveConfig()}>
             {t.schedule.saveSetup}
@@ -913,27 +1088,37 @@ export function Schedule({
                 {t.schedule.custom}
               </button>
             </div>
-            <TextField label={t.schedule.search} value={search} onChange={setSearch} />
+            <TextField
+              label={t.schedule.search}
+              help={t.schedule.searchHelp}
+              value={search}
+              onChange={setSearch}
+            />
             {unscheduled.length ? (
               <ul className="schedule-pool__list">
                 {unscheduled.map((proposal) => (
                   <li
                     key={proposal.id}
-                    className="schedule-pool-card"
+                    className={`schedule-pool-card${dragging?.kind === 'proposal' && dragging.proposalId === proposal.id ? ' schedule-pool-card--dragging' : ''}`}
                     draggable={!archived}
                     onDragStart={(event) => {
                       const payload: DragPayload = { kind: 'proposal', proposalId: proposal.id };
                       setDragging(payload);
                       event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', proposal.title);
                     }}
+                    onDragEnd={() => setDragging(null)}
                   >
                     <span className={`status-dot status-dot--${proposal.status}`} aria-hidden="true" />
                     <div>
                       <strong>{proposal.title}</strong>
                       <span>{proposalName(proposal)}</span>
-                      <small>
-                        {proposal.format} · {proposal.deliveryLanguage} ·{' '}
-                        {proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative}
+                      <small className="schedule-pool-card__facts">
+                        <span>{categoryLabel(proposal)}</span>
+                        <span>{formatLabel(proposal)}</span>
+                        <span>{levelLabel(proposal)}</span>
+                        <span>{deliveryLanguageLabel(proposal)}</span>
+                        <span>{proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative}</span>
                       </small>
                     </div>
                     <button type="button" className="btn btn--ghost btn--compact" disabled={controlsBusy} onClick={() => startProposal(proposal)}>
@@ -949,34 +1134,59 @@ export function Schedule({
 
           <section className="schedule-board" aria-label={t.schedule.adminTitle}>
             <div className="schedule-day-tabs" role="tablist" aria-label={t.schedule.days}>
-              {config.days.map((day) => (
+              {config.days.map((day, index) => (
                 <button
+                  id={`schedule-admin-day-${index}`}
                   key={day.date}
                   type="button"
                   role="tab"
                   aria-selected={selectedDay === day.date}
+                  aria-controls="schedule-admin-grid"
+                  tabIndex={selectedDay === day.date ? 0 : -1}
                   className={selectedDay === day.date ? 'schedule-day-tab schedule-day-tab--active' : 'schedule-day-tab'}
                   onClick={() => setSelectedDay(day.date)}
+                  onKeyDown={(event) => {
+                    let next = index;
+                    if (event.key === 'ArrowRight') next = (index + 1) % config.days.length;
+                    else if (event.key === 'ArrowLeft') next = (index - 1 + config.days.length) % config.days.length;
+                    else if (event.key === 'Home') next = 0;
+                    else if (event.key === 'End') next = config.days.length - 1;
+                    else return;
+                    event.preventDefault();
+                    const nextDay = config.days[next];
+                    if (!nextDay) return;
+                    setSelectedDay(nextDay.date);
+                    requestAnimationFrame(() => document.getElementById(`schedule-admin-day-${next}`)?.focus());
+                  }}
                 >
                   {formatCalendarDay(calendarDate(day.date)!, locale)}
                 </button>
               ))}
             </div>
             <p className="schedule-board__hint">{t.schedule.dragHint}</p>
-            <TimeGrid
-              config={config}
-              date={selectedDay}
-              entries={entries}
-              proposals={byId}
-              locale={locale}
-              busy={controlsBusy}
-              onEdit={editEntry}
-              onDrag={(payload) => setDragging(payload)}
-              onDrop={dropped}
-              onEmpty={startCustom}
-              emptySlot={t.schedule.emptySlot}
-              moveLabel={t.schedule.move}
-            />
+            <div
+              id="schedule-admin-grid"
+              role="tabpanel"
+              aria-labelledby={`schedule-admin-day-${Math.max(config.days.findIndex((day) => day.date === selectedDay), 0)}`}
+            >
+              <TimeGrid
+                config={config}
+                date={selectedDay}
+                entries={entries}
+                proposals={byId}
+                submissionForm={submissionForm}
+                locale={locale}
+                busy={controlsBusy}
+                dragging={dragging}
+                onEdit={editEntry}
+                onDrag={setDragging}
+                onDrop={dropped}
+                onResize={saveEntry}
+                onEmpty={startCustom}
+                emptySlot={t.schedule.emptySlot}
+                moveLabel={t.schedule.move}
+              />
+            </div>
           </section>
         </div>
       ) : (
@@ -994,6 +1204,7 @@ export function Schedule({
           entry={editing}
           config={config}
           proposal={editing.kind === 'proposal' ? byId.get(editing.proposalId) : undefined}
+          submissionForm={submissionForm}
           busy={busy}
           error={error}
           onChange={setEditing}
@@ -1050,11 +1261,14 @@ function TimeGrid({
   date,
   entries,
   proposals,
+  submissionForm,
   locale,
   busy,
+  dragging,
   onEdit,
   onDrag,
   onDrop,
+  onResize,
   onEmpty,
   emptySlot,
   moveLabel,
@@ -1063,31 +1277,491 @@ function TimeGrid({
   date: string;
   entries: ScheduleEntry[];
   proposals: Map<string, ProposalRow>;
+  submissionForm: SubmissionForm | null;
   locale: 'en' | 'fr';
   busy: boolean;
+  dragging: DragPayload | null;
   onEdit: (entry: ScheduleEntry) => void;
-  onDrag: (payload: DragPayload) => void;
+  onDrag: (payload: DragPayload | null) => void;
   onDrop: (roomId: string, startsAt: string) => void;
+  onResize: (entry: ScheduleEntry) => Promise<boolean>;
   onEmpty: (date?: string, roomId?: string, startsAt?: string) => void;
   emptySlot: (time: string, room: string) => string;
   moveLabel: string;
 }) {
+  const { t } = useI18n();
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const [announcementInvalid, setAnnouncementInvalid] = useState(false);
+  const [resizing, setResizing] = useState<ResizeGesture | null>(null);
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const [interactive, setInteractive] = useState(false);
+  const resizePickerId = useId();
+  const resizingRef = useRef<ResizeGesture | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!dragging) setDropTarget(null);
+  }, [dragging]);
+
+  useEffect(() => setInteractive(true), []);
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
+
   const day = config.days.find((candidate) => candidate.date === date) ?? config.days[0];
   if (!day) return null;
-  const slots = Array.from(
-    { length: Math.ceil((minutes(day.endsAt) - minutes(day.startsAt)) / SLOT_MINUTES) },
-    (_, index) => timeOf(minutes(day.startsAt) + index * SLOT_MINUTES),
+  const dayStart = minutes(day.startsAt);
+  const dayEnd = minutes(day.endsAt);
+  const trackHeight = (dayEnd - dayStart) * PIXELS_PER_MINUTE;
+  const lineMinutes = [dayStart];
+  for (
+    let value = Math.ceil((dayStart + 1) / SLOT_MINUTES) * SLOT_MINUTES;
+    value < dayEnd;
+    value += SLOT_MINUTES
+  ) {
+    lineMinutes.push(value);
+  }
+  const speakersByProposal = new Map(
+    [...proposals.values()].map((proposal) => [proposal.id, proposal.speakerIds ?? []]),
   );
+  const dayEntries = entries
+    .filter((entry) => entry.date === date)
+    .sort((left, right) =>
+      left.startsAt.localeCompare(right.startsAt) || left.roomId.localeCompare(right.roomId),
+    );
+  const selectedEntry = dayEntries.find((entry) => entry.id === selectedEntryId) ?? dayEntries[0] ?? null;
+
+  function factsFor(entry: ScheduleEntry) {
+    if (entry.kind === 'custom') {
+      const speaker = customSpeakerNames(entry);
+      return {
+        speaker,
+        category: t.schedule.types[entry.customType],
+        categoryLabel: t.schedule.itemType,
+        language: entry.language
+          ? t.schedule.languageNames[entry.language]
+          : t.schedule.languageNeutral,
+        status: '',
+        format: '',
+        level: '',
+      };
+    }
+    const proposal = proposals.get(entry.proposalId);
+    if (!proposal) {
+      return {
+        speaker: '',
+        category: '',
+        categoryLabel: t.proposal.category,
+        language: t.schedule.languageNeeded,
+        status: '',
+        format: '',
+        level: '',
+      };
+    }
+    const language = scheduledProposalLanguage(proposal, entry);
+    return {
+      speaker: proposalName(proposal),
+      category: optionLabel(submissionForm?.category, proposal.category, locale),
+      categoryLabel: t.proposal.category,
+      language: language ? t.schedule.languageNames[language] : t.schedule.languageNeeded,
+      status: proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative,
+      format: optionLabel(submissionForm?.format, proposal.format, locale),
+      level: optionLabel(submissionForm?.level, proposal.level, locale),
+    };
+  }
+
+  function factDescription(entry: ScheduleEntry): string {
+    const facts = factsFor(entry);
+    return [
+      facts.speaker ? `${t.schedule.speakers}: ${facts.speaker}` : '',
+      facts.category ? `${facts.categoryLabel}: ${facts.category}` : '',
+      `${t.schedule.language}: ${facts.language}`,
+      facts.format ? `${t.proposal.format}: ${facts.format}` : '',
+      facts.level ? `${t.proposal.level}: ${facts.level}` : '',
+      facts.status ? `${t.schedule.confirmationStatus}: ${facts.status}` : '',
+    ].filter(Boolean).join('. ');
+  }
+
+  const lineKind = (value: number) =>
+    value % 60 === 0 ? 'hour' : value % 30 === 0 ? 'half' : 'quarter';
+
+  function announce(message: string, invalid = false) {
+    setAnnouncement(message);
+    setAnnouncementInvalid(invalid);
+  }
+
+  function targetFromPointer(event: DragEvent<HTMLElement>, roomId: string): DropTarget {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offset = Math.min(trackHeight, Math.max(0, event.clientY - rect.top));
+    const rawMinutes = dayStart + offset / PIXELS_PER_MINUTE;
+    const latestStart = Math.max(dayStart, dayEnd - SCHEDULE_LIMITS.durationStep);
+    const snappedMinutes = Math.min(latestStart, Math.max(
+      dayStart,
+      Math.round(rawMinutes / SCHEDULE_LIMITS.durationStep) * SCHEDULE_LIMITS.durationStep,
+    ));
+    return { roomId, startsAt: timeOf(snappedMinutes) };
+  }
+
+  function dropPreviewFor(target: DropTarget | null) {
+    if (!target || !dragging) return null;
+    let candidate: ScheduleEntry | null = null;
+    let title = '';
+    if (dragging.kind === 'entry') {
+      const entry = entries.find((item) => item.id === dragging.entryId);
+      if (entry) {
+        candidate = { ...entry, date, roomId: target.roomId, startsAt: target.startsAt };
+        title = entryTitle(entry, proposals, locale);
+      }
+    } else {
+      const proposal = proposals.get(dragging.proposalId);
+      if (proposal) {
+        candidate = {
+          id: `drag-${proposal.id}`,
+          kind: 'proposal',
+          proposalId: proposal.id,
+          date,
+          roomId: target.roomId,
+          startsAt: target.startsAt,
+          durationMinutes: suggestedDuration(proposal.format),
+        };
+        title = proposal.title;
+      }
+    }
+    if (!candidate) return null;
+    const range = `${candidate.startsAt}–${scheduleEndTime(candidate)}`;
+    const room = config.rooms.find((item) => item.id === target.roomId);
+    const roomLabel = room ? roomName(room, locale) : target.roomId;
+    const pastEnd = minutes(candidate.startsAt) + candidate.durationMinutes > dayEnd;
+    const candidateEntries = [
+      ...entries.filter((entry) => entry.id !== candidate?.id),
+      candidate,
+    ];
+    const conflict = scheduleConflicts(candidateEntries, speakersByProposal).some((item) =>
+      item.entryIds.includes(candidate.id),
+    );
+    const invalidReason = pastEnd
+      ? t.schedule.dragOutsideDay
+      : conflict
+        ? t.schedule.dragConflict
+        : '';
+    return {
+      candidate,
+      title,
+      range,
+      roomLabel,
+      invalidReason,
+      status: `${t.schedule.dragGuide(range, roomLabel)}${invalidReason ? ` ${invalidReason}` : ''}`,
+    };
+  }
+
+  const dropPreview = dropPreviewFor(dropTarget);
+
+  function resizeConflicts(entry: ScheduleEntry): boolean {
+    const candidates = [...entries.filter((item) => item.id !== entry.id), entry];
+    return scheduleConflicts(candidates, speakersByProposal).some((item) =>
+      item.entryIds.includes(entry.id),
+    );
+  }
+
+  async function commitResize(entry: ScheduleEntry, durationMinutes: number) {
+    if (durationMinutes === entry.durationMinutes) return;
+    const candidate = { ...entry, durationMinutes };
+    const range = `${candidate.startsAt}–${scheduleEndTime(candidate)}`;
+    if (resizeConflicts(candidate)) {
+      announce(t.schedule.resizeConflict(range), true);
+      return false;
+    }
+    const saved = await onResize(candidate);
+    announce(
+      saved
+        ? t.schedule.resizeValue(range, durationMinutes)
+        : t.schedule.resizeNotSaved,
+      !saved,
+    );
+    return saved;
+  }
+
+  function beginResize(
+    entry: ScheduleEntry,
+    pointerId: number,
+    startPosition: number,
+    axis: ResizeGesture['axis'],
+  ) {
+    const gesture: ResizeGesture = {
+      entryId: entry.id,
+      pointerId,
+      axis,
+      startPosition,
+      initialDuration: entry.durationMinutes,
+      durationMinutes: entry.durationMinutes,
+    };
+    resizingRef.current = gesture;
+    setResizing(gesture);
+    return gesture;
+  }
+
+  function startPointerResize(
+    event: ReactPointerEvent<HTMLElement>,
+    entry: ScheduleEntry,
+    axis: ResizeGesture['axis'],
+  ) {
+    if (busy || !interactive) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (axis === 'horizontal') event.currentTarget.focus({ preventScroll: true });
+    setSelectedEntryId(entry.id);
+    const startPosition = axis === 'horizontal' ? event.clientX : event.clientY;
+    const gesture = beginResize(entry, event.pointerId, startPosition, axis);
+    resizeCleanupRef.current?.();
+    const move = (nextEvent: PointerEvent) => {
+      if (nextEvent.pointerId !== gesture.pointerId) return;
+      nextEvent.preventDefault();
+      moveResize(
+        gesture.axis === 'horizontal' ? nextEvent.clientX : nextEvent.clientY,
+        gesture.pointerId,
+        entry,
+      );
+    };
+    const finish = (nextEvent: PointerEvent) => {
+      if (nextEvent.pointerId !== gesture.pointerId) return;
+      resizeCleanupRef.current?.();
+      finishResize(gesture.pointerId, entry);
+    };
+    const cancel = (nextEvent: PointerEvent) => {
+      if (nextEvent.pointerId !== gesture.pointerId) return;
+      resizeCleanupRef.current?.();
+      cancelResize();
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', cancel);
+      resizeCleanupRef.current = null;
+    };
+    resizeCleanupRef.current = cleanup;
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', cancel);
+  }
+
+  function moveResize(position: number, pointerId: number, entry: ScheduleEntry) {
+    const gesture = resizingRef.current;
+    if (!gesture || gesture.pointerId !== pointerId || gesture.entryId !== entry.id) return;
+    const bounds = scheduleDurationBounds(entry.date, entry.startsAt, config);
+    if (!bounds) return;
+    const deltaMinutes = (position - gesture.startPosition) / PIXELS_PER_MINUTE;
+    const requested = gesture.initialDuration +
+      Math.round(deltaMinutes / bounds.step) * bounds.step;
+    const durationMinutes = snapScheduleDuration(requested, bounds, gesture.initialDuration);
+    const next = { ...gesture, durationMinutes };
+    resizingRef.current = next;
+    setResizing(next);
+    const range = `${entry.startsAt}–${scheduleEndTime({ ...entry, durationMinutes })}`;
+    announce(
+      requested > bounds.max || requested < bounds.min
+        ? t.schedule.resizeLimited(range)
+        : t.schedule.resizeValue(range, durationMinutes),
+    );
+  }
+
+  function finishResize(pointerId: number, entry: ScheduleEntry) {
+    const gesture = resizingRef.current;
+    if (!gesture || gesture.pointerId !== pointerId || gesture.entryId !== entry.id) return;
+    resizingRef.current = null;
+    void commitResize(entry, gesture.durationMinutes).finally(() => {
+      setResizing((current) => current?.entryId === entry.id ? null : current);
+    });
+  }
+
+  function cancelResize() {
+    resizingRef.current = null;
+    setResizing(null);
+  }
+
+  function resizeWithKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>, entry: ScheduleEntry) {
+    const resizeKey =
+      event.key === 'ArrowUp' ||
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowLeft' ||
+      event.key === 'ArrowRight' ||
+      event.key === 'PageUp' ||
+      event.key === 'PageDown' ||
+      event.key === 'Home' ||
+      event.key === 'End';
+    if (!resizeKey) return;
+    if (busy || !interactive) {
+      event.preventDefault();
+      return;
+    }
+    const bounds = scheduleDurationBounds(entry.date, entry.startsAt, config);
+    if (!bounds) return;
+    let requested: number | null = null;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') requested = entry.durationMinutes - bounds.step;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') requested = entry.durationMinutes + bounds.step;
+    if (event.key === 'PageUp') requested = entry.durationMinutes - SLOT_MINUTES;
+    if (event.key === 'PageDown') requested = entry.durationMinutes + SLOT_MINUTES;
+    if (event.key === 'Home') requested = bounds.min;
+    if (event.key === 'End') requested = bounds.max;
+    if (requested === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const durationMinutes = event.key === 'Home'
+      ? bounds.min
+      : event.key === 'End'
+        ? bounds.max
+        : snapScheduleDuration(requested, bounds, entry.durationMinutes);
+    const range = `${entry.startsAt}–${scheduleEndTime({ ...entry, durationMinutes })}`;
+    if (durationMinutes === entry.durationMinutes) {
+      announce(t.schedule.resizeLimited(range));
+      return;
+    }
+    void commitResize(entry, durationMinutes);
+  }
+
+  const selectedDuration = selectedEntry
+    ? resizing?.entryId === selectedEntry.id
+      ? resizing.durationMinutes
+      : selectedEntry.durationMinutes
+    : null;
+  const selectedTitle = selectedEntry ? entryTitle(selectedEntry, proposals, locale) : '';
+  const selectedRange = selectedEntry && selectedDuration !== null
+    ? `${selectedEntry.startsAt}–${scheduleEndTime({ ...selectedEntry, durationMinutes: selectedDuration })}`
+    : '';
+  const selectedBounds = selectedEntry
+    ? scheduleDurationBounds(selectedEntry.date, selectedEntry.startsAt, config)
+    : null;
+  const selectedFacts = selectedEntry ? factsFor(selectedEntry) : null;
+
+  function selectEntry(entryId: string, reveal = false) {
+    setSelectedEntryId(entryId);
+    if (!reveal) return;
+    window.requestAnimationFrame(() => {
+      const card = document.getElementById(`schedule-grid-entry-${entryId}`);
+      const scroller = card?.closest<HTMLElement>('.schedule-grid-scroll');
+      if (!card || !scroller) return;
+      const cardRect = card.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const stickyHeader = scroller.querySelector<HTMLElement>('.schedule-grid__room');
+      const stickyRail = scroller.querySelector<HTMLElement>('.schedule-grid__times');
+      const topEdge = scrollerRect.top + (stickyHeader?.offsetHeight ?? 0) + 8;
+      const bottomEdge = scrollerRect.bottom - 8;
+      const leftEdge = scrollerRect.left + (stickyRail?.offsetWidth ?? 0) + 8;
+      const rightEdge = scrollerRect.right - 8;
+      let top = scroller.scrollTop;
+      let left = scroller.scrollLeft;
+      if (cardRect.top < topEdge) top += cardRect.top - topEdge;
+      else if (cardRect.bottom > bottomEdge) top += cardRect.bottom - bottomEdge;
+      if (cardRect.left < leftEdge) left += cardRect.left - leftEdge;
+      else if (cardRect.right > rightEdge) left += cardRect.right - rightEdge;
+      scroller.scrollTo({ top, left, behavior: 'auto' });
+    });
+  }
+
   return (
-    <div className="schedule-grid-scroll">
-      <div className="schedule-grid" style={{ '--schedule-rooms': config.rooms.length } as CSSProperties}>
-        <div className="schedule-grid__corner" />
+    <>
+      {selectedEntry && selectedDuration !== null && selectedBounds && (
+        <section className="schedule-resize-inspector" aria-label={t.schedule.resizeSession}>
+          <label className="schedule-resize-inspector__field" htmlFor={resizePickerId}>
+            <span>{t.schedule.selectedSession}</span>
+            <select
+              id={resizePickerId}
+              className="field__input field__input--select"
+              value={selectedEntry.id}
+              disabled={busy || !interactive}
+              onChange={(event) => selectEntry(event.target.value, true)}
+            >
+              {dayEntries.map((entry) => {
+                const room = config.rooms.find((candidate) => candidate.id === entry.roomId);
+                const range = `${entry.startsAt}–${scheduleEndTime(entry)}`;
+                return (
+                  <option key={entry.id} value={entry.id}>
+                    {entryTitle(entry, proposals, locale)} · {range} · {room ? roomName(room, locale) : entry.roomId}
+                  </option>
+                );
+              })}
+            </select>
+            <span className="schedule-resize-inspector__selected-title" aria-hidden="true">
+              {selectedTitle}
+            </span>
+          </label>
+          <div className="schedule-resize-inspector__control">
+            <span>{t.schedule.duration}</span>
+            <button
+              type="button"
+              role="slider"
+              className="schedule-resize-inspector__slider"
+              aria-disabled={busy || !interactive}
+              aria-label={t.schedule.resizeLabel(selectedTitle)}
+              aria-orientation="horizontal"
+              aria-valuemin={selectedBounds.min}
+              aria-valuemax={selectedBounds.max}
+              aria-valuenow={selectedDuration}
+              aria-valuetext={t.schedule.resizeValue(selectedRange, selectedDuration)}
+              title={t.schedule.resizeHint}
+              onKeyDown={(event) => resizeWithKeyboard(event, selectedEntry)}
+              onPointerDown={(event) => startPointerResize(event, selectedEntry, 'horizontal')}
+            >
+              <span className="schedule-resize-inspector__summary">
+                <strong title={selectedTitle}>{selectedTitle}</strong>
+                <time>{selectedRange}</time>
+              </span>
+              <span className="schedule-resize-inspector__value">
+                {t.schedule.durationValue(selectedDuration)}
+              </span>
+            </button>
+            <small>{t.schedule.resizeHint}</small>
+          </div>
+          <div className="schedule-resize-inspector__action">
+            <span>{t.schedule.sessionActions}</span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--compact"
+              disabled={busy || !interactive}
+              onClick={() => onEdit(selectedEntry)}
+            >
+              {t.schedule.editSelected}
+            </button>
+          </div>
+          {selectedFacts && (
+            <dl className="schedule-resize-inspector__facts" aria-label={t.schedule.sessionFacts}>
+              {selectedFacts.speaker && (
+                <div><dt>{t.schedule.speakers}</dt><dd>{selectedFacts.speaker}</dd></div>
+              )}
+              {selectedFacts.category && (
+                <div><dt>{selectedFacts.categoryLabel}</dt><dd>{selectedFacts.category}</dd></div>
+              )}
+              <div><dt>{t.schedule.language}</dt><dd>{selectedFacts.language}</dd></div>
+              {selectedFacts.format && (
+                <div><dt>{t.proposal.format}</dt><dd>{selectedFacts.format}</dd></div>
+              )}
+              {selectedFacts.level && (
+                <div><dt>{t.proposal.level}</dt><dd>{selectedFacts.level}</dd></div>
+              )}
+              {selectedFacts.status && (
+                <div><dt>{t.schedule.confirmationStatus}</dt><dd>{selectedFacts.status}</dd></div>
+              )}
+            </dl>
+          )}
+        </section>
+      )}
+      <p className={`schedule-board__status${dropPreview || announcement ? '' : ' schedule-board__status--idle'}${dropPreview?.invalidReason || (!dropPreview && announcementInvalid) ? ' schedule-board__status--invalid' : ''}`} role="status" aria-live="polite">
+        {dropPreview?.status ?? announcement}
+      </p>
+      <div className="schedule-grid-scroll">
+        <div className="schedule-grid" style={{ '--schedule-rooms': config.rooms.length } as CSSProperties}>
+        <div className="schedule-grid__corner"><span>{t.schedule.time}</span></div>
         {config.rooms.map((room) => (
           <div className="schedule-grid__room" key={room.id}>{roomName(room, locale)}</div>
         ))}
-        <div className="schedule-grid__times" style={{ height: slots.length * SLOT_HEIGHT }}>
-          {slots.map((slot, index) => index % 2 === 0 && (
-            <time key={slot} style={{ top: index * SLOT_HEIGHT }}>{slot}</time>
+        <div className="schedule-grid__times" style={{ height: trackHeight }}>
+          {lineMinutes.map((value) => (value === dayStart || value % 30 === 0) && (
+            <time
+              key={value}
+              className={`schedule-grid__time schedule-grid__time--${lineKind(value)}`}
+              dateTime={timeOf(value)}
+              style={{ top: (value - dayStart) * PIXELS_PER_MINUTE }}
+            >
+              {timeOf(value)}
+            </time>
           ))}
         </div>
         {config.rooms.map((room, roomIndex) => {
@@ -1096,58 +1770,139 @@ function TimeGrid({
             <div
               className="schedule-grid__track"
               key={room.id}
-              style={{ height: slots.length * SLOT_HEIGHT, gridColumn: roomIndex + 2 }}
+              style={{ height: trackHeight, gridColumn: roomIndex + 2 }}
+              onDragOver={(event) => {
+                if (!dragging) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                const target = targetFromPointer(event, room.id);
+                setDropTarget((current) =>
+                  current?.roomId === target.roomId && current.startsAt === target.startsAt
+                    ? current
+                    : target,
+                );
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null);
+              }}
+              onDrop={(event) => {
+                if (!dragging) return;
+                event.preventDefault();
+                const target = targetFromPointer(event, room.id);
+                const preview = dropPreviewFor(target);
+                if (preview?.invalidReason) {
+                  setDropTarget(target);
+                  announce(preview.status, true);
+                  return;
+                }
+                announce(preview?.status ?? '');
+                setDropTarget(null);
+                onDrop(room.id, target.startsAt);
+              }}
             >
-              {slots.map((slot, index) => (
+              {lineMinutes.map((value, index) => {
+                const next = lineMinutes[index + 1] ?? dayEnd;
+                const slot = timeOf(value);
+                return (
                 <button
                   type="button"
-                  className="schedule-grid__slot"
+                  className={`schedule-grid__slot schedule-grid__slot--${lineKind(value)}`}
                   key={slot}
-                  style={{ top: index * SLOT_HEIGHT, height: SLOT_HEIGHT }}
+                  style={{
+                    top: (value - dayStart) * PIXELS_PER_MINUTE,
+                    height: (next - value) * PIXELS_PER_MINUTE,
+                  }}
                   aria-label={emptySlot(slot, roomName(room, locale))}
-                  disabled={busy}
+                  tabIndex={-1}
+                  disabled={busy || !interactive}
                   onClick={() => onEmpty(date, room.id, slot)}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    onDrop(room.id, slot);
-                  }}
                 />
-              ))}
+                );
+              })}
+              {dropPreview && dropTarget?.roomId === room.id && (
+                <div
+                  className={`schedule-drop-guide${dropPreview.invalidReason ? ' schedule-drop-guide--invalid' : ''}`}
+                  style={{
+                    top: (minutes(dropPreview.candidate.startsAt) - dayStart) * PIXELS_PER_MINUTE,
+                    height: dropPreview.candidate.durationMinutes * PIXELS_PER_MINUTE,
+                  }}
+                  aria-hidden="true"
+                >
+                  <span className="schedule-drop-guide__label">
+                    <time>{dropPreview.range}</time>
+                    <strong>{dropPreview.title}</strong>
+                    <span>{dropPreview.roomLabel}</span>
+                  </span>
+                </div>
+              )}
               {roomEntries.map((entry) => {
                 const top = ((minutes(entry.startsAt) - minutes(day.startsAt)) / SLOT_MINUTES) * SLOT_HEIGHT;
-                const height = Math.max((entry.durationMinutes / SLOT_MINUTES) * SLOT_HEIGHT, SLOT_HEIGHT);
+                const displayDuration = resizing?.entryId === entry.id
+                  ? resizing.durationMinutes
+                  : entry.durationMinutes;
+                const height = displayDuration * PIXELS_PER_MINUTE;
                 const proposal = entry.kind === 'proposal' ? proposals.get(entry.proposalId) : undefined;
+                const title = entryTitle(entry, proposals, locale);
+                const range = `${entry.startsAt}–${scheduleEndTime({ ...entry, durationMinutes: displayDuration })}`;
+                const facts = factsFor(entry);
+                const factsId = `schedule-card-facts-${entry.id}`;
+                const description = factDescription(entry);
                 return (
-                  <button
-                    type="button"
+                  <div
+                    id={`schedule-grid-entry-${entry.id}`}
                     key={entry.id}
-                    className={`schedule-card schedule-card--${entry.kind}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}`}
+                    className={`schedule-card schedule-card--${entry.kind}${selectedEntry?.id === entry.id ? ' schedule-card--selected' : ''}${displayDuration < 15 ? ' schedule-card--micro' : displayDuration <= 20 ? ' schedule-card--compact' : ''}${displayDuration <= 45 ? ' schedule-card--condensed' : ''}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}${dragging?.kind === 'entry' && dragging.entryId === entry.id ? ' schedule-card--dragging' : ''}${resizing?.entryId === entry.id ? ' schedule-card--resizing' : ''}`}
                     style={{ top, height }}
-                    draggable={!busy}
-                    disabled={busy}
-                    aria-label={`${moveLabel}: ${entryTitle(entry, proposals, locale)}`}
-                    onClick={() => onEdit(entry)}
-                    onDragStart={(event: DragEvent<HTMLElement>) => {
-                      onDrag({ kind: 'entry', entryId: entry.id });
-                      event.dataTransfer.effectAllowed = 'move';
-                    }}
                   >
-                    <time>{entry.startsAt}</time>
-                    <strong>{entryTitle(entry, proposals, locale)}</strong>
-                    {proposal && <span>{proposalName(proposal)}</span>}
-                    <span className="schedule-card__action">{moveLabel}</span>
-                  </button>
+                    <button
+                      type="button"
+                      className="schedule-card__body"
+                      draggable={!busy && interactive}
+                      disabled={busy || !interactive}
+                      aria-label={`${moveLabel}: ${title}, ${range}`}
+                      aria-describedby={factsId}
+                      title={`${title} · ${range} · ${description}`}
+                      onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+                        setSelectedEntryId(entry.id);
+                        onDrag({ kind: 'entry', entryId: entry.id });
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', title);
+                      }}
+                      onDragEnd={() => onDrag(null)}
+                      onClick={() => {
+                        setSelectedEntryId(entry.id);
+                        onEdit(entry);
+                      }}
+                    >
+                      <time>{range}</time>
+                      <strong title={title}>{title}</strong>
+                      <span className="schedule-card__facts" aria-hidden="true">
+                        {facts.speaker && <span className="schedule-card__speaker">{facts.speaker}</span>}
+                        {facts.category && <span className="schedule-card__category">{facts.category}</span>}
+                        <span className="schedule-card__language">{facts.language}</span>
+                        {facts.status && <span className="schedule-card__status">{facts.status}</span>}
+                      </span>
+                      <span id={factsId} className="visually-hidden">{description}</span>
+                    </button>
+                    {interactive && !busy && displayDuration >= SLOT_MINUTES && (
+                      <span
+                        className="schedule-card__resize-direct"
+                        aria-hidden="true"
+                        title={t.schedule.resizeHint}
+                        onPointerDown={(event) => startPointerResize(event, entry, 'vertical')}
+                      >
+                        <span />
+                      </span>
+                    )}
+                  </div>
                 );
               })}
             </div>
           );
         })}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1155,6 +1910,7 @@ function EntryEditor({
   entry,
   config,
   proposal,
+  submissionForm,
   busy,
   error,
   onChange,
@@ -1166,6 +1922,7 @@ function EntryEditor({
   entry: ScheduleEntry;
   config: ScheduleConfig;
   proposal?: ProposalRow;
+  submissionForm: SubmissionForm | null;
   busy: boolean;
   error: string;
   onChange: (entry: ScheduleEntry) => void;
@@ -1175,12 +1932,48 @@ function EntryEditor({
   onReload: () => void;
 }) {
   const { t, locale } = useI18n();
+  const proposalLanguage = proposal && entry.kind === 'proposal'
+    ? scheduledProposalLanguage(proposal, entry)
+    : null;
   const dialogRef = useModalFocus(onCancel);
   const feedbackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (error) feedbackRef.current?.focus({ preventScroll: true });
   }, [error]);
+
+  const customSpeakers = entry.kind === 'custom' ? entry.speakers ?? [] : [];
+  const customSpeakerNamesReady = customSpeakers.every((speaker) => speaker.name.trim());
+
+  function updateCustomSpeaker(index: number, patch: Partial<PublicScheduleSpeaker>) {
+    if (entry.kind !== 'custom') return;
+    const speakers = [...customSpeakers];
+    speakers[index] = { ...speakers[index], ...patch };
+    onChange({ ...entry, speakers });
+  }
+
+  function addCustomSpeaker() {
+    if (entry.kind !== 'custom' || customSpeakers.length >= SCHEDULE_LIMITS.customSpeakers) return;
+    const newSpeakerIndex = customSpeakers.length;
+    onChange({ ...entry, speakers: [...customSpeakers, { name: '' }] });
+    requestAnimationFrame(() => {
+      const newSpeakerName = dialogRef.current
+        ?.querySelectorAll<HTMLInputElement>('.schedule-custom-speaker input[aria-required="true"]')[newSpeakerIndex];
+      newSpeakerName?.focus();
+    });
+  }
+
+  function removeCustomSpeaker(index: number) {
+    if (entry.kind !== 'custom') return;
+    const speakers = customSpeakers.filter((_, speakerIndex) => speakerIndex !== index);
+    if (speakers.length) {
+      onChange({ ...entry, speakers });
+      return;
+    }
+    const withoutSpeakers = { ...entry };
+    delete withoutSpeakers.speakers;
+    onChange(withoutSpeakers);
+  }
 
   return (
     <div className="schedule-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
@@ -1194,10 +1987,29 @@ function EntryEditor({
       >
         <div className="schedule-dialog__heading">
           <div>
-            <p>{entry.kind === 'proposal' ? (proposal ? proposalName(proposal) : '') : t.schedule.types[entry.customType]}</p>
+            <p>
+              {entry.kind === 'proposal'
+                ? (proposal ? proposalName(proposal) : '')
+                : [t.schedule.types[entry.customType], customSpeakerNames(entry)]
+                    .filter(Boolean)
+                    .join(' · ')}
+            </p>
             <h3 id="schedule-editor-title">
               {entry.kind === 'proposal' ? proposal?.title : t.schedule.custom}
             </h3>
+            {entry.kind === 'proposal' && proposal && (
+              <div className="schedule-dialog__facts">
+                <span>{optionLabel(submissionForm?.category, proposal.category, locale)}</span>
+                <span>{optionLabel(submissionForm?.format, proposal.format, locale)}</span>
+                <span>{optionLabel(submissionForm?.level, proposal.level, locale)}</span>
+                <span>
+                  {proposalLanguage
+                    ? t.schedule.languageNames[proposalLanguage]
+                    : t.schedule.languageNeeded}
+                </span>
+                <span>{proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative}</span>
+              </div>
+            )}
           </div>
           <button data-autofocus type="button" className="btn btn--ghost btn--compact" onClick={onCancel}>
             {t.schedule.cancelEdit}
@@ -1232,15 +2044,25 @@ function EntryEditor({
             disabled={busy}
             required
           />
-          <TextField
-            label={t.schedule.duration}
-            type="number"
-            min="5"
-            value={String(entry.durationMinutes)}
-            onChange={(duration) => onChange({ ...entry, durationMinutes: Number(duration) })}
-            disabled={busy}
-            required
-          />
+          <div className="field">
+            <label className="field__label" htmlFor="schedule-entry-duration">
+              {t.schedule.duration}
+              <span className="field__requirement">{t.form.required}</span>
+            </label>
+            <input
+              id="schedule-entry-duration"
+              className="field__input"
+              type="number"
+              min={SCHEDULE_LIMITS.durationMin}
+              max={SCHEDULE_LIMITS.durationMax}
+              step={SCHEDULE_LIMITS.durationStep}
+              value={entry.durationMinutes}
+              onChange={(event) => onChange({ ...entry, durationMinutes: Number(event.target.value) })}
+              disabled={busy}
+              required
+              aria-required="true"
+            />
+          </div>
         </div>
         {entry.kind === 'proposal' && proposal?.deliveryLanguage === 'either' && (
           <SelectField
@@ -1257,14 +2079,38 @@ function EntryEditor({
         )}
         {entry.kind === 'custom' && (
           <>
-            <SelectField<CustomScheduleType>
-              label={t.schedule.itemType}
-              value={entry.customType}
-              options={CUSTOM_SCHEDULE_TYPES.map((value) => ({ value, label: t.schedule.types[value] }))}
-              onChange={(customType) => onChange({ ...entry, customType })}
-              disabled={busy}
-              required
-            />
+            <div className="grid grid--2 grid--align-controls">
+              <SelectField<CustomScheduleType>
+                label={t.schedule.itemType}
+                value={entry.customType}
+                options={CUSTOM_SCHEDULE_TYPES.map((value) => ({ value, label: t.schedule.types[value] }))}
+                onChange={(customType) => onChange({ ...entry, customType })}
+                disabled={busy}
+                required
+              />
+              <SelectField<ScheduleLanguage | ''>
+                label={t.schedule.language}
+                help={t.schedule.customLanguageHelp}
+                value={entry.language ?? ''}
+                options={[
+                  { value: '', label: t.schedule.languageNeutral },
+                  ...SCHEDULE_LANGUAGES.map((value) => ({
+                    value,
+                    label: t.schedule.languageNames[value],
+                  })),
+                ]}
+                onChange={(language) => {
+                  if (language) {
+                    onChange({ ...entry, language });
+                    return;
+                  }
+                  const neutralEntry = { ...entry };
+                  delete neutralEntry.language;
+                  onChange(neutralEntry);
+                }}
+                disabled={busy}
+              />
+            </div>
             <div className="grid grid--2">
               <TextField
                 label={t.schedule.titleEn}
@@ -1299,6 +2145,89 @@ function EntryEditor({
                 rows={3}
               />
             </div>
+            <fieldset className="schedule-custom-speakers">
+              <legend>{t.schedule.customSpeakersTitle}</legend>
+              <div className="schedule-custom-speakers__heading">
+                <div>
+                  <p>{t.schedule.customSpeakersHelp}</p>
+                  <span>{t.schedule.customSpeakerCount(customSpeakers.length, SCHEDULE_LIMITS.customSpeakers)}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--compact"
+                  disabled={busy || customSpeakers.length >= SCHEDULE_LIMITS.customSpeakers}
+                  onClick={addCustomSpeaker}
+                >
+                  {t.schedule.addCustomSpeaker}
+                </button>
+              </div>
+              {customSpeakers.length === 0 ? (
+                <p className="schedule-custom-speakers__empty">{t.schedule.noCustomSpeakers}</p>
+              ) : (
+                <div className="schedule-custom-speakers__list">
+                  {customSpeakers.map((speaker, index) => (
+                    <fieldset
+                      className="schedule-custom-speaker"
+                      key={index}
+                    >
+                      <legend className="visually-hidden">
+                        {t.schedule.customSpeakerNumber(index + 1)}
+                      </legend>
+                      <div className="schedule-custom-speaker__heading">
+                        <strong>{speaker.name.trim() || t.schedule.customSpeakerNumber(index + 1)}</strong>
+                        <button
+                          type="button"
+                          className="btn btn--ghost btn--compact"
+                          disabled={busy}
+                          onClick={() => removeCustomSpeaker(index)}
+                          aria-label={t.schedule.removeCustomSpeaker(index + 1)}
+                        >
+                          {t.schedule.removeCustomSpeakerShort}
+                        </button>
+                      </div>
+                      <div className="grid grid--2 schedule-custom-speaker__fields">
+                        <TextField
+                          label={t.schedule.customSpeakerName(index + 1)}
+                          value={speaker.name}
+                          onChange={(name) => updateCustomSpeaker(index, { name })}
+                          maxLength={SCHEDULE_LIMITS.speakerName}
+                          disabled={busy}
+                          error={!speaker.name.trim() ? t.schedule.customSpeakerNameMissing : undefined}
+                          required
+                        />
+                        <TextField
+                          label={t.schedule.customSpeakerJobTitle(index + 1)}
+                          value={speaker.jobTitle ?? ''}
+                          onChange={(jobTitle) => updateCustomSpeaker(index, { jobTitle })}
+                          maxLength={SCHEDULE_LIMITS.speakerJobTitle}
+                          disabled={busy}
+                        />
+                        <TextField
+                          label={t.schedule.customSpeakerCompany(index + 1)}
+                          value={speaker.company ?? ''}
+                          onChange={(company) => updateCustomSpeaker(index, { company })}
+                          maxLength={SCHEDULE_LIMITS.speakerCompany}
+                          disabled={busy}
+                        />
+                        <TextAreaField
+                          label={t.schedule.customSpeakerBio(index + 1)}
+                          value={speaker.bio ?? ''}
+                          onChange={(bio) => updateCustomSpeaker(index, { bio })}
+                          maxLength={SCHEDULE_LIMITS.speakerBio}
+                          disabled={busy}
+                          rows={3}
+                        />
+                      </div>
+                    </fieldset>
+                  ))}
+                </div>
+              )}
+              {!customSpeakerNamesReady && (
+                <p className="schedule-custom-speakers__validation" role="status">
+                  {t.schedule.customSpeakerNameRequired}
+                </p>
+              )}
+            </fieldset>
           </>
         )}
         {error && (
@@ -1317,7 +2246,7 @@ function EntryEditor({
           </button>
           <span className="schedule-dialog__actions-spacer" />
           <button type="button" className="btn" disabled={busy} onClick={onCancel}>{t.schedule.cancelEdit}</button>
-          <button type="button" className="btn btn--primary" disabled={busy} onClick={onSave}>{t.schedule.saveItem}</button>
+          <button type="button" className="btn btn--primary" disabled={busy || !customSpeakerNamesReady} onClick={onSave}>{t.schedule.saveItem}</button>
         </div>
       </section>
     </div>

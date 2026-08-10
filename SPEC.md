@@ -261,7 +261,6 @@ proposals/{proposalId}
                                           // accepted | confirmed | declined |
                                           // waitlisted | rejected | withdrawn
   confirmDeadline, confirmedAt
-  assignedLanguage                        // set at scheduling when deliveryLanguage = either
   submittedAt, updatedAt
   aggregate {                             // written by Cloud Function only
     avgScore, normalizedScore, reviewCount, stdDev
@@ -280,19 +279,34 @@ emailLog/{logId}
   proposalId, template, to, sentAt, providerId
 
 config/schedule
-  timeZone, days[], rooms[], revision, sharedVersion, needsAttention
+  timeZone, days[], rooms[], revision, needsAttention
+  sharedVersion, sharedRevision, sharedFingerprint, sharedTaxonomyFingerprint
+  publishedVersion, publishedRevision
 
 scheduleDraft/{entryId}
   kind, date, startsAt, durationMinutes, roomId
-  proposalId, assignedLanguage             // proposal item
-  customType, title, description            // custom item
+  proposalId, assignedLanguage?             // proposal item; assignment only for `either`
+  customType, title, description?            // custom item
+  language?                                 // optional custom-item attendee language
+  speakers[]? { name, bio?, company?, jobTitle? } // optional public custom speakers
 
 scheduleReleases/{releaseId}
   version, timeZone, days[], rooms[], publishedAt?
-  entries/{entryId}                         // immutable confirmed-session snapshot;
-                                             // speaker name, bio, company, job title only
-  internal/source                           // admin-only sharedAt, sourceRevision,
-                                             // fingerprint, sharedBy
+  entries/{entryId}                         // immutable attendee-facing snapshot;
+                                             // proposal entries are confirmed only
+    kind, date, startsAt, durationMinutes, roomId
+    proposalId, session {                   // proposal item
+      title, abstract, language
+      category, categoryLabel               // attendee labels frozen when shared
+      format, formatLabel
+      level, levelLabel
+      speakers[] { name, bio, company?, jobTitle? }
+    }
+    customType, title, description?, language?, speakers[]? // custom item
+  internal/source                           // admin-only release metadata
+    sharedAt, sharedBy, sourceRevision
+    sourceFingerprint                       // frozen config + entry projection
+    taxonomyFingerprint                     // form taxonomy used for frozen labels
 
 cfps/{cfpId}
   sharedScheduleId, sharedScheduleAt         // authenticated internal preview

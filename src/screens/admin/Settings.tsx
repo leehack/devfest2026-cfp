@@ -437,7 +437,7 @@ export function Settings({
           disabled={busy || archived}
         />
 
-        <div className="grid grid--2">
+        <div className="grid grid--2 grid--align-controls">
           <TextField
             label={t.admin.eventStartDate}
             type="date"
