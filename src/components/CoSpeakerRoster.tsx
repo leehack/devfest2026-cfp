@@ -69,6 +69,7 @@ export function CoSpeakerRoster({
   const manualRefresh = useRef(false);
   const refreshButton = useRef<HTMLButtonElement>(null);
   const inviteInput = useRef<HTMLInputElement>(null);
+  const focusWhenIdle = useRef<'invite' | 'refresh' | null>(null);
   const [roster, setRoster] = useState<ProposalSpeakerRoster | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -85,6 +86,26 @@ export function CoSpeakerRoster({
 
   tRef.current = t;
   onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (
+      inviting ||
+      refreshing ||
+      retrying !== null ||
+      revoking !== null ||
+      removing !== null ||
+      focusWhenIdle.current === null
+    ) {
+      return;
+    }
+    const target = focusWhenIdle.current;
+    focusWhenIdle.current = null;
+    const element =
+      target === 'invite'
+        ? inviteInput.current ?? refreshButton.current
+        : refreshButton.current;
+    element?.focus({ preventScroll: true });
+  }, [inviting, refreshing, retrying, revoking, removing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,7 +125,7 @@ export function CoSpeakerRoster({
         onChangeRef.current?.(next);
         if (announceRefresh) {
           setNotice(tRef.current.coSpeakers.refreshed);
-          requestAnimationFrame(() => refreshButton.current?.focus({ preventScroll: true }));
+          focusWhenIdle.current = 'refresh';
         }
       })
       .catch(() => {
@@ -115,7 +136,7 @@ export function CoSpeakerRoster({
           onChangeRef.current?.(null);
         } else {
           setActionError(tRef.current.coSpeakers.loadFailed);
-          requestAnimationFrame(() => refreshButton.current?.focus({ preventScroll: true }));
+          focusWhenIdle.current = 'refresh';
         }
       })
       .finally(() => {
@@ -149,9 +170,7 @@ export function CoSpeakerRoster({
       replaceRoster(next);
       setEmail('');
       setNotice(t.coSpeakers.invited(address));
-      requestAnimationFrame(() => {
-        (inviteInput.current ?? refreshButton.current)?.focus({ preventScroll: true });
-      });
+      focusWhenIdle.current = 'invite';
     } catch (error) {
       setActionError(inviteError(error, t));
     } finally {
@@ -170,7 +189,7 @@ export function CoSpeakerRoster({
         await revokeProposalSpeakerInvitation(cfpId, proposalId, item.invitationId),
       );
       setNotice(t.coSpeakers.revokedNotice(label));
-      requestAnimationFrame(() => refreshButton.current?.focus({ preventScroll: true }));
+      focusWhenIdle.current = 'refresh';
     } catch (error) {
       setActionError(friendlyError(error, t));
     } finally {
@@ -190,7 +209,7 @@ export function CoSpeakerRoster({
         await retryProposalSpeakerInvitation(cfpId, proposalId, item.invitationId),
       );
       setNotice(t.coSpeakers.deliveryRetried(label));
-      requestAnimationFrame(() => refreshButton.current?.focus({ preventScroll: true }));
+      focusWhenIdle.current = 'refresh';
     } catch (error) {
       setActionError(friendlyError(error, t));
     } finally {
@@ -216,7 +235,7 @@ export function CoSpeakerRoster({
       }
       replaceRoster(next);
       setNotice(leaving ? t.coSpeakers.leftNotice : t.coSpeakers.removedNotice(label));
-      requestAnimationFrame(() => refreshButton.current?.focus({ preventScroll: true }));
+      focusWhenIdle.current = 'refresh';
     } catch (error) {
       setActionError(friendlyError(error, t));
     } finally {
