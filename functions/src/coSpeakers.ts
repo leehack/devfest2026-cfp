@@ -394,7 +394,10 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
     assertOpen(cfp);
     assertDraft(proposal);
     if (!canManage(identity, cfpId, proposal, member)) {
-      throw new HttpsError('permission-denied', 'Only the primary speaker or an event admin can invite a co-speaker.');
+      throw new HttpsError(
+        'permission-denied',
+        'Only the lead speaker can invite a co-speaker, and only while the proposal is a draft.',
+      );
     }
     const primarySpeakerId = primaryOf(proposal);
     const primaryParticipant = await tx.get(participantRef(cfpId, proposalId, primarySpeakerId));
@@ -547,7 +550,7 @@ export const retryCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     if (!canManage(identity, cfpId, proposal, member)) {
       throw new HttpsError(
         'permission-denied',
-        'Only the primary speaker can retry a co-speaker invitation.',
+        'Only the lead speaker can retry a co-speaker invitation.',
       );
     }
     const email = normaliseSpeakerEmail(invitation.get('email'));
@@ -864,7 +867,10 @@ export const revokeCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     assertOpen(cfp);
     assertDraft(proposal);
     if (!canManage(identity, cfpId, proposal, member)) {
-      throw new HttpsError('permission-denied', 'Only the primary speaker or an event admin can revoke a co-speaker.');
+      throw new HttpsError(
+        'permission-denied',
+        'Only the lead speaker can revoke a co-speaker invitation, and only while the proposal is a draft.',
+      );
     }
     if (!invitation.exists) throw new HttpsError('not-found', 'Invitation not found.');
     const state = String(invitation.get('status') ?? '');
@@ -910,7 +916,10 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
     const selfLeavingDraft =
       proposal.get('status') === 'draft' && identity.uid === targetUid;
     if (!canManage(identity, cfpId, proposal, member) && !selfLeavingDraft) {
-      throw new HttpsError('permission-denied', 'Only the primary speaker or an event admin can remove a co-speaker.');
+      throw new HttpsError(
+        'permission-denied',
+        'Only the lead speaker can remove another speaker from a draft. After submission, the lead speaker or an event admin can remove only a co-speaker who declined.',
+      );
     }
     const speakerIds = speakerIdsOf(proposal);
     const primarySpeakerId = primaryOf(proposal);

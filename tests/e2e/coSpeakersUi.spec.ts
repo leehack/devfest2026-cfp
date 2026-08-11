@@ -353,7 +353,7 @@ test.describe('co-speaker UI', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await signInAs(page, ADMIN, at('/admin/proposals'));
 
-    const manage = page.getByRole('button', { name: 'Manage speakers' }).first();
+    const manage = page.getByRole('button', { name: /Open speaker roster for/ }).first();
     await expect(manage).toBeVisible();
     await manage.click();
     const dialog = page.getByRole('dialog', { name: 'Speakers for this proposal' });
@@ -363,13 +363,16 @@ test.describe('co-speaker UI', () => {
     await expect(dialog.getByText(GUEST.name, { exact: true })).toBeVisible();
     await expect(dialog).not.toContainText(LEAD.email);
     await expect(dialog).not.toContainText(GUEST.email);
+    await expect(dialog).toContainText('Only the lead speaker can invite co-speakers before submission.');
+    await expect(dialog.getByLabel('Co-speaker email')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Send invitation' })).toHaveCount(0);
     await expectContainedOnMobile(page, dialog);
 
     await page.keyboard.press('Shift+Tab');
     await expect(dialog.getByRole('button', { name: 'Refresh speakers' })).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(
-      dialog.getByRole('button', { name: 'Close speaker management' }),
+      dialog.getByRole('button', { name: 'Close speaker roster' }),
     ).toBeFocused();
 
     await page.keyboard.press('Escape');
@@ -377,12 +380,17 @@ test.describe('co-speaker UI', () => {
     await expect(manage).toBeFocused();
 
     await page.getByRole('button', { name: 'Français', exact: true }).click();
-    const manageFr = page.getByRole('button', { name: 'Gérer les conférenciers' }).first();
+    const manageFr = page.getByRole('button', {
+      name: /Ouvrir la liste des conférenciers pour/,
+    }).first();
     await manageFr.click();
     const dialogFr = page.getByRole('dialog', {
       name: 'Conférenciers de cette proposition',
     });
     await expect(dialogFr).toBeVisible();
+    await expect(dialogFr).toContainText(
+      'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission.',
+    );
     await expectContainedOnMobile(page, dialogFr);
     await page.keyboard.press('Escape');
     await expect(dialogFr).toBeHidden();

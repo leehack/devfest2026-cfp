@@ -1119,7 +1119,7 @@ export const fr: Dictionary = {
         : `${n} propositions n’ont pas encore de note.`,
     form: 'Questions de confirmation',
     formHelp:
-      'Posées dès qu’une personne accepte. Rien n’est obligatoire — laissez vide et confirmer reste un simple clic.',
+      'Chaque personne retenue répond séparément à ces questions. Utilisez-les pour les renseignements individuels, comme la taille du chandail, les besoins alimentaires ou une photo; rendez chaque réponse obligatoire lorsque l’événement l’exige. Laissez le formulaire vide pour conserver une confirmation en un clic.',
     formEmpty: 'Aucune question. Les conférenciers confirment, et c’est tout.',
     formUntitled: 'Nouvelle question',
     formLabelEn: 'Question (anglais)',
@@ -1345,7 +1345,7 @@ export const fr: Dictionary = {
     help:
       'Invitez jusqu’à trois co-conférenciers avant la soumission. Chaque personne se joint avec son propre compte et gère son profil et sa confirmation.',
     adminHelp:
-      'Le conférencier principal est propriétaire du contenu. Les co-conférenciers gèrent leur profil et leur confirmation; les invitations en attente doivent être réglées avant la soumission.',
+      'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission. L’organisation peut consulter la liste ici et, après la soumission, retirer uniquement un co-conférencier ayant décliné. Chaque conférencier gère son propre profil et sa confirmation.',
     readOnlyHelp:
       'Vous êtes co-conférencier de cette proposition. Le conférencier principal gère le contenu; votre profil et votre confirmation demeurent les vôtres.',
     saveDetails: 'Enregistrer mes renseignements',
@@ -1379,8 +1379,8 @@ export const fr: Dictionary = {
     inviteHelp:
       'Utilisez l’adresse avec laquelle cette personne se connectera. Elle doit accepter avant la soumission.',
     atCapacity: 'Cette proposition compte déjà le maximum de quatre conférenciers.',
-    manage: 'Gérer les conférenciers',
-    close: 'Fermer la gestion des conférenciers',
+    manage: 'Liste des conférenciers',
+    close: 'Fermer la liste des conférenciers',
     lead: 'Conférencier principal',
     joined: 'A rejoint',
     pending: 'Invitation en attente',
@@ -1449,9 +1449,9 @@ export const fr: Dictionary = {
     switchAccount: 'Changer de compte',
     expiredTitle: 'Cette invitation est expirée',
     expiredHelp:
-      'Demandez au conférencier principal ou à l’organisation d’envoyer une nouvelle invitation.',
+      'Demandez au conférencier principal d’envoyer une nouvelle invitation.',
     revokedTitle: 'Cette invitation a été révoquée',
-    revokedHelp: 'Le conférencier principal ou l’organisation a retiré cette invitation.',
+    revokedHelp: 'Le conférencier principal a révoqué cette invitation.',
     pausedTitle: 'Cette invitation est temporairement indisponible',
     pausedHelp: 'L’appel à conférences est en pause. Réessayez lorsque celui-ci reprendra.',
     unavailableTitle: 'Cette invitation est indisponible',
@@ -1470,7 +1470,7 @@ export const fr: Dictionary = {
       none:
         'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
     } as Record<string, string>,
-    manageFor: (title: string) => `Gérer les conférenciers de ${title}`,
+    manageFor: (title: string) => `Ouvrir la liste des conférenciers pour ${title}`,
   },
 
   schedule: {

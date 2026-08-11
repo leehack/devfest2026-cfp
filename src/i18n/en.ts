@@ -1113,7 +1113,7 @@ export const en = {
       n === 1 ? '1 proposal has no score yet.' : `${n} proposals have no score yet.`,
     form: 'Confirmation questions',
     formHelp:
-      'Asked once a speaker accepts. Nothing here is required — leave it empty and confirming stays one click.',
+      'Each accepted speaker answers these questions separately. Use them for per-person details such as T-shirt size, dietary needs, or a headshot; mark any field required when the event needs it. Leave the form empty to keep confirmation one click.',
     formEmpty: 'No questions yet. Speakers just confirm and that is that.',
     formUntitled: 'New question',
     formLabelEn: 'Question (English)',
@@ -1336,7 +1336,7 @@ export const en = {
     help:
       'Invite up to three co-speakers before submitting. Each person joins with their own account and maintains their own profile and confirmation.',
     adminHelp:
-      'The lead speaker owns the talk. Joined co-speakers maintain their own profile and confirmation; pending invitations must be resolved before submission.',
+      'Only the lead speaker can invite co-speakers before submission. Organisers can review the roster here and, after submission, remove only a co-speaker who declined. Each speaker manages their own profile and confirmation.',
     readOnlyHelp:
       'You are a co-speaker on this proposal. The lead speaker owns the talk content; your profile and confirmation remain yours to update.',
     saveDetails: 'Save my details',
@@ -1368,8 +1368,8 @@ export const en = {
     inviteHelp:
       'Use the address they will sign in with. They must accept before this proposal can be submitted.',
     atCapacity: 'This proposal already has the maximum of four speakers.',
-    manage: 'Manage speakers',
-    close: 'Close speaker management',
+    manage: 'Speaker roster',
+    close: 'Close speaker roster',
     lead: 'Lead speaker',
     joined: 'Joined',
     pending: 'Invitation pending',
@@ -1436,9 +1436,9 @@ export const en = {
       `Sign in as ${email} to accept or decline this invitation.`,
     switchAccount: 'Switch account',
     expiredTitle: 'This invitation has expired',
-    expiredHelp: 'Ask the lead speaker or an organiser to send a new invitation.',
+    expiredHelp: 'Ask the lead speaker to send a new invitation.',
     revokedTitle: 'This invitation was revoked',
-    revokedHelp: 'The lead speaker or an organiser removed this invitation.',
+    revokedHelp: 'The lead speaker revoked this invitation.',
     pausedTitle: 'This invitation is temporarily unavailable',
     pausedHelp: 'The call for proposals is paused. Try this invitation again when it reopens.',
     unavailableTitle: 'This invitation is unavailable',
@@ -1457,7 +1457,7 @@ export const en = {
       none:
         'The lead speaker owns the talk. Your profile remains editable from your account; participation details are now locked.',
     } as Record<string, string>,
-    manageFor: (title: string) => `Manage speakers for ${title}`,
+    manageFor: (title: string) => `Open speaker roster for ${title}`,
   },
 
   schedule: {
