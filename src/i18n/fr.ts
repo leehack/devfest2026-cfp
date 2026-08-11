@@ -1343,9 +1343,9 @@ export const fr: Dictionary = {
   coSpeakers: {
     title: 'Conférenciers de cette proposition',
     help:
-      'Invitez jusqu’à trois co-conférenciers avant la soumission. Chaque personne se joint avec son propre compte et gère son profil et sa confirmation.',
+      'Invitez jusqu’à trois co-conférenciers avant la soumission. Chaque personne complète sa propre préparation et, si la proposition est retenue, confirme séparément. La conférence est confirmée seulement lorsque tous les conférenciers actifs ont confirmé.',
     adminHelp:
-      'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission. L’organisation peut consulter la liste ici et, après la soumission, retirer uniquement un co-conférencier ayant décliné. Chaque conférencier gère son propre profil et sa confirmation.',
+      'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission. Chaque conférencier actif confirme séparément, et la conférence est confirmée seulement lorsque tout le monde a confirmé. L’organisation peut consulter la liste ici et, après la soumission, retirer uniquement un co-conférencier ayant décliné.',
     readOnlyHelp:
       'Vous êtes co-conférencier de cette proposition. Le conférencier principal gère le contenu; votre profil et votre confirmation demeurent les vôtres.',
     saveDetails: 'Enregistrer mes renseignements',

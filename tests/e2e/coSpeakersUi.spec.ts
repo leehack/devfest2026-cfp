@@ -364,6 +364,7 @@ test.describe('co-speaker UI', () => {
     await expect(dialog).not.toContainText(LEAD.email);
     await expect(dialog).not.toContainText(GUEST.email);
     await expect(dialog).toContainText('Only the lead speaker can invite co-speakers before submission.');
+    await expect(dialog).toContainText('The session is confirmed only after everyone confirms.');
     await expect(dialog.getByLabel('Co-speaker email')).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: 'Send invitation' })).toHaveCount(0);
     await expectContainedOnMobile(page, dialog);
@@ -390,6 +391,9 @@ test.describe('co-speaker UI', () => {
     await expect(dialogFr).toBeVisible();
     await expect(dialogFr).toContainText(
       'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission.',
+    );
+    await expect(dialogFr).toContainText(
+      'La conférence est confirmée seulement lorsque tout le monde a confirmé.',
     );
     await expectContainedOnMobile(page, dialogFr);
     await page.keyboard.press('Escape');

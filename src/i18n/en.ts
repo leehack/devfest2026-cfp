@@ -1334,9 +1334,9 @@ export const en = {
   coSpeakers: {
     title: 'Speakers for this proposal',
     help:
-      'Invite up to three co-speakers before submitting. Each person joins with their own account and maintains their own profile and confirmation.',
+      'Invite up to three co-speakers before submitting. Every joined speaker completes their own setup and, if the proposal is accepted, confirms separately. The session is confirmed only after every active speaker confirms.',
     adminHelp:
-      'Only the lead speaker can invite co-speakers before submission. Organisers can review the roster here and, after submission, remove only a co-speaker who declined. Each speaker manages their own profile and confirmation.',
+      'Only the lead speaker can invite co-speakers before submission. Each active speaker confirms separately, and the session is confirmed only after everyone confirms. Organisers can review the roster here and, after submission, remove only a co-speaker who declined.',
     readOnlyHelp:
       'You are a co-speaker on this proposal. The lead speaker owns the talk content; your profile and confirmation remain yours to update.',
     saveDetails: 'Save my details',
