@@ -3,17 +3,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { SelectField, TextAreaField, TextField } from '../../components/fields';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
-import { adminError } from '../../lib/errors';
+import { emailError, isSpeakerMessageRecipientsChanged } from '../../lib/errors';
 import { useLatest } from '../../lib/useLatest';
 import {
   emailQueue,
   loadAllProposals,
   sendSpeakerMessage,
   setEmailSettings,
+  type EmailDeliveryReadiness,
   type EmailRow,
   type HeldEmail,
   type ProposalRow,
+  type RetryableEmail,
+  type SpeakerMessageRecipient,
 } from '../../lib/roles';
+import {
+  EmailActionDialog,
+  type EmailReviewAction,
+  type EmailReviewRow,
+} from '../../components/EmailActionDialog';
 import { EmailSetup } from '../../components/EmailSetup';
 import { EmailPreview } from '../../components/EmailPreview';
 import { LIMITS } from '@shared/enums';
@@ -34,22 +42,27 @@ import { Result } from './Result';
 export function Email({
   cfpId,
   cfpName,
+  canManageProvider = false,
   readOnly = false,
   onDirtyChange,
   onPendingChange,
 }: {
   cfpId: string;
   cfpName: string;
+  canManageProvider?: boolean;
   readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
-  onPendingChange?: (count: number) => void;
+  onPendingChange?: (state: { waiting: number; needsAttention: number }) => void;
 }) {
   const { t, locale } = useI18n();
   const tRef = useLatest(t);
   const [tally, setTally] = useState<Record<string, number>>({});
   const [held, setHeld] = useState<HeldEmail[]>([]);
+  const [heldRemaining, setHeldRemaining] = useState(0);
+  const [retryable, setRetryable] = useState<RetryableEmail[]>([]);
+  const [retryableRemaining, setRetryableRemaining] = useState(0);
+  const [delivery, setDelivery] = useState<EmailDeliveryReadiness | null>(null);
   const [staleHeld, setStaleHeld] = useState(0);
-  const [recoverableSending, setRecoverableSending] = useState(0);
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [storedSettings, setStoredSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [keyHint, setKeyHint] = useState('');
@@ -68,12 +81,22 @@ export function Email({
   const [setupDirty, setSetupDirty] = useState(false);
   const [wordingDirty, setWordingDirty] = useState(false);
   const [messageDirty, setMessageDirty] = useState(false);
+  const [review, setReview] = useState<{
+    action: Exclude<EmailReviewAction, 'compose'>;
+    rows: EmailReviewRow[];
+  } | null>(null);
   const editing = useRef(false);
   const activeCfp = useRef(cfpId);
   activeCfp.current = cfpId;
   const senderDirty =
     settings.from !== storedSettings.from || settings.replyTo !== storedSettings.replyTo;
   const dirty = !readOnly && (senderDirty || setupDirty || wordingDirty || messageDirty);
+  const keyConfigured = Boolean(
+    delivery &&
+      !delivery.problems.some((problem) =>
+        ['missing_key', 'invalid_key', 'setup_unavailable'].includes(problem),
+      ),
+  );
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -89,10 +112,9 @@ export function Email({
   const run = useCallback(
     async (
       action: 'preview' | 'release' | 'retry',
-      logId?: string,
-      reviewedLogIds?: string[],
-    ) => {
-      if (readOnly && action !== 'preview') return;
+      reviewedRows?: EmailReviewRow[],
+    ): Promise<boolean> => {
+      if (readOnly && action !== 'preview') return false;
       const scope = cfpId;
       setBusy(true);
       setError('');
@@ -101,10 +123,14 @@ export function Email({
         const { data } = await emailQueue({
           cfpId,
           action,
-          ...(logId ? { logId } : {}),
-          ...(reviewedLogIds ? { logIds: reviewedLogIds } : {}),
+          ...(reviewedRows
+            ? {
+                logIds: reviewedRows.map((row) => row.logId),
+                reviewedRecipients: reviewedRows.map(({ logId, to }) => ({ logId, to })),
+              }
+            : {}),
         });
-        if (activeCfp.current !== scope) return;
+        if (activeCfp.current !== scope) return false;
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
         if (action === 'preview') {
@@ -115,9 +141,15 @@ export function Email({
           setReady(true);
           setTally(data.tally ?? {});
           setStaleHeld(data.staleHeld ?? 0);
-          setRecoverableSending(data.recoverableSending ?? 0);
           setHeld(nextHeld);
-          onPendingChange?.(nextHeld.length);
+          setHeldRemaining(data.heldRemaining ?? 0);
+          setRetryable(data.retryable ?? []);
+          setRetryableRemaining(data.retryableRemaining ?? 0);
+          setDelivery(data.delivery ?? null);
+          onPendingChange?.({
+            waiting: data.waiting ?? nextHeld.length,
+            needsAttention: data.needsAttention ?? data.retryable?.length ?? 0,
+          });
           // Never over the top of someone mid-sentence: this load is async, and
           // an admin who starts typing before it lands would otherwise watch the
           // field empty itself under the cursor.
@@ -134,16 +166,22 @@ export function Email({
         } else {
           setNote(tRef.current.admin.emailSent(data.released ?? 0));
           const { data: after } = await emailQueue({ cfpId, action: 'preview' });
-          if (activeCfp.current !== scope) return;
+          if (activeCfp.current !== scope) return false;
           const nextHeld = [...(after.held ?? [])].sort(
             (a, b) =>
               a.kind.localeCompare(b.kind) || (a.title ?? '').localeCompare(b.title ?? ''),
           );
           setTally(after.tally ?? {});
           setStaleHeld(after.staleHeld ?? 0);
-          setRecoverableSending(after.recoverableSending ?? 0);
           setHeld(nextHeld);
-          onPendingChange?.(nextHeld.length);
+          setHeldRemaining(after.heldRemaining ?? 0);
+          setRetryable(after.retryable ?? []);
+          setRetryableRemaining(after.retryableRemaining ?? 0);
+          setDelivery(after.delivery ?? null);
+          onPendingChange?.({
+            waiting: after.waiting ?? nextHeld.length,
+            needsAttention: after.needsAttention ?? after.retryable?.length ?? 0,
+          });
           if (after.settings && !editing.current) {
             setSettings(after.settings);
             setStoredSettings(after.settings);
@@ -155,8 +193,10 @@ export function Email({
           setTruncated(after.truncated ?? 0);
           setTemplates(after.templates ?? {});
         }
+        return true;
       } catch (e) {
-        if (activeCfp.current === scope) setError(adminError(e, tRef.current));
+        if (activeCfp.current === scope) setError(emailError(e, tRef.current));
+        return false;
       } finally {
         if (activeCfp.current === scope) setBusy(false);
       }
@@ -170,8 +210,11 @@ export function Email({
     setReady(false);
     setTally({});
     setHeld([]);
+    setHeldRemaining(0);
+    setRetryable([]);
+    setRetryableRemaining(0);
+    setDelivery(null);
     setStaleHeld(0);
-    setRecoverableSending(0);
     setSettings(EMPTY_SETTINGS);
     setStoredSettings(EMPTY_SETTINGS);
     setKeyHint('');
@@ -188,6 +231,7 @@ export function Email({
     setSetupDirty(false);
     setWordingDirty(false);
     setMessageDirty(false);
+    setReview(null);
   }, [cfpId]);
 
   useEffect(() => {
@@ -203,33 +247,54 @@ export function Email({
   // otherwise, by which point the message is a `failed` row.
   const mismatch = senderMismatch(settings.from, domain);
 
-  const waiting = held.length;
-  // A `dry_run` row is a message that was never sent, so it belongs with the
-  // failures on the retry button rather than looking like a delivery.
-  const unsent = count('failed') + count('dry_run') + recoverableSending;
+  const waiting = held.length + heldRemaining;
+  const unsent = retryable.length + retryableRemaining;
+  const inProgress = count('queued') + count('sending');
+  const delivered = count('sent');
+  const deliveryReady = delivery?.ready === true;
 
   /*
    * Its own function rather than another `run` action: resend answers with an
    * acknowledgement, not a queue snapshot, so folding it into `run` would blank
    * the tally and the rows the moment it returned.
    */
-  async function resend(row: EmailRow) {
-    if (readOnly) return;
-    if (!window.confirm(t.admin.emailResendConfirm.replace('{to}', row.to))) return;
+  async function resend(row: EmailRow): Promise<boolean> {
+    if (readOnly) return false;
     const scope = cfpId;
     setBusy(true);
     setNote('');
     setError('');
     try {
-      await emailQueue({ cfpId, action: 'resend', logId: row.logId });
-      if (activeCfp.current !== scope) return;
-      setNote(t.admin.emailResent.replace('{to}', row.to));
+      await emailQueue({
+        cfpId,
+        action: 'resend',
+        logId: row.logId,
+        reviewedTo: row.currentTo,
+      });
+      if (activeCfp.current !== scope) return false;
+      setNote(t.admin.emailResent.replace('{to}', row.currentTo));
       await run('preview');
+      return true;
     } catch (e) {
-      if (activeCfp.current === scope) setError(adminError(e, t));
+      if (activeCfp.current === scope) setError(emailError(e, t));
+      return false;
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }
+  }
+
+  async function confirmReview() {
+    if (!review) return;
+    const done =
+      review.action === 'release'
+        ? await run('release', review.rows)
+        : review.action === 'retry'
+          ? await run('retry', review.rows)
+          : (() => {
+              const row = rows.find((candidate) => candidate.logId === review.rows[0]?.logId);
+              return row ? resend(row) : Promise.resolve(false);
+            })();
+    if (done) setReview(null);
   }
 
   async function saveSender() {
@@ -267,7 +332,7 @@ export function Email({
       setSenderNote(t.admin.windowSaved);
       await run('preview');
     } catch (e) {
-      if (activeCfp.current === scope) setSenderError(adminError(e, t));
+      if (activeCfp.current === scope) setSenderError(emailError(e, t));
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }
@@ -301,12 +366,79 @@ export function Email({
       <h2>{t.admin.email}</h2>
 
       <section
+        className={`email-delivery-status${deliveryReady ? ' email-delivery-status--ready' : ''}`}
+        aria-labelledby="email-delivery-status-title"
+      >
+        <div className="email-delivery-status__mark" aria-hidden="true">
+          {deliveryReady ? '✓' : '!'}
+        </div>
+        <div className="email-delivery-status__copy">
+          <p className="email-delivery-status__eyebrow">{t.admin.emailDeliveryStatus}</p>
+          <h3 id="email-delivery-status-title">
+            {!delivery
+              ? t.admin.emailDeliveryChecking
+              : deliveryReady
+                ? t.admin.emailDeliveryReady
+                : t.admin.emailDeliveryBlocked}
+          </h3>
+          <p>
+            {deliveryReady
+              ? t.admin.emailDeliveryReadyHelp
+              : t.admin.emailDeliveryBlockedHelp}
+          </p>
+          {delivery && !deliveryReady && (
+            <ul className="email-delivery-status__problems">
+              {delivery.problems.map((problem) => (
+                <li key={problem}>
+                  {t.admin.emailDeliveryProblems[problem] ?? problem}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {!deliveryReady && (
+          <a className="btn email-delivery-status__action" href="#email-delivery-setup">
+            {t.admin.emailCompleteSetup}
+          </a>
+        )}
+      </section>
+
+      <section className="email-operations" aria-labelledby="email-operations-title">
+        <div className="email-operations__heading">
+          <h3 id="email-operations-title">{t.admin.emailOperations}</h3>
+          <p>{t.admin.emailOperationsHelp}</p>
+        </div>
+        <div className="email-operations__grid">
+          <article className="email-operation email-operation--waiting">
+            <span className="email-operation__count">{waiting}</span>
+            <h4>{t.admin.emailAwaiting}</h4>
+            <p>{t.admin.emailAwaitingHelp}</p>
+          </article>
+          <article className={`email-operation${unsent ? ' email-operation--attention' : ''}`}>
+            <span className="email-operation__count">{unsent}</span>
+            <h4>{t.admin.emailNeedsAttention}</h4>
+            <p>{t.admin.emailNeedsAttentionHelp}</p>
+          </article>
+          <article className="email-operation">
+            <span className="email-operation__count">{inProgress}</span>
+            <h4>{t.admin.emailInProgress}</h4>
+            <p>{t.admin.emailInProgressHelp}</p>
+          </article>
+          <article className="email-operation email-operation--delivered">
+            <span className="email-operation__count">{delivered}</span>
+            <h4>{t.admin.emailDelivered}</h4>
+            <p>{t.admin.emailDeliveredHelp}</p>
+          </article>
+        </div>
+      </section>
+
+      <section
         className={`email-queue-card${waiting > 0 ? ' email-queue-card--pending' : ''}`}
         aria-labelledby="decision-email-queue-title"
       >
         <div className="email-queue-card__heading">
           <div>
-            <p className="email-queue-card__eyebrow">{t.admin.pendingEmailEyebrow}</p>
+            <p className="email-queue-card__eyebrow">{t.admin.emailAwaiting}</p>
             <h3 id="decision-email-queue-title">{t.admin.emailDecisionQueue}</h3>
             <p>{t.admin.emailHelp}</p>
           </div>
@@ -321,17 +453,8 @@ export function Email({
           )}
         </div>
 
-        <dl className="stats">
-          {(['held', 'queued', 'sending', 'sent', 'dry_run', 'failed'] as const).map((status) => (
-            <div key={status} className="stats__item">
-              <dt>{t.admin.emailStatus[status]}</dt>
-              <dd>{count(status)}</dd>
-            </div>
-          ))}
-        </dl>
-
         {waiting === 0 && <p className="muted">{t.admin.emailQueueEmpty}</p>}
-        {waiting > 0 && (!keyHint || !settings.from) && (
+        {waiting > 0 && !deliveryReady && (
           <p className="note note--inline">{t.admin.emailQueueSetupNeeded}</p>
         )}
         {staleHeld > 0 && (
@@ -341,7 +464,12 @@ export function Email({
         )}
 
         {held.length > 0 && (
-          <div className="table__scroll">
+          <div
+            className="table__scroll table__scroll--focusable"
+            role="region"
+            aria-label={t.admin.emailHeldTableLabel}
+            tabIndex={0}
+          >
             <table className="table table--held">
               <thead>
                 <tr>
@@ -368,6 +496,11 @@ export function Email({
             </table>
           </div>
         )}
+        {heldRemaining > 0 && (
+          <p className="field__help">
+            {t.admin.emailBatchRemaining.replace('{count}', String(heldRemaining))}
+          </p>
+        )}
 
         <div className="row row--wrap">
           <button type="button" className="btn" disabled={busy} onClick={() => run('preview')}>
@@ -376,44 +509,122 @@ export function Email({
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy || readOnly || waiting === 0}
-            onClick={() => {
-              if (confirm(t.admin.emailConfirm.replace('{count}', String(waiting)))) {
-                void run(
-                  'release',
-                  undefined,
-                  held.map((row) => row.logId),
-                );
-              }
-            }}
+            disabled={busy || readOnly || held.length === 0 || !deliveryReady}
+            aria-describedby={!deliveryReady ? 'email-action-setup-reason' : undefined}
+            onClick={() => setReview({ action: 'release', rows: held })}
           >
-            {waiting === 0
+            {held.length === 0
               ? t.admin.emailNothing
-              : t.admin.emailRelease(waiting)}
+              : t.admin.emailRelease(held.length)}
           </button>
-          {unsent > 0 && (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || readOnly}
-              onClick={() => run('retry')}
-            >
-              {t.admin.emailRetry.replace('{count}', String(unsent))}
-            </button>
-          )}
         </div>
+
+        {!deliveryReady && (
+          <p className="field__help" id="email-action-setup-reason">
+            {t.admin.emailActionSetupReason}
+          </p>
+        )}
 
         <Result ok={note} error={error} />
       </section>
 
-      <h3 className="card__subtitle">{t.admin.setupEmail}</h3>
+      <section
+        className={`email-attention-card${unsent ? ' email-attention-card--active' : ''}`}
+        aria-labelledby="email-attention-title"
+      >
+        <div className="email-attention-card__heading">
+          <div>
+            <p className="email-attention-card__eyebrow">{t.admin.emailNeedsAttention}</p>
+            <h3 id="email-attention-title">{t.admin.emailNeedsAttention}</h3>
+            <p>{t.admin.emailNeedsAttentionHelp}</p>
+          </div>
+          <strong className="email-attention-card__count" aria-label={String(unsent)}>
+            {unsent}
+          </strong>
+        </div>
+
+        {retryable.length === 0 ? (
+          <p className="muted">{t.admin.emailNoAttention}</p>
+        ) : (
+          <div
+            className="table__scroll table__scroll--focusable"
+            role="region"
+            aria-label={t.admin.emailAttentionTableLabel}
+            tabIndex={0}
+          >
+            <table className="table table--attention">
+              <thead>
+                <tr>
+                  <th scope="col">{t.admin.emailKind}</th>
+                  <th scope="col">{t.admin.emailTo}</th>
+                  <th scope="col">{t.proposal.title}</th>
+                  <th scope="col">{t.admin.emailStatusColumn}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retryable.map((row) => (
+                  <tr key={row.logId}>
+                    <td data-label={t.admin.emailKind}>
+                      {t.admin.emailKinds[row.kind] ?? row.kind}
+                    </td>
+                    <td className="table__wrap" data-label={t.admin.emailTo}>
+                      {row.to}
+                    </td>
+                    <td className="table__wrap" data-label={t.proposal.title}>
+                      {row.title || '—'}
+                    </td>
+                    <td data-label={t.admin.emailStatusColumn}>
+                      {row.recoverable
+                        ? t.admin.emailRecoverableStatus
+                        : (t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {retryableRemaining > 0 && (
+          <p className="field__help">
+            {t.admin.emailBatchRemaining.replace('{count}', String(retryableRemaining))}
+          </p>
+        )}
+
+        {unsent > 0 && (
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busy || readOnly || !deliveryReady}
+            aria-describedby={!deliveryReady ? 'email-attention-setup-reason' : undefined}
+            onClick={() => setReview({ action: 'retry', rows: retryable })}
+          >
+            {t.admin.emailRetry.replace('{count}', String(retryable.length))}
+          </button>
+        )}
+        {!deliveryReady && unsent > 0 && (
+          <p className="field__help" id="email-attention-setup-reason">
+            {t.admin.emailActionSetupReason}
+          </p>
+        )}
+      </section>
+
+      <h3 className="card__subtitle" id="email-delivery-setup">
+        {t.admin.setupEmail}
+      </h3>
       <EmailSetup
         cfpId={cfpId}
         keyHint={keyHint}
+        keyConfigured={keyConfigured}
+        canManageProvider={canManageProvider}
         domainId={domainId}
         readOnly={readOnly}
-        onKeySet={setKeyHint}
-        onDomainChanged={() => run('preview')}
+        onKeySet={(hint) => {
+          setKeyHint(hint);
+          void run('preview');
+        }}
+        onDomainChanged={async () => {
+          await run('preview');
+        }}
         onDirtyChange={setSetupDirty}
       />
 
@@ -457,10 +668,12 @@ export function Email({
       <EmailPreview
         cfpId={cfpId}
         cfpName={cfpName}
-        configured={Boolean(keyHint && settings.from)}
+        configured={deliveryReady}
         templates={templates}
         readOnly={readOnly}
-        onSaved={() => run('preview')}
+        onSaved={async () => {
+          await run('preview');
+        }}
         onDirtyChange={setWordingDirty}
       />
 
@@ -471,6 +684,7 @@ export function Email({
         <WriteToSpeaker
           cfpId={cfpId}
           replyTo={settings.replyTo}
+          deliveryReady={deliveryReady}
           readOnly={readOnly}
           onSent={() => run('preview')}
           onDirtyChange={setMessageDirty}
@@ -483,6 +697,7 @@ export function Email({
         organiser actually has.
       */}
       <h3 className="card__subtitle">{t.admin.emailLog}</h3>
+      <p className="section__help">{t.admin.emailLogHelp}</p>
       {rows.length === 0 ? (
         <p className="muted">{t.admin.emailLogEmpty}</p>
       ) : (
@@ -493,7 +708,7 @@ export function Email({
               value={filter}
               options={[
                 { value: '', label: t.admin.emailLogAll },
-                ...(['held', 'queued', 'sent', 'dry_run', 'failed'] as const).map((s) => ({
+                ...(['held', 'queued', 'sending', 'sent', 'dry_run', 'failed'] as const).map((s) => ({
                   value: s,
                   label: t.admin.emailStatus[s],
                 })),
@@ -503,7 +718,12 @@ export function Email({
             />
           </div>
 
-          <div className="table__scroll">
+          <div
+            className="table__scroll table__scroll--focusable"
+            role="region"
+            aria-label={t.admin.emailHistoryTableLabel}
+            tabIndex={0}
+          >
             <table className="table email-log-table">
               <thead>
                 <tr>
@@ -541,23 +761,30 @@ export function Email({
                         {row.error && <span className="muted"> — {row.error}</span>}
                       </td>
                       <td data-label={t.admin.emailSentAt}>
-                        {row.sentAt ? formatDate(new Date(row.sentAt), locale) : '—'}
+                        {row.attemptedAt ? formatDate(new Date(row.attemptedAt), locale) : '—'}
                       </td>
                       <td data-label={t.admin.emailActions}>
                         <button
                           type="button"
                           className="btn btn--ghost"
+                          aria-describedby={!deliveryReady ? 'email-action-setup-reason' : undefined}
                           disabled={
                             busy ||
                             readOnly ||
+                            !deliveryReady ||
                             row.stale ||
                             row.status === 'held' ||
                             row.status === 'queued' ||
                             row.status === 'sending'
                           }
-                          onClick={() => resend(row)}
+                          onClick={() =>
+                            setReview({
+                              action: 'resend',
+                              rows: [{ ...row, to: row.currentTo }],
+                            })
+                          }
                         >
-                          {t.admin.emailResend}
+                          {row.status === 'sent' ? t.admin.emailResend : t.admin.emailRetryOne}
                         </button>
                       </td>
                     </tr>
@@ -572,6 +799,16 @@ export function Email({
             </p>
           )}
         </>
+      )}
+      {review && (
+        <EmailActionDialog
+          action={review.action}
+          rows={review.rows}
+          busy={busy}
+          error={error}
+          onCancel={() => setReview(null)}
+          onConfirm={() => void confirmReview()}
+        />
       )}
     </section>
   );
@@ -591,12 +828,14 @@ export function Email({
 function WriteToSpeaker({
   cfpId,
   replyTo,
+  deliveryReady,
   readOnly = false,
   onSent,
   onDirtyChange,
 }: {
   cfpId: string;
   replyTo: string;
+  deliveryReady: boolean;
   readOnly?: boolean;
   onSent: () => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -613,6 +852,11 @@ function WriteToSpeaker({
   const [attempt, setAttempt] = useState(0);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const [recipientPreview, setRecipientPreview] = useState<SpeakerMessageRecipient[]>([]);
+  const [recipientsFingerprint, setRecipientsFingerprint] = useState('');
+  const [recipientLoading, setRecipientLoading] = useState(false);
+  const [recipientError, setRecipientError] = useState('');
+  const [reviewing, setReviewing] = useState(false);
   const activeCfp = useRef(cfpId);
   activeCfp.current = cfpId;
   const dirty = !readOnly && (subject !== '' || body !== '');
@@ -639,6 +883,11 @@ function WriteToSpeaker({
     setLoadError('');
     setNote('');
     setError('');
+    setRecipientPreview([]);
+    setRecipientsFingerprint('');
+    setRecipientLoading(false);
+    setRecipientError('');
+    setReviewing(false);
     void (async () => {
       try {
         // Drafts are excluded: writing to someone about a talk they have not
@@ -646,7 +895,7 @@ function WriteToSpeaker({
         const sendable = (await loadAllProposals(cfpId)).filter((row) => row.status !== 'draft');
         if (!cancelled) setRows(sendable);
       } catch (e) {
-        if (!cancelled) setLoadError(adminError(e, tRef.current));
+        if (!cancelled) setLoadError(emailError(e, tRef.current));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -655,6 +904,40 @@ function WriteToSpeaker({
       cancelled = true;
     };
   }, [attempt, cfpId, tRef]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRecipientPreview([]);
+    setRecipientsFingerprint('');
+    setRecipientError('');
+    setReviewing(false);
+    if (!proposalId) {
+      setRecipientLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setRecipientLoading(true);
+    void (async () => {
+      try {
+        const { data } = await sendSpeakerMessage({
+          cfpId,
+          action: 'preview',
+          proposalId,
+        });
+        if (cancelled) return;
+        setRecipientPreview(data.recipients ?? []);
+        setRecipientsFingerprint(data.recipientsFingerprint ?? '');
+      } catch (e) {
+        if (!cancelled) setRecipientError(emailError(e, tRef.current));
+      } finally {
+        if (!cancelled) setRecipientLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cfpId, proposalId, tRef]);
 
   // From the snapshot frozen onto the proposal — the global speaker profile is
   // not the committee's to read. See `ReviewPage`.
@@ -665,29 +948,49 @@ function WriteToSpeaker({
       .join(', ');
 
   const target = rows.find((row) => row.id === proposalId);
-  const recipients = (target?.speakerSnapshot ?? [])
-    .map((speaker) => speaker.name)
-    .filter(Boolean);
-  const to = nameOf(target) || t.admin.emailTo;
-
   async function send() {
     if (readOnly) return;
-    if (!target) return;
-    if (!confirm(t.admin.messageConfirm.replace('{name}', to))) return;
+    if (!target || !recipientsFingerprint) return;
 
     const scope = cfpId;
     setBusy(true);
     setNote('');
     setError('');
     try {
-      await sendSpeakerMessage({ cfpId, proposalId, subject, body });
+      const { data } = await sendSpeakerMessage({
+        cfpId,
+        action: 'send',
+        proposalId,
+        subject,
+        body,
+        expectedRecipientsFingerprint: recipientsFingerprint,
+      });
       if (activeCfp.current !== scope) return;
       setSubject('');
       setBody('');
-      setNote(t.admin.messageSent.replace('{name}', to));
+      setReviewing(false);
+      setNote(t.admin.messageQueued(data.logIds?.length ?? recipientPreview.length));
       onSent();
     } catch (e) {
-      if (activeCfp.current === scope) setError(adminError(e, t));
+      if (activeCfp.current !== scope) return;
+      if (!isSpeakerMessageRecipientsChanged(e)) {
+        setError(emailError(e, t));
+        return;
+      }
+      try {
+        const { data } = await sendSpeakerMessage({
+          cfpId,
+          action: 'preview',
+          proposalId,
+        });
+        if (activeCfp.current !== scope) return;
+        setRecipientPreview(data.recipients ?? []);
+        setRecipientsFingerprint(data.recipientsFingerprint ?? '');
+        setRecipientError('');
+        setError(t.admin.messageRecipientChanged);
+      } catch (refreshError) {
+        if (activeCfp.current === scope) setError(emailError(refreshError, t));
+      }
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }
@@ -737,13 +1040,17 @@ function WriteToSpeaker({
       />
       {target && (
         <aside className="email-compose__recipients" aria-live="polite">
-          <strong>
-            {t.admin.messageRecipients(target.speakerIds?.length || recipients.length || 1)}
-          </strong>
-          {recipients.length > 0 && (
+          <strong>{t.admin.messageRecipientPreview}</strong>
+          <p>{t.admin.messageRecipientPreviewHelp}</p>
+          {recipientLoading && <p className="muted">{t.app.loading}</p>}
+          {recipientError && <p className="field__error">{recipientError}</p>}
+          {recipientPreview.length > 0 && (
             <ul>
-              {recipients.map((name) => (
-                <li key={name}>{name}</li>
+              {recipientPreview.map((recipient) => (
+                <li key={recipient.uid}>
+                  <strong>{recipient.name}</strong>
+                  <span>{recipient.to}</span>
+                </li>
               ))}
             </ul>
           )}
@@ -771,12 +1078,45 @@ function WriteToSpeaker({
       <button
         type="button"
         className="btn btn--primary"
-        disabled={busy || readOnly || !proposalId || !subject.trim() || !body.trim()}
-        onClick={send}
+        disabled={
+          busy ||
+          readOnly ||
+          !deliveryReady ||
+          !proposalId ||
+          !subject.trim() ||
+          !body.trim() ||
+          recipientLoading ||
+          Boolean(recipientError) ||
+          !recipientsFingerprint ||
+          recipientPreview.length === 0
+        }
+        aria-describedby={!deliveryReady ? 'email-message-setup-reason' : undefined}
+        onClick={() => setReviewing(true)}
       >
         {busy ? t.admin.messageSending : t.admin.messageSend}
       </button>
+      {!deliveryReady && (
+        <p className="field__help" id="email-message-setup-reason">
+          {t.admin.messageSetupNeeded}
+        </p>
+      )}
       <Result ok={note} error={error} />
+      {reviewing && target && (
+        <EmailActionDialog
+          action="compose"
+          rows={recipientPreview.map((recipient) => ({
+            logId: recipient.uid,
+            kind: 'message',
+            to: recipient.to,
+            title: `${recipient.name} · ${target.title}`,
+          }))}
+          message={{ subject, body }}
+          busy={busy}
+          error={error}
+          onCancel={() => setReviewing(false)}
+          onConfirm={() => void send()}
+        />
+      )}
     </div>
   );
 }

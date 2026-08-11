@@ -23,10 +23,12 @@ import {
   inviteRole,
   readCfp,
   readEmailLog,
+  readEmailDomainBinding,
   readExternalMutationLease,
   readMember,
   readProposalById,
   readProposalUpdateTime,
+  reviewedEmailRecipients,
   readStoredObjects,
   reserveCfpDeletionDirect,
   reset,
@@ -37,7 +39,9 @@ import {
   seedProposal,
   seedReview,
   seedSpeaker,
+  setEmailDeliveryReadyDirect,
   setSendingDomainDirect,
+  setSendingDomainPointerDirect,
   setSubmissionFormDirect,
   storeObjectDirect,
 } from './backend';
@@ -297,6 +301,35 @@ test.describe('nothing crosses between two calls', () => {
     });
   });
 
+  test('a copied Resend domain pointer cannot cross the CFP binding', async () => {
+    await inviteRole(OWNER.email, 'admin', CFP_ID);
+    const chair = await createAccount(OWNER);
+    await callAs(chair.idToken, 'claimRole', { cfpId: CFP_ID });
+
+    const domain = 'mail.someone-elses.example';
+    const domainId = `dom-${domain}`;
+    await setSendingDomainDirect(domain, OTHER);
+    await setSendingDomainPointerDirect(domain, domainId, CFP_ID);
+
+    expect(
+      await callAs(chair.idToken, 'setEmailSettings', {
+        cfpId: CFP_ID,
+        from: `Our CFP <cfp@${domain}>`,
+        replyTo: '',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+
+    const readiness = await callJson(chair.idToken, 'emailQueue', {
+      cfpId: CFP_ID,
+      action: 'readiness',
+    });
+    expect(readiness).toMatchObject({
+      domainId: '',
+      domain: '',
+      delivery: { ready: false, problems: expect.arrayContaining(['missing_domain']) },
+    });
+  });
+
   test('the review queue and the aggregate stop at the tenant', async () => {
     await inviteRole(OWNER.email, 'admin', CFP_ID);
     const chair = await createAccount(OWNER);
@@ -433,7 +466,7 @@ test.describe('archiving and deleting', () => {
       ['setProposalStatus', { proposalId: 'p-history', status: 'accepted' }],
       [
         'sendSpeakerMessage',
-        { proposalId: 'p-history', subject: 'Question', body: 'Can you reply?' },
+        { action: 'preview', proposalId: 'p-history' },
       ],
       ['setEmailSettings', { from: 'Event <cfp@event.example>', replyTo: '' }],
       [
@@ -441,12 +474,18 @@ test.describe('archiving and deleting', () => {
         { kind: 'accepted', locale: 'en', subject: 'Accepted', body: 'Hello.' },
       ],
       ['sendTestEmail', { kind: 'accepted', locale: 'en' }],
-      ['setEmailSecret', { apiKey: 're_archived_test_key' }],
       ['emailDomain', { action: 'add', domain: 'event.example' }],
       ['emailDomain', { action: 'verify' }],
       ['emailQueue', { action: 'release', logIds: ['held-history'] }],
       ['emailQueue', { action: 'retry' }],
-      ['emailQueue', { action: 'resend', logId: 'failed-history' }],
+      [
+        'emailQueue',
+        {
+          action: 'resend',
+          logId: 'failed-history',
+          reviewedTo: 'speaker@example.org',
+        },
+      ],
     ];
     for (const [callable, data] of refused) {
       expect(await callAs(owner.idToken, callable, data), callable).toMatchObject({
@@ -507,7 +546,6 @@ test.describe('archiving and deleting', () => {
       code: 'ABORTED',
     });
     for (const [callable, data] of [
-      ['setEmailSecret', { apiKey: 're_fenced_test_key' }],
       ['emailDomain', { action: 'add', domain: 'fenced.example' }],
       ['emailDomain', { action: 'verify' }],
     ] as const) {
@@ -554,12 +592,22 @@ test.describe('archiving and deleting', () => {
       status: 'under_review',
     });
     await seedSpeaker(speaker.uid, { ...SPEAKER, name: 'Committee version' });
+    const currentPreview = await callJson(owner.idToken, 'previewProposalSpeakerProfile', {
+      proposalId: 'p-frozen-history',
+      speakerUid: speaker.uid,
+    });
     expect(
       await callJson(owner.idToken, 'refreshProposalSpeakerSnapshot', {
         proposalId: 'p-frozen-history',
         speakerUid: speaker.uid,
+        expectedCurrentFingerprint: currentPreview.currentFingerprint,
+        expectedLatestFingerprint: currentPreview.latestFingerprint,
       }),
     ).toMatchObject({ changed: true });
+    const refreshedPreview = await callJson(owner.idToken, 'previewProposalSpeakerProfile', {
+      proposalId: 'p-frozen-history',
+      speakerUid: speaker.uid,
+    });
     await seedReview('p-frozen-history', owner.uid, 2);
     await expect
       .poll(async () => await readProposalById('p-frozen-history'))
@@ -574,6 +622,8 @@ test.describe('archiving and deleting', () => {
       await callAs(owner.idToken, 'refreshProposalSpeakerSnapshot', {
         proposalId: 'p-frozen-history',
         speakerUid: speaker.uid,
+        expectedCurrentFingerprint: refreshedPreview.currentFingerprint,
+        expectedLatestFingerprint: refreshedPreview.latestFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     await seedReview('p-frozen-history', owner.uid, 4);
@@ -658,13 +708,18 @@ test.describe('archiving and deleting', () => {
       }),
     ]);
 
+    await setEmailDeliveryReadyDirect();
     const preview = await callJson(owner.idToken, 'emailQueue', { action: 'preview' });
     expect(preview).toMatchObject({ recoverableSending: 1 });
     expect(preview.rows.find((row: { logId: string }) => row.logId === 'expired-send')).toMatchObject({
       status: 'sending',
       recoverable: true,
     });
-    expect(await callJson(owner.idToken, 'emailQueue', { action: 'retry' })).toMatchObject({
+    expect(await callJson(owner.idToken, 'emailQueue', {
+      action: 'retry',
+      logIds: preview.retryable.map((row: { logId: string }) => row.logId),
+      reviewedRecipients: reviewedEmailRecipients(preview.retryable),
+    })).toMatchObject({
       released: 1,
     });
 
@@ -697,6 +752,7 @@ test.describe('archiving and deleting', () => {
     const owner = await createAccount(OWNER);
     await seedMember(owner.uid, 'owner');
     await seedMember('departing-reviewer', 'reviewer');
+    await setSendingDomainDirect('deleting.example');
 
     const speaker = await createAccount(SPEAKER);
     await seedProposal('p-1', { speakerUid: speaker.uid, title: 'A talk', status: 'submitted' });
@@ -725,6 +781,7 @@ test.describe('archiving and deleting', () => {
     expect(await readMember('departing-reviewer')).toBeNull();
     expect(await readProposalById('p-1')).toBeNull();
     expect(await readStoredObjects('cfps/')).toEqual([]);
+    expect(await readEmailDomainBinding('dom-deleting.example')).toBeNull();
   });
 
   test('delete and unarchive serialize so a deletion reservation cannot be revived', async () => {

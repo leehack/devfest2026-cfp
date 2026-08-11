@@ -6,7 +6,7 @@ import {
   type ProposalSpeakerRoster,
   type SpeakerRosterItem,
 } from '@shared/coSpeakers';
-import type { SpeakerSnapshot } from '@shared/types';
+import type { SpeakerProfileUpdateRequestState, SpeakerSnapshot } from '@shared/types';
 
 import { useI18n } from '../i18n/context';
 import { ProfileSnapshotRefresh } from './ProfileSnapshotRefresh';
@@ -27,7 +27,13 @@ export interface CoSpeakerRosterProps {
   context?: RosterContext;
   readOnly?: boolean;
   refreshKey?: number;
+  canRequestProfileUpdate?: boolean;
+  autoReviewSpeakerUid?: string;
   onChange?: (roster: ProposalSpeakerRoster | null) => void;
+  onProfileUpdateRequestChanged?: (
+    speakerUid: string,
+    request: SpeakerProfileUpdateRequestState,
+  ) => void;
   onSnapshotRefreshed?: (speakerUid: string, snapshot: SpeakerSnapshot) => void;
   onLeft?: () => void;
 }
@@ -62,7 +68,10 @@ export function CoSpeakerRoster({
   context = 'speaker',
   readOnly = false,
   refreshKey = 0,
+  canRequestProfileUpdate = false,
+  autoReviewSpeakerUid,
   onChange,
+  onProfileUpdateRequestChanged,
   onSnapshotRefreshed,
   onLeft,
 }: CoSpeakerRosterProps) {
@@ -373,6 +382,13 @@ export function CoSpeakerRoster({
                   speakerUid={item.uid}
                   speakerName={label}
                   disabled={actionBusy}
+                  canRequestUpdate={
+                    canRequestProfileUpdate && item.confirmationState === 'confirmed'
+                  }
+                  autoOpen={autoReviewSpeakerUid === item.uid}
+                  onRequestChanged={(request) =>
+                    onProfileUpdateRequestChanged?.(item.uid, request)
+                  }
                   onRefreshed={(result) => {
                     onSnapshotRefreshed?.(item.uid, result.snapshot);
                     setReload((value) => value + 1);
@@ -561,7 +577,10 @@ export function CoSpeakerRosterDialog({
   proposalId,
   proposalTitle,
   readOnly = false,
+  canRequestProfileUpdate = false,
+  autoReviewSpeakerUid,
   onSnapshotRefreshed,
+  onProfileUpdateRequestChanged,
   onClose,
 }: {
   open: boolean;
@@ -569,7 +588,13 @@ export function CoSpeakerRosterDialog({
   proposalId: string;
   proposalTitle: string;
   readOnly?: boolean;
+  canRequestProfileUpdate?: boolean;
+  autoReviewSpeakerUid?: string;
   onSnapshotRefreshed?: (speakerUid: string, snapshot: SpeakerSnapshot) => void;
+  onProfileUpdateRequestChanged?: (
+    speakerUid: string,
+    request: SpeakerProfileUpdateRequestState,
+  ) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -649,7 +674,10 @@ export function CoSpeakerRosterDialog({
           proposalId={proposalId}
           context="admin"
           readOnly={readOnly}
+          canRequestProfileUpdate={canRequestProfileUpdate}
+          autoReviewSpeakerUid={autoReviewSpeakerUid}
           onSnapshotRefreshed={onSnapshotRefreshed}
+          onProfileUpdateRequestChanged={onProfileUpdateRequestChanged}
         />
       </div>
     </div>

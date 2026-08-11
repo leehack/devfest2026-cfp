@@ -292,12 +292,14 @@ private draft title/address never appears in the admin email queue.
 `speakers/{uid}` shared by every proposal, editable throughout — including while
 a talk is frozen, because a changed employer is not a changed talk.
 
-The reusable speaker photo belongs there too. Its private original is replaced
-through a server callable, not a browser Storage write. An event may make the
-photo mandatory at confirmation; confirming freezes that exact generation into
-the speaker's event response. A published programme serves a square derivative
-through an opaque release member, so replacing or removing the global profile
-photo never rewrites an already-published schedule.
+The reusable speaker photo belongs there too. A speaker may add or replace it
+from `/me` or from the account-profile section while preparing a proposal; it
+remains optional and is not copied into the proposal reviewers see. Its private
+original is replaced through a server callable, not a browser Storage write. An
+event may make the photo mandatory at confirmation; confirming freezes that
+exact generation into the speaker's event response. A published programme
+serves a square derivative through an opaque release member, so replacing or
+removing the global profile photo never rewrites an already-published schedule.
 
 **But the committee reads a copy, not the profile.** `submitProposal` freezes a
 `speakerSnapshot` onto the proposal. Two reasons, one answer: a profile is global
@@ -307,9 +309,20 @@ committee on the platform the whole speaker directory; and a bio rewritten in
 The snapshot deliberately omits the email address — a reviewer judging a talk has
 no need of it. Later profile edits do not silently rewrite that event copy. The
 speaker, or an event admin acting on an active speaker, may explicitly refresh
-one proposal from the current profile. Confirmation answers and travel details
-stay untouched; an existing shared or published programme stays immutable, and
-a configured working schedule is marked for review before it is shared again.
+one proposal from the current profile. The refresh first shows the changed public
+fields side by side and refuses to apply a profile that changed after that
+comparison. An admin never sees or adopts a newer private location or the photo
+itself; photo approval remains the speaker's action.
+
+After a speaker has confirmed, an admin may request updated profile details, the
+programme photo, or both. A targeted email opens that exact session, the speaker
+picker shows a task badge, and the admin proposal table keeps a waiting/ready
+queue; copying the session link remains a fallback. The speaker edits the account
+profile, explicitly applies the requested details or photo to that session, and
+marks the request complete. Confirmation answers and travel details stay
+untouched. The ready state remains visible until an organiser includes the
+session in a new shared release; an existing shared or published programme never
+changes in place.
 
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept
@@ -373,7 +386,10 @@ to autoscale past that — anything beyond is a loop or an attack, and should
 queue rather than bill.
 
 One Resend account serves every call on the platform, so each one registers its
-own sending domain and `setEmailSettings` refuses a `from` that is not on it.
+own sending domain. A callable-only platform binding assigns each Resend domain
+id to exactly one CFP; typing another event's public domain name cannot adopt it.
+`setEmailSettings` and delivery both refuse a `from` whose exact binding is not
+owned by that CFP. Only platform owners and administrators rotate the shared key.
 `config/platform` holds the site's own origin and is writable by nobody through
 the app — it is where every mailed link points, sign-in links included, and those
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
@@ -395,7 +411,11 @@ and edits the start, duration, room and resolved language. Planner cards keep th
 title, speakers, category, format, level, language and confirmation state visible.
 Custom programme items cover breaks, meals, opening/closing remarks, keynotes and
 social events, with optional language, description and attendee-facing speaker
-names, roles, organisations and bios.
+names, roles, organisations, bios and photos. A custom photo upload returns only
+an opaque working-asset handle to the editor. Sharing substitutes a different
+release-scoped reference, and the anonymous programme receives only a derived
+square image for the current published release—never a Storage path or object
+generation.
 
 Draft writes are admin-only callables with an optimistic `revision`; a stale tab
 must reload instead of overwriting another organiser. The server rejects room,
@@ -466,22 +486,26 @@ With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
 without sending anything, and the log never claims a send that did not happen.
 
-**Set it all up from `/admin`**, under Email. Four steps, each of which says
+**Set event mail up from `/admin`**, under Email. Four steps, each of which says
 whether it is done, because the failure this replaces was silent — the pipeline
 queued perfectly and sent nothing, and no screen said why.
 
-1. **API key.** Paste a Resend key. Give it **Full access** when you create it:
+1. **Shared API key.** A platform owner or administrator pastes the platform's
+   Resend key. Event administrators can see whether it is ready but cannot
+   replace it. Give it **Full access** when you create it:
    the next step manages domains, and Resend's sending-only keys cannot. The key
    is checked against Resend before being saved, so a typo fails here rather than
    on the night the decisions go out. It goes to **Secret Manager, never to
    Firestore** — Firestore has no version history, no access audit, and a copy of
    every document lands in every export. The page shows the last four characters
    and nothing more.
-2. **Sending domain.** Add it, and the page lists the exact DNS records Resend
+2. **Sending domain.** Add a new domain, and the page lists the exact DNS records Resend
    wants and re-checks them on a button. Those records are generated per domain
    and exist only in Resend's dashboard, which is the one part of the setup
    nobody can be told in advance. This is the long pole — DNS propagation plus
-   Resend's own check.
+   Resend's own check. An exact legacy domain pointer migrates only when no
+   other CFP references it; an existing unbound Resend domain is refused rather
+   than implicitly claimed by its public name.
 3. **Sender.** The from address and reply-to, stored in `config/email`.
    `CFP_EMAIL_FROM` and `CFP_REPLY_TO` in `functions/.env*` remain a fallback for
    a fresh project, empty on purpose so nothing sends until someone says so.

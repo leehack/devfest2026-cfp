@@ -8,6 +8,7 @@ import {
   removeProfilePhoto,
   uploadProfilePhoto,
 } from '../lib/proposals';
+import { base64Of, imageBlobFromBase64, imageDimensions } from '../lib/imageFiles';
 
 interface Props {
   required?: boolean;
@@ -19,44 +20,6 @@ interface Props {
   onPresenceChange?: (present: boolean) => void;
   sessionGeneration?: string | null;
   onUseForSession?: (generation: string | null) => Promise<boolean>;
-}
-
-function dataUrlBytes(base64: string, contentType: string): Blob {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return new Blob([bytes], { type: contentType });
-}
-
-async function imageDimensions(file: File): Promise<{ width: number; height: number }> {
-  const url = URL.createObjectURL(file);
-  try {
-    return await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-      image.onerror = () => reject(new Error('invalid image'));
-      image.src = url;
-    });
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-async function base64Of(file: File): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('file read failed'));
-    reader.onload = () =>
-      typeof reader.result === 'string'
-        ? resolve(reader.result)
-        : reject(new Error('file read failed'));
-    reader.readAsDataURL(file);
-  });
-  const separator = dataUrl.indexOf(',');
-  if (separator < 0) throw new Error('file encoding failed');
-  return dataUrl.slice(separator + 1);
 }
 
 export function SpeakerProfilePhoto({
@@ -84,8 +47,10 @@ export function SpeakerProfilePhoto({
   const [problem, setProblem] = useState('');
   const [sessionProblem, setSessionProblem] = useState('');
   const loadFailed = useRef(t.profilePhoto.loadFailed);
+  const onBusyChangeRef = useRef(onBusyChange);
   const onCurrentGenerationChangeRef = useRef(onCurrentGenerationChange);
   loadFailed.current = t.profilePhoto.loadFailed;
+  onBusyChangeRef.current = onBusyChange;
   onCurrentGenerationChangeRef.current = onCurrentGenerationChange;
 
   const showPreview = useCallback((blob: Blob | null) => {
@@ -105,11 +70,12 @@ export function SpeakerProfilePhoto({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    onBusyChangeRef.current?.(true);
     setGenerationKnown(false);
     void profilePhotoImage({})
       .then(({ data }) => {
         if (cancelled) return;
-        showPreview(dataUrlBytes(data.base64, data.contentType));
+        showPreview(imageBlobFromBase64(data.base64, data.contentType));
         setGeneration(data.generation);
         setGenerationKnown(true);
         onCurrentGenerationChangeRef.current?.(data.generation);
@@ -129,10 +95,14 @@ export function SpeakerProfilePhoto({
         if (code !== 'not-found') setProblem(loadFailed.current);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          onBusyChangeRef.current?.(false);
+        }
       });
     return () => {
       cancelled = true;
+      onBusyChangeRef.current?.(false);
     };
   }, [setPresence, showPreview]);
 
@@ -145,7 +115,7 @@ export function SpeakerProfilePhoto({
 
   function setWorking(next: boolean) {
     setBusy(next);
-    onBusyChange?.(next);
+    onBusyChangeRef.current?.(next);
   }
 
   async function choose(file: File) {

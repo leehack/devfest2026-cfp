@@ -137,6 +137,63 @@ export interface SpeakerSnapshot {
   sessionizeUrl?: string;
 }
 
+/** The two independently adopted parts of one speaker's programme profile. */
+export type SpeakerProfileUpdateScope = 'profile' | 'photo';
+
+/**
+ * Public profile fields safe to compare across the account and event copies.
+ * `basedIn` is returned only to the speaker themself. An organiser preview may
+ * compare a private global profile with an event copy, so it must not disclose
+ * a newer location the speaker has not adopted for that event.
+ */
+export interface SpeakerProfilePreviewFields {
+  name: string;
+  bio: string;
+  company?: string;
+  jobTitle?: string;
+  basedIn?: string;
+  socials: Social[];
+  isGde: boolean;
+  pastTalks?: string;
+  sessionizeUrl?: string;
+}
+
+export type SpeakerProfilePreviewField = keyof SpeakerProfilePreviewFields;
+export type SpeakerProfilePreviewValue = string | boolean | Social[] | null;
+
+export interface SpeakerProfilePreviewChange {
+  field: SpeakerProfilePreviewField;
+  before: SpeakerProfilePreviewValue;
+  after: SpeakerProfilePreviewValue;
+}
+
+/** Safe request state returned by the preview callable to the speaker/admin. */
+export interface SpeakerProfileUpdateRequestState {
+  requestId: string;
+  generation: number;
+  status: 'pending' | 'resolved' | 'cancelled';
+  scopes: SpeakerProfileUpdateScope[];
+  resolvedScopes: SpeakerProfileUpdateScope[];
+  requestedAt: unknown;
+  resolvedAt?: unknown;
+  cancelledAt?: unknown;
+  /** A shared schedule release has incorporated this exact resolved generation. */
+  handledAt?: unknown;
+}
+
+/** Safe list-level state for speaker and organiser attention badges. */
+export interface SpeakerProfileUpdateRequestSummary {
+  proposalId: string;
+  speakerUid: string;
+  requestId: string;
+  generation: number;
+  state: 'waiting' | 'ready';
+  scopes: SpeakerProfileUpdateScope[];
+  resolvedScopes: SpeakerProfileUpdateScope[];
+  requestedAt: number | null;
+  resolvedAt: number | null;
+}
+
 /**
  * The consents this call asked for, keyed by the `acks` keys in its
  * `config/submissionForm`. Every one of them is `true` — the schema will not

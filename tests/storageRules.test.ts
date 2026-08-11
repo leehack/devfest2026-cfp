@@ -119,12 +119,14 @@ describe('a confirmed headshot snapshot', () => {
 
 describe('profile originals and public derivative caches', () => {
   const profile = `speakerProfilePhotos/${SPEAKER}/upload-id`;
+  const custom = `cfps/${CFP_ID}/workingScheduleSpeakerPhotos/${'a'.repeat(43)}`;
   const derivative =
     `cfps/${CFP_ID}/publicSchedulePhotos/release-id/opaque-photo-ref.webp`;
 
   beforeEach(async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       await uploadBytes(ref(ctx.storage(), profile), bytes(), jpeg);
+      await uploadBytes(ref(ctx.storage(), custom), bytes(), jpeg);
       await uploadBytes(
         ref(ctx.storage(), derivative),
         bytes(),
@@ -137,6 +139,14 @@ describe('profile originals and public derivative caches', () => {
     for (const client of [asSpeaker(), asOther(), asUnverified(), asStranger()]) {
       await assertFails(getBytes(ref(client, profile)));
       await assertFails(uploadBytes(ref(client, profile), bytes(64), jpeg));
+    }
+  });
+
+  it('keeps custom programme originals callable-only', async () => {
+    for (const client of [asSpeaker(), asOther(), asUnverified(), asStranger()]) {
+      await assertFails(getBytes(ref(client, custom)));
+      await assertFails(uploadBytes(ref(client, custom), bytes(64), jpeg));
+      await assertFails(deleteObject(ref(client, custom)));
     }
   });
 

@@ -5,6 +5,7 @@ import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
 import {
   isLateIntakeWindow,
+  overviewEmailReady,
   publishedProgrammeLifecycleStep,
 } from '../../lib/adminLifecycle';
 import { toDate } from '../../lib/dates';
@@ -12,7 +13,6 @@ import { adminError } from '../../lib/errors';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
 import { loadScheduleDraft, loadSharedSchedule } from '../../lib/schedule';
 import {
-  emailDomain,
   emailQueue,
   loadAllProposals,
   loadCfp,
@@ -23,14 +23,15 @@ import { href, navigate, type AdminTab } from '../../lib/router';
 import { paths } from '../../lib/paths';
 import { cfpState, type CfpState } from '@shared/cfpWindow';
 import type { ConfirmForm } from '@shared/confirmForm';
+import type { EmailDeliveryProblem, EmailDeliveryReadiness } from '@shared/emailSettings';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp } from '@shared/types';
 
 interface EmailReadiness {
-  key: boolean;
-  domain: boolean;
-  sender: boolean;
+  delivery: EmailDeliveryReadiness | null;
+  problems: EmailDeliveryProblem[];
   waiting: number;
+  needsAttention: number;
   checkFailed: boolean;
 }
 
@@ -144,22 +145,20 @@ export function Overview({ cfpId }: { cfpId: string }) {
           emailQueue({ cfpId, action: 'readiness' }),
           emailQueue({ cfpId, action: 'summary' }),
         ])
-          .then(async ([{ data: snapshot }, { data: summary }]) => {
-            const domains =
-              snapshot.keyHint && snapshot.domainId
-                ? (await emailDomain({ cfpId, action: 'list' })).data.domains ?? []
-                : [];
-            return {
-              key: Boolean(snapshot.keyHint),
-              domain: domains.some(
-                (domain) => domain.id === snapshot.domainId && domain.status === 'verified',
-              ),
-              sender: Boolean(snapshot.settings?.from),
-              waiting: summary.waiting ?? 0,
-              checkFailed: false,
-            };
-          })
-          .catch(() => ({ key: false, domain: false, sender: false, waiting: 0, checkFailed: true })),
+          .then(([{ data: snapshot }, { data: summary }]) => ({
+            delivery: snapshot.delivery ?? null,
+            problems: snapshot.delivery?.problems ?? [],
+            waiting: summary.waiting ?? 0,
+            needsAttention: summary.needsAttention ?? 0,
+            checkFailed: false,
+          }))
+          .catch(() => ({
+            delivery: null,
+            problems: [],
+            waiting: 0,
+            needsAttention: 0,
+            checkFailed: true,
+          })),
         Promise.all([loadScheduleDraft(cfpId), loadSharedSchedule(cfpId)])
           .then(([draft, shared]) => ({
             configured: draft.config !== null,
@@ -236,7 +235,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
   ].every((options) => options.length > 0);
   const committeeCount = committee.people.length + committee.pending.length;
   const committeeReady = committeeCount > 1;
-  const emailReady = email.key && email.domain && email.sender;
+  const emailReady = overviewEmailReady(email.delivery);
+  const emailProblemLabels = email.problems.map(
+    (problem) => t.admin.emailDeliveryProblems[problem] ?? problem,
+  );
   const status = stateOf(cfp);
 
   const steps: SetupStep[] = [
@@ -278,7 +280,9 @@ export function Overview({ cfpId }: { cfpId: string }) {
         ? t.admin.setupEmailUnavailable
         : emailReady
           ? t.admin.setupEmailDone
-          : t.admin.setupEmailTodo,
+          : emailProblemLabels.length > 0
+            ? t.admin.setupEmailProblems(emailProblemLabels)
+            : t.admin.setupEmailTodo,
       action: t.admin.setupEmailAction,
       tab: 'email',
     },
@@ -346,12 +350,13 @@ export function Overview({ cfpId }: { cfpId: string }) {
       needsFirstReview: needsFirstReview.length,
       publicNeedsUpdate,
       waitingEmails: email.waiting,
+      emailNeedsAttention: email.needsAttention,
     });
   } else if (readiness < 100) {
     lifecycleStep = 1;
   } else if (live.length === 0) {
     lifecycleStep = 2;
-  } else if (email.waiting > 0) {
+  } else if (email.waiting + email.needsAttention > 0) {
     lifecycleStep = schedule.sharedReleaseId && confirmed.length > 0 ? 7 : 5;
   } else if (undecided.length > 0) {
     lifecycleStep = needsFirstReview.length > 0 ? 3 : 4;

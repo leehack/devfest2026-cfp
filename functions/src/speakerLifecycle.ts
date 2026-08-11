@@ -287,6 +287,49 @@ export function scheduleEmailStillTrue(
   );
 }
 
+/** Revalidates one profile-request email against its exact pending generation. */
+export function profileUpdateRequestStillTrue(
+  kind: unknown,
+  requestId: string,
+  generation: number,
+  cfpId: string,
+  proposalId: string,
+  speakerUid: string,
+  updateRequest: DocumentSnapshot | null | undefined,
+  proposal: DocumentSnapshot | null | undefined,
+  confirmation: DocumentSnapshot | null | undefined,
+): boolean {
+  if (
+    kind !== 'profile_update_requested' ||
+    !requestId ||
+    !Number.isSafeInteger(generation) ||
+    generation < 1 ||
+    !updateRequest?.exists ||
+    !proposal?.exists ||
+    updateRequest.get('cfpId') !== cfpId ||
+    updateRequest.get('proposalId') !== proposalId ||
+    updateRequest.get('speakerUid') !== speakerUid ||
+    updateRequest.get('requestId') !== requestId ||
+    updateRequest.get('generation') !== generation ||
+    updateRequest.get('status') !== 'pending' ||
+    !proposalSpeakerIds(proposal.data() ?? {}).includes(speakerUid) ||
+    !['accepted', 'confirmed'].includes(String(proposal.get('status') ?? ''))
+  ) {
+    return false;
+  }
+
+  if (!usesPerSpeakerLifecycle(proposal.data() ?? {})) {
+    return proposal.get('status') === 'confirmed';
+  }
+  return Boolean(
+    confirmation?.exists &&
+      confirmation.get('cfpId') === cfpId &&
+      confirmation.get('proposalId') === proposalId &&
+      confirmation.get('uid') === speakerUid &&
+      confirmation.get('response') === 'confirmed',
+  );
+}
+
 /** Revalidates a queued invite against the exact private row before delivery. */
 export function coSpeakerInvitationStillTrue(
   kind: unknown,

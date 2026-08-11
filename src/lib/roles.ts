@@ -176,11 +176,34 @@ export interface HeldEmail {
   to: string;
   title?: string;
 }
+
+export type EmailDeliveryProblem =
+  | 'missing_key'
+  | 'invalid_key'
+  | 'missing_domain'
+  | 'domain_unverified'
+  | 'invalid_sender'
+  | 'sender_domain_mismatch'
+  | 'setup_unavailable';
+
+export interface EmailDeliveryReadiness {
+  ready: boolean;
+  problems: EmailDeliveryProblem[];
+  domainStatus: string;
+}
+
+export interface RetryableEmail extends HeldEmail {
+  status: string;
+  recoverable?: boolean;
+}
+
 export const emailQueue = httpsCallable<
   In<{
     action: 'readiness' | 'summary' | 'preview' | 'release' | 'retry' | 'resend';
     logId?: string;
     logIds?: string[];
+    reviewedRecipients?: Array<{ logId: string; to: string }>;
+    reviewedTo?: string;
   }>,
   {
     ok: boolean;
@@ -188,10 +211,20 @@ export const emailQueue = httpsCallable<
     waiting?: number;
     tally?: Record<string, number>;
     held?: HeldEmail[];
+    /** Additional sendable held rows available after this bounded review batch. */
+    heldRemaining?: number;
     /** Held rows whose proposal no longer has that decision. */
     staleHeld?: number;
     /** Sending rows whose delivery lease expired and can be retried safely. */
     recoverableSending?: number;
+    /** Current failed, setup-incomplete, or expired deliveries needing an admin. */
+    needsAttention?: number;
+    /** Exact current rows the bulk retry action would move back to the queue. */
+    retryable?: RetryableEmail[];
+    /** Additional retryable rows available after this bounded review batch. */
+    retryableRemaining?: number;
+    /** Server-checked provider and sender readiness for delivery actions. */
+    delivery?: EmailDeliveryReadiness;
     released?: number;
     settings?: EmailSettings;
     /** Last four characters of the API key — never the key. */
@@ -209,6 +242,9 @@ export const emailQueue = httpsCallable<
 export interface EmailRow {
   logId: string;
   kind: string;
+  /** Current server-resolved address used when an admin reviews a resend. */
+  currentTo: string;
+  /** Historical address used by the recorded attempt. */
   to: string;
   status: string;
   attempts: number;
@@ -217,6 +253,8 @@ export interface EmailRow {
   subject: string;
   /** Milliseconds, because a Timestamp does not survive the callable's JSON. */
   sentAt: number | null;
+  /** The latest provider attempt, whether it delivered or not. */
+  attemptedAt: number | null;
   error: string;
   /** Retained in storage, but not currently eligible for release. */
   stale?: boolean;
@@ -230,7 +268,7 @@ export const setEmailSettings = httpsCallable<In<EmailSettings>, { ok: boolean }
 );
 
 /** The key goes up and never comes back — `keyHint` is the last four characters. */
-export const setEmailSecret = httpsCallable<In<{ apiKey: string }>, { ok: boolean; keyHint: string }>(
+export const setEmailSecret = httpsCallable<{ apiKey: string }, { ok: boolean; keyHint: string }>(
   functions,
   'setEmailSecret',
 );
@@ -281,9 +319,31 @@ export const setSubmissionForm = httpsCallable<
   { ok: boolean; form: SubmissionForm }
 >(functions, 'setSubmissionForm');
 
+export interface SpeakerMessageRecipient {
+  uid: string;
+  to: string;
+  name: string;
+}
+
 export const sendSpeakerMessage = httpsCallable<
-  In<{ proposalId: string; subject: string; body: string }>,
-  { ok: boolean; logId: string; logIds: string[] }
+  In<
+    | { action: 'preview'; proposalId: string }
+    | {
+        action: 'send';
+        proposalId: string;
+        subject: string;
+        body: string;
+        expectedRecipientsFingerprint: string;
+      }
+  >,
+  {
+    ok: boolean;
+    logId?: string;
+    logIds?: string[];
+    recipientCount?: number;
+    recipients?: SpeakerMessageRecipient[];
+    recipientsFingerprint?: string;
+  }
 >(functions, 'sendSpeakerMessage');
 
 /**

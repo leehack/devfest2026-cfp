@@ -28,9 +28,19 @@ import { COC_URL } from '../lib/env';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
-import { editScope, type EditScope } from '../lib/lifecycle';
+import {
+  editScope,
+  lateSpeakerNeedsScheduleRelease,
+  type EditScope,
+} from '../lib/lifecycle';
 import { goTo, href } from '../lib/router';
 import { coSpeakerInviteQuery } from '../lib/coSpeakers';
+import { proposalSelectionQuery } from '../lib/proposalLinks';
+import {
+  listSpeakerProfileUpdateRequests,
+  type ProfileUpdateRequestSummary,
+} from '../lib/profileUpdateRequests';
+import { profileUpdateRequestsByProposal } from '../lib/profileUpdateRequestSummary';
 import {
   loadPublishedSchedule,
   loadSharedSchedule,
@@ -123,6 +133,7 @@ interface TalkPickerProps {
   busy: boolean;
   canAdd: boolean;
   atCap: boolean;
+  profileRequests: ReadonlyMap<string, ProfileUpdateRequestSummary[]>;
   onOpen: (id: string) => void;
   onAdd: () => void;
 }
@@ -135,6 +146,7 @@ function TalkPicker({
   busy,
   canAdd,
   atCap,
+  profileRequests,
   onOpen,
   onAdd,
 }: TalkPickerProps) {
@@ -168,6 +180,9 @@ function TalkPicker({
         <span className="talks__title">{title}</span>
         {talk.status !== 'draft' && (
           <span className="talks__status">{t.enums.status[talk.status]}</span>
+        )}
+        {(profileRequests.get(talk.id) ?? []).some((request) => request.state === 'waiting') && (
+          <span className="talks__attention">{t.profileSnapshot.pickerBadge}</span>
         )}
       </button>
     );
@@ -398,7 +413,7 @@ interface StatusBannerProps {
     public: boolean;
     href?: string;
   };
-  /** A newer shared preview exists, but this confirmed talk has no placement in it. */
+  /** This speaker is not in the current release, or its preview has no placement. */
   schedulePending?: boolean;
   /** The current shared preview could not be loaded, so no older placement is shown. */
   scheduleUnavailable?: boolean;
@@ -714,6 +729,9 @@ function ProposalFormPage({
     ProposalSpeakerRoster | null | undefined
   >(undefined);
   const [speakerRosterRefresh, setSpeakerRosterRefresh] = useState(0);
+  const [profileRequestRefresh, setProfileRequestRefresh] = useState(0);
+  const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
+  const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
 
   const transitionFocus = useRef<
     'join-waiting' | 'join-loading' | 'leave-waiting' | 'leave-loading' | null
@@ -820,7 +838,7 @@ function ProposalFormPage({
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked, schedule, sharedResult] = await Promise.all([
+        const [{ talks: found, speaker: profile }, questions, asked, schedule, sharedResult, requestResult] = await Promise.all([
           loadMyProposals(cfpId, user),
           loadConfirmForm(cfpId),
           loadSubmissionForm(cfpId),
@@ -832,6 +850,9 @@ function ProposalFormPage({
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
+          listSpeakerProfileUpdateRequests({ cfpId })
+            .then(({ data }) => ({ requests: data.own, failed: false }))
+            .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
         ]);
         if (cancelled) return;
         setTalks(found);
@@ -853,12 +874,15 @@ function ProposalFormPage({
         setPublishedSchedule(schedule);
         setSharedSchedule(sharedResult.value);
         setSharedScheduleFailed(sharedResult.failed);
+        setProfileRequests(requestResult.requests);
+        setProfileRequestsFailed(requestResult.failed);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
         const currentTalks = found.filter((talk) => !isPastTalk(talk));
-        const preferred = preferredProposalId
-          ? found.find((talk) => talk.id === preferredProposalId)
+        const requestedProposalId = preferredProposalId ?? proposalSelectionQuery(window.location.search);
+        const preferred = requestedProposalId
+          ? currentTalks.find((talk) => talk.id === requestedProposalId)
           : undefined;
         const open =
           preferred ??
@@ -1027,6 +1051,7 @@ function ProposalFormPage({
               sessionPhotoGenerations.current.set(id, generation);
               if (proposalIdRef.current === id) setSessionPhotoGeneration(generation);
             }
+            setProfileRequestRefresh((value) => value + 1);
             setAnswerSaveState('saved');
             if (source !== 'transition' && !dirty.current) collapseHistoryGuard();
           } else {
@@ -1700,6 +1725,8 @@ function ProposalFormPage({
       if (response === 'confirm') savedAnswersRef.current = responseAnswers;
       answerDirty.current = false;
       setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
+      setSpeakerRosterRefresh((value) => value + 1);
+      setProfileRequestRefresh((value) => value + 1);
       setAsking(false);
       setBanner(null);
     } catch (error: any) {
@@ -1780,6 +1807,7 @@ function ProposalFormPage({
   }
 
   const submittedCount = talks.filter((talk) => inStatusSet('live', talk.status)).length;
+  const profileRequestsByProposal = profileUpdateRequestsByProposal(profileRequests);
 
   const picker = (
     <TalkPicker
@@ -1800,12 +1828,17 @@ function ProposalFormPage({
         submittedCount < LIMITS.maxTalksPerSpeaker
       }
       atCap={submittedCount >= LIMITS.maxTalksPerSpeaker}
+      profileRequests={profileRequestsByProposal}
       onOpen={openTalk}
       onAdd={startNewTalk}
     />
   );
 
   const withdrawable = status !== 'draft' && inStatusSet('withdrawable', status);
+  const lateSpeakerSchedulePending = lateSpeakerNeedsScheduleRelease(
+    selectedTalk?.proposal,
+    user.uid,
+  );
   const sharedEntry: PublishedScheduleEntry | undefined =
     proposalId && sharedSchedule?.schedule
       ? sharedSchedule.entries.find(
@@ -1829,7 +1862,11 @@ function ProposalFormPage({
   const hasNewerSharedPreview = Boolean(
     cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId,
   );
-  const displayedEntry = hasNewerSharedPreview ? sharedEntry : publishedEntry;
+  const displayedEntry = lateSpeakerSchedulePending
+    ? undefined
+    : hasNewerSharedPreview
+      ? sharedEntry
+      : publishedEntry;
   const displayedSchedule = hasNewerSharedPreview
     ? sharedSchedule?.schedule
     : publishedSchedule?.schedule;
@@ -1930,7 +1967,7 @@ function ProposalFormPage({
     },
   ];
 
-  const speakerNext = archived
+  const lifecycleNext = archived
     ? t.form.nextSteps.archived
     : speakerStatus === 'draft'
       ? cfp.state === 'open'
@@ -1945,15 +1982,17 @@ function ProposalFormPage({
           : speakerStatus === 'accepted'
             ? t.form.nextSteps.accepted
             : speakerStatus === 'confirmed'
-              ? speakerSchedule?.public
-                ? t.form.nextSteps.confirmedPublic
-                : speakerSchedule
-                  ? t.form.nextSteps.confirmedShared
-                  : sharedScheduleFailed
-                    ? t.form.nextSteps.confirmedUnavailable
-                    : hasNewerSharedPreview
-                      ? t.form.nextSteps.confirmedPending
-                      : t.form.nextSteps.confirmedWaiting
+              ? lateSpeakerSchedulePending
+                ? t.form.nextSteps.confirmedPending
+                : speakerSchedule?.public
+                  ? t.form.nextSteps.confirmedPublic
+                  : speakerSchedule
+                    ? t.form.nextSteps.confirmedShared
+                    : sharedScheduleFailed
+                      ? t.form.nextSteps.confirmedUnavailable
+                      : hasNewerSharedPreview
+                        ? t.form.nextSteps.confirmedPending
+                        : t.form.nextSteps.confirmedWaiting
               : speakerStatus === 'waitlisted'
                 ? t.form.nextSteps.waitlisted
                 : speakerStatus === 'rejected'
@@ -1961,7 +2000,6 @@ function ProposalFormPage({
                   : speakerStatus === 'declined'
                     ? t.form.nextSteps.declined
                     : t.form.nextSteps.withdrawn;
-
   return (
     <form className="form submission-form" onSubmit={onSubmit} noValidate>
       {picker}
@@ -1993,7 +2031,23 @@ function ProposalFormPage({
         </div>
       </section>
 
-      <ProposalJourney status={speakerStatus} next={speakerNext} />
+      <ProposalJourney status={speakerStatus} next={lifecycleNext} />
+
+      {profileRequestsFailed && (
+        <aside className="profile-request-load-error" role="alert">
+          <div>
+            <h2>{t.profileSnapshot.taskLoadFailed}</h2>
+            <p>{t.profileSnapshot.taskLoadFailedHelp}</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            {t.errors.reload}
+          </button>
+        </aside>
+      )}
 
       {/*
         The talk stays on screen after submitting. A speaker who cannot re-read
@@ -2050,12 +2104,14 @@ function ProposalFormPage({
           schedule={speakerSchedule}
           schedulePending={
             speakerStatus === 'confirmed' &&
-            hasNewerSharedPreview &&
-            !sharedEntry &&
-            !sharedScheduleFailed
+            (lateSpeakerSchedulePending ||
+              (hasNewerSharedPreview && !sharedEntry && !sharedScheduleFailed))
           }
           scheduleUnavailable={
-            speakerStatus === 'confirmed' && hasNewerSharedPreview && sharedScheduleFailed
+            speakerStatus === 'confirmed' &&
+            !lateSpeakerSchedulePending &&
+            hasNewerSharedPreview &&
+            sharedScheduleFailed
           }
         />
       )}
@@ -2233,6 +2289,18 @@ function ProposalFormPage({
         <h2>{t.sections.speaker}</h2>
         <p className="section__help">{t.sections.speakerHelp}</p>
 
+        {/* Confirmation renders this same account-owned control while it is
+            open, including the event-version action. Keep only one live copy. */}
+        {!(confirmForm.speakerPhoto && (asking || speakerStatus === 'confirmed')) && (
+          <SpeakerProfilePhoto
+            disabled={submitting}
+            onBusyChange={(next) => setAnswerUploadBusy(SPEAKER_PHOTO_KEY, next)}
+            onCurrentGenerationChange={(generation) => {
+              currentProfilePhotoGeneration.current = generation;
+            }}
+          />
+        )}
+
         {speakerEditing || !speakerProfileComplete(form) ? (
           <div className="speaker-editor">
             <SpeakerFields form={form} set={set} err={err} disabled={submitting} />
@@ -2258,7 +2326,45 @@ function ProposalFormPage({
             cfpId={cfpId}
             proposalId={proposalId}
             disabled={archived || submitting || saveState === 'saving'}
+            showRequestState={speakerStatus === 'accepted' || speakerStatus === 'confirmed'}
+            requestRefreshKey={profileRequestRefresh}
             beforeRefresh={async () => !dirty.current || persist('transition')}
+            onEditProfile={() => {
+              setSpeakerEditing(true);
+              requestAnimationFrame(() => {
+                document
+                  .querySelector<HTMLElement>(
+                    '#submission-speaker input:not([disabled]), #submission-speaker textarea:not([disabled])',
+                  )
+                  ?.focus({ preventScroll: true });
+              });
+            }}
+            onEditPhoto={() => {
+              const photo = document.querySelector<HTMLElement>('.speaker-photo');
+              photo?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              requestAnimationFrame(() =>
+                photo
+                  ?.querySelector<HTMLButtonElement>('button:not([disabled])')
+                  ?.focus({ preventScroll: true }),
+              );
+            }}
+            onRefreshed={() => setSpeakerRosterRefresh((value) => value + 1)}
+            onRequestChanged={(request) => {
+              setProfileRequests((current) =>
+                request.status === 'pending'
+                  ? current.map((summary) =>
+                      summary.proposalId === proposalId &&
+                      summary.requestId === request.requestId
+                        ? { ...summary, resolvedScopes: request.resolvedScopes }
+                        : summary,
+                    )
+                  : current.filter(
+                      (summary) =>
+                        summary.proposalId !== proposalId ||
+                        summary.requestId !== request.requestId,
+                    ),
+              );
+            }}
           />
         )}
       </section>

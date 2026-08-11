@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EMPTY_SETTINGS,
+  emailDeliveryReadiness,
   parseSender,
   senderDomain,
   senderMismatch,
@@ -9,6 +10,63 @@ import {
   validateSettings,
   type EmailSettings,
 } from '@shared/emailSettings';
+
+describe('emailDeliveryReadiness', () => {
+  it('is ready only with a live key, verified exact domain, and valid sender', () => {
+    expect(
+      emailDeliveryReadiness({
+        key: 'present',
+        domain: 'devfest.example',
+        domainStatus: 'verified',
+        from: 'DevFest <cfp@devfest.example>',
+      }),
+    ).toEqual({ ready: true, problems: [], domainStatus: 'verified' });
+  });
+
+  it('returns stable, composable problem codes', () => {
+    expect(
+      emailDeliveryReadiness({
+        key: 'missing',
+        domain: '',
+        domainStatus: 'unknown',
+        from: '',
+      }),
+    ).toEqual({
+      ready: false,
+      problems: ['missing_key', 'missing_domain', 'invalid_sender'],
+      domainStatus: 'unknown',
+    });
+  });
+
+  it('rejects an unverified domain and an otherwise valid sender on another domain', () => {
+    expect(
+      emailDeliveryReadiness({
+        key: 'present',
+        domain: 'devfest.example',
+        domainStatus: 'pending',
+        from: 'cfp@mail.devfest.example',
+      }),
+    ).toEqual({
+      ready: false,
+      problems: ['domain_unverified', 'sender_domain_mismatch'],
+      domainStatus: 'pending',
+    });
+  });
+
+  it.each([
+    ['invalid', 'invalid_key'],
+    ['unavailable', 'setup_unavailable'],
+  ] as const)('distinguishes a %s key check', (key, problem) => {
+    expect(
+      emailDeliveryReadiness({
+        key,
+        domain: 'devfest.example',
+        domainStatus: 'verified',
+        from: 'cfp@devfest.example',
+      }).problems,
+    ).toEqual([problem]);
+  });
+});
 
 describe('parseSender', () => {
   it.each([

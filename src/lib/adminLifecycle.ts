@@ -1,5 +1,6 @@
 import { toDate } from './dates';
 import type { CfpState } from '@shared/cfpWindow';
+import type { EmailDeliveryReadiness } from '@shared/emailSettings';
 import type { Cfp } from '@shared/types';
 
 type LateIntakeCfp = Pick<Cfp, 'opensAt' | 'publishedScheduleAt' | 'publishedScheduleId'>;
@@ -23,6 +24,14 @@ interface PublishedProgrammeSignals {
   needsFirstReview: number;
   publicNeedsUpdate: boolean;
   waitingEmails: number;
+  emailNeedsAttention: number;
+}
+
+/** A hint, stored domain id, or sender alone is never proof that delivery works. */
+export function overviewEmailReady(
+  delivery: EmailDeliveryReadiness | null | undefined,
+): boolean {
+  return delivery?.ready === true;
 }
 
 /** The published-programme half of the 17-step organiser lifecycle. */
@@ -34,11 +43,12 @@ export function publishedProgrammeLifecycleStep({
   needsFirstReview,
   publicNeedsUpdate,
   waitingEmails,
+  emailNeedsAttention,
 }: PublishedProgrammeSignals): number {
   if (awaitingConfirmation > 0) return 15;
   if (undecided > 0) return needsFirstReview > 0 ? 13 : 14;
   if (publicNeedsUpdate) return 16;
-  if (waitingEmails > 0) return 15;
+  if (waitingEmails + emailNeedsAttention > 0) return 15;
   if (status === 'open') return lateIntake ? 12 : 9;
   return 11;
 }

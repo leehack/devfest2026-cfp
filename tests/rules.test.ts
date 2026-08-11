@@ -994,6 +994,57 @@ describe('a speaker profile is readable only by its owner', () => {
   });
 });
 
+describe('speaker profile update requests are callable-only', () => {
+  const path = `${CFP}/proposals/p-anna/profileUpdateRequests/${APPLICANT}`;
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), path), {
+        cfpId: CFP_ID,
+        proposalId: 'p-anna',
+        speakerUid: APPLICANT,
+        requestId: 'request-1',
+        generation: 1,
+        status: 'pending',
+        scopes: ['profile'],
+        resolvedScopes: [],
+        requestedBy: OWNER,
+      });
+    });
+  });
+
+  it('does not disclose the participant-private request directly', async () => {
+    await assertFails(getDoc(doc(asApplicant(), path)));
+    await assertFails(getDoc(doc(asOwner(), path)));
+  });
+
+  it('does not let a speaker or admin forge a request transition', async () => {
+    await assertFails(updateDoc(doc(asApplicant(), path), { status: 'resolved' }));
+    await assertFails(updateDoc(doc(asOwner(), path), { status: 'cancelled' }));
+  });
+});
+
+describe('custom schedule speaker photo assets are callable-only', () => {
+  const path = `${CFP}/scheduleSpeakerPhotoAssets/${'a'.repeat(43)}`;
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), path), {
+        assetRef: 'a'.repeat(43),
+        path: `cfps/${CFP_ID}/workingScheduleSpeakerPhotos/${'a'.repeat(43)}`,
+        generation: '1',
+        contentType: 'image/png',
+        size: 1024,
+      });
+    });
+  });
+
+  it('denies direct reads and writes even to event admins', async () => {
+    await assertFails(getDoc(doc(asOwner(), path)));
+    await assertFails(setDoc(doc(asOwner(), path), { size: 1 }, { merge: true }));
+  });
+});
+
 describe('role grants are readable only by admins', () => {
   beforeEach(async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
@@ -1418,6 +1469,12 @@ describe('platform access is callable-only', () => {
         role: 'creator',
         createdBy: REVIEWER,
       });
+      await setDoc(doc(db, 'emailDomainBindings', 'domain-hash'), {
+        cfpId: CFP_ID,
+        domainId: 'domain-id',
+        domain: 'mail.example.org',
+      });
+      await setDoc(doc(db, 'config', 'emailProvider'), { keyHint: '…test' });
     });
   });
 
@@ -1439,6 +1496,21 @@ describe('platform access is callable-only', () => {
     );
     await assertFails(
       getDoc(doc(asApplicant(), 'platformRoleGrants', 'creator@example.org')),
+    );
+  });
+
+  it('does not expose or let browsers rewrite provider and domain ownership', async () => {
+    await assertFails(getDoc(doc(asReviewer(), 'emailDomainBindings', 'domain-hash')));
+    await assertFails(getDoc(doc(asReviewer(), 'config', 'emailProvider')));
+    await assertFails(
+      setDoc(doc(asReviewer(), 'emailDomainBindings', 'domain-hash'), {
+        cfpId: OTHER_CFP_ID,
+        domainId: 'domain-id',
+        domain: 'mail.example.org',
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'config', 'emailProvider'), { keyHint: '…evil' }),
     );
   });
 

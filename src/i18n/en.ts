@@ -366,7 +366,7 @@ export const en = {
   profilePhoto: {
     title: 'Speaker photo',
     help:
-      'This reusable profile photo can be approved for an event when you confirm a session. Published schedules keep the exact approved version until organisers publish a new release.',
+      'This reusable profile photo is not sent with CFP proposals or shown to reviewers. If a session is accepted, you can approve its exact version for the programme when you confirm.',
     previewAlt: 'Current speaker profile photo',
     chooseLabel: 'Choose speaker profile photo',
     requirements: (pixels: number) =>
@@ -414,6 +414,109 @@ export const en = {
       'The working schedule now needs review. Existing shared and published programme versions are unchanged until organisers share and publish again.',
     notReady: 'Complete the profile and make sure this account is still an active speaker.',
     failed: 'The session profile could not be updated. Try again.',
+    gdeLabel: 'Google Developer Expert',
+    yes: 'Yes',
+    no: 'No',
+    notProvided: 'Not provided',
+    reviewAdmin: 'Review profile changes',
+    reviewSelf: 'Review changes for this session',
+    reviewing: 'Checking profile…',
+    reviewEyebrow: 'Session copy comparison',
+    reviewTitle: (name: string) => name ? `Profile changes for ${name}` : 'Profile changes',
+    reviewHelp:
+      'Only fields that differ are shown. Nothing changes until you explicitly apply them.',
+    closeReview: 'Close comparison',
+    sessionCopy: 'Used by this session',
+    latestProfile: 'Latest account profile',
+    noChangesTitle: 'Profile details are already current',
+    noChangesHelp: 'There are no profile-field changes to apply to this session.',
+    photoChangedTitle: 'The profile photo is different',
+    photoChangedHelp:
+      'Photos stay speaker-controlled. Ask the speaker to approve their current profile photo for this session.',
+    photoState: {
+      present: 'Photo on file',
+      absent: 'No photo',
+    },
+    apply: 'Apply profile changes',
+    applying: 'Applying changes…',
+    reviewChanged:
+      'The profile changed while this comparison was open. Review the updated differences before applying.',
+    requestUpdate: 'Request speaker update',
+    expandRequest: 'Request another item',
+    requestAgain: 'Request another update',
+    requestItems: 'What should the speaker update?',
+    requestHelp:
+      'This request belongs only to this speaker on this session. Select at least one item.',
+    scope: {
+      profile: 'Profile information',
+      photo: 'Speaker photo',
+    },
+    scopeHelp: {
+      profile: 'Name, bio, company, role, links, and public speaker credentials.',
+      photo: 'The reusable profile photo, approved separately for this session.',
+    },
+    requestInAppOnly:
+      'The request appears in the speaker’s session workspace, and a notification email with the exact session link is queued automatically.',
+    sendRequest: 'Add update request',
+    requesting: 'Adding request…',
+    cancelRequest: 'Cancel',
+    requestCreated: 'Update request added. A notification email is queued for the speaker.',
+    requestExpanded: 'The additional item was added to the existing request.',
+    requestAlreadyPending: 'That update is already requested.',
+    cancelPendingRequest: 'Cancel request',
+    cancellingRequest: 'Cancelling…',
+    cancelRequestConfirm:
+      'Cancel this profile update request? The speaker will no longer see it as an action to complete.',
+    requestCancelled: 'Profile update request cancelled.',
+    requestPendingAdmin: 'Update requested',
+    requestShareHelp:
+      'A notification email was queued automatically. You can also copy the exact session link as a fallback.',
+    copySessionLink: 'Copy session link',
+    sessionLinkCopied: 'Session link copied.',
+    sessionLinkCopyFailed: 'The session link could not be copied. Try again.',
+    requestEyebrow: 'Organiser request',
+    requestPendingTitle: 'Your speaker profile needs attention for this session',
+    requestPendingHelp:
+      'Your session remains confirmed. Update the requested account-profile item, then explicitly apply it to this session.',
+    requestedItems: 'Requested profile items',
+    requestStepEdit: 'Edit and save the requested item in your account profile.',
+    requestStepAdopt:
+      'Apply profile details here, or choose “Use this photo for this session” for a photo.',
+    requestStepPublish:
+      'Organisers review and republish; the current programme stays unchanged until then.',
+    editProfile: 'Edit account profile',
+    editPhoto: 'Go to speaker photo',
+    completeRequest: 'Mark requested items complete',
+    completingRequest: 'Checking requested items…',
+    completeRequestHelp:
+      'Use this after the requested details already look right, or after applying your changes to this session.',
+    requestCompleted: 'Profile update request completed.',
+    requestPartlyComplete: 'The current items were completed. Finish the remaining request.',
+    requestNotReady:
+      'The requested session copy is not current yet. Apply the profile details or photo, then try again.',
+    requestResolvedTitle: 'Profile update request completed',
+    requestResolvedHelp:
+      'The requested items are now attached to this session. Organisers can review and republish the programme.',
+    pickerBadge: 'Profile update requested',
+    taskLoadFailed: 'Profile requests could not be checked',
+    taskLoadFailedHelp:
+      'Your proposals are still available, but request badges may be missing until this check succeeds.',
+    adminQueueEyebrow: 'Speaker follow-up',
+    adminQueueTitle: 'Profile update queue',
+    adminQueueHelp:
+      'Waiting requests need the speaker. Ready requests need an organiser to review the session copy and reshare the programme.',
+    adminQueueEmpty: 'No speaker profile updates need attention.',
+    adminQueueLoadFailed: 'Profile update requests could not be loaded.',
+    waitingOnSpeaker: 'Waiting on speaker',
+    readyToReview: 'Ready to review',
+    waitingCount: (count: number) => `Waiting on speaker · ${count}`,
+    readyCount: (count: number) => `Ready to review · ${count}`,
+    viewRequest: 'View request',
+    reviewReady: 'Review update',
+    reviewSpeakerRequest: (speaker: string, session: string) =>
+      `Review ${speaker}’s profile update for ${session}`,
+    filterLabel: 'Profile follow-up',
+    filterAll: 'All profile states',
   },
 
   acks: {
@@ -831,6 +934,7 @@ export const en = {
     setupEmail: 'Complete email delivery',
     setupEmailDone: 'The API key, verified domain, and sender are configured.',
     setupEmailTodo: 'Finish the API key, verified domain, and sender.',
+    setupEmailProblems: (problems: string[]) => `Still needed: ${problems.join('; ')}.`,
     setupEmailUnavailable: 'Email setup could not be checked right now. Open Email to retry.',
     setupEmailAction: 'Set up email',
     setupConfirmation: 'Plan accepted-speaker details',
@@ -855,6 +959,12 @@ export const en = {
     noPeople: 'Nobody holds a role yet.',
     isYou: 'you',
     lastAdmin: 'That is the only admin left — give someone else the role first.',
+    emailDeliveryNotReady:
+      'Delivery setup is no longer ready. Check the API key, domain, and sender before trying again.',
+    emailActionInvalid:
+      'The email state changed before this action finished. Refresh the delivery workspace and review it again.',
+    emailBadInput: 'Check the email wording and selected recipients, then try again.',
+    emailMissing: 'That email record no longer exists. Refresh the delivery workspace.',
     badInput: 'Check the email address and the dates.',
 
     identity: 'This call for proposals',
@@ -926,11 +1036,13 @@ export const en = {
     windowSaved: 'Saved.',
 
     email: 'Email',
-    emailStepKey: 'Resend API key',
+    emailStepKey: 'Shared Resend API key',
     emailKeyHelp:
-      'Stored in Secret Manager, not in the database, and never shown again. Checked against Resend before it is saved, so a typo fails here rather than on the night the decisions go out.',
+      'One key serves the whole platform. Only platform administrators can rotate it; it is stored in Secret Manager, checked against Resend, and never shown again.',
+    emailKeyPlatformManaged:
+      'The Resend key is shared across every CFP. Ask a platform administrator to set or rotate it; event administrators cannot change it.',
     emailKeySteps: [
-      'Create an account at resend.com — the free tier covers a CFP.',
+      'Use the platform’s account at resend.com.',
       'Open API Keys, then Create API Key.',
       'Set the permission to Full access. Sending access alone cannot manage domains, and the next step needs it.',
       'Copy the key — it starts with re_, and Resend shows it only once — then paste it below.',
@@ -971,6 +1083,7 @@ export const en = {
     emailStepSender: 'Sender',
     emailPreview: 'Preview',
     emailPreviewLocale: 'Language',
+    emailLanguageNames: { en: 'English', fr: 'French' },
     emailPreviewVisa: 'Show the visa paragraph',
     emailPreviewPlain: 'Plain text',
     emailEdit: 'Edit the wording',
@@ -992,8 +1105,10 @@ export const en = {
     emailSubject: 'Subject:',
     emailTest: 'Send this to me',
     emailTestSent: 'Sent to {to}.',
-    emailTestDryRun: 'Nothing sent — finish the key and sender above first.',
-    emailTestNeedsSetup: 'A test needs the key and the sending address set.',
+    emailTestDryRun:
+      'Test not delivered — finish the delivery setup, then run the test again.',
+    emailTestNeedsSetup: 'Complete the API key, verified domain, and sender before testing.',
+    emailTestSaveFirst: 'Save this wording before testing it; tests use the stored template.',
     emailFrom: 'Send as',
     emailReplyTo: 'Reply-to',
     emailFromHelp:
@@ -1003,7 +1118,7 @@ export const en = {
       'You are sending from {sender}, but the domain verified with Resend is {verified}. Resend verifies an exact domain, so this will queue and then fail at send.',
     emailSaveSender: 'Save address',
     emailNoSender:
-      'No sending address is set, so nothing is going out. Messages still queue, and send once you set one.',
+      'No sending address is set, so delivery is locked. After saving one, explicitly review held or failed messages before releasing them.',
     emailSender: {
       empty: 'A sending address is required.',
       format: 'That does not look like an email address.',
@@ -1036,6 +1151,12 @@ export const en = {
     pendingEmailReview: 'Review and send',
     pendingEmailTabLabel: (count: number) =>
       `Email, ${count} speaker ${count === 1 ? 'notification' : 'notifications'} waiting`,
+    emailAttentionTabLabel: (waiting: number, attention: number) =>
+      `Email, ${waiting} awaiting approval, ${attention} ${attention === 1 ? 'delivery' : 'deliveries'} needing attention`,
+    emailAttentionShort: 'to fix',
+    emailAttentionTitle: (count: number) =>
+      count === 1 ? '1 email delivery needs attention.' : `${count} email deliveries need attention.`,
+    emailReviewAttention: 'Review deliveries',
     pendingEmailUnknownTitle: 'Email queue status unavailable',
     pendingEmailUnknownHelp:
       'The decision is saved, but we could not verify its email. Open Email to check the queue before notifying speakers.',
@@ -1044,7 +1165,7 @@ export const en = {
       queued: 'Queued',
       sending: 'Sending',
       sent: 'Sent',
-      dry_run: 'Not sent — no sender configured',
+      dry_run: 'Not delivered — setup incomplete',
       failed: 'Failed',
     },
     emailRecoverableStatus: 'Delivery stalled — retry available',
@@ -1054,6 +1175,7 @@ export const en = {
       submission_received: 'Submission received',
       committee_role_invited: 'Committee invitation',
       co_speaker_invited: 'Co-speaker invitation',
+      profile_update_requested: 'Speaker profile update request',
       committee_proposal_submitted: 'New proposal for committee',
       committee_schedule_shared: 'Shared preview for committee',
       withdrawn: 'Withdrawn',
@@ -1076,7 +1198,7 @@ export const en = {
       'The relevant event action queues this message immediately; delivery still depends on the configured sender.',
     messageTitle: 'Write to all speakers on a talk',
     messageHelp:
-      'For anything the templates do not cover — a question, a correction, a detail about the day. Every active speaker on the selected talk receives their own copy, recorded in the log below.',
+      'For anything the templates do not cover — a question, a correction, a detail about the day. Review the current addresses first; one copy is then queued for each active speaker and recorded below.',
     messageRecipients: (count: number) =>
       `All ${count} ${count === 1 ? 'speaker' : 'speakers'} will receive this message`,
     messageTalk: 'Talk',
@@ -1085,35 +1207,123 @@ export const en = {
     messageBody: 'Message',
     messageBodyHelp:
       'A blank line starts a new paragraph. {speakerName}, {title} and {proposalUrl} are filled in for you.',
-    messageSend: 'Send to all speakers',
-    messageSending: 'Sending…',
-    messageConfirm: 'Send this to {name}? It goes out immediately.',
-    messageSent: 'Sent to {name}.',
+    messageSend: 'Review recipients',
+    messageSending: 'Queueing…',
+    messageConfirm: 'Queue this message for {name}?',
+    messageSent: 'Queued for delivery to {name}.',
+    messageQueued: (count: number) =>
+      `${count} ${count === 1 ? 'copy' : 'copies'} queued for delivery.`,
+    messageSetupNeeded: 'Complete delivery setup before queueing a speaker message.',
+    messageRecipientPreview: 'Current delivery addresses',
+    messageRecipientPreviewHelp:
+      'These addresses are read from the active speaker accounts, not the older proposal snapshot.',
+    messageRecipientChanged:
+      'The recipient list changed while you were reviewing it. Review the current addresses and try again.',
     messageNoReplyTo:
       'No reply-to address is set, so a speaker who replies will reach nobody. Set one above before writing.',
     messageNoTalks: 'Nothing to write about yet — no proposal has been submitted.',
     emailRefresh: 'Refresh',
     emailRelease: (count: number) =>
-      `Send ${count} ${count === 1 ? 'notification' : 'notifications'}`,
+      `Review ${count} ${count === 1 ? 'notification' : 'notifications'}`,
     emailNothing: 'Nothing to send',
     emailStaleHeld:
       'Superseded notifications retained: {count}. They stay in the history and can be sent only if they become current again.',
     emailStaleStatus: 'Retained — superseded',
-    emailConfirm: 'Send {count} speaker notifications now? This cannot be undone.',
-    emailRetry: 'Retry {count} unsent',
+    emailConfirm: 'Queue {count} speaker notifications now? This cannot be undone.',
+    emailRetry: 'Review {count} for retry',
+    emailBatchRemaining:
+      '{count} more messages remain. They will appear for a separate review after this batch is queued.',
     emailSent: (count: number) => `${count} ${count === 1 ? 'email' : 'emails'} queued.`,
-    emailLog: 'What was sent',
+    emailLog: 'Delivery history',
+    emailLogHelp:
+      'Tracked workspace attempts appear here, including messages still waiting, in progress, failed, or not delivered. Private co-speaker invitation delivery stays in the Speaker roster.',
     emailLogEmpty: 'Nothing has been queued yet.',
     emailLogFilter: 'Show',
     emailLogAll: 'Everything',
     emailStatusColumn: 'Outcome',
-    emailSentAt: 'Sent',
+    emailSentAt: 'Last attempt',
     emailActions: 'Actions',
-    emailResend: 'Send again',
+    emailResend: 'Send another copy',
+    emailRetryOne: 'Retry delivery',
     emailResendConfirm:
       'Send this message to {to} again? They will receive a second copy of it.',
     emailResent: 'Queued again for {to}.',
     emailLogTruncated: '{count} older messages are not shown.',
+
+    emailOperations: 'Delivery overview',
+    emailOperationsHelp: 'Follow each message from organiser review to confirmed delivery.',
+    emailAwaiting: 'Awaiting approval',
+    emailAwaitingHelp: 'Speaker decisions and schedule changes that an organiser must review.',
+    emailNeedsAttention: 'Needs attention',
+    emailNeedsAttentionHelp: 'Current messages that failed, were not delivered, or have a stalled attempt.',
+    emailInProgress: 'In progress',
+    emailInProgressHelp: 'Messages queued or currently being handed to the provider.',
+    emailDelivered: 'Delivered',
+    emailDeliveredHelp: 'Messages accepted by the delivery provider.',
+    emailNoAttention: 'No current delivery needs attention.',
+    emailNoProgress: 'No messages are currently in progress.',
+    emailDeliveryStatus: 'Delivery readiness',
+    emailDeliveryReady: 'Ready to deliver',
+    emailDeliveryReadyHelp: 'The API key, verified domain, and saved sender are ready.',
+    emailDeliveryBlocked: 'Setup required',
+    emailDeliveryBlockedHelp:
+      'Messages can still be created and held, but release, retry, test, and one-off delivery stay locked until every item below is ready.',
+    emailDeliveryChecking: 'Checking delivery setup…',
+    emailDeliveryProblems: {
+      missing_key: 'Add a Resend API key',
+      invalid_key: 'Replace the rejected Resend API key',
+      missing_domain: 'Add a sending domain',
+      domain_unverified: 'Verify the sending domain',
+      invalid_sender: 'Save a valid sending address',
+      sender_domain_mismatch: 'Use the verified domain in the sending address',
+      setup_unavailable: 'Check the delivery provider connection',
+    } as Record<string, string>,
+    emailCompleteSetup: 'Complete delivery setup',
+    emailActionSetupReason: 'Unavailable until delivery setup is complete.',
+    emailHeldTableLabel: 'Speaker notifications awaiting approval',
+    emailAttentionTableLabel: 'Messages that need delivery attention',
+    emailHistoryTableLabel: 'Email delivery history',
+    emailReview: {
+      eyebrow: 'Final review',
+      releaseTitle: 'Release speaker notifications',
+      releaseHelp:
+        'Check every address and message type. Confirming queues this exact reviewed set; it cannot be pulled back after delivery starts.',
+      retryTitle: 'Retry unresolved deliveries',
+      retryHelp:
+        'Only the current unresolved rows shown below will be retried. Confirm the addresses before creating another attempt.',
+      resendTitle: 'Review another copy',
+      resendHelp:
+        'This message was already attempted. Check the address and status before intentionally queueing it again.',
+      composeTitle: 'Review speaker message',
+      composeHelp:
+        'Check the current delivery addresses and your wording. Confirming queues one private copy for each person listed.',
+      messages: 'Messages',
+      recipients: 'Recipients',
+      types: 'Message types',
+      typeBreakdown: 'Messages grouped by type',
+      listLabel: 'Exact messages and recipients under review',
+      close: 'Close review',
+      cancel: 'Keep unchanged',
+      confirmRelease: (count: number) =>
+        `Queue ${count} ${count === 1 ? 'notification' : 'notifications'}`,
+      confirmRetry: (count: number) =>
+        `Retry ${count} ${count === 1 ? 'delivery' : 'deliveries'}`,
+      confirmResend: 'Queue another copy',
+      confirmCompose: (count: number) =>
+        `Queue ${count} ${count === 1 ? 'copy' : 'copies'}`,
+    },
+    emailPreviewBilingual: 'Show bilingual fallback',
+    emailPreviewBilingualHelp:
+      'When a committee member or invitee has no saved language, the real message contains English and French.',
+    emailPreviewSelectedTest: 'The test uses the selected language only.',
+    emailPreviewSample: {
+      speakerName: 'Ada Lovelace',
+      title: 'Notes on the Analytical Engine',
+      scheduleDate: 'Saturday, November 14',
+      scheduleTime: '10:00–10:40 a.m.',
+      scheduleRoom: 'Room A',
+    },
+    emailApplicablePlaceholders: 'Available for this message:',
 
     proposals: 'Proposal decisions',
     proposalsHelp:
@@ -1672,6 +1882,18 @@ export const en = {
     customSpeakerJobTitle: (n: number) => `Speaker ${n} role / job title`,
     customSpeakerCompany: (n: number) => `Speaker ${n} organization`,
     customSpeakerBio: (n: number) => `Speaker ${n} bio`,
+    customSpeakerPhoto: 'Speaker photo',
+    customSpeakerPhotoHelp:
+      'Optional. This portrait appears only after you share and publish the programme.',
+    customSpeakerPhotoChoose: 'Choose photo',
+    customSpeakerPhotoReplace: 'Replace photo',
+    customSpeakerPhotoRemove: 'Remove',
+    customSpeakerPhotoInput: (n: number) => `Choose speaker ${n} programme photo`,
+    customSpeakerPhotoUploading: 'Uploading…',
+    customSpeakerPhotoPending: 'Photo ready. Save this programme item to attach it.',
+    customSpeakerPhotoUploadFailed: 'The speaker photo could not be uploaded. Try again.',
+    customSpeakerPhotoLoadFailed: 'The saved speaker photo could not be loaded.',
+    customSpeakerPhotoRemoveConfirm: 'Remove this photo from the working programme item?',
     removeCustomSpeaker: (n: number) => `Remove speaker ${n}`,
     removeCustomSpeakerShort: 'Remove',
     customSpeakerNameMissing: "Enter this speaker's name.",

@@ -49,6 +49,7 @@ import type { CfpRole } from '@shared/cfp';
 import type { PlatformAccessStatus } from '@shared/platform';
 import type { PublishedScheduleBundle } from './lib/schedule';
 import { coSpeakerInviteQuery } from './lib/coSpeakers';
+import { proposalSelectionQuery } from './lib/proposalLinks';
 
 const SubmitPage = lazy(() =>
   import('./screens/SubmitPage').then(({ SubmitPage }) => ({ default: SubmitPage })),
@@ -301,7 +302,7 @@ export function App({
     if (
       seeded?.stillOnInitialRoute &&
       seeded.id === cfpId &&
-      route === 'cfp' &&
+      (route === 'cfp' || route === 'schedule' || route === 'session') &&
       cfpAttempt === 0
     ) {
       setCfpError(false);
@@ -752,6 +753,7 @@ function Routed({
       archived={cfp.state === 'archived'}
       tab={tab}
       role={role!}
+      isPlatformAdmin={platformStatus?.isPlatformAdmin === true}
       onCfpChange={() => void refreshCfp()}
     />
   ) : (
@@ -911,6 +913,10 @@ export function SignIn({
     try {
       const invite =
         destination === 'submit' ? coSpeakerInviteQuery(window.location.search) : null;
+      const proposalId =
+        destination === 'submit' && !invite
+          ? proposalSelectionQuery(window.location.search)
+          : null;
       await requestSignInLink({
         email: email.trim(),
         locale,
@@ -920,7 +926,9 @@ export function SignIn({
               proposalId: invite.proposalId,
               speakerInvitationId: invite.invitationId,
             }
-          : {}),
+          : proposalId
+            ? { proposalId }
+            : {}),
       });
       // Stored before the confirmation is shown: this is what lets the link
       // complete without asking again when it is opened in this browser.

@@ -32,7 +32,14 @@ import {
 } from '@shared/confirmForm';
 import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
 import type { CfpProfile, Visibility } from '@shared/cfp';
-import type { Cfp, SpeakerSnapshot } from '@shared/types';
+import type {
+  Cfp,
+  SpeakerProfilePreviewField,
+  SpeakerProfilePreviewFields,
+  SpeakerProfileUpdateRequestState,
+  SpeakerProfileUpdateScope,
+  SpeakerSnapshot,
+} from '@shared/types';
 
 export interface CfpWindow {
   name: string;
@@ -359,15 +366,84 @@ export const removeProfilePhoto = httpsCallable<
   { ok: true }
 >(functions, 'removeProfilePhoto');
 
+export type ProposalSpeakerProfileField = SpeakerProfilePreviewField;
+export type ProposalSpeakerProfileScope = SpeakerProfileUpdateScope;
+export type ProposalSpeakerProfileValue = SpeakerProfilePreviewFields;
+export type ProposalSpeakerProfileUpdateRequest = SpeakerProfileUpdateRequestState;
+
 export const refreshProposalSpeakerSnapshot = httpsCallable<
-  { cfpId: string; proposalId: string; speakerUid?: string },
+  {
+    cfpId: string;
+    proposalId: string;
+    speakerUid?: string;
+    expectedCurrentFingerprint: string;
+    expectedLatestFingerprint: string;
+  },
   {
     ok: true;
     changed: boolean;
+    speakerUid: string;
     snapshot: SpeakerSnapshot;
+    currentFingerprint: string;
+    latestFingerprint: string;
     scheduleNeedsAttention: boolean;
   }
 >(functions, 'refreshProposalSpeakerSnapshot');
+
+export interface ProposalSpeakerProfilePreview {
+  ok: true;
+  speakerUid: string;
+  currentFingerprint: string;
+  latestFingerprint: string;
+  current: ProposalSpeakerProfileValue;
+  latest: ProposalSpeakerProfileValue;
+  changes: Array<{
+    field: ProposalSpeakerProfileField;
+    before: unknown | null;
+    after: unknown | null;
+  }>;
+  photo: {
+    enabled: boolean;
+    current: 'present' | 'absent';
+    latest: 'present' | 'absent';
+    changed: boolean;
+  };
+  request: ProposalSpeakerProfileUpdateRequest | null;
+}
+
+export const previewProposalSpeakerProfile = httpsCallable<
+  { cfpId: string; proposalId: string; speakerUid?: string },
+  ProposalSpeakerProfilePreview
+>(functions, 'previewProposalSpeakerProfile');
+
+export const requestProposalSpeakerProfileUpdate = httpsCallable<
+  {
+    cfpId: string;
+    proposalId: string;
+    speakerUid: string;
+    scopes: ProposalSpeakerProfileScope[];
+  },
+  {
+    ok: true;
+    created: boolean;
+    request: ProposalSpeakerProfileUpdateRequest;
+  }
+>(functions, 'requestProposalSpeakerProfileUpdate');
+
+export const cancelProposalSpeakerProfileUpdate = httpsCallable<
+  { cfpId: string; proposalId: string; speakerUid: string; requestId: string },
+  { ok: true; changed: boolean; request: ProposalSpeakerProfileUpdateRequest }
+>(functions, 'cancelProposalSpeakerProfileUpdate');
+
+export const completeProposalSpeakerProfileUpdate = httpsCallable<
+  { cfpId: string; proposalId: string; requestId: string },
+  {
+    ok: true;
+    changed: boolean;
+    request: ProposalSpeakerProfileUpdateRequest;
+    remainingScopes: ProposalSpeakerProfileScope[];
+  }
+>(functions, 'completeProposalSpeakerProfileUpdate');
 
 export type { SpeakerProfilePhoto };
 

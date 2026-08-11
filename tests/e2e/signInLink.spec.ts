@@ -13,10 +13,13 @@ import {
   CFP_ID,
   callPublic,
   clearSignInAllowance,
+  createAccount,
   inviteRole,
   readEmailLog,
   readSignInLinks,
   reset,
+  seedProposal,
+  seedSpeaker,
   setPublicUrlDirect,
 } from './backend';
 import { at, signInAs, type Identity } from './form';
@@ -86,6 +89,41 @@ test.describe('signing in by email link', () => {
     await expect(page).toHaveURL(at('/admin/proposals'));
     await expect(page.getByRole('heading', { name: 'Proposals' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+  });
+
+  test('a bare session link survives email-link sign-in and selects the owned talk', async ({
+    page,
+  }) => {
+    const speakerIdentity = {
+      sub: 'session-link-email-speaker',
+      email: 'session-link-email-speaker@example.test',
+      name: 'Session Link Speaker',
+    };
+    const speaker = await createAccount(speakerIdentity);
+    await Promise.all([
+      seedSpeaker(speaker.uid, {
+        name: speakerIdentity.name,
+        email: speakerIdentity.email,
+      }),
+      seedProposal('email-link-other-talk', {
+        speakerUid: speaker.uid,
+        title: 'The other email-link session',
+        status: 'submitted',
+      }),
+      seedProposal('email-link-target-talk', {
+        speakerUid: speaker.uid,
+        title: 'The requested email-link session',
+        status: 'confirmed',
+      }),
+    ]);
+
+    await ask(page, speakerIdentity.email, `${at()}?proposal=email-link-target-talk`);
+    await page.goto(await latestLink(speakerIdentity.email));
+
+    await expect(page).toHaveURL(`${at()}?proposal=email-link-target-talk`);
+    await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue(
+      'The requested email-link session',
+    );
   });
 
   /*
@@ -251,6 +289,18 @@ test.describe('signing in by email link', () => {
     for (const bad of ['', 'not-an-address', 'missing@tld', 'two words@example.test']) {
       expect(await request(bad), bad).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
     }
+    expect(await readSignInLinks()).toEqual(before);
+  });
+
+  test('a malformed bare proposal selector is refused before a sign-in link is sent', async () => {
+    const before = await readSignInLinks();
+    expect(
+      await callPublic('requestSignInLink', {
+        email: ADDRESS,
+        locale: 'en',
+        proposalId: 'not/a/document-id',
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
     expect(await readSignInLinks()).toEqual(before);
   });
 

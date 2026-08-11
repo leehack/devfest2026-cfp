@@ -4,6 +4,7 @@ import {
   CO_SPEAKER_INVITATION_KINDS,
   DECISION_KINDS,
   EMAIL_KINDS,
+  PROFILE_UPDATE_REQUEST_EMAIL_KINDS,
   ROLE_INVITATION_EMAIL_KINDS,
   STAFF_EMAIL_KINDS,
   builtInTemplate,
@@ -172,6 +173,7 @@ describe('renderEmail', () => {
     ]);
     expect(ROLE_INVITATION_EMAIL_KINDS).toEqual(['committee_role_invited']);
     expect(CO_SPEAKER_INVITATION_KINDS).toEqual(['co_speaker_invited']);
+    expect(PROFILE_UPDATE_REQUEST_EMAIL_KINDS).toEqual(['profile_update_requested']);
   });
 });
 

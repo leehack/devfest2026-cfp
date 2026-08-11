@@ -16,12 +16,14 @@ import {
   callAs,
   callJson,
   createAccount,
+  invitePlatformRole,
   inviteRole,
   readEmailLog,
   reset,
   seedEmailLog,
   seedProposal,
   seedSpeaker,
+  setEmailDeliveryReadyDirect,
   setEmailStatusDirect,
   setSendingDomainDirect,
   setProposalStatusDirect,
@@ -59,15 +61,297 @@ function heldLogIds(preview: { held?: Array<{ logId: string }> }): string[] {
   return (preview.held ?? []).map((row) => row.logId);
 }
 
+function reviewedPayload(
+  preview: Record<string, unknown>,
+  field: 'held' | 'retryable' = 'held',
+) {
+  const rows = (preview[field] ?? []) as Array<{ logId: string; to: string }>;
+  return {
+    logIds: rows.map((row) => row.logId),
+    reviewedRecipients: rows.map(({ logId, to }) => ({ logId, to })),
+  };
+}
+
 async function releaseCurrentBatch(idToken: string) {
+  await setEmailDeliveryReadyDirect();
   const preview = await callJson(idToken, 'emailQueue', { action: 'preview' });
   return callJson(idToken, 'emailQueue', {
     action: 'release',
-    logIds: heldLogIds(preview),
+    ...reviewedPayload(preview),
+  });
+}
+
+async function retryCurrent(idToken: string) {
+  await setEmailDeliveryReadyDirect();
+  const preview = await callJson(idToken, 'emailQueue', { action: 'preview' });
+  return callJson(idToken, 'emailQueue', {
+    action: 'retry',
+    ...reviewedPayload(preview, 'retryable'),
+  });
+}
+
+async function queueSpeakerMessage(
+  idToken: string,
+  draft: { proposalId: string; subject: string; body: string },
+) {
+  await setEmailDeliveryReadyDirect();
+  const preview = await callJson(idToken, 'sendSpeakerMessage', {
+    action: 'preview',
+    proposalId: draft.proposalId,
+  });
+  return callJson(idToken, 'sendSpeakerMessage', {
+    action: 'send',
+    ...draft,
+    expectedRecipientsFingerprint: preview.recipientsFingerprint,
   });
 }
 
 test.describe('email pipeline', () => {
+  test('manual delivery is refused until the server observes a complete setup', async () => {
+    const { chair } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview.delivery).toMatchObject({
+      ready: false,
+      problems: expect.arrayContaining(['missing_key', 'missing_domain', 'invalid_sender']),
+    });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'release',
+        logIds: heldLogIds(preview),
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'retry',
+        logIds: heldLogIds(preview),
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: heldLogIds(preview)[0],
+        reviewedTo: speaker.email,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    const recipients = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+    expect(
+      await callAs(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        subject: 'Setup gate',
+        body: 'This must not be queued.',
+        expectedRecipientsFingerprint: recipients.recipientsFingerprint,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(
+      await callAs(chair.idToken, 'sendTestEmail', {
+        kind: 'accepted',
+        locale: 'en',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect((await readEmailLog())[0]).toMatchObject({ status: 'held', attempts: 0 });
+  });
+
+  test('a queued acceptance is superseded if the decision is undone before claim', async () => {
+    const { chair } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await waitForEmail((rows) => rows[0]?.status === 'held', 'the held acceptance');
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'under_review',
+    });
+
+    await setEmailStatusDirect('accepted__talk-1', 'queued');
+    const rows = await waitForEmail(
+      (current) => current[0]?.status === 'failed',
+      'the stale queued decision to be superseded',
+    );
+    expect(rows[0]).toMatchObject({
+      status: 'failed',
+      attempts: 0,
+      error: 'This notification is superseded.',
+    });
+    expect(rows[0].attemptedAt).toBeTruthy();
+    expect(rows[0]).not.toHaveProperty('sentAt');
+  });
+
+  test('a reviewed manual message never follows a changed profile address', async () => {
+    const { author } = await stage();
+    await seedSpeaker(author.uid, { ...speaker, email: 'ada-new@example.test' });
+    await seedEmailLog('reviewed-message-race', {
+      status: 'queued',
+      kind: 'message',
+      proposalId: 'talk-1',
+      recipientUid: author.uid,
+      to: speaker.email,
+      reviewedTo: speaker.email,
+      subject: 'Reviewed address',
+      body: 'This must stay with the reviewed recipient.',
+    });
+
+    const rows = await waitForEmail(
+      (current) => current[0]?.status === 'failed',
+      'the changed reviewed recipient to be superseded',
+    );
+    expect(rows[0]).toMatchObject({
+      id: 'reviewed-message-race',
+      status: 'failed',
+      attempts: 0,
+      to: speaker.email,
+      reviewedTo: speaker.email,
+      error: 'This notification is superseded.',
+    });
+    expect(rows[0].attemptedAt).toBeTruthy();
+    expect(rows[0]).not.toHaveProperty('sentAt');
+  });
+
+  test('release pins the live address shown in preview and rejects later drift', async () => {
+    const { chair, author } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await waitForEmail((rows) => rows[0]?.status === 'held', 'the held acceptance');
+
+    const firstLiveAddress = 'ada-current@example.test';
+    await seedSpeaker(author.uid, { ...speaker, email: firstLiveAddress });
+    await setEmailDeliveryReadyDirect();
+    const reviewed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(reviewed.held).toEqual([
+      expect.objectContaining({ logId: 'accepted__talk-1', to: firstLiveAddress }),
+    ]);
+    expect(reviewed.rows[0]).toMatchObject({
+      logId: 'accepted__talk-1',
+      to: speaker.email,
+      currentTo: firstLiveAddress,
+    });
+
+    const secondLiveAddress = 'ada-later@example.test';
+    await seedSpeaker(author.uid, { ...speaker, email: secondLiveAddress });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(reviewed),
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect((await readEmailLog())[0]).toMatchObject({ status: 'held', to: speaker.email });
+
+    const refreshed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(refreshed.held[0]).toMatchObject({ to: secondLiveAddress });
+    expect(
+      await callJson(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(refreshed),
+      }),
+    ).toMatchObject({ released: 1, stale: 0 });
+    const rows = await waitForEmail(
+      (current) => current[0]?.status === 'dry_run',
+      'the acceptance at the refreshed reviewed address',
+    );
+    expect(rows[0]).toMatchObject({ to: secondLiveAddress, reviewedTo: secondLiveAddress });
+  });
+
+  test('retry and resend bind a recoverable row to its current live address', async () => {
+    const { chair, author } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await releaseCurrentBatch(chair.idToken);
+    await waitForEmail((rows) => rows[0]?.status === 'dry_run', 'the first acceptance attempt');
+
+    const retryAddress = 'ada-retry@example.test';
+    await seedSpeaker(author.uid, { ...speaker, email: retryAddress });
+    const retryPreview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(retryPreview.retryable[0]).toMatchObject({
+      logId: 'accepted__talk-1',
+      to: retryAddress,
+    });
+    expect(retryPreview.rows[0]).toMatchObject({ to: speaker.email, currentTo: retryAddress });
+    expect(
+      await callJson(chair.idToken, 'emailQueue', {
+        action: 'retry',
+        ...reviewedPayload(retryPreview, 'retryable'),
+      }),
+    ).toMatchObject({ released: 1, stale: 0 });
+    await waitForEmail((rows) => rows[0]?.attempts === 2, 'the retry at the live address');
+
+    const resendAddress = 'ada-resend@example.test';
+    await seedSpeaker(author.uid, { ...speaker, email: resendAddress });
+    const resendPreview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    const resendRow = resendPreview.rows.find(
+      (row: { logId: string }) => row.logId === 'accepted__talk-1',
+    );
+    expect(resendRow).toMatchObject({ to: retryAddress, currentTo: resendAddress });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: 'accepted__talk-1',
+        reviewedTo: resendAddress,
+      }),
+    ).toMatchObject({ ok: true });
+    const rows = await waitForEmail((current) => current[0]?.attempts === 3, 'the live resend');
+    expect(rows[0]).toMatchObject({ to: resendAddress, reviewedTo: resendAddress });
+  });
+
+  test('a large queue exposes one atomic reviewed batch and a truthful remainder', async ({
+    page,
+  }) => {
+    const { chair } = await stage();
+    await Promise.all(
+      Array.from({ length: 101 }, (_, index) =>
+        seedEmailLog(`bulk-review-${String(index).padStart(3, '0')}`, {
+          status: 'held',
+          kind: 'message',
+          proposalId: `bulk-${index}`,
+          to: `speaker-${index}@example.test`,
+          subject: `Bulk message ${index}`,
+          body: 'One exact reviewed batch.',
+        }),
+      ),
+    );
+    await setEmailDeliveryReadyDirect();
+
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview).toMatchObject({ waiting: 101, heldRemaining: 1 });
+    expect(preview.held).toHaveLength(100);
+
+    await signInAs(page, admin, at('/admin/email'));
+    const queue = page.locator('.email-queue-card');
+    await expect(queue.locator('.email-queue-card__count strong')).toHaveText('101');
+    await expect(queue.locator('.table--held tbody tr')).toHaveCount(100);
+    await expect(
+      queue.getByText(
+        '1 more messages remain. They will appear for a separate review after this batch is queued.',
+      ),
+    ).toBeVisible();
+
+    await queue.getByRole('button', { name: 'Review 100 notifications' }).click();
+    const review = page.getByRole('dialog', { name: 'Release speaker notifications' });
+    await expect(review.locator('tbody tr')).toHaveCount(100);
+    await review.getByRole('button', { name: 'Queue 100 notifications' }).click();
+
+    await expect(queue.getByText('100 emails queued.')).toBeVisible();
+    await expect(queue.locator('.email-queue-card__count strong')).toHaveText('1');
+    await expect(queue.locator('.table--held tbody tr')).toHaveCount(1);
+    await expect(queue.getByRole('button', { name: 'Review 1 notification' })).toBeVisible();
+    await expect(queue.getByText(/more messages remain/)).toHaveCount(0);
+
+    const next = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(next).toMatchObject({ waiting: 1, heldRemaining: 0 });
+    expect(next.held).toHaveLength(1);
+  });
+
   test('a decision is held until it is released', async () => {
     const { chair } = await stage();
 
@@ -90,6 +374,7 @@ test.describe('email pipeline', () => {
       await callAs(chair.idToken, 'emailQueue', {
         action: 'resend',
         logId: 'accepted__talk-1',
+        reviewedTo: speaker.email,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect((await readEmailLog())[0].status).toBe('held');
@@ -98,20 +383,28 @@ test.describe('email pipeline', () => {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect((await readEmailLog())[0].status).toBe('held');
 
+    await setEmailDeliveryReadyDirect();
     const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(preview.ok).toBe(true);
     expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
       ok: true,
       waiting: 1,
+      needsAttention: 0,
     });
     expect(await callAs(chair.idToken, 'emailQueue', { action: 'release' })).toMatchObject({
       ok: false,
       code: 'INVALID_ARGUMENT',
     });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'release',
+        logIds: heldLogIds(preview),
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
 
     const released = await callAs(chair.idToken, 'emailQueue', {
       action: 'release',
-      logIds: heldLogIds(preview),
+      ...reviewedPayload(preview),
     });
     expect(released.ok).toBe(true);
 
@@ -121,9 +414,13 @@ test.describe('email pipeline', () => {
     );
     expect(sent[0].status).toBe('dry_run');
     expect(sent[0].attempts).toBe(1);
+    expect(sent[0].reviewedTo).toBe(speaker.email);
+    expect(sent[0].attemptedAt).toBeTruthy();
+    expect(sent[0]).not.toHaveProperty('sentAt');
     expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
       ok: true,
       waiting: 0,
+      needsAttention: 1,
     });
   });
 
@@ -134,7 +431,7 @@ test.describe('email pipeline', () => {
    * telling somebody they were accepted after the committee had undone it.
    */
   test('a decision taken back before release is not sent', async ({ page }) => {
-    const { chair } = await stage();
+    const { chair, author } = await stage();
 
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
     const held = await waitForEmail((rows) => rows.length > 0, 'the decision to be queued');
@@ -145,14 +442,24 @@ test.describe('email pipeline', () => {
       proposalId: 'talk-1',
       status: 'under_review',
     });
+    await seedSpeaker(author.uid, {
+      ...speaker,
+      email: 'new-private-address@example.test',
+    });
 
     const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(preview).toMatchObject({ ok: true, held: [], staleHeld: 1 });
     expect(preview.tally['held:accepted']).toBeUndefined();
-    expect(preview.rows[0]).toMatchObject({ status: 'held', stale: true });
+    expect(preview.rows[0]).toMatchObject({
+      status: 'held',
+      stale: true,
+      to: speaker.email,
+      currentTo: speaker.email,
+    });
     expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
       ok: true,
       waiting: 0,
+      needsAttention: 0,
     });
 
     await signInAs(page, admin, at('/admin/email'));
@@ -160,18 +467,21 @@ test.describe('email pipeline', () => {
     await expect(page.getByText(/Superseded notifications retained: 1/)).toBeVisible();
     await expect(page.getByText('Retained — superseded')).toBeVisible();
     // The audit row keeps the action in place so the reason it cannot be used
-    // is visible, but the UI calls that action “Send again”.
-    await expect(page.getByRole('button', { name: 'Send again' })).toBeDisabled();
+    // is visible, but it cannot be retried while superseded.
+    await expect(page.getByRole('button', { name: 'Retry delivery' })).toBeDisabled();
     expect(
       await callAs(chair.idToken, 'emailQueue', {
         action: 'resend',
         logId: 'accepted__talk-1',
+        reviewedTo: speaker.email,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 
+    await setEmailDeliveryReadyDirect();
     const released = await callJson(chair.idToken, 'emailQueue', {
       action: 'release',
       logIds: ['accepted__talk-1'],
+      reviewedRecipients: [{ logId: 'accepted__talk-1', to: speaker.email }],
     });
     expect(released).toMatchObject({ ok: true, released: 0, stale: 1 });
 
@@ -193,7 +503,11 @@ test.describe('email pipeline', () => {
       proposalId: 'talk-1',
       status: 'under_review',
     });
-    expect(await callJson(chair.idToken, 'emailQueue', { action: 'retry' })).toMatchObject({
+    expect(await callJson(chair.idToken, 'emailQueue', {
+      action: 'retry',
+      logIds: ['accepted__talk-1'],
+      reviewedRecipients: [{ logId: 'accepted__talk-1', to: speaker.email }],
+    })).toMatchObject({
       released: 0,
       stale: 1,
     });
@@ -209,8 +523,9 @@ test.describe('email pipeline', () => {
     });
     await waitForEmail((rows) => rows[0]?.status === 'held', 'the held acceptance');
 
+    await setEmailDeliveryReadyDirect();
     const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
-    const release = { action: 'release', logIds: heldLogIds(preview) };
+    const release = { action: 'release', ...reviewedPayload(preview) };
     const releases = await Promise.all([
       callJson(chair.idToken, 'emailQueue', release),
       callJson(chair.idToken, 'emailQueue', release),
@@ -233,6 +548,7 @@ test.describe('email pipeline', () => {
       status: 'accepted',
     });
     await waitForEmail((rows) => rows[0]?.status === 'held', 'the reviewed acceptance');
+    await setEmailDeliveryReadyDirect();
     const reviewed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(heldLogIds(reviewed)).toEqual(['accepted__talk-1']);
 
@@ -251,7 +567,7 @@ test.describe('email pipeline', () => {
     expect(
       await callJson(chair.idToken, 'emailQueue', {
         action: 'release',
-        logIds: heldLogIds(reviewed),
+        ...reviewedPayload(reviewed),
       }),
     ).toMatchObject({ released: 1, stale: 0 });
 
@@ -265,6 +581,7 @@ test.describe('email pipeline', () => {
     expect(await callJson(chair.idToken, 'emailQueue', { action: 'summary' })).toEqual({
       ok: true,
       waiting: 1,
+      needsAttention: 1,
     });
   });
 
@@ -354,6 +671,7 @@ test.describe('email pipeline', () => {
 
   test('the admin panel previews the batch and sends it', async ({ page }) => {
     const { chair } = await stage();
+    await setEmailDeliveryReadyDirect();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'rejected' });
 
     await signInAs(page, admin, at('/admin/email'));
@@ -373,13 +691,19 @@ test.describe('email pipeline', () => {
     const heldLog = panel
       .locator('.email-log-table')
       .getByRole('row', { name: new RegExp(speaker.email) });
-    await expect(heldLog.getByRole('button', { name: 'Send again' })).toBeDisabled();
+    await expect(heldLog.getByRole('button', { name: 'Retry delivery' })).toBeDisabled();
 
-    const send = panel.getByRole('button', { name: 'Send 1 notification' });
+    const send = panel.getByRole('button', { name: 'Review 1 notification' });
     await expect(send).toBeEnabled();
-
-    page.once('dialog', (d) => d.accept());
     await send.click();
+    const review = page.getByRole('dialog', { name: 'Release speaker notifications' });
+    await expect(review.getByText(speaker.email)).toBeVisible();
+    await expect(
+      review
+        .getByLabel('Exact messages and recipients')
+        .getByRole('cell', { name: 'Not selected' }),
+    ).toBeVisible();
+    await review.getByRole('button', { name: 'Queue 1 notification' }).click();
 
     await expect(panel.getByText('1 email queued.')).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Nothing to send' })).toBeDisabled();
@@ -392,6 +716,7 @@ test.describe('email pipeline', () => {
     page,
   }) => {
     await stage();
+    await setEmailDeliveryReadyDirect();
     await signInAs(page, admin, at('/admin/proposals'));
 
     await page
@@ -402,7 +727,9 @@ test.describe('email pipeline', () => {
     const notice = page.locator('.pending-email-notice');
     await expect(notice).toContainText('1 speaker notification is waiting');
     await expect(
-      page.getByRole('link', { name: 'Email, 1 speaker notification waiting' }),
+      page.getByRole('link', {
+        name: 'Email, 1 awaiting approval, 0 deliveries needing attention',
+      }),
     ).toBeVisible();
 
     await notice.getByRole('link', { name: 'Review and send' }).click();
@@ -414,14 +741,43 @@ test.describe('email pipeline', () => {
       'Accepted',
     );
 
-    const send = queue.getByRole('button', { name: 'Send 1 notification' });
-    page.once('dialog', (dialog) => dialog.accept());
+    const send = queue.getByRole('button', { name: 'Review 1 notification' });
     await send.click();
+    await page
+      .getByRole('dialog', { name: 'Release speaker notifications' })
+      .getByRole('button', { name: 'Queue 1 notification' })
+      .click();
 
     await expect(queue.getByText('1 email queued.')).toBeVisible();
-    await expect(page.getByRole('link', { name: /Email, 1 speaker notification waiting/ })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /Email, 1 awaiting approval/ })).toHaveCount(0);
     await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
     await expect(page.locator('.pending-email-notice')).toHaveCount(0);
+  });
+
+  test('admin navigation keeps failed delivery visible beside a held batch', async ({ page }) => {
+    const { chair, author } = await stage();
+    await setEmailDeliveryReadyDirect();
+    await callAs(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await seedProposal('talk-2', {
+      speakerUid: author.uid,
+      title: 'A second current decision',
+      status: 'accepted',
+      speaker: { name: speaker.name },
+    });
+    await seedEmailLog('accepted__talk-2', {
+      status: 'dry_run',
+      kind: 'accepted',
+      proposalId: 'talk-2',
+      attempts: 1,
+    });
+
+    await signInAs(page, admin, at('/admin/proposals'));
+    await expect(page.getByRole('heading', { name: /1 speaker notification is waiting/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '1 email delivery needs attention.' })).toBeVisible();
+    await expect(page.locator('.subnav .subnav__badge--attention')).toHaveText('2');
   });
 
   test('a failed queue refresh still guides the admin after a saved decision', async ({ page }) => {
@@ -456,7 +812,7 @@ test.describe('email pipeline', () => {
 
     await waitForEmail((r) => r[0]?.status === 'dry_run', 'the unsent receipt');
 
-    const retried = await callAs(chair.idToken, 'emailQueue', { action: 'retry' });
+    const retried = await retryCurrent(chair.idToken);
     expect(retried.ok).toBe(true);
 
     // Requeued and processed again — a second attempt, not a second row.
@@ -540,14 +896,26 @@ test.describe('email pipeline', () => {
     expect(result.code).toBe('PERMISSION_DENIED');
   });
 
-  test('the API key is admin-only and never comes back', async () => {
+  test('the shared API key is platform-admin-only and never comes back', async () => {
     const { chair, author } = await stage();
 
-    for (const name of ['setEmailSecret', 'emailDomain', 'sendTestEmail'] as const) {
+    for (const name of ['emailDomain', 'sendTestEmail'] as const) {
       const result = await callAs(author.idToken, name, { apiKey: 're_x', action: 'list' });
       expect(result.ok, name).toBe(false);
       expect(result.code, name).toBe('PERMISSION_DENIED');
     }
+
+    // Event administration does not confer control over the credential shared
+    // by every tenant on the platform.
+    expect(await callAs(chair.idToken, 'setEmailSecret', { apiKey: 're_x' })).toMatchObject({
+      ok: false,
+      code: 'PERMISSION_DENIED',
+    });
+
+    await invitePlatformRole(admin.email, 'admin');
+    expect(await callJson(chair.idToken, 'platformAccess', {})).toMatchObject({
+      isPlatformAdmin: true,
+    });
 
     // A key that is not even shaped like one is refused before it reaches Resend.
     const bad = await callAs(chair.idToken, 'setEmailSecret', { apiKey: 'sk_not_resend' });
@@ -602,6 +970,25 @@ test.describe('email pipeline', () => {
       reset: true,
     });
     expect(reset.ok).toBe(true);
+  });
+
+  test('a template test waits until the visible draft is saved', async ({ page }) => {
+    await stage();
+    await setEmailDeliveryReadyDirect();
+    await signInAs(page, admin, at('/admin/email'));
+
+    await page.getByLabel('Edit the wording').check();
+    const testMessage = page.getByRole('button', { name: 'Send this to me' });
+    await expect(testMessage).toBeEnabled();
+    await page
+      .getByLabel('Subject line')
+      .fill('A saved test for {event}');
+    await expect(testMessage).toBeDisabled();
+    await expect(
+      page.getByText('Save this wording before testing it; tests use the stored template.'),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Save wording' }).click();
+    await expect(testMessage).toBeEnabled();
   });
 
   test('changing admin tabs does not discard unsaved email wording', async ({ page }) => {
@@ -744,6 +1131,11 @@ test.describe('email pipeline', () => {
       keyHint: '',
       domainId: '',
       domain: '',
+      delivery: {
+        ready: false,
+        problems: ['missing_key', 'missing_domain', 'invalid_sender'],
+        domainStatus: 'unknown',
+      },
     });
     expect(readiness).toHaveProperty('settings');
     expect(readiness).not.toHaveProperty('rows');
@@ -765,6 +1157,46 @@ test.describe('email pipeline', () => {
       kind: 'accepted',
       status: 'dry_run',
       logId: 'accepted__talk-1',
+      sentAt: null,
+    });
+    expect(rows[0].attemptedAt).toEqual(expect.any(Number));
+  });
+
+  test('history sorts by the truthful attempt time with a legacy sent fallback', async () => {
+    const { chair } = await stage();
+    await seedEmailLog('created-only', {
+      status: 'failed',
+      kind: 'message',
+      proposalId: 'talk-1',
+      createdAt: new Date('2026-01-01T10:00:00Z'),
+    });
+    await seedEmailLog('legacy-sent', {
+      status: 'sent',
+      kind: 'message',
+      proposalId: 'talk-1',
+      sentAt: new Date('2026-01-01T11:00:00Z'),
+    });
+    await seedEmailLog('attempted-failed', {
+      status: 'failed',
+      kind: 'message',
+      proposalId: 'talk-1',
+      attemptedAt: new Date('2026-01-01T12:00:00Z'),
+    });
+
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    const ordered = preview.rows
+      .filter((row: { logId: string }) =>
+        ['created-only', 'legacy-sent', 'attempted-failed'].includes(row.logId),
+      );
+    expect(ordered.map((row: { logId: string }) => row.logId)).toEqual([
+      'attempted-failed',
+      'legacy-sent',
+      'created-only',
+    ]);
+    expect(ordered[0]).toMatchObject({ attemptedAt: Date.parse('2026-01-01T12:00:00Z'), sentAt: null });
+    expect(ordered[1]).toMatchObject({
+      attemptedAt: Date.parse('2026-01-01T11:00:00Z'),
+      sentAt: Date.parse('2026-01-01T11:00:00Z'),
     });
   });
 
@@ -777,9 +1209,14 @@ test.describe('email pipeline', () => {
 
     // The deterministic id stops an accidental second copy, which also stopped
     // a deliberate one — an address that bounced had no route back.
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    const reviewed = preview.rows.find(
+      (row: { logId: string }) => row.logId === 'accepted__talk-1',
+    );
     const again = await callAs(chair.idToken, 'emailQueue', {
       action: 'resend',
       logId: 'accepted__talk-1',
+      reviewedTo: reviewed.currentTo,
     });
     expect(again.ok).toBe(true);
 
@@ -792,6 +1229,7 @@ test.describe('email pipeline', () => {
 
   test('a message already in flight is not re-queued underneath the trigger', async () => {
     const { chair } = await stage();
+    await setEmailDeliveryReadyDirect();
     await callAs(chair.idToken, 'setProposalStatus', { proposalId: 'talk-1', status: 'accepted' });
 
     /*
@@ -809,6 +1247,7 @@ test.describe('email pipeline', () => {
     const refused = await callAs(chair.idToken, 'emailQueue', {
       action: 'resend',
       logId: 'accepted__talk-1',
+      reviewedTo: speaker.email,
     });
     expect(refused).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   });
@@ -817,6 +1256,7 @@ test.describe('email pipeline', () => {
     page,
   }) => {
     await stage();
+    await setEmailDeliveryReadyDirect();
     await seedEmailLog('stalled-receipt', {
       status: 'sending',
       kind: 'submission_received',
@@ -828,10 +1268,18 @@ test.describe('email pipeline', () => {
 
     await signInAs(page, admin);
     await page.goto(at('/admin/email'));
-    await expect(page.getByText('Delivery stalled — retry available')).toBeVisible();
-    const retry = page.getByRole('button', { name: 'Retry 1 unsent' });
+    await expect(
+      page
+        .getByLabel('Needs attention')
+        .getByRole('cell', { name: 'Delivery stalled — retry available' }),
+    ).toBeVisible();
+    const retry = page.getByRole('button', { name: 'Review 1 for retry' });
     await expect(retry).toBeEnabled();
     await retry.click();
+    await page
+      .getByRole('dialog', { name: 'Retry unresolved deliveries' })
+      .getByRole('button', { name: 'Retry 1 delivery' })
+      .click();
 
     await expect
       .poll(async () => (await readEmailLog()).find((row) => row.id === 'stalled-receipt'))
@@ -841,8 +1289,13 @@ test.describe('email pipeline', () => {
 
   test('resending something that was never queued says so', async () => {
     const { chair } = await stage();
+    await setEmailDeliveryReadyDirect();
     expect(
-      await callAs(chair.idToken, 'emailQueue', { action: 'resend', logId: 'accepted__nope' }),
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: 'accepted__nope',
+        reviewedTo: speaker.email,
+      }),
     ).toMatchObject({ ok: false, code: 'NOT_FOUND' });
   });
 });
@@ -889,7 +1342,7 @@ test.describe('a message to one speaker', () => {
   test('is queued, sent, and carries the copy that was typed', async () => {
     const { chair } = await stage();
 
-    const sent = await callJson(chair.idToken, 'sendSpeakerMessage', {
+    const sent = await queueSpeakerMessage(chair.idToken, {
       proposalId: 'talk-1',
       ...message,
     });
@@ -904,6 +1357,7 @@ test.describe('a message to one speaker', () => {
     const row = rows.find((r) => r.kind === 'message')!;
     expect(row).toMatchObject({
       to: speaker.email,
+      reviewedTo: speaker.email,
       subject: message.subject,
       body: message.body,
       // No API key under the emulator, so the trigger renders and records this
@@ -912,11 +1366,44 @@ test.describe('a message to one speaker', () => {
     });
   });
 
+  test('requires the exact current recipient set reviewed by the admin', async () => {
+    const { chair, author } = await stage();
+    await setEmailDeliveryReadyDirect();
+    const first = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+    expect(first).toMatchObject({
+      kind: 'message',
+      recipientCount: 1,
+      recipients: [{ uid: author.uid, to: speaker.email }],
+    });
+
+    await seedSpeaker(author.uid, { ...speaker, email: 'ada-new@example.test' });
+    expect(
+      await callAs(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        ...message,
+        expectedRecipientsFingerprint: first.recipientsFingerprint,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await readEmailLog()).toHaveLength(0);
+
+    const current = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+    expect(current.recipients).toEqual([
+      { uid: author.uid, to: 'ada-new@example.test', name: speaker.name },
+    ]);
+  });
+
   test('two of them are two emails, not one overwritten row', async () => {
     const { chair } = await stage();
 
-    await callJson(chair.idToken, 'sendSpeakerMessage', { proposalId: 'talk-1', ...message });
-    await callJson(chair.idToken, 'sendSpeakerMessage', {
+    await queueSpeakerMessage(chair.idToken, { proposalId: 'talk-1', ...message });
+    await queueSpeakerMessage(chair.idToken, {
       proposalId: 'talk-1',
       subject: 'One more thing',
       body: 'Sorry — also this.',
@@ -953,18 +1440,20 @@ test.describe('a message to one speaker', () => {
     });
 
     // Writing about an unsubmitted talk tells its author it was read.
-    expect(
-      await callAs(chair.idToken, 'sendSpeakerMessage', { proposalId: 'talk-draft', ...message }),
-    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await callAs(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-draft',
+    })).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(await readEmailLog()).toHaveLength(0);
   });
 
   test('the admin panel composes one and shows it in the log', async ({ page }) => {
     await stage();
+    await setEmailDeliveryReadyDirect();
     await signInAs(page, admin, at('/admin/email'));
 
     const panel = page.getByRole('region', { name: 'Write to all speakers on a talk' });
-    const send = panel.getByRole('button', { name: 'Send to all speakers' });
+    const send = panel.getByRole('button', { name: 'Review recipients' });
 
     // Nothing to send until there is somebody to send it to and something to
     // say — a message with a blank body is only ever a slip.
@@ -978,16 +1467,45 @@ test.describe('a message to one speaker', () => {
     await panel.getByRole('textbox', { name: /^Subject/ }).fill('About your room');
     await panel.getByRole('textbox', { name: /^Message/ }).fill('Hi {speakerName}, quick question.');
     await expect(send).toBeEnabled();
-
-    page.once('dialog', (d) => d.accept());
     await send.click();
+    const review = page.getByRole('dialog', { name: 'Review speaker message' });
+    await expect(review.getByText(speaker.email)).toBeVisible();
+    await review.getByRole('button', { name: 'Queue 1 copy' }).click();
 
-    await expect(panel.getByText(`Sent to ${speaker.name}.`)).toBeVisible();
+    await expect(panel.getByText('1 copy queued for delivery.')).toBeVisible();
     // Cleared, because there is no deterministic id to collapse a second send.
     await expect(panel.getByRole('textbox', { name: /^Subject/ })).toHaveValue('');
 
     const log = page.getByRole('table');
     await expect(log.getByRole('row', { name: /About your room/ })).toBeVisible();
+  });
+
+  test('composer refreshes a changed recipient inside the open review', async ({ page }) => {
+    const { author } = await stage();
+    await setEmailDeliveryReadyDirect();
+    await signInAs(page, admin, at('/admin/email'));
+
+    const panel = page.getByRole('region', { name: 'Write to all speakers on a talk' });
+    await panel.getByLabel('Talk').selectOption('talk-1');
+    await panel.getByRole('textbox', { name: /^Subject/ }).fill('Profile-sensitive message');
+    await panel.getByRole('textbox', { name: /^Message/ }).fill('Hello {speakerName}.');
+    await panel.getByRole('button', { name: 'Review recipients' }).click();
+
+    const review = page.getByRole('dialog', { name: 'Review speaker message' });
+    await expect(review.getByText(speaker.email)).toBeVisible();
+    await seedSpeaker(author.uid, {
+      ...speaker,
+      name: 'Augusta Ada King',
+      locale: 'en',
+    });
+    await review.getByRole('button', { name: 'Queue 1 copy' }).click();
+
+    await expect(review.getByRole('alert')).toContainText(
+      'The recipient list changed while you were reviewing it.',
+    );
+    await expect(review.getByText(/Augusta Ada King/)).toBeVisible();
+    await review.getByRole('button', { name: 'Queue 1 copy' }).click();
+    await expect(panel.getByText('1 copy queued for delivery.')).toBeVisible();
   });
 
   const bad = {
@@ -998,8 +1516,17 @@ test.describe('a message to one speaker', () => {
   for (const [what, draft] of Object.entries(bad)) {
     test(`refuses ${what}`, async () => {
       const { chair } = await stage();
+      const preview = await callJson(chair.idToken, 'sendSpeakerMessage', {
+        action: 'preview',
+        proposalId: 'talk-1',
+      });
       expect(
-        await callAs(chair.idToken, 'sendSpeakerMessage', { proposalId: 'talk-1', ...draft }),
+        await callAs(chair.idToken, 'sendSpeakerMessage', {
+          action: 'send',
+          proposalId: 'talk-1',
+          ...draft,
+          expectedRecipientsFingerprint: preview.recipientsFingerprint,
+        }),
       ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
       expect(await readEmailLog()).toHaveLength(0);
     });

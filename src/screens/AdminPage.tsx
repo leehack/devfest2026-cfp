@@ -32,7 +32,8 @@ const Schedule = lazy(() =>
 
 interface PendingEmailState {
   cfpId: string;
-  count: number | null;
+  waiting: number | null;
+  needsAttention: number;
   failed: boolean;
 }
 
@@ -48,6 +49,7 @@ export function AdminPage({
   archived,
   tab,
   role,
+  isPlatformAdmin = false,
   onCfpChange,
 }: {
   user: User;
@@ -56,6 +58,7 @@ export function AdminPage({
   archived: boolean;
   tab: AdminTab;
   role: CfpRole;
+  isPlatformAdmin?: boolean;
   onCfpChange?: () => void;
 }) {
   const { t } = useI18n();
@@ -68,14 +71,20 @@ export function AdminPage({
   const mobileMenu = useRef<HTMLDetailsElement>(null);
   dirtyRef.current = dirty;
   const pendingEmailCount =
-    pendingEmailState?.cfpId === cfpId ? pendingEmailState.count : null;
+    pendingEmailState?.cfpId === cfpId ? pendingEmailState.waiting : null;
+  const emailNeedsAttention =
+    pendingEmailState?.cfpId === cfpId ? pendingEmailState.needsAttention : 0;
+  const emailAttentionCount = (pendingEmailCount ?? 0) + emailNeedsAttention;
+  const emailBadgeClass = `subnav__badge${
+    emailNeedsAttention > 0 ? ' subnav__badge--attention' : ''
+  }`;
   const pendingEmailCheckFailed =
     pendingEmailState?.cfpId === cfpId && pendingEmailState.failed;
 
   const publishPendingEmailCount = useCallback(
-    (count: number) => {
+    (state: { waiting: number; needsAttention: number }) => {
       queueRequest.current += 1;
-      setPendingEmailState({ cfpId, count, failed: false });
+      setPendingEmailState({ cfpId, ...state, failed: false });
     },
     [cfpId],
   );
@@ -85,12 +94,18 @@ export function AdminPage({
     try {
       const { data } = await emailQueue({ cfpId, action: 'summary' });
       if (request !== queueRequest.current) return;
-      setPendingEmailState({ cfpId, count: data.waiting ?? 0, failed: false });
+      setPendingEmailState({
+        cfpId,
+        waiting: data.waiting ?? 0,
+        needsAttention: data.needsAttention ?? 0,
+        failed: false,
+      });
     } catch {
       if (request !== queueRequest.current) return;
       setPendingEmailState((current) => ({
         cfpId,
-        count: current?.cfpId === cfpId ? current.count : null,
+        waiting: current?.cfpId === cfpId ? current.waiting : null,
+        needsAttention: current?.cfpId === cfpId ? current.needsAttention : 0,
         failed: true,
       }));
     }
@@ -239,19 +254,19 @@ export function AdminPage({
             role="button"
             aria-expanded={mobileMenuOpen}
             aria-label={`${t.admin.sectionPicker}: ${t.admin.tabs[tab]}`}
-            aria-describedby={pendingEmailCount ? 'admin-section-pending-email' : undefined}
+            aria-describedby={emailAttentionCount ? 'admin-section-pending-email' : undefined}
           >
             <span className="admin-section-menu__current">
               <span className="admin-section-menu__label">{t.admin.sectionPicker}</span>
               <strong>{t.admin.tabs[tab]}</strong>
             </span>
-            {pendingEmailCount ? (
+            {emailAttentionCount ? (
               <>
-                <span className="subnav__badge" aria-hidden="true">
-                  {pendingEmailCount}
+                <span className={emailBadgeClass} aria-hidden="true">
+                  {emailAttentionCount}
                 </span>
                 <span className="visually-hidden" id="admin-section-pending-email">
-                  {t.admin.pendingEmailTabLabel(pendingEmailCount)}
+                  {t.admin.emailAttentionTabLabel(pendingEmailCount ?? 0, emailNeedsAttention)}
                 </span>
               </>
             ) : null}
@@ -261,9 +276,9 @@ export function AdminPage({
               const content = (
                 <>
                   <span>{t.admin.tabs[name]}</span>
-                  {name === 'email' && pendingEmailCount ? (
-                    <span className="subnav__badge" aria-hidden="true">
-                      {pendingEmailCount}
+                  {name === 'email' && emailAttentionCount ? (
+                    <span className={emailBadgeClass} aria-hidden="true">
+                      {emailAttentionCount}
                     </span>
                   ) : null}
                 </>
@@ -282,8 +297,11 @@ export function AdminPage({
                       to={href({ route: 'admin', cfpId, tab: name })}
                       className="admin-section-menu__link"
                       aria-label={
-                        name === 'email' && pendingEmailCount
-                          ? t.admin.pendingEmailTabLabel(pendingEmailCount)
+                        name === 'email' && emailAttentionCount
+                          ? t.admin.emailAttentionTabLabel(
+                              pendingEmailCount ?? 0,
+                              emailNeedsAttention,
+                            )
                           : undefined
                       }
                     >
@@ -305,15 +323,15 @@ export function AdminPage({
             className={`subnav__tab${name === tab ? ' subnav__tab--on' : ''}`}
             aria-current={name === tab ? 'page' : undefined}
             aria-label={
-              name === 'email' && pendingEmailCount
-                ? t.admin.pendingEmailTabLabel(pendingEmailCount)
+              name === 'email' && emailAttentionCount
+                ? t.admin.emailAttentionTabLabel(pendingEmailCount ?? 0, emailNeedsAttention)
                 : undefined
             }
           >
             <span>{t.admin.tabs[name]}</span>
-            {name === 'email' && pendingEmailCount ? (
-              <span className="subnav__badge" aria-hidden="true">
-                {pendingEmailCount}
+            {name === 'email' && emailAttentionCount ? (
+              <span className={emailBadgeClass} aria-hidden="true">
+                {emailAttentionCount}
               </span>
             ) : null}
           </Link>
@@ -345,8 +363,34 @@ export function AdminPage({
         </section>
       )}
 
+      {tab !== 'email' && emailNeedsAttention > 0 && (
+        <section
+          className="pending-email-notice pending-email-notice--attention"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <div className="pending-email-notice__count" aria-hidden="true">
+            <strong>{emailNeedsAttention}</strong>
+            <span>{t.admin.emailAttentionShort}</span>
+          </div>
+          <div className="pending-email-notice__copy">
+            <p className="pending-email-notice__eyebrow">{t.admin.emailNeedsAttention}</p>
+            <h3>{t.admin.emailAttentionTitle(emailNeedsAttention)}</h3>
+            <p>{t.admin.emailNeedsAttentionHelp}</p>
+          </div>
+          <Link
+            className="btn btn--primary pending-email-notice__action"
+            to={href({ route: 'admin', cfpId, tab: 'email' })}
+          >
+            {t.admin.emailReviewAttention}
+          </Link>
+        </section>
+      )}
+
       {tab !== 'email' &&
         pendingEmailCheckFailed &&
+        emailNeedsAttention === 0 &&
         (pendingEmailCount === null || pendingEmailCount === 0) && (
           <section className="pending-email-notice pending-email-notice--unknown" role="alert">
             <div className="pending-email-notice__copy">
@@ -402,6 +446,7 @@ export function AdminPage({
           <Email
             cfpId={cfpId}
             cfpName={cfpName}
+            canManageProvider={isPlatformAdmin}
             readOnly={archived}
             onDirtyChange={setDirty}
             onPendingChange={publishPendingEmailCount}

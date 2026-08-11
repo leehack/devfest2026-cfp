@@ -21,6 +21,7 @@ export const EMAIL_KINDS = [
   'co_speaker_invited',
   'committee_proposal_submitted',
   'committee_schedule_shared',
+  'profile_update_requested',
   'withdrawn',
   'accepted',
   'waitlisted',
@@ -47,6 +48,9 @@ export const ROLE_INVITATION_EMAIL_KINDS: readonly EmailKind[] = [
 ];
 export const CO_SPEAKER_INVITATION_KINDS: readonly EmailKind[] = [
   'co_speaker_invited',
+];
+export const PROFILE_UPDATE_REQUEST_EMAIL_KINDS: readonly EmailKind[] = [
+  'profile_update_requested',
 ];
 
 /**
@@ -159,6 +163,16 @@ const EN: Record<EmailKind, Template> = {
       'Sign in to view the current working schedule:',
       '{scheduleUrl}',
       'Please reply to the organising team if you spot a conflict or anything that needs changing.',
+    ),
+  },
+  profile_update_requested: {
+    subject: 'Profile update requested for “{title}” at {event}',
+    body: p(
+      'Hi {speakerName},',
+      'The organising team has asked you to update your speaker information for “{title}”.',
+      'Open this exact session to see what is requested, adopt the updated profile details or photo, and mark the request complete:',
+      '{proposalUrl}',
+      'Your confirmation and any current shared programme remain unchanged until the organising team reviews and reshares the update.',
     ),
   },
   withdrawn: {
@@ -280,6 +294,16 @@ const FR: Record<EmailKind, Template> = {
       'Connectez-vous pour consulter l’horaire de travail actuel :',
       '{scheduleUrl}',
       'Répondez à l’équipe organisatrice si vous repérez un conflit ou un élément à corriger.',
+    ),
+  },
+  profile_update_requested: {
+    subject: 'Mise à jour de profil demandée pour « {title} » à {event}',
+    body: p(
+      'Bonjour {speakerName},',
+      'L’équipe organisatrice vous demande de mettre à jour vos renseignements de personne conférencière pour « {title} ».',
+      'Ouvrez cette séance précise pour voir la demande, adopter les renseignements ou la photo mis à jour, puis marquer la demande comme terminée :',
+      '{proposalUrl}',
+      'Votre confirmation et tout programme actuellement partagé restent inchangés jusqu’à ce que l’équipe organisatrice vérifie et partage de nouveau la mise à jour.',
     ),
   },
   withdrawn: {

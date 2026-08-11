@@ -5,6 +5,7 @@ import {
   callJson,
   callPublic,
   clearScheduleCancellationCarrySourceDirect,
+  clearSchedulePhotoProvenanceDirect,
   clearSharedSchedulePointerDirect,
   createAccount,
   createUnverifiedAccount,
@@ -15,6 +16,7 @@ import {
   readPublicScheduleRelease,
   readScheduleEntry,
   readScheduleReleaseIds,
+  reviewedEmailRecipients,
   reset,
   seedPlatformMember,
   setCfpArchivedDirect,
@@ -23,6 +25,7 @@ import {
   seedSpeaker,
   setEmailAmbiguousFailureDirect,
   setEmailDeliveryDirect,
+  setEmailDeliveryReadyDirect,
   setEmailStatusDirect,
   setProposalStatusDirect,
   setScheduleEntryCancelledDirect,
@@ -361,6 +364,7 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
     expectedRevision: withBreak.revision,
   });
   expect(shared).toMatchObject({ version: 2, sharedCount: 2, omittedCount: 0 });
+  await setEmailDeliveryReadyDirect();
   const unchangedQueue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
   expect(unchangedQueue.held).toEqual([
     expect.objectContaining({
@@ -371,11 +375,13 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
   expect(await callJson(admin.idToken, 'emailQueue', { action: 'summary' })).toEqual({
     ok: true,
     waiting: 1,
+    needsAttention: 0,
   });
   expect(
     await callJson(admin.idToken, 'emailQueue', {
       action: 'release',
       logIds: unchangedQueue.held.map((row: { logId: string }) => row.logId),
+      reviewedRecipients: reviewedEmailRecipients(unchangedQueue.held),
     }),
   ).toMatchObject({ ok: true, released: 1, stale: 0 });
   await waitForEmail(
@@ -413,13 +419,18 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
     expectedRevision: adjustedBreak.revision,
   });
   const retryReleaseId = shared.releaseId;
+  await setEmailDeliveryReadyDirect();
   const retryableQueue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
   expect(retryableQueue.held).toEqual([]);
   expect(retryableQueue.tally['dry_run:schedule_assigned']).toBe(1);
-  expect(await callJson(admin.idToken, 'emailQueue', { action: 'retry' })).toMatchObject({
+  expect(await callJson(admin.idToken, 'emailQueue', {
+    action: 'retry',
+    logIds: retryableQueue.retryable.map((row: { logId: string }) => row.logId),
+    reviewedRecipients: reviewedEmailRecipients(retryableQueue.retryable),
+  })).toMatchObject({
     ok: true,
     released: 1,
-    stale: 1,
+    stale: 0,
   });
   await waitForEmail(
     (rows) =>
@@ -513,7 +524,23 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
   await expect(page.getByRole('heading', { name: 'The modern web, without the maze' })).toBeVisible();
 
   await setProposalStatusDirect('modern-web', 'withdrawn');
-  await expect.poll(async () => (await readScheduleEntry(published.releaseId, 'modern-web'))?.cancelled).toBe(true);
+  await expect
+    .poll(
+      async () => (await readScheduleEntry(published.releaseId, 'modern-web'))?.cancelled,
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  await waitForEmail(
+    (rows) =>
+      rows.some(
+        (row) =>
+          row.dedupeKey === published.releaseId &&
+          row.proposalId === 'modern-web' &&
+          row.kind === 'schedule_cancelled' &&
+          row.status === 'held',
+      ),
+    'held cancellation after the published entry is marked',
+  );
   const cancelledQueue = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
   expect(cancelledQueue.held).toEqual([
     expect.objectContaining({ kind: 'schedule_cancelled', title: 'The modern web, without the maze' }),
@@ -643,6 +670,36 @@ test('keeps private, shared, and public schedule releases isolated by audience',
   await expect(page.getByRole('link', { name: 'The modern web, without the maze' })).toBeVisible();
   const internal = await callJson(fixture.reviewer.idToken, 'getSharedSchedule', {});
   expect(internal.schedule.id).toBe(shared.releaseId);
+});
+
+test('requires a legacy shared release without photo provenance to be shared again', async () => {
+  const fixture = await seedDisclosureSchedule();
+  const legacy = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+  await clearSchedulePhotoProvenanceDirect(legacy.releaseId);
+
+  expect(await callJson(fixture.admin.idToken, 'getSharedSchedule', {})).toMatchObject({
+    stale: true,
+  });
+  expect(
+    await callAs(fixture.admin.idToken, 'publishSchedule', {
+      expectedRevision: legacy.revision,
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+
+  const repaired = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: legacy.revision,
+  });
+  expect(repaired.releaseId).not.toBe(legacy.releaseId);
+  expect(await callJson(fixture.admin.idToken, 'getSharedSchedule', {})).toMatchObject({
+    stale: false,
+  });
+  await expect(
+    callJson(fixture.admin.idToken, 'publishSchedule', {
+      expectedRevision: repaired.revision,
+    }),
+  ).resolves.toMatchObject({ releaseId: repaired.releaseId });
 });
 
 test('an anonymous public release contains no organiser provenance or private speaker fields', async () => {
@@ -1038,7 +1095,9 @@ test('releases a trigger-created cancellation from its mapped release before any
   });
   await setProposalStatusDirect('modern-web', 'withdrawn');
   await expect
-    .poll(async () => (await readScheduleEntry(first.releaseId, 'modern-web'))?.cancelled)
+    .poll(async () => (await readScheduleEntry(first.releaseId, 'modern-web'))?.cancelled, {
+      timeout: 15_000,
+    })
     .toBe(true);
   const cancellationRows = await waitForEmail(
     (rows) =>
@@ -1057,6 +1116,7 @@ test('releases a trigger-created cancellation from its mapped release before any
       row.proposalId === 'modern-web' &&
       row.kind === 'schedule_cancelled',
   )!;
+  await setEmailDeliveryReadyDirect();
   const queue = await callJson(fixture.admin.idToken, 'emailQueue', { action: 'preview' });
   expect(queue.held).toContainEqual(
     expect.objectContaining({
@@ -1069,6 +1129,9 @@ test('releases a trigger-created cancellation from its mapped release before any
     await callJson(fixture.admin.idToken, 'emailQueue', {
       action: 'release',
       logIds: [cancellation.id],
+      reviewedRecipients: reviewedEmailRecipients(
+        queue.held.filter((row: { logId: string }) => row.logId === cancellation.id),
+      ),
     }),
   ).toMatchObject({ ok: true, released: 1, stale: 0 });
   await waitForEmail(
@@ -1367,11 +1430,13 @@ test('blocks held schedule assignment and change mail once proposals are no long
     cancelled: false,
   });
 
+  await setEmailDeliveryReadyDirect();
   for (const row of actionable) {
     expect(
       await callAs(fixture.admin.idToken, 'emailQueue', {
         action: 'resend',
         logId: row.id,
+        reviewedTo: row.to,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   }
@@ -1379,6 +1444,7 @@ test('blocks held schedule assignment and change mail once proposals are no long
     await callJson(fixture.admin.idToken, 'emailQueue', {
       action: 'release',
       logIds: actionable.map((row) => row.id),
+      reviewedRecipients: actionable.map((row) => ({ logId: row.id, to: row.to })),
     }),
   ).toMatchObject({ ok: true, released: 0, stale: 2 });
   for (const row of actionable) {
@@ -1387,6 +1453,7 @@ test('blocks held schedule assignment and change mail once proposals are no long
       await callAs(fixture.admin.idToken, 'emailQueue', {
         action: 'resend',
         logId: row.id,
+        reviewedTo: row.to,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   }

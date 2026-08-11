@@ -164,6 +164,12 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // Custom programme portraits are callable-owned immutable assets. Even
+      // organisers receive only their opaque handle through the upload/preview APIs.
+      match /scheduleSpeakerPhotoAssets/{assetRef} {
+        allow read, write: if false;
+      }
+
       // Shared previews are disclosed through a role-filtering callable, never
       // through browser reads. Only the public pointer opens a release; admins
       // retain direct access to known ids for the schedule workspace.
@@ -395,6 +401,13 @@ service cloud.firestore {
           allow list: if isAdmin(cfpId) && confirmationProposal().status != 'draft';
           allow create, update, delete: if false;
         }
+
+        // One participant-private workflow record. It names the requesting
+        // organiser and exact speaker, so both disclosure and every lifecycle
+        // transition stay behind role-checking callables.
+        match /profileUpdateRequests/{speakerUid} {
+          allow read, write: if false;
+        }
       }
 
       // -------------------------------------------------------- email log
@@ -466,6 +479,13 @@ service cloud.firestore {
     }
 
     match /platformRoleGrants/{email} {
+      allow read, write: if false;
+    }
+
+    // Platform-wide ownership of a Resend domain. Event callables expose only
+    // the one exact domain bound to their CFP; browsers never enumerate or
+    // rewrite another organiser's assignment.
+    match /emailDomainBindings/{bindingId} {
       allow read, write: if false;
     }
 

@@ -7,6 +7,7 @@ import {
   currentReleasedSpeakerIds,
   everySpeakerConfirmed,
   primarySpeakerId,
+  profileUpdateRequestStillTrue,
   proposalEventIsCurrent,
   proposalSpeakerIds,
   scheduleCancellationSnapshotIsCurrent,
@@ -298,6 +299,89 @@ describe('speaker lifecycle', () => {
         proposal as never,
         cfp as never,
         now + 60_000,
+      ),
+    ).toBe(false);
+  });
+
+  it('revalidates profile mail against the exact pending individually-confirmed generation', () => {
+    const proposal = snapshot({
+      status: 'accepted',
+      primarySpeakerId: 'lead',
+      speakerIds: ['lead', 'speaker'],
+    });
+    const confirmation = snapshot({
+      cfpId: 'event',
+      proposalId: 'talk',
+      uid: 'speaker',
+      response: 'confirmed',
+    });
+    const pending = snapshot({
+      cfpId: 'event',
+      proposalId: 'talk',
+      speakerUid: 'speaker',
+      requestId: 'request-one',
+      generation: 2,
+      status: 'pending',
+    });
+    const current = (
+      request = pending,
+      speakerConfirmation = confirmation,
+      generation = 2,
+    ) => profileUpdateRequestStillTrue(
+      'profile_update_requested',
+      'request-one',
+      generation,
+      'event',
+      'talk',
+      'speaker',
+      request as never,
+      proposal as never,
+      speakerConfirmation as never,
+    );
+
+    expect(current()).toBe(true);
+    expect(current(pending, confirmation, 1)).toBe(false);
+    expect(current(snapshot({ ...pending.data(), status: 'resolved' }))).toBe(false);
+    expect(current(pending, snapshot({ ...confirmation.data(), response: 'declined' }))).toBe(false);
+    expect(
+      profileUpdateRequestStillTrue(
+        'profile_update_requested',
+        'request-one',
+        2,
+        'event',
+        'talk',
+        'removed',
+        pending as never,
+        proposal as never,
+        confirmation as never,
+      ),
+    ).toBe(false);
+
+    const legacyConfirmed = snapshot({ status: 'confirmed', speakerIds: ['speaker'] });
+    expect(
+      profileUpdateRequestStillTrue(
+        'profile_update_requested',
+        'request-one',
+        2,
+        'event',
+        'talk',
+        'speaker',
+        pending as never,
+        legacyConfirmed as never,
+        null,
+      ),
+    ).toBe(true);
+    expect(
+      profileUpdateRequestStillTrue(
+        'profile_update_requested',
+        'request-one',
+        2,
+        'event',
+        'talk',
+        'speaker',
+        pending as never,
+        snapshot({ status: 'accepted', speakerIds: ['speaker'] }) as never,
+        null,
       ),
     ).toBe(false);
   });

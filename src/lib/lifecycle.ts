@@ -13,6 +13,21 @@ import { inStatusSet, type ProposalStatus } from '@shared/enums';
  */
 export type EditScope = 'all' | 'logistics' | 'none';
 
+/** A late addition is not part of the immutable release that predates them. */
+export function lateSpeakerNeedsScheduleRelease(
+  proposal: Record<string, unknown> | null | undefined,
+  uid: string,
+): boolean {
+  const baseline = proposal?.lateSpeakerScheduleBaselineIds;
+  return (
+    proposal?.lateSpeakerSchedulePreserved === true &&
+    Array.isArray(baseline) &&
+    baseline.length > 0 &&
+    baseline.every((speakerUid) => typeof speakerUid === 'string' && speakerUid.length > 0) &&
+    !baseline.includes(uid)
+  );
+}
+
 export function editScope(
   status: ProposalStatus,
   windowOpen: boolean,

@@ -15,6 +15,7 @@ import { httpsCallable } from 'firebase/functions';
 
 import { auth, functions } from '../firebase';
 import type { AdminTab } from './adminTabs';
+import { proposalSelectionQuery } from './proposalLinks';
 
 const PENDING = 'cfp.signInEmail';
 
@@ -87,6 +88,7 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
     const source = new URL(window.location.href);
     const proposalId = source.searchParams.get('proposal');
     const invitationId = source.searchParams.get('speakerInvite');
+    const selectedProposalId = proposalSelectionQuery(source.search);
     await signInWithEmailLink(auth, address, window.location.href);
     forgetPendingEmail();
     // The code is spent and the URL is now a confusing thing to bookmark or
@@ -95,6 +97,8 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
     if (proposalId && invitationId) {
       retained.set('proposal', proposalId);
       retained.set('speakerInvite', invitationId);
+    } else if (selectedProposalId) {
+      retained.set('proposal', selectedProposalId);
     }
     history.replaceState(
       null,

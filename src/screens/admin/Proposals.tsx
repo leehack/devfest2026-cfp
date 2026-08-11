@@ -38,6 +38,15 @@ import { DECISION_KINDS } from '@shared/emailTemplates';
 import { compareNormalizedScores } from '@shared/aggregate';
 import type { SpeakerSnapshot } from '@shared/types';
 import { reconcileProposalSpeakerSnapshot } from './proposalSnapshots';
+import {
+  listSpeakerProfileUpdateRequests,
+  type ProfileUpdateRequestSummary,
+} from '../../lib/profileUpdateRequests';
+import {
+  profileUpdateRequestsByProposal,
+  proposalHasProfileUpdateAttention,
+  type ProfileUpdateRequestAttention,
+} from '../../lib/profileUpdateRequestSummary';
 
 const HIGH_DISAGREEMENT = 1;
 const ADMIN_PROPOSAL_STATUSES = ['under_review', 'accepted', 'waitlisted', 'rejected'] as const;
@@ -480,6 +489,102 @@ function Dashboard({ rows, shape }: { rows: ProposalRow[]; shape: SubmissionForm
 type ScoreFilter = 'all' | 'scored' | 'unscored' | 'disagreement';
 type ProposalSort = 'score' | 'spread' | 'reviews' | 'title' | 'status';
 type StatusFilter = 'current' | 'all' | 'undecided' | ProposalStatus;
+type ProfileAttentionFilter = 'all' | ProfileUpdateRequestAttention;
+
+function profileRequestSpeakerName(row: ProposalRow | undefined, speakerUid: string): string {
+  return (
+    row?.speakerSnapshot?.find((speaker) => speaker.uid === speakerUid)?.name ||
+    speakerUid
+  );
+}
+
+function ProfileUpdateQueue({
+  rows,
+  requests,
+  failed,
+  onOpen,
+  onRetry,
+}: {
+  rows: ProposalRow[];
+  requests: ProfileUpdateRequestSummary[];
+  failed: boolean;
+  onOpen: (proposalId: string, speakerUid: string) => void;
+  onRetry: () => void;
+}) {
+  const { t } = useI18n();
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const waiting = requests.filter((request) => request.state === 'waiting');
+  const ready = requests.filter((request) => request.state === 'ready');
+  const ordered = [...ready, ...waiting];
+
+  return (
+    <section className="section profile-request-queue" aria-labelledby="profile-request-queue-title">
+      <div className="profile-request-queue__heading">
+        <div>
+          <span className="profile-request-queue__eyebrow">
+            {t.profileSnapshot.adminQueueEyebrow}
+          </span>
+          <h2 id="profile-request-queue-title">{t.profileSnapshot.adminQueueTitle}</h2>
+          <p className="section__help">{t.profileSnapshot.adminQueueHelp}</p>
+        </div>
+        <div className="profile-request-queue__counts" aria-label={t.profileSnapshot.adminQueueTitle}>
+          <span className="profile-attention profile-attention--waiting">
+            {t.profileSnapshot.waitingCount(waiting.length)}
+          </span>
+          <span className="profile-attention profile-attention--ready">
+            {t.profileSnapshot.readyCount(ready.length)}
+          </span>
+        </div>
+      </div>
+
+      {failed ? (
+        <div className="profile-request-queue__empty" role="alert">
+          <p>{t.profileSnapshot.adminQueueLoadFailed}</p>
+          <button type="button" className="btn btn--ghost btn--small" onClick={onRetry}>
+            {t.errors.reload}
+          </button>
+        </div>
+      ) : ordered.length === 0 ? (
+        <p className="profile-request-queue__empty">{t.profileSnapshot.adminQueueEmpty}</p>
+      ) : (
+        <ul className="profile-request-queue__list">
+          {ordered.map((request) => {
+            const row = byId.get(request.proposalId);
+            const name = profileRequestSpeakerName(row, request.speakerUid);
+            return (
+              <li key={`${request.proposalId}:${request.speakerUid}:${request.generation}`}>
+                <span
+                  className={`profile-request-queue__state profile-request-queue__state--${request.state}`}
+                >
+                  {request.state === 'waiting'
+                    ? t.profileSnapshot.waitingOnSpeaker
+                    : t.profileSnapshot.readyToReview}
+                </span>
+                <span className="profile-request-queue__identity">
+                  <strong>{name}</strong>
+                  <span>{row?.title || t.admin.untitled}</span>
+                </span>
+                <span className="profile-request-queue__scopes">
+                  {request.scopes.map((scope) => t.profileSnapshot.scope[scope]).join(' · ')}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  aria-label={t.profileSnapshot.reviewSpeakerRequest(name, row?.title || t.admin.untitled)}
+                  onClick={() => onOpen(request.proposalId, request.speakerUid)}
+                >
+                  {request.state === 'waiting'
+                    ? t.profileSnapshot.viewRequest
+                    : t.profileSnapshot.reviewReady}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 interface UndoDecision {
   action: number;
@@ -650,8 +755,12 @@ export function Proposals({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('current');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
+  const [profileFilter, setProfileFilter] = useState<ProfileAttentionFilter>('all');
   const [sort, setSort] = useState<ProposalSort>('score');
   const [managedProposalId, setManagedProposalId] = useState<string | null>(null);
+  const [managedSpeakerUid, setManagedSpeakerUid] = useState<string | null>(null);
+  const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
+  const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
   const loadGeneration = useRef(0);
   const activeCfp = useRef(cfpId);
   const decisionSequence = useRef(0);
@@ -659,14 +768,29 @@ export function Proposals({
   activeCfp.current = cfpId;
 
   useEffect(() => {
-    const proposalId = new URLSearchParams(window.location.search).get('manageSpeakers');
+    const search = new URLSearchParams(window.location.search);
+    const proposalId = search.get('manageSpeakers');
+    const speakerUid = search.get('profileSpeaker');
     setManagedProposalId(proposalId?.trim() || null);
+    setManagedSpeakerUid(proposalId?.trim() && speakerUid?.trim() ? speakerUid.trim() : null);
   }, [cfpId]);
+
+  const openSpeakerManagement = useCallback((proposalId: string, speakerUid?: string) => {
+    setManagedProposalId(proposalId);
+    setManagedSpeakerUid(speakerUid ?? null);
+    const url = new URL(window.location.href);
+    url.searchParams.set('manageSpeakers', proposalId);
+    if (speakerUid) url.searchParams.set('profileSpeaker', speakerUid);
+    else url.searchParams.delete('profileSpeaker');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const closeSpeakerManagement = useCallback(() => {
     setManagedProposalId(null);
+    setManagedSpeakerUid(null);
     const url = new URL(window.location.href);
     url.searchParams.delete('manageSpeakers');
+    url.searchParams.delete('profileSpeaker');
     history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }, []);
 
@@ -703,20 +827,30 @@ export function Proposals({
       setStatusFilter('current');
       setCategoryFilter('all');
       setScoreFilter('all');
+      setProfileFilter('all');
       setSort('score');
+      setProfileRequests([]);
+      setProfileRequestsFailed(false);
       committedDecisions.current.clear();
       decisionSequence.current = 0;
     }
     try {
-      const [all, form, submission] = await Promise.all([
+      const [all, form, submission, updateRequests] = await Promise.all([
         loadAllProposals(cfpId, { speakerDetails: true }),
         loadConfirmForm(cfpId),
         loadSubmissionForm(cfpId),
+        readOnly
+          ? Promise.resolve({ requests: [] as ProfileUpdateRequestSummary[], failed: false })
+          : listSpeakerProfileUpdateRequests({ cfpId })
+              .then(({ data }) => ({ requests: data.admin, failed: false }))
+              .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setRows(all);
       setQuestions(form.fields);
       setShape(submission);
+      setProfileRequests(updateRequests.requests);
+      setProfileRequestsFailed(updateRequests.failed);
       setLoadedFor(cfpId);
       setLoadFailed(false);
       setError('');
@@ -745,7 +879,7 @@ export function Proposals({
         setLoading(false);
       }
     }
-  }, [cfpId, t]);
+  }, [cfpId, readOnly, t]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -888,6 +1022,10 @@ export function Proposals({
   const inCurrentScope = loadedFor === cfpId;
   const scopedRows = useMemo(() => (inCurrentScope ? rows : []), [inCurrentScope, rows]);
   const scopedShape = inCurrentScope ? shape : DEFAULT_SUBMISSION_FORM;
+  const profileRequestsByProposal = useMemo(
+    () => profileUpdateRequestsByProposal(inCurrentScope ? profileRequests : []),
+    [inCurrentScope, profileRequests],
+  );
 
   const categories = useMemo(() => {
     const configured = scopedShape.category.map((option) => option.value);
@@ -914,6 +1052,14 @@ export function Proposals({
         return false;
       }
       if (categoryFilter !== 'all' && row.category !== categoryFilter) return false;
+      if (
+        !proposalHasProfileUpdateAttention(
+          profileRequestsByProposal.get(row.id) ?? [],
+          profileFilter,
+        )
+      ) {
+        return false;
+      }
 
       const reviewCount = row.aggregate?.reviewCount ?? 0;
       if (scoreFilter === 'scored' && reviewCount === 0) return false;
@@ -944,6 +1090,8 @@ export function Proposals({
     categoryFilter,
     locale,
     names,
+    profileFilter,
+    profileRequestsByProposal,
     scopedRows,
     scoreFilter,
     search,
@@ -957,6 +1105,7 @@ export function Proposals({
     statusFilter !== 'current' ||
     categoryFilter !== 'all' ||
     scoreFilter !== 'all' ||
+    profileFilter !== 'all' ||
     sort !== 'score';
 
   // Best first for the accepted-speaker summary, regardless of how the table is
@@ -993,6 +1142,15 @@ export function Proposals({
   return (
     <>
       <Dashboard rows={scopedRows} shape={scopedShape} />
+      {!readOnly && (
+        <ProfileUpdateQueue
+          rows={scopedRows}
+          requests={profileRequests}
+          failed={profileRequestsFailed}
+          onOpen={openSpeakerManagement}
+          onRetry={() => void refresh()}
+        />
+      )}
       <ReviewCoverage
         coverage={coverage}
         loading={coverageLoading}
@@ -1109,6 +1267,23 @@ export function Proposals({
             </select>
           </label>
 
+          {!readOnly && (
+            <label className="decision-filter">
+              <span>{t.profileSnapshot.filterLabel}</span>
+              <select
+                className="field__input field__input--select"
+                value={profileFilter}
+                onChange={(event) =>
+                  setProfileFilter(event.target.value as ProfileAttentionFilter)
+                }
+              >
+                <option value="all">{t.profileSnapshot.filterAll}</option>
+                <option value="waiting">{t.profileSnapshot.waitingOnSpeaker}</option>
+                <option value="ready">{t.profileSnapshot.readyToReview}</option>
+              </select>
+            </label>
+          )}
+
           <label className="decision-filter">
             <span>{t.admin.sortBy}</span>
             <select
@@ -1138,6 +1313,7 @@ export function Proposals({
                 setStatusFilter('current');
                 setCategoryFilter('all');
                 setScoreFilter('all');
+                setProfileFilter('all');
                 setSort('score');
               }}
             >
@@ -1180,6 +1356,13 @@ export function Proposals({
                 {filtered.map((row) => {
                   const saving = pending.has(row.id);
                   const rowError = rowErrors.get(row.id);
+                  const rowProfileRequests = profileRequestsByProposal.get(row.id) ?? [];
+                  const waitingProfileRequests = rowProfileRequests.filter(
+                    (request) => request.state === 'waiting',
+                  ).length;
+                  const readyProfileRequests = rowProfileRequests.filter(
+                    (request) => request.state === 'ready',
+                  ).length;
                   return (
                     <tr key={row.id} className={saving ? 'decision-table__row--saving' : undefined}>
                       <td data-label={t.admin.colTitle}>
@@ -1195,10 +1378,20 @@ export function Proposals({
                             type="button"
                             className="btn btn--ghost btn--small"
                             aria-label={t.coSpeakers.manageFor(row.title || t.admin.untitled)}
-                            onClick={() => setManagedProposalId(row.id)}
+                            onClick={() => openSpeakerManagement(row.id)}
                           >
                             {t.coSpeakers.manage}
                           </button>
+                          {waitingProfileRequests > 0 && (
+                            <span className="profile-attention profile-attention--waiting">
+                              {t.profileSnapshot.waitingCount(waitingProfileRequests)}
+                            </span>
+                          )}
+                          {readyProfileRequests > 0 && (
+                            <span className="profile-attention profile-attention--ready">
+                              {t.profileSnapshot.readyCount(readyProfileRequests)}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td data-label={t.admin.colScore}>
@@ -1331,6 +1524,38 @@ export function Proposals({
             scopedRows.find((row) => row.id === managedProposalId)?.title || t.admin.untitled
           }
           readOnly={readOnly}
+          canRequestProfileUpdate={
+            !readOnly &&
+            ['accepted', 'confirmed'].includes(
+              scopedRows.find((row) => row.id === managedProposalId)?.status ?? '',
+            )
+          }
+          autoReviewSpeakerUid={managedSpeakerUid ?? undefined}
+          onProfileUpdateRequestChanged={(speakerUid, request) => {
+            if (!managedProposalId) return;
+            const proposalId = managedProposalId;
+            setProfileRequests((current) => {
+              const withoutCurrent = current.filter(
+                (summary) =>
+                  summary.proposalId !== proposalId || summary.speakerUid !== speakerUid,
+              );
+              if (request.status === 'cancelled') return withoutCurrent;
+              return [
+                ...withoutCurrent,
+                {
+                  proposalId,
+                  speakerUid,
+                  requestId: request.requestId,
+                  generation: request.generation,
+                  state: request.status === 'resolved' ? 'ready' : 'waiting',
+                  scopes: request.scopes,
+                  resolvedScopes: request.resolvedScopes,
+                  requestedAt: null,
+                  resolvedAt: null,
+                },
+              ];
+            });
+          }}
           onSnapshotRefreshed={onSnapshotRefreshed}
           onClose={closeSpeakerManagement}
         />

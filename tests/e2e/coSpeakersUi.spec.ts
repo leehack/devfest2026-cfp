@@ -345,6 +345,53 @@ test.describe('co-speaker UI', () => {
     await expect(page.getByRole('button', { name: 'Save profile and join' })).toHaveCount(0);
   });
 
+  test('a late co-speaker confirmation refreshes its roster state without a page reload', async ({
+    page,
+  }) => {
+    const { lead, guest } = await submittedPair();
+    const [admin, late] = await Promise.all([
+      createAccount(ADMIN),
+      createAccount(LATE),
+    ]);
+    await Promise.all([
+      seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
+      seedSpeaker(late.uid, { name: LATE.name, email: LATE.email }),
+    ]);
+    await callJson(admin.idToken, 'setProposalStatus', {
+      proposalId: 'ui-linked-talk',
+      status: 'accepted',
+    });
+    for (const speaker of [lead, guest]) {
+      await callJson(speaker.idToken, 'respondToDecision', {
+        proposalId: 'ui-linked-talk',
+        response: 'confirm',
+        answers: {},
+      });
+    }
+    const invitation = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'ui-linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'ui-linked-talk',
+      invitationId: invitation.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+
+    await signInAs(page, LATE);
+    const lateRow = page.locator('.co-speaker-person').filter({ hasText: LATE.name });
+    await expect(lateRow.getByText('Awaiting confirmation', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
+    await expect(lateRow.getByText('Confirmed', { exact: true })).toBeVisible();
+    await expect(lateRow.getByText('Awaiting confirmation', { exact: true })).toHaveCount(0);
+  });
+
   test('an admin can remove an unconfirmed late speaker after a released speaker declines', async ({
     page,
   }) => {
@@ -446,9 +493,10 @@ test.describe('co-speaker UI', () => {
     await expect(dialog.getByRole('button', { name: 'Send invitation' })).toHaveCount(0);
     await expectContainedOnMobile(page, dialog);
 
+    const guestRow = dialog.locator('.co-speaker-person').filter({ hasText: GUEST.name });
     await page.keyboard.press('Shift+Tab');
     await expect(
-      dialog.getByRole('button', { name: `Use ${GUEST.name}’s latest profile` }),
+      guestRow.getByRole('button', { name: 'Review profile changes', exact: true }),
     ).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(

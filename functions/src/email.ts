@@ -29,6 +29,7 @@ import { logger } from 'firebase-functions';
 import {
   CO_SPEAKER_INVITATION_KINDS,
   DECISION_KINDS,
+  PROFILE_UPDATE_REQUEST_EMAIL_KINDS,
   ROLE_INVITATION_EMAIL_KINDS,
   SCHEDULE_EMAIL_KINDS,
   STAFF_EMAIL_KINDS,
@@ -44,8 +45,10 @@ import {
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
 import { readResendKey } from './secrets';
+import { ensureLegacyEmailDomainBinding } from './emailTenancy';
 import {
   coSpeakerInvitationStillTrue,
+  profileUpdateRequestStillTrue,
   scheduleEmailStillTrue,
   scheduleReleaseProposalEntryId,
 } from './speakerLifecycle';
@@ -119,7 +122,15 @@ export function settingsFromConfig(stored: Record<string, unknown>): EmailSettin
 
 export async function loadSettings(db: Firestore, cfpId: string): Promise<EmailSettings> {
   const snap = await configDoc(db, cfpId).get();
-  return settingsFromConfig(snap.data() ?? {});
+  const config = snap.data() ?? {};
+  const settings = settingsFromConfig(config);
+  // A sender is tenant-owned only through the platform binding. Falling back
+  // to an address in an unbound config would let a copied legacy pointer keep
+  // sending as another CFP even after the binding was assigned correctly.
+  if (!(await ensureLegacyEmailDomainBinding(db, cfpId, config))) {
+    return { ...settings, from: '' };
+  }
+  return settings;
 }
 
 /** Organiser-written copy, if any. Absent means the built-in wording is used. */
@@ -129,6 +140,33 @@ export async function loadTemplates(db: Firestore, cfpId: string): Promise<Templ
 }
 
 export type EmailStatus = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'dry_run';
+
+const DECISION_EMAIL_STATUSES: Record<string, readonly string[]> = {
+  accepted: ['accepted', 'confirmed', 'declined'],
+  waitlisted: ['waitlisted'],
+  rejected: ['rejected'],
+};
+
+/** A queued decision may outlive the committee action that created it. */
+export function decisionEmailStillTrue(
+  kind: unknown,
+  proposal: FirebaseFirestore.DocumentSnapshot | null | undefined,
+): boolean {
+  const statuses = DECISION_EMAIL_STATUSES[String(kind ?? '')];
+  return Boolean(
+    statuses && proposal?.exists && statuses.includes(String(proposal.get('status') ?? '')),
+  );
+}
+
+/** Admin review pins one address; a trigger may refresh only unreviewed rows. */
+export function reviewedRecipientStillTrue(
+  row: FirebaseFirestore.DocumentData,
+  liveTo: unknown,
+): boolean {
+  const reviewedTo = row.reviewedTo;
+  if (typeof reviewedTo !== 'string' || !reviewedTo) return true;
+  return row.to === reviewedTo && liveTo === reviewedTo;
+}
 
 /** A send normally completes in seconds; this is the manual-recovery boundary. */
 export const EMAIL_SENDING_LEASE_MS = 10 * 60 * 1_000;
@@ -218,6 +256,9 @@ export interface QueueRequest {
   /** Pending co-speaker invitations are revalidated immediately before delivery. */
   invitationId?: string;
   invitationEmail?: string;
+  /** Profile-request mail is bound to one immutable request generation. */
+  profileUpdateRequestId?: string;
+  profileUpdateRequestGeneration?: number;
 }
 
 export function isStaffEmail(kind: unknown): kind is EmailKind {
@@ -230,6 +271,10 @@ export function isRoleInvitationEmail(kind: unknown): kind is EmailKind {
 
 export function isCoSpeakerInvitationEmail(kind: unknown): kind is EmailKind {
   return CO_SPEAKER_INVITATION_KINDS.includes(kind as EmailKind);
+}
+
+export function isProfileUpdateRequestEmail(kind: unknown): kind is EmailKind {
+  return PROFILE_UPDATE_REQUEST_EMAIL_KINDS.includes(kind as EmailKind);
 }
 
 export function isScheduleEmail(kind: unknown): kind is EmailKind {
@@ -267,6 +312,100 @@ async function scheduleEmailIsCurrent(
     proposal,
     String(row.recipientUid ?? ''),
     scheduleReleaseProposalEntryId(source, proposalId),
+  );
+}
+
+async function decisionEmailIsCurrent(
+  db: Firestore,
+  cfpId: string,
+  row: FirebaseFirestore.DocumentData,
+  read: (refs: DocumentReference[]) => Promise<DocumentSnapshot[]>,
+): Promise<boolean> {
+  const proposalId = String(row.proposalId ?? '');
+  if (!/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(proposalId)) return false;
+  const [proposal] = await read([db.doc(`cfps/${cfpId}/proposals/${proposalId}`)]);
+  return decisionEmailStillTrue(row.kind, proposal);
+}
+
+/**
+ * Final Firestore-backed address check.
+ *
+ * An admin-reviewed row is pinned to `reviewedTo`. Automatic rows may refresh
+ * while they are first claimed, but their refreshed `to` must still match the
+ * account immediately before the provider handoff.
+ */
+async function reviewedRecipientIsCurrent(
+  db: Firestore,
+  cfpId: string,
+  row: FirebaseFirestore.DocumentData,
+  read: (refs: DocumentReference[]) => Promise<DocumentSnapshot[]>,
+): Promise<boolean> {
+  const reviewedTo = row.reviewedTo;
+  const reviewed = typeof reviewedTo === 'string' && Boolean(reviewedTo);
+  if (reviewed && row.to !== reviewedTo) return false;
+  const expectedTo = reviewed ? reviewedTo : row.to;
+  if (typeof expectedTo !== 'string' || !expectedTo) return false;
+  if (isStaffEmail(row.kind)) return true; // Auth was re-read immediately before this check.
+  if (isRoleInvitationEmail(row.kind)) return row.grantEmail === expectedTo;
+  if (isCoSpeakerInvitationEmail(row.kind)) return row.invitationEmail === expectedTo;
+
+  const uid = String(row.recipientUid ?? '');
+  if (!uid) return true; // Legacy single-speaker rows have no resolvable account id.
+  const proposalId = String(row.proposalId ?? '');
+  if (
+    !/^[^/]{1,128}$/.test(uid) ||
+    !/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(proposalId)
+  ) {
+    return false;
+  }
+  const [speaker, proposal] = await read([
+    db.doc(`speakers/${uid}`),
+    db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+  ]);
+  if (!speaker.exists || speaker.get('email') !== expectedTo || !proposal.exists) return false;
+  if (isScheduleEmail(row.kind)) return true;
+  const speakerIds = proposal.get('speakerIds');
+  return Array.isArray(speakerIds) && speakerIds.includes(uid);
+}
+
+async function profileUpdateEmailIsCurrent(
+  db: Firestore,
+  cfpId: string,
+  row: FirebaseFirestore.DocumentData,
+  read: (refs: DocumentReference[]) => Promise<DocumentSnapshot[]>,
+): Promise<boolean> {
+  const proposalId = String(row.proposalId ?? '');
+  const speakerUid = String(row.recipientUid ?? '');
+  const requestId = String(row.profileUpdateRequestId ?? '');
+  const generation = Number(row.profileUpdateRequestGeneration ?? 0);
+  if (
+    !/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(proposalId) ||
+    !/^[^/]{1,128}$/.test(speakerUid) ||
+    !/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(requestId) ||
+    !Number.isSafeInteger(generation) ||
+    generation < 1
+  ) {
+    return false;
+  }
+  const [updateRequest, proposal, confirmation] = await read([
+    db.doc(
+      `cfps/${cfpId}/proposals/${proposalId}/profileUpdateRequests/${speakerUid}`,
+    ),
+    db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+    db.doc(
+      `cfps/${cfpId}/proposals/${proposalId}/speakerConfirmations/${speakerUid}`,
+    ),
+  ]);
+  return profileUpdateRequestStillTrue(
+    row.kind,
+    requestId,
+    generation,
+    cfpId,
+    proposalId,
+    speakerUid,
+    updateRequest,
+    proposal,
+    confirmation,
   );
 }
 
@@ -529,6 +668,10 @@ function claimedProposalUrl(
   row: FirebaseFirestore.DocumentData,
   cfp: { id: string; publicUrl: string },
 ): string {
+  if (isProfileUpdateRequestEmail(row.kind)) {
+    const query = new URLSearchParams({ proposal: String(row.proposalId ?? '') });
+    return `${cfpUrl(cfp.publicUrl, cfp.id)}?${query.toString()}`;
+  }
   if (!isCoSpeakerInvitationEmail(row.kind)) return cfpUrl(cfp.publicUrl, cfp.id);
   const proposalId = String(row.proposalId ?? '');
   const invitationId = String(row.invitationId ?? '');
@@ -565,6 +708,18 @@ export const SEND_QUEUED_EMAIL_TRIGGER_OPTIONS = {
   retry: true,
 } as const;
 
+function supersededEmailUpdate(error = 'This notification is superseded.') {
+  return {
+    status: 'failed' as const,
+    error,
+    attemptedAt: FieldValue.serverTimestamp(),
+    sentAt: FieldValue.delete(),
+    sendingClaimId: FieldValue.delete(),
+    sendingStartedAt: FieldValue.delete(),
+    providerAttemptId: FieldValue.delete(),
+  };
+}
+
 export const sendQueuedEmail = onDocumentWritten(
   SEND_QUEUED_EMAIL_TRIGGER_OPTIONS,
   async (event) => {
@@ -586,15 +741,22 @@ export const sendQueuedEmail = onDocumentWritten(
       if (!snap.exists) return null;
       const claimMode = emailClaimMode(snap.data()!, claimId, queuedAttempts);
       if (!claimMode) return null;
-      if (!cfp.exists || cfp.get('deleting') === true) return null;
+      if (!cfp.exists || cfp.get('deleting') === true) {
+        tx.update(
+          ref,
+          supersededEmailUpdate(
+            'This notification is superseded because the event was deleted.',
+          ),
+        );
+        return null;
+      }
       if (cfp.get('archived') === true) {
-        tx.update(ref, {
-          status: 'failed',
-          error: 'This notification is superseded because the event is archived.',
-          sendingClaimId: FieldValue.delete(),
-          sendingStartedAt: FieldValue.delete(),
-          providerAttemptId: FieldValue.delete(),
-        });
+        tx.update(
+          ref,
+          supersededEmailUpdate(
+            'This notification is superseded because the event is archived.',
+          ),
+        );
         return null;
       }
       let to = snap.get('to') as string;
@@ -608,13 +770,25 @@ export const sendQueuedEmail = onDocumentWritten(
           tx.getAll(...refs)
         ))
       ) {
-        tx.update(ref, {
-          status: 'failed',
-          error: 'This notification is superseded.',
-          sendingClaimId: FieldValue.delete(),
-          sendingStartedAt: FieldValue.delete(),
-          providerAttemptId: FieldValue.delete(),
-        });
+        tx.update(ref, supersededEmailUpdate());
+        return null;
+      }
+      if (
+        isProfileUpdateRequestEmail(snap.get('kind')) &&
+        !(await profileUpdateEmailIsCurrent(db, cfpId, snap.data()!, (refs) =>
+          tx.getAll(...refs)
+        ))
+      ) {
+        tx.update(ref, supersededEmailUpdate());
+        return null;
+      }
+      if (
+        DECISION_KINDS.includes(snap.get('kind')) &&
+        !(await decisionEmailIsCurrent(db, cfpId, snap.data()!, (refs) =>
+          tx.getAll(...refs)
+        ))
+      ) {
+        tx.update(ref, supersededEmailUpdate());
         return null;
       }
       if (isStaffEmail(snap.get('kind'))) {
@@ -631,18 +805,13 @@ export const sendQueuedEmail = onDocumentWritten(
           !staffUser ||
           staffUser.uid !== uid ||
           !staffMemberIsActive(member?.data(), cfpId, uid) ||
-          !staffNotificationStillTrue(snap.get('kind'), subjectId, subject)
+          !staffNotificationStillTrue(snap.get('kind'), subjectId, subject) ||
+          !reviewedRecipientStillTrue(snap.data()!, staffUser.email)
         ) {
-          tx.update(ref, {
-            status: 'failed',
-            error: 'This notification is superseded.',
-            sendingClaimId: FieldValue.delete(),
-            sendingStartedAt: FieldValue.delete(),
-            providerAttemptId: FieldValue.delete(),
-          });
+          tx.update(ref, supersededEmailUpdate());
           return null;
         }
-        to = staffUser.email!;
+        to = (snap.get('reviewedTo') as string | undefined) || staffUser.email!;
         language = staffEmailLanguage(member?.data());
       } else if (isRoleInvitationEmail(snap.get('kind'))) {
         const invitationId = String(snap.get('proposalId') ?? '');
@@ -657,18 +826,13 @@ export const sendQueuedEmail = onDocumentWritten(
             cfpId,
             grantEmail,
             grant,
-          )
+          ) ||
+          !reviewedRecipientStillTrue(snap.data()!, grantEmail)
         ) {
-          tx.update(ref, {
-            status: 'failed',
-            error: 'This notification is superseded.',
-            sendingClaimId: FieldValue.delete(),
-            sendingStartedAt: FieldValue.delete(),
-            providerAttemptId: FieldValue.delete(),
-          });
+          tx.update(ref, supersededEmailUpdate());
           return null;
         }
-        to = grantEmail;
+        to = (snap.get('reviewedTo') as string | undefined) || grantEmail;
         language = staffEmailLanguage(grant?.data());
       } else if (isCoSpeakerInvitationEmail(snap.get('kind'))) {
         const proposalId = String(snap.get('proposalId') ?? '');
@@ -690,18 +854,13 @@ export const sendQueuedEmail = onDocumentWritten(
             invitation,
             proposal,
             cfp,
-          )
+          ) ||
+          !reviewedRecipientStillTrue(snap.data()!, invitationEmail)
         ) {
-          tx.update(ref, {
-            status: 'failed',
-            error: 'This notification is superseded.',
-            sendingClaimId: FieldValue.delete(),
-            sendingStartedAt: FieldValue.delete(),
-            providerAttemptId: FieldValue.delete(),
-          });
+          tx.update(ref, supersededEmailUpdate());
           return null;
         }
-        to = invitationEmail;
+        to = (snap.get('reviewedTo') as string | undefined) || invitationEmail;
         language = { locale: 'en', bilingual: true };
       } else {
         const uid = String(snap.get('recipientUid') ?? '');
@@ -719,18 +878,13 @@ export const sendQueuedEmail = onDocumentWritten(
             !Array.isArray(speakerIds) ||
             (!scheduleNotification && !speakerIds.includes(uid)) ||
             typeof latestEmail !== 'string' ||
-            !latestEmail
+            !latestEmail ||
+            !reviewedRecipientStillTrue(snap.data()!, latestEmail)
           ) {
-            tx.update(ref, {
-              status: 'failed',
-              error: 'This notification is superseded.',
-              sendingClaimId: FieldValue.delete(),
-              sendingStartedAt: FieldValue.delete(),
-              providerAttemptId: FieldValue.delete(),
-            });
+            tx.update(ref, supersededEmailUpdate());
             return null;
           }
-          to = latestEmail;
+          to = (snap.get('reviewedTo') as string | undefined) || latestEmail;
           language = {
             locale: speaker.get('locale') === 'fr' ? 'fr' : 'en',
             bilingual: false,
@@ -800,23 +954,100 @@ export const sendQueuedEmail = onDocumentWritten(
             !(await scheduleEmailIsCurrent(db, cfpId, current.data()!, latestCfp, (refs) =>
               tx.getAll(...refs)
             ));
-          if (invalidEvent || invalidSchedule) {
-            tx.update(ref, {
-              status: 'failed',
-              error: 'This notification is superseded.',
-              sendingClaimId: FieldValue.delete(),
-              sendingStartedAt: FieldValue.delete(),
-              providerAttemptId: FieldValue.delete(),
-            });
+          const invalidProfileUpdate =
+            !invalidEvent &&
+            isProfileUpdateRequestEmail(current.get('kind')) &&
+            !(await profileUpdateEmailIsCurrent(db, cfpId, current.data()!, (refs) =>
+              tx.getAll(...refs)
+            ));
+          const invalidDecision =
+            !invalidEvent &&
+            DECISION_KINDS.includes(current.get('kind')) &&
+            !(await decisionEmailIsCurrent(db, cfpId, current.data()!, (refs) =>
+              tx.getAll(...refs)
+            ));
+          let invalidStaff = false;
+          if (!invalidEvent && isStaffEmail(current.get('kind'))) {
+            const uid = String(current.get('recipientUid') ?? '');
+            const subjectId = String(current.get('proposalId') ?? '');
+            const member = uid
+              ? await tx.get(db.doc(`cfps/${cfpId}/members/${uid}`))
+              : null;
+            const subject =
+              current.get('kind') === 'committee_proposal_submitted'
+                ? await tx.get(db.doc(`cfps/${cfpId}/proposals/${subjectId}`))
+                : latestCfp;
+            invalidStaff =
+              !uid ||
+              !staffMemberIsActive(member?.data(), cfpId, uid) ||
+              !staffNotificationStillTrue(current.get('kind'), subjectId, subject);
+          }
+          let invalidRoleInvitation = false;
+          if (!invalidEvent && isRoleInvitationEmail(current.get('kind'))) {
+            const invitationId = String(current.get('proposalId') ?? '');
+            const grantEmail = String(current.get('grantEmail') ?? '');
+            const grant = grantEmail
+              ? await tx.get(db.doc(`cfps/${cfpId}/roleGrants/${grantEmail}`))
+              : null;
+            invalidRoleInvitation = !roleInvitationStillTrue(
+              current.get('kind'),
+              invitationId,
+              cfpId,
+              grantEmail,
+              grant,
+            );
+          }
+          let invalidCoSpeakerInvitation = false;
+          if (!invalidEvent && isCoSpeakerInvitationEmail(current.get('kind'))) {
+            const proposalId = String(current.get('proposalId') ?? '');
+            const invitationId = String(current.get('invitationId') ?? '');
+            const invitationEmail = String(current.get('invitationEmail') ?? '');
+            const [invitation, proposal] = await tx.getAll(
+              db.doc(
+                `cfps/${cfpId}/proposals/${proposalId}/speakerInvitations/${invitationId}`,
+              ),
+              db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+            );
+            invalidCoSpeakerInvitation = !coSpeakerInvitationStillTrue(
+              current.get('kind'),
+              invitationId,
+              cfpId,
+              proposalId,
+              invitationEmail,
+              invitation,
+              proposal,
+              latestCfp,
+            );
+          }
+          const invalidReviewedRecipient =
+            !invalidEvent &&
+            !(await reviewedRecipientIsCurrent(db, cfpId, current.data()!, (refs) =>
+              tx.getAll(...refs)
+            ));
+          if (
+            invalidEvent ||
+            invalidSchedule ||
+            invalidProfileUpdate ||
+            invalidDecision ||
+            invalidStaff ||
+            invalidRoleInvitation ||
+            invalidCoSpeakerInvitation ||
+            invalidReviewedRecipient
+          ) {
+            tx.update(ref, supersededEmailUpdate());
             return false;
           }
         }
         if (fields) {
-          const terminal = ['sent', 'failed', 'dry_run'].includes(String(fields.status ?? ''));
+          const terminalStatus = String(fields.status ?? '');
+          const terminal = ['sent', 'failed', 'dry_run'].includes(terminalStatus);
+          const terminalAt = terminal ? FieldValue.serverTimestamp() : null;
           tx.update(ref, {
             ...fields,
             ...(terminal
               ? {
+                  attemptedAt: terminalAt!,
+                  sentAt: terminalStatus === 'sent' ? terminalAt! : FieldValue.delete(),
                   sendingClaimId: FieldValue.delete(),
                   sendingStartedAt: FieldValue.delete(),
                   ...(!preserveProviderAttempt
@@ -829,9 +1060,8 @@ export const sendQueuedEmail = onDocumentWritten(
         return true;
       });
 
-    const [apiKey, settings, templates, platform, cfpSnap] = await Promise.all([
+    const [apiKey, templates, platform, cfpSnap] = await Promise.all([
       readResendKey(),
-      loadSettings(db, cfpId),
       loadTemplates(db, cfpId),
       loadPlatform(db),
       db.doc(`cfps/${cfpId}`).get(),
@@ -841,11 +1071,27 @@ export const sendQueuedEmail = onDocumentWritten(
       name: (cfpSnap.get('name') as string) || cfpId,
       publicUrl: platform.publicUrl,
     };
-    if (!cfpSnap.exists || cfpSnap.get('deleting') === true) return;
+    if (!cfpSnap.exists || cfpSnap.get('deleting') === true) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded because the event was deleted.',
+      });
+      return;
+    }
     if (cfpSnap.get('archived') === true) {
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded because the event is archived.',
+      });
+      return;
+    }
+    if (
+      isProfileUpdateRequestEmail(claimed.kind) &&
+      !(await profileUpdateEmailIsCurrent(db, cfpId, claimed, (refs) => db.getAll(...refs)))
+    ) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded.',
       });
       return;
     }
@@ -864,7 +1110,8 @@ export const sendQueuedEmail = onDocumentWritten(
       if (
         !latestUser?.email ||
         !staffMemberIsActive(member?.data(), cfpId, uid) ||
-        !staffNotificationStillTrue(claimed.kind, subjectId, subject)
+        !staffNotificationStillTrue(claimed.kind, subjectId, subject) ||
+        !reviewedRecipientStillTrue(claimed, latestUser.email)
       ) {
         await updateClaim({
           status: 'failed',
@@ -873,14 +1120,15 @@ export const sendQueuedEmail = onDocumentWritten(
         return;
       }
       const language = staffEmailLanguage(member?.data());
+      const recipient = (claimed.reviewedTo as string | undefined) || latestUser.email;
       if (
-        claimed.to !== latestUser.email ||
+        claimed.to !== recipient ||
         claimed.locale !== language.locale ||
         claimed.bilingual !== language.bilingual
       ) {
-        if (!(await updateClaim({ to: latestUser.email, ...language }))) return;
+        if (!(await updateClaim({ to: recipient, ...language }))) return;
       }
-      claimed.to = latestUser.email;
+      claimed.to = recipient;
       Object.assign(claimed, language);
     } else if (isRoleInvitationEmail(claimed.kind)) {
       const invitationId = String(claimed.proposalId ?? '');
@@ -895,7 +1143,8 @@ export const sendQueuedEmail = onDocumentWritten(
           cfpId,
           grantEmail,
           grant,
-        )
+        ) ||
+        !reviewedRecipientStillTrue(claimed, grantEmail)
       ) {
         await updateClaim({
           status: 'failed',
@@ -904,9 +1153,15 @@ export const sendQueuedEmail = onDocumentWritten(
         return;
       }
       const language = staffEmailLanguage(grant?.data());
-      if (claimed.locale !== language.locale || claimed.bilingual !== language.bilingual) {
-        if (!(await updateClaim(language))) return;
+      const recipient = (claimed.reviewedTo as string | undefined) || grantEmail;
+      if (
+        claimed.to !== recipient ||
+        claimed.locale !== language.locale ||
+        claimed.bilingual !== language.bilingual
+      ) {
+        if (!(await updateClaim({ to: recipient, ...language }))) return;
       }
+      claimed.to = recipient;
       Object.assign(claimed, language);
     } else if (isCoSpeakerInvitationEmail(claimed.kind)) {
       const proposalId = String(claimed.proposalId ?? '');
@@ -928,7 +1183,8 @@ export const sendQueuedEmail = onDocumentWritten(
           invitation,
           proposal,
           cfpSnap,
-        )
+        ) ||
+        !reviewedRecipientStillTrue(claimed, invitationEmail)
       ) {
         await updateClaim({
           status: 'failed',
@@ -937,14 +1193,15 @@ export const sendQueuedEmail = onDocumentWritten(
         return;
       }
       const language = { locale: 'en' as const, bilingual: true };
+      const recipient = (claimed.reviewedTo as string | undefined) || invitationEmail;
       if (
-        claimed.to !== invitationEmail ||
+        claimed.to !== recipient ||
         claimed.locale !== language.locale ||
         claimed.bilingual !== language.bilingual
       ) {
-        if (!(await updateClaim({ to: invitationEmail, ...language }))) return;
+        if (!(await updateClaim({ to: recipient, ...language }))) return;
       }
-      claimed.to = invitationEmail;
+      claimed.to = recipient;
       Object.assign(claimed, language);
     } else {
       const uid = String(claimed.recipientUid ?? '');
@@ -962,7 +1219,8 @@ export const sendQueuedEmail = onDocumentWritten(
           !Array.isArray(speakerIds) ||
           (!scheduleNotification && !speakerIds.includes(uid)) ||
           typeof latestEmail !== 'string' ||
-          !latestEmail
+          !latestEmail ||
+          !reviewedRecipientStillTrue(claimed, latestEmail)
         ) {
           await updateClaim({
             status: 'failed',
@@ -974,19 +1232,26 @@ export const sendQueuedEmail = onDocumentWritten(
           locale: (speaker.get('locale') === 'fr' ? 'fr' : 'en') as EmailLocale,
           bilingual: false,
         };
+        const recipient = (claimed.reviewedTo as string | undefined) || latestEmail;
         if (
-          claimed.to !== latestEmail ||
+          claimed.to !== recipient ||
           claimed.locale !== language.locale ||
           claimed.bilingual !== language.bilingual
         ) {
-          if (!(await updateClaim({ to: latestEmail, ...language }))) return;
+          if (!(await updateClaim({ to: recipient, ...language }))) return;
         }
-        claimed.to = latestEmail;
+        claimed.to = recipient;
         Object.assign(claimed, language);
       }
     }
     const finalCfp = await db.doc(`cfps/${cfpId}`).get();
-    if (!finalCfp.exists || finalCfp.get('deleting') === true) return;
+    if (!finalCfp.exists || finalCfp.get('deleting') === true) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded because the event was deleted.',
+      });
+      return;
+    }
     if (finalCfp.get('archived') === true) {
       await updateClaim({
         status: 'failed',
@@ -1006,6 +1271,22 @@ export const sendQueuedEmail = onDocumentWritten(
       });
       return;
     }
+    const finalEmailConfig = await db.doc(`cfps/${cfpId}/config/email`).get();
+    const finalEmailData = finalEmailConfig.data() ?? {};
+    const configuredForDelivery = Boolean(
+      finalEmailData.from || finalEmailData.domain || finalEmailData.domainId,
+    );
+    if (
+      configuredForDelivery &&
+      !(await ensureLegacyEmailDomainBinding(db, cfpId, finalEmailData))
+    ) {
+      await updateClaim({
+        status: 'failed',
+        error: 'Email delivery is blocked because this sending domain is not assigned to the event.',
+      });
+      return;
+    }
+    const settings = settingsFromConfig(finalEmailData);
     // This is the final state check before the provider handoff. An archive
     // racing the HTTP request itself cannot recall a message Resend accepted.
     if (!(await updateClaim(undefined, false, true))) return;
@@ -1025,7 +1306,6 @@ export const sendQueuedEmail = onDocumentWritten(
     const finalized = await updateClaim(
       {
         status: outcome.status,
-        sentAt: FieldValue.serverTimestamp(),
         providerId: outcome.providerId ?? FieldValue.delete(),
         error: outcome.error ?? FieldValue.delete(),
       },

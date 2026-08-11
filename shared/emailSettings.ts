@@ -73,6 +73,50 @@ export function senderMismatch(from: string, verified: string): string | null {
   return sender === target ? null : sender;
 }
 
+/** Stable setup failures the admin UI can translate without parsing prose. */
+export type EmailDeliveryProblem =
+  | 'missing_key'
+  | 'invalid_key'
+  | 'missing_domain'
+  | 'domain_unverified'
+  | 'invalid_sender'
+  | 'sender_domain_mismatch'
+  | 'setup_unavailable';
+
+export interface EmailDeliveryReadiness {
+  ready: boolean;
+  problems: EmailDeliveryProblem[];
+  /** Resend's current status, or `unknown` when it could not be read. */
+  domainStatus: string;
+}
+
+/**
+ * Pure half of the delivery gate. The server supplies the live key/domain facts;
+ * keeping the classification shared lets the UI render exactly the same state.
+ */
+export function emailDeliveryReadiness(input: {
+  key: 'present' | 'missing' | 'invalid' | 'unavailable';
+  domain: string;
+  domainStatus: string;
+  from: string;
+}): EmailDeliveryReadiness {
+  const problems: EmailDeliveryProblem[] = [];
+  if (input.key === 'missing') problems.push('missing_key');
+  if (input.key === 'invalid') problems.push('invalid_key');
+  if (input.key === 'unavailable') problems.push('setup_unavailable');
+
+  const domain = input.domain.trim().toLowerCase();
+  if (!domain) problems.push('missing_domain');
+  else if (input.domainStatus !== 'verified') problems.push('domain_unverified');
+
+  if (!('address' in parseSender(input.from))) problems.push('invalid_sender');
+  else if (domain && senderMismatch(input.from, domain)) {
+    problems.push('sender_domain_mismatch');
+  }
+
+  return { ready: problems.length === 0, problems, domainStatus: input.domainStatus };
+}
+
 export type SettingsProblem =
   | { field: 'from' | 'replyTo'; problem: SenderProblem }
   | { field: 'publicUrl'; problem: 'url' };

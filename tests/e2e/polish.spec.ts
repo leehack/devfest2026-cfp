@@ -9,6 +9,7 @@ import {
   seedProposal,
   seedReview,
   seedSpeaker,
+  setEmailDeliveryReadyDirect,
   setSubmissionFormDirect,
   waitForEmail,
 } from './backend';
@@ -472,9 +473,13 @@ test('pending and completed email rows become readable cards on a phone', async 
     proposalId: 'email-card-complete',
     status: 'accepted',
   });
+  await setEmailDeliveryReadyDirect();
   await callAs(admin.idToken, 'emailQueue', {
     action: 'release',
     logIds: ['accepted__email-card-complete'],
+    reviewedRecipients: [
+      { logId: 'accepted__email-card-complete', to: SPEAKER.email },
+    ],
   });
   await waitForEmail(
     (rows) =>
@@ -504,10 +509,10 @@ test('pending and completed email rows become readable cards on a phone', async 
     expect(layout.labels.every(Boolean)).toBe(true);
     expect(layout.inside).toBe(true);
   }
-  await expect(completed.getByRole('button', { name: en.admin.emailResend })).toBeEnabled();
+  await expect(completed.getByRole('button', { name: en.admin.emailRetryOne })).toBeEnabled();
   expect(
     await completed
-      .getByRole('button', { name: en.admin.emailResend })
+      .getByRole('button', { name: en.admin.emailRetryOne })
       .evaluate((button) => button.getBoundingClientRect().height),
   ).toBeGreaterThanOrEqual(44);
   expect(

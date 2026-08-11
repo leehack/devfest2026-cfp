@@ -14,13 +14,16 @@ import {
 } from '../src/lib/dates';
 import {
   adminError,
+  emailError,
   friendlyError,
+  isSpeakerMessageRecipientsChanged,
   platformAdminError,
   resendError,
   scheduleError,
 } from '../src/lib/errors';
 import {
   isLateIntakeWindow,
+  overviewEmailReady,
   publishedProgrammeLifecycleStep,
 } from '../src/lib/adminLifecycle';
 import { en } from '../src/i18n/en';
@@ -113,6 +116,7 @@ describe('the published-programme lifecycle', () => {
         needsFirstReview: 0,
         publicNeedsUpdate: false,
         waitingEmails: 0,
+        emailNeedsAttention: 0,
       }),
     ).toBe(9);
   });
@@ -133,8 +137,47 @@ describe('the published-programme lifecycle', () => {
         needsFirstReview: 0,
         publicNeedsUpdate: false,
         waitingEmails: 0,
+        emailNeedsAttention: 0,
       }),
     ).toBe(12);
+  });
+
+  it('routes failed and mixed email work back to delivery', () => {
+    const base = {
+      status: 'closed' as const,
+      lateIntake: false,
+      awaitingConfirmation: 0,
+      undecided: 0,
+      needsFirstReview: 0,
+      publicNeedsUpdate: false,
+    };
+    expect(
+      publishedProgrammeLifecycleStep({
+        ...base,
+        waitingEmails: 0,
+        emailNeedsAttention: 2,
+      }),
+    ).toBe(15);
+    expect(
+      publishedProgrammeLifecycleStep({
+        ...base,
+        waitingEmails: 3,
+        emailNeedsAttention: 2,
+      }),
+    ).toBe(15);
+  });
+
+  it('uses the observed delivery result rather than stored setup hints', () => {
+    expect(
+      overviewEmailReady({
+        ready: false,
+        problems: ['sender_domain_mismatch'],
+        domainStatus: 'verified',
+      }),
+    ).toBe(false);
+    expect(
+      overviewEmailReady({ ready: true, problems: [], domainStatus: 'verified' }),
+    ).toBe(true);
   });
 
   it('does not infer late intake from legacy publication data with no timestamp', () => {
@@ -165,6 +208,36 @@ describe('adminError', () => {
     expect(adminError(failed('unavailable'), en)).toBe(en.errors.unavailable);
     expect(friendlyError(failed('unknown'), en)).toBe(en.errors.unavailable);
     expect(adminError(new Error('boom'), en)).toBe(en.errors.generic);
+  });
+
+  it('maps email delivery and recipient races without the last-admin fallback', () => {
+    expect(
+      emailError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'email_delivery_not_ready' },
+        },
+        en,
+      ),
+    ).toBe(en.admin.emailDeliveryNotReady);
+    expect(
+      emailError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'speaker_message_recipients_changed' },
+        },
+        fr,
+      ),
+    ).toBe(fr.admin.messageRecipientChanged);
+    expect(
+      emailError({ code: 'functions/failed-precondition' }, en),
+    ).toBe(en.admin.emailActionInvalid);
+    expect(
+      isSpeakerMessageRecipientsChanged({
+        code: 'functions/failed-precondition',
+        details: { reason: 'speaker_message_recipients_changed' },
+      }),
+    ).toBe(true);
   });
 
   it('speaks the reader’s language', () => {
@@ -242,6 +315,15 @@ describe('scheduleError', () => {
           dict,
         ),
       ).toBe(dict.schedule.cancellationProcessing);
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
+            details: { reason: 'schedule-preview-stale' },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.publishNeedsReshare);
       expect(
         scheduleError(
           {

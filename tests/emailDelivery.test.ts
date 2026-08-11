@@ -3,14 +3,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EMAIL_SENDING_LEASE_MS,
   SEND_QUEUED_EMAIL_TRIGGER_OPTIONS,
+  decisionEmailStillTrue,
   deliver,
   emailClaimMode,
   logId,
   providerAttemptId,
   resendIdempotencyKey,
+  reviewedRecipientStillTrue,
   sendViaResend,
   sendingLeaseExpired,
 } from '../functions/src/email';
+
+const proposal = (status: string, exists = true) => ({
+  exists,
+  get: (field: string) => (field === 'status' ? status : undefined),
+}) as FirebaseFirestore.DocumentSnapshot;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -38,6 +45,40 @@ function successfulFetch() {
 }
 
 describe('email send claims', () => {
+  it('keeps a decision sendable only while that exact decision remains true', () => {
+    expect(decisionEmailStillTrue('accepted', proposal('accepted'))).toBe(true);
+    expect(decisionEmailStillTrue('accepted', proposal('confirmed'))).toBe(true);
+    expect(decisionEmailStillTrue('accepted', proposal('declined'))).toBe(true);
+    expect(decisionEmailStillTrue('waitlisted', proposal('waitlisted'))).toBe(true);
+    expect(decisionEmailStillTrue('rejected', proposal('rejected'))).toBe(true);
+    expect(decisionEmailStillTrue('accepted', proposal('under_review'))).toBe(false);
+    expect(decisionEmailStillTrue('rejected', proposal('withdrawn'))).toBe(false);
+    expect(decisionEmailStillTrue('submission_received', proposal('submitted'))).toBe(false);
+    expect(decisionEmailStillTrue('accepted', proposal('accepted', false))).toBe(false);
+  });
+
+  it('pins a reviewed address while leaving automatic rows refreshable', () => {
+    expect(
+      reviewedRecipientStillTrue(
+        { to: 'old@example.org', reviewedTo: 'old@example.org' },
+        'old@example.org',
+      ),
+    ).toBe(true);
+    expect(
+      reviewedRecipientStillTrue(
+        { to: 'old@example.org', reviewedTo: 'old@example.org' },
+        'new@example.org',
+      ),
+    ).toBe(false);
+    expect(
+      reviewedRecipientStillTrue(
+        { to: 'new@example.org', reviewedTo: 'old@example.org' },
+        'old@example.org',
+      ),
+    ).toBe(false);
+    expect(reviewedRecipientStillTrue({ to: 'old@example.org' }, 'new@example.org')).toBe(true);
+  });
+
   it('starts one queued generation and resumes only the same CloudEvent claim', () => {
     expect(emailClaimMode({ status: 'queued', attempts: 2 }, 'event-a', 2)).toBe('new');
     expect(
@@ -171,6 +212,9 @@ describe('Resend idempotency', () => {
     expect(logId('schedule_changed', 'talk', 'release-2', 'co-speaker')).toBe(
       'schedule_changed__talk__release-2__co-speaker',
     );
+    expect(
+      logId('profile_update_requested', 'talk', 'generation-2', 'co-speaker'),
+    ).toBe('profile_update_requested__talk__generation-2__co-speaker');
   });
 
   it('renders co-speaker invitations with the exact server-owned invite destination', async () => {
@@ -198,5 +242,30 @@ describe('Resend idempotency', () => {
       'https://cfp.example.org/c/event/submit?proposal=talk-1&speakerInvite=invite-1',
     );
     expect(request.html).toContain('speakerInvite=invite-1');
+  });
+
+  it('renders profile requests with the exact server-owned proposal destination', async () => {
+    const fetchMock = successfulFetch();
+    await deliver(
+      {
+        kind: 'profile_update_requested',
+        proposalId: 'talk-1',
+        locale: 'en',
+        to: 'speaker@example.org',
+        data: { speakerName: 'Speaker', title: 'A shared session', needsVisa: false },
+      },
+      'resend-key',
+      settings,
+      { id: 'event', name: 'DevFest', publicUrl: 'https://cfp.example.org' },
+    );
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      text: string;
+      html: string;
+    };
+    expect(request.text).toContain(
+      'https://cfp.example.org/c/event/submit?proposal=talk-1',
+    );
+    expect(request.html).toContain('proposal=talk-1');
   });
 });

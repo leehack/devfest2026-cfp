@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import {
@@ -39,6 +40,18 @@ const interactionConfig = {
   days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '12:00' }],
   rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
 };
+
+async function programmePortrait(
+  width: number,
+  height: number,
+  background: { r: number; g: number; b: number },
+): Promise<Buffer> {
+  return sharp({
+    create: { width, height, channels: 3, background },
+  })
+    .png()
+    .toBuffer();
+}
 
 test.beforeEach(async () => {
   await reset();
@@ -493,6 +506,39 @@ test('custom programme items can carry or clear a scheduled language', async ({ 
   ).toHaveValue('');
 });
 
+test('server-rendered programme routes keep their CFP data through hydration', async ({
+  page,
+}) => {
+  await seedPublicAgenda();
+  const browserCfpReads: string[] = [];
+  page.on('request', (request) => {
+    const url = request.url();
+    const body = request.postData() ?? '';
+    if (
+      url.includes('/v1/projects/') &&
+      (url.includes('/documents/cfps/') || body.includes('/documents/cfps/'))
+    ) {
+      browserCfpReads.push(url);
+    }
+  });
+
+  await page.goto(at('/schedule'));
+  await page.waitForFunction(
+    () => typeof (window as any).signInAsTestSpeaker === 'function',
+  );
+  const roomFilter = page.getByRole('combobox', { name: 'Room / track' });
+  await roomFilter.selectOption('blue');
+  await expect(page.getByRole('link', { name: 'Coffee break' })).toHaveCount(0);
+  expect(browserCfpReads).toEqual([]);
+
+  await page.goto(at('/schedule/second-session'));
+  await page.waitForFunction(
+    () => typeof (window as any).signInAsTestSpeaker === 'function',
+  );
+  await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  expect(browserCfpReads).toEqual([]);
+});
+
 test('public agenda groups simultaneous rooms and keeps one room chronological on mobile', async ({
   page,
 }) => {
@@ -692,8 +738,12 @@ test('custom programme item speakers are optional, repeatable, removable, and pu
 
   let speakerOne = speakers.getByRole('group', { name: 'Speaker 1' });
   let speakerTwo = speakers.getByRole('group', { name: 'Speaker 2' });
-  await speakerOne.getByRole('textbox', { name: /^Speaker 1 name/ }).fill('Keya Remove');
-  await speakerTwo.getByRole('textbox', { name: /^Speaker 2 name/ }).fill('Lucas Maintained');
+  const speakerOneName = speakerOne.getByRole('textbox', { name: /^Speaker 1 name/ });
+  const speakerTwoName = speakerTwo.getByRole('textbox', { name: /^Speaker 2 name/ });
+  await speakerOneName.fill('Keya Remove');
+  await speakerTwoName.fill('Lucas Maintained');
+  await expect(speakerOneName).toHaveValue('Keya Remove');
+  await expect(speakerTwoName).toHaveValue('Lucas Maintained');
   await speakerTwo
     .getByRole('textbox', { name: 'Speaker 2 role / job title' })
     .fill('Panel moderator');
@@ -755,6 +805,99 @@ test('custom programme item speakers are optional, repeatable, removable, and pu
     detail.getByText('Keeps community conversations useful and welcoming.', { exact: true }),
   ).toBeVisible();
   await expect(detail.getByText('Keya Remove')).toHaveCount(0);
+});
+
+test('an admin uploads, reopens, and removes a custom programme speaker photo', async ({
+  page,
+}) => {
+  const admin = await createAccount(ADMIN);
+  await seedMember(admin.uid, 'admin', undefined, ADMIN.email);
+  await callJson(admin.idToken, 'setScheduleConfig', {
+    config: interactionConfig,
+    expectedRevision: 0,
+  });
+  const tiny = await programmePortrait(799, 900, { r: 55, g: 95, b: 170 });
+  const original = await programmePortrait(920, 860, { r: 35, g: 125, b: 185 });
+  await signInAs(page, ADMIN, at('/admin/schedule'));
+
+  await page.getByRole('button', { name: 'Add programme item' }).click();
+  let dialog = page.getByRole('dialog', { name: 'Add programme item' });
+  await dialog.getByRole('textbox', { name: /^Title \(English\)/ }).fill('Guest keynote');
+  let speakers = dialog.getByRole('group', { name: 'Speakers (optional)' });
+  await speakers.getByRole('button', { name: 'Add speaker' }).click();
+  let speaker = speakers.getByRole('group', { name: 'Speaker 1' });
+  await speaker.getByRole('textbox', { name: /^Speaker 1 name/ }).fill('Jordan Guest');
+  const input = speaker.getByLabel('Choose speaker 1 programme photo');
+
+  await input.setInputFiles({
+    name: 'too-small.png',
+    mimeType: 'image/png',
+    buffer: tiny,
+  });
+  await expect(
+    speaker.getByText('Choose a photo at least 800 pixels on both sides.'),
+  ).toBeVisible();
+
+  let releaseUpload = () => {};
+  let markUploadStarted = () => {};
+  const uploadGate = new Promise<void>((resolve) => {
+    releaseUpload = resolve;
+  });
+  const uploadStarted = new Promise<void>((resolve) => {
+    markUploadStarted = resolve;
+  });
+  await page.route('**/uploadCustomScheduleSpeakerPhoto', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    markUploadStarted();
+    await uploadGate;
+    await route.continue();
+  });
+
+  await input.setInputFiles({
+    name: 'jordan.png',
+    mimeType: 'image/png',
+    buffer: original,
+  });
+  await uploadStarted;
+  await expect(dialog.getByRole('button', { name: 'Save item' })).toBeDisabled();
+  await expect(speakers.getByRole('button', { name: 'Add speaker' })).toBeDisabled();
+  await expect(speaker.getByRole('button', { name: 'Remove speaker 1' })).toBeDisabled();
+  await expect(speaker.getByText('Uploading…')).toBeVisible();
+  releaseUpload();
+  await expect(speaker.locator('.schedule-custom-speaker-photo img')).toBeVisible();
+  await expect(
+    speaker.getByText('Photo ready. Save this programme item to attach it.'),
+  ).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Save item' })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Save item' }).click();
+
+  const placement = page.getByRole('button', { name: 'Move or edit: Guest keynote' });
+  await expect(placement).toBeVisible();
+  await placement.click();
+  dialog = page.getByRole('dialog', { name: 'Add programme item' });
+  speakers = dialog.getByRole('group', { name: 'Speakers (optional)' });
+  speaker = speakers.getByRole('group', { name: 'Speaker 1' });
+  await expect(speaker.locator('.schedule-custom-speaker-photo img')).toBeVisible();
+  await expect(speaker.getByText('Replace photo', { exact: true })).toBeVisible();
+
+  page.once('dialog', async (confirmation) => {
+    expect(confirmation.message()).toBe('Remove this photo from the working programme item?');
+    await confirmation.accept();
+  });
+  await speaker.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(speaker.locator('.schedule-custom-speaker-photo img')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Save item' }).click();
+
+  await placement.click();
+  dialog = page.getByRole('dialog', { name: 'Add programme item' });
+  speaker = dialog
+    .getByRole('group', { name: 'Speakers (optional)' })
+    .getByRole('group', { name: 'Speaker 1' });
+  await expect(speaker.locator('.schedule-custom-speaker-photo img')).toHaveCount(0);
+  await expect(speaker.getByText('Choose photo', { exact: true })).toBeVisible();
 });
 
 test('custom speaker rows stay aligned and contained across desktop, tablet, mobile, and French', async ({
@@ -1257,7 +1400,9 @@ test('sharing and publishing have separate review steps and stale-version guidan
 
   await expect(page.getByText(/The public programme is live\. Public version 2/)).toBeVisible();
   await expect(
-    page.getByRole('link', { name: /Email, 1 speaker notification waiting/ }),
+    page.getByRole('link', {
+      name: 'Email, 1 awaiting approval, 0 deliveries needing attention',
+    }),
   ).toBeVisible();
   await expect(publish).toBeDisabled();
   await expect(publish).toHaveAttribute('title', 'The public programme is already up to date.');

@@ -52,6 +52,9 @@ working versions under
 copies under
 `cfps/{cfpId}/confirmedHeadshots/{proposalId}/{uid}/{key}/{generation}`.
 Reusable profile originals live under `speakerProfilePhotos/{uid}/{uploadId}`;
+custom programme originals live under
+`cfps/{cfpId}/workingScheduleSpeakerPhotos/{assetRef}` with callable-only
+metadata in `scheduleSpeakerPhotoAssets/{assetRef}`;
 public square derivatives are cached under the immutable release prefix
 `cfps/{cfpId}/publicSchedulePhotos/{releaseId}/{photoRef}.webp` and remain
 callable-only.
@@ -124,15 +127,20 @@ immediate, but re-check the grant/member, proposal or shared pointer before send
 An explicit `locale` on the event member or pending grant is honoured; otherwise
 one notice renders both EN and FR, including both organiser overrides.
 
-Email setup is entirely `/admin`, no redeploy: key, domain, sender, wording.
+Email setup needs no redeploy: a platform owner/admin rotates the one shared key,
+then each event admin manages its bound domain, sender and wording from `/admin`.
 Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
 the built-in and an organiser's override are the same shape and one editor
 prefills from either. Overrides live in `config/email.templates`; a half-written
 one (blank subject or body) falls back rather than sending a blank.
 Addresses are data (`cfps/{id}/config/email`, `setEmailSettings`); the **key is
 Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
-a response — the client sees `keyHint`, the last four characters. Resend's domain
-API is proxied by `emailDomain` so the DNS records can be shown and re-checked.
+a response — callable-only `config/emailProvider` holds only `keyHint`, the last
+four characters. Resend's domain API is proxied by `emailDomain` so the DNS
+records can be shown and re-checked. `emailDomainBindings/{hash(domainId)}` is
+the callable-only, exclusive tenant assignment; an event admin may create a new
+domain or migrate its CFP's unique exact legacy pointer, never adopt an existing
+unbound domain by typing its public name.
 `functions/.env*` is only a fallback. `config` is *not* world-readable as a
 collection — the rule names the two readable documents one at a time.
 
@@ -400,19 +408,24 @@ collection — the rule names the two readable documents one at a time.
   what `languagePreference` exists for and what the scheduling dashboard counts,
   so a call picks which of the four to offer and what to call them — not what
   they are. `validateSubmissionForm` refuses anything else.
-- **No photographs on the submission form.** ~70% of applicants are turned down
-  and we should not be holding their picture, so `image` is refused there (§3).
-  A reusable profile photo is optional until an accepted speaker confirms; the
-  event may require it, and confirmation freezes one exact generation for the
-  programme without exposing the private profile pointer.
+- **No proposal-scoped photographs on the submission form.** ~70% of applicants
+  are turned down, so `image` is refused there (§3). The account-profile section
+  may expose the same optional reusable photo control as `/me`, but that private
+  asset is not copied into the proposal or shown to reviewers. An event may
+  require it only after acceptance; confirmation freezes one exact generation
+  for the programme without exposing the private profile pointer.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.
 - **One Resend account serves the whole platform.** So `emailDomain` is pinned to
-  the domain id stored on *this* CFP — `list` used to return the account's whole
-  roster, and `get`/`verify` took an id straight from the caller. `setEmailSettings`
-  refuses a sender that is not on that domain, or one organiser could write as
-  another organiser's verified event.
+  the domain id stored on *this* CFP and its exclusive
+  `emailDomainBindings/{hash(domainId)}` row — `list` used to return the account's
+  whole roster, and `get`/`verify` took an id straight from the caller. An existing
+  unbound Resend domain is never adopted by name; legacy migration needs exactly
+  one matching CFP config. `setEmailSettings`, readiness and the delivery trigger
+  all re-check the binding, or one organiser could write as another organiser's
+  verified event. The shared key is rotatable only by a current verified platform
+  owner/admin; event administration alone is deliberately insufficient.
 - **`config/platform` is unwritable by anyone.** `publicUrl` is the origin of
   every link the server mails, sign-in links included, and those are bearer
   credentials — an organiser who could edit it could aim other people's sign-in
@@ -490,6 +503,19 @@ collection — the rule names the two readable documents one at a time.
   status change marks shared and public copies cancelled rather than deleting
   them, so links and calendar UIDs remain stable. Schedule emails are held when
   sharing, not while editing or promoting, and dedupe by release id.
+- **Custom programme photos have two opaque identities.** The admin editor keeps
+  only a server-generated `photoAssetRef`; its callable-owned metadata binds the
+  exact private object and generation. Sharing replaces it with a release-only
+  `photoRef` and a private source record. The anonymous image callable accepts
+  only the exact current published entry and speaker index, so a working ref,
+  path or generation never appears in attendee data. Replacing or removing the
+  draft photo cannot rewrite an immutable release.
+- **Profile-update requests are tasks, not profile access.** A new request
+  generation queues one exact-speaker email and appears in that speaker's talk
+  picker plus the organiser's waiting/ready queue. Claim, send, resend and
+  completion revalidate the exact active confirmed speaker and request
+  generation. Only the speaker adopts the photo or completes the request; an
+  included schedule re-share marks that resolved generation handled.
 - **An email send is leased and idempotent at the provider.** The queue claim
   stores the CloudEvent id, `sendingStartedAt`, and a durable provider-attempt
   id. Automatic retries and recovery of an ambiguous failure use the same

@@ -32,7 +32,11 @@ import {
   currentScheduleReleaseContainsProposal,
   usesPerSpeakerLifecycle,
 } from './speakerLifecycle';
-import { speakerSnapshotFrom } from './profileSnapshots';
+import {
+  cancelPendingProfileUpdateRequest,
+  profileUpdateRequestRef,
+  speakerSnapshotFrom,
+} from './profileSnapshots';
 
 const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
 const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,160}$/;
@@ -40,6 +44,20 @@ const INVITATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const INVITE_RATE_WINDOW_MS = 60 * 60 * 1000;
 const INVITES_PER_SPEAKER_WINDOW = 20;
 const INVITES_PER_RECIPIENT_WINDOW = 5;
+
+/** Clears terminal timestamps before the trigger records the next attempt. */
+export function coSpeakerInvitationRetryEmailUpdate() {
+  return {
+    status: 'queued',
+    sendingClaimId: FieldValue.delete(),
+    sendingStartedAt: FieldValue.delete(),
+    attemptedAt: FieldValue.delete(),
+    sentAt: FieldValue.delete(),
+    providerId: FieldValue.delete(),
+    error: FieldValue.delete(),
+    retryRequestedAt: FieldValue.serverTimestamp(),
+  };
+}
 
 interface Identity {
   uid: string;
@@ -751,15 +769,7 @@ export const retryCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
         },
       });
     } else {
-      tx.update(emailRef, {
-        status: 'queued',
-        sendingClaimId: FieldValue.delete(),
-        sendingStartedAt: FieldValue.delete(),
-        sentAt: FieldValue.delete(),
-        providerId: FieldValue.delete(),
-        error: FieldValue.delete(),
-        retryRequestedAt: FieldValue.serverTimestamp(),
-      });
+      tx.update(emailRef, coSpeakerInvitationRetryEmailUpdate());
     }
     tx.set(speakerRateRef, {
       ...nextSpeakerRate,
@@ -1226,12 +1236,13 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
   let leftProposal = false;
   await db.runTransaction(async (tx) => {
-    const [cfp, proposal, member, participant, scheduleConfig] = await tx.getAll(
+    const [cfp, proposal, member, participant, scheduleConfig, profileUpdateRequest] = await tx.getAll(
       db.doc(`cfps/${cfpId}`),
       proposalRef,
       db.doc(`cfps/${cfpId}/members/${identity.uid}`),
       participantRef(cfpId, proposalId, targetUid),
       db.doc(`cfps/${cfpId}/config/schedule`),
+      profileUpdateRequestRef(db, cfpId, proposalId, targetUid),
     );
     assertActive(cfp);
     if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
@@ -1388,6 +1399,12 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
         removedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
+    );
+    cancelPendingProfileUpdateRequest(
+      tx,
+      profileUpdateRequest,
+      identity.uid,
+      'speaker-removed',
     );
     if (scheduleConfig.exists && currentStatus !== 'draft') {
       tx.update(scheduleConfig.ref, {

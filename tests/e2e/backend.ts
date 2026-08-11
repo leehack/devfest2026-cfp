@@ -16,6 +16,7 @@ const STORAGE = 'http://127.0.0.1:9199';
 const BUCKET = 'demo-devfest-cfp.appspot.com';
 const REGION = 'northamerica-northeast1';
 const DOCS = `${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents`;
+const FIRESTORE_CLEAR_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
 const day = 24 * 60 * 60 * 1000;
 
@@ -32,13 +33,35 @@ async function expectOk(response: Response, what: string) {
   if (!response.ok) throw new Error(`${what} failed: ${response.status} ${await response.text()}`);
 }
 
+export function isRetryableFirestoreClearConflict(status: number, body: string): boolean {
+  if (status !== 409) return false;
+  try {
+    const error = (JSON.parse(body) as { error?: { status?: unknown; message?: unknown } }).error;
+    return (
+      error?.status === 'ABORTED' &&
+      typeof error.message === 'string' &&
+      /\btransaction lock timeout\b/i.test(error.message)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function clearFirestore() {
-  await expectOk(
-    await fetch(`${FIRESTORE}/emulator/v1/projects/${PROJECT}/databases/(default)/documents`, {
+  const url = `${FIRESTORE}/emulator/v1/projects/${PROJECT}/databases/(default)/documents`;
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(url, {
       method: 'DELETE',
-    }),
-    'clearFirestore',
-  );
+    });
+    if (response.ok) return;
+
+    const body = await response.text();
+    const delay = FIRESTORE_CLEAR_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined || !isRetryableFirestoreClearConflict(response.status, body)) {
+      throw new Error(`clearFirestore failed: ${response.status} ${body}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 /**
@@ -597,9 +620,59 @@ export async function setPublicUrlDirect(url: string) {
  * that check any organiser could write as somebody else's verified domain.
  */
 export async function setSendingDomainDirect(domain: string, cfpId = CFP_ID) {
+  const domainId = `dom-${domain}`;
+  await setSendingDomainPointerDirect(domain, domainId, cfpId);
+  await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    cfpId: { stringValue: cfpId },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+  });
+}
+
+/** A legacy/stale config pointer without changing the platform assignment. */
+export async function setSendingDomainPointerDirect(
+  domain: string,
+  domainId: string,
+  cfpId = CFP_ID,
+) {
   await patch(`cfps/${cfpId}/config/email`, {
     domain: { stringValue: domain },
-    domainId: { stringValue: `dom-${domain}` },
+    domainId: { stringValue: domainId },
+  });
+}
+
+export async function readEmailDomainBinding(domainId: string): Promise<Record<string, any> | null> {
+  const id = createHash('sha256').update(domainId).digest('hex');
+  const response = await fetch(`${DOCS}/emailDomainBindings/${id}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readEmailDomainBinding');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/**
+ * Makes manual delivery actions testable without contacting Resend.
+ *
+ * The function honours this marker only under FUNCTIONS_EMULATOR. Production
+ * still reads the real secret and live Resend domain, while the empty emulator
+ * secret keeps the resulting delivery receipts truthful as `dry_run`.
+ */
+export async function setEmailDeliveryReadyDirect(cfpId = CFP_ID) {
+  const domain = 'delivery.example.test';
+  const domainId = `dom-${domain}`;
+  await patch(`cfps/${cfpId}/config/email`, {
+    from: { stringValue: `Test CFP <cfp@${domain}>` },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+    emulatorDeliveryReady: { booleanValue: true },
+  });
+  await patch('config/emailProvider', { keyHint: { stringValue: '…test' } });
+  await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    cfpId: { stringValue: cfpId },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
   });
 }
 
@@ -694,6 +767,13 @@ export async function setEmailAmbiguousFailureDirect(logId: string, cfpId = CFP_
   });
 }
 
+/** Exact address binding returned by the admin queue preview. */
+export function reviewedEmailRecipients(
+  rows: Array<{ logId: string; to: string }>,
+): Array<{ logId: string; to: string }> {
+  return rows.map(({ logId, to }) => ({ logId, to }));
+}
+
 /** Holds a queue row in a claimed send, with a caller-selected lease age. */
 export async function setEmailSendingDirect(
   logId: string,
@@ -735,6 +815,7 @@ export async function setEmailDeliveryDirect(
       'sendingStartedAt',
       'sendingClaimId',
       'providerAttemptId',
+      'attemptedAt',
       'sentAt',
       'providerId',
       'error',
@@ -766,6 +847,14 @@ export async function seedEmailLog(
     sendingStartedAt,
     sendingClaimId,
     providerAttemptId,
+    recipientUid,
+    to = 'speaker@example.org',
+    reviewedTo,
+    subject,
+    body,
+    attemptedAt,
+    sentAt,
+    createdAt,
   }: {
     status: string;
     kind?: string;
@@ -774,6 +863,14 @@ export async function seedEmailLog(
     sendingStartedAt?: Date;
     sendingClaimId?: string;
     providerAttemptId?: string;
+    recipientUid?: string;
+    to?: string;
+    reviewedTo?: string;
+    subject?: string;
+    body?: string;
+    attemptedAt?: Date;
+    sentAt?: Date;
+    createdAt?: Date;
   },
   cfpId = CFP_ID,
 ) {
@@ -781,9 +878,16 @@ export async function seedEmailLog(
     status: { stringValue: status },
     kind: { stringValue: kind },
     proposalId: { stringValue: proposalId },
-    to: { stringValue: 'speaker@example.org' },
+    to: { stringValue: to },
+    ...(reviewedTo ? { reviewedTo: { stringValue: reviewedTo } } : {}),
+    ...(recipientUid ? { recipientUid: { stringValue: recipientUid } } : {}),
+    ...(subject ? { subject: { stringValue: subject } } : {}),
+    ...(body ? { body: { stringValue: body } } : {}),
     locale: { stringValue: 'en' },
     attempts: { integerValue: String(attempts) },
+    ...(attemptedAt ? { attemptedAt: { timestampValue: attemptedAt.toISOString() } } : {}),
+    ...(sentAt ? { sentAt: { timestampValue: sentAt.toISOString() } } : {}),
+    ...(createdAt ? { createdAt: { timestampValue: createdAt.toISOString() } } : {}),
     ...(sendingStartedAt
       ? { sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() } }
       : {}),
@@ -896,6 +1000,7 @@ export async function seedSpeaker(
     bio,
     company,
     jobTitle,
+    basedIn,
     isGde,
     pastTalks,
   }: {
@@ -905,6 +1010,7 @@ export async function seedSpeaker(
     bio?: string;
     company?: string;
     jobTitle?: string;
+    basedIn?: string;
     isGde?: boolean;
     pastTalks?: string;
   },
@@ -913,7 +1019,7 @@ export async function seedSpeaker(
     name: { stringValue: name },
     email: { stringValue: email },
     bio: { stringValue: bio ?? 'x'.repeat(120) },
-    basedIn: { stringValue: 'Montréal, QC' },
+    basedIn: { stringValue: basedIn ?? 'Montréal, QC' },
     isGde: { booleanValue: isGde ?? false },
     ...(company ? { company: { stringValue: company } } : {}),
     ...(jobTitle ? { jobTitle: { stringValue: jobTitle } } : {}),
@@ -987,6 +1093,66 @@ export async function readSpeakerConfirmation(
   );
   if (response.status === 404) return null;
   await expectOk(response, 'readSpeakerConfirmation');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** A personal decision row for direct callable lifecycle tests. */
+export async function seedSpeakerConfirmation(
+  proposalId: string,
+  uid: string,
+  response: 'confirmed' | 'declined',
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/speakerConfirmations/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    proposalId: { stringValue: proposalId },
+    uid: { stringValue: uid },
+    response: { stringValue: response },
+    answers: { mapValue: { fields: {} } },
+  });
+}
+
+/** A server-owned request row placed at a lifecycle edge without a UI round-trip. */
+export async function seedProfileUpdateRequestDirect(
+  proposalId: string,
+  uid: string,
+  {
+    requestId = 'profile-update-request-1',
+    generation = 1,
+    scopes = ['profile'],
+  }: {
+    requestId?: string;
+    generation?: number;
+    scopes?: Array<'profile' | 'photo'>;
+  } = {},
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/profileUpdateRequests/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    proposalId: { stringValue: proposalId },
+    speakerUid: { stringValue: uid },
+    requestId: { stringValue: requestId },
+    generation: { integerValue: String(generation) },
+    status: { stringValue: 'pending' },
+    scopes: { arrayValue: { values: scopes.map((scope) => ({ stringValue: scope })) } },
+    resolvedScopes: { arrayValue: { values: [] } },
+    requestedBy: { stringValue: 'fixture-admin' },
+    requestedAt: { timestampValue: new Date().toISOString() },
+  });
+}
+
+export async function readProfileUpdateRequestDirect(
+  proposalId: string,
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/proposals/${proposalId}/profileUpdateRequests/${uid}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readProfileUpdateRequestDirect');
   const { fields } = await response.json();
   return unwrap(fields ?? {});
 }
@@ -1223,6 +1389,25 @@ export async function clearScheduleCancellationCarrySourceDirect(
     {},
     ['pendingScheduleCancellations', 'scheduledProposalEntries'],
   );
+}
+
+/** Models a shared release written before schedule-photo provenance existed. */
+export async function clearSchedulePhotoProvenanceDirect(
+  releaseId: string,
+  cfpId = CFP_ID,
+) {
+  await Promise.all([
+    patchWithMask(
+      `cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`,
+      {},
+      ['speakerPhotoFingerprint'],
+    ),
+    patchWithMask(
+      `cfps/${cfpId}/config/schedule`,
+      {},
+      ['sharedSpeakerPhotoFingerprint'],
+    ),
+  ]);
 }
 
 /** Rewrites one release into the shape produced before taxonomy labels were frozen. */

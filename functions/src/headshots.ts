@@ -39,6 +39,16 @@ export interface PublicSpeakerPhoto {
   contentType: 'image/webp';
 }
 
+const CUSTOM_SPEAKER_PHOTO_REF = /^[A-Za-z0-9_-]{43}$/;
+
+export function customScheduleSpeakerPhotoPath(cfpId: string, assetRef: string): string {
+  return `cfps/${cfpId}/workingScheduleSpeakerPhotos/${assetRef}`;
+}
+
+export function validCustomScheduleSpeakerPhotoRef(value: unknown): value is string {
+  return typeof value === 'string' && CUSTOM_SPEAKER_PHOTO_REF.test(value);
+}
+
 /** New participant-scoped objects; the proposal-only helpers remain the legacy format. */
 export function speakerWorkingHeadshotPrefix(
   cfpId: string,

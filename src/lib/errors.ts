@@ -68,6 +68,38 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
+export function isSpeakerMessageRecipientsChanged(error: unknown): boolean {
+  return (
+    codeOf(error) === 'failed-precondition' &&
+    reasonOf(error) === 'speaker_message_recipients_changed'
+  );
+}
+
+/** Email actions have lifecycle failures of their own, never the last-admin guard. */
+export function emailError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'failed-precondition') {
+    switch (reasonOf(error)) {
+      case 'email_delivery_not_ready':
+        return t.admin.emailDeliveryNotReady;
+      case 'speaker_message_recipients_changed':
+      case 'email_recipients_changed':
+        return t.admin.messageRecipientChanged;
+      default:
+        return t.admin.emailActionInvalid;
+    }
+  }
+  switch (codeOf(error)) {
+    case 'invalid-argument':
+      return t.admin.emailBadInput;
+    case 'not-found':
+      return t.admin.emailMissing;
+    case 'permission-denied':
+      return t.nav.forbidden;
+    default:
+      return friendlyError(error, t);
+  }
+}
+
 export function scheduleError(error: unknown, t: Dictionary): string {
   if (codeOf(error) === 'failed-precondition') {
     if (detailsOf(error).speakerPhoto === 'required') {
@@ -82,6 +114,8 @@ export function scheduleError(error: unknown, t: Dictionary): string {
         return t.schedule.cancellationDeliveryPending;
       case 'schedule-cancellation-processing':
         return t.schedule.cancellationProcessing;
+      case 'schedule-preview-stale':
+        return t.schedule.publishNeedsReshare;
     }
   }
   switch (codeOf(error)) {

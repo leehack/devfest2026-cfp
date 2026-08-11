@@ -139,6 +139,18 @@ describe('schedule validation', () => {
 
     expect(validateScheduleEntry({ ...custom, speakers: [speaker] }, config)).toBeNull();
     expect(validateScheduleEntry({ ...custom, speakers: [{ name: 'Host' }] }, config)).toBeNull();
+    expect(
+      validateScheduleEntry(
+        { ...custom, speakers: [{ name: 'Host', photoAssetRef: 'a'.repeat(43) }] },
+        config,
+      ),
+    ).toBeNull();
+    expect(
+      validateScheduleEntry(
+        { ...custom, speakers: [{ name: 'Host', photoAssetRef: 'bucket/path' }] },
+        config,
+      ),
+    ).toBe('entrySpeakers');
     expect(validateScheduleEntry({ ...custom, speakers: [{ name: '' }] }, config)).toBe(
       'entrySpeakers',
     );

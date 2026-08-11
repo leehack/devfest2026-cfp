@@ -55,8 +55,15 @@ test.describe('the speaker snapshot', () => {
     expect(await company('snap-open')).toBeUndefined();
     expect(await company('snap-decided')).toBeUndefined();
 
+    const openPreview = await callJson(
+      speaker.idToken,
+      'previewProposalSpeakerProfile',
+      { proposalId: 'snap-open' },
+    );
     await callJson(speaker.idToken, 'refreshProposalSpeakerSnapshot', {
       proposalId: 'snap-open',
+      expectedCurrentFingerprint: openPreview.currentFingerprint,
+      expectedLatestFingerprint: openPreview.latestFingerprint,
     });
     expect(await company('snap-open')).toBe('Unity');
 
@@ -89,8 +96,15 @@ test.describe('the speaker snapshot', () => {
     });
 
     expect(await company('snap-pair')).toBeUndefined();
+    const pairPreview = await callJson(
+      speaker.idToken,
+      'previewProposalSpeakerProfile',
+      { proposalId: 'snap-pair' },
+    );
     await callJson(speaker.idToken, 'refreshProposalSpeakerSnapshot', {
       proposalId: 'snap-pair',
+      expectedCurrentFingerprint: pairPreview.currentFingerprint,
+      expectedLatestFingerprint: pairPreview.latestFingerprint,
     });
     expect(await company('snap-pair')).toBe('Unity');
     expect((await readProposalById('snap-pair'))?.speakerSnapshot?.[0]?.uid).toBe(speaker.uid);

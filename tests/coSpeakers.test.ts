@@ -11,6 +11,8 @@ import {
   coSpeakerInvitationStillTrue,
   coSpeakerSignInInvitationStillTrue,
 } from '../functions/src/speakerLifecycle';
+import { coSpeakerInvitationRetryEmailUpdate } from '../functions/src/coSpeakers';
+import { proposalSelectionQuery } from '../src/lib/proposalLinks';
 
 const snapshot = (data?: Record<string, unknown>) =>
   ({
@@ -41,7 +43,27 @@ describe('co-speaker identity helpers', () => {
   });
 });
 
+describe('proposal session link parsing', () => {
+  it('selects only a bare proposal link and leaves invitation links alone', () => {
+    expect(proposalSelectionQuery('?proposal=talk-2')).toBe('talk-2');
+    expect(proposalSelectionQuery('?proposal=%20talk-2%20')).toBe('talk-2');
+    expect(proposalSelectionQuery('?proposal=talk-2&speakerInvite=invite-2')).toBeNull();
+    expect(proposalSelectionQuery('?proposal=talk-2&speakerInvite=')).toBeNull();
+    expect(proposalSelectionQuery('?speakerInvite=invite-2')).toBeNull();
+    expect(proposalSelectionQuery('?proposal=%20')).toBeNull();
+  });
+});
+
 describe('co-speaker invitation delivery validity', () => {
+  it('clears both terminal timestamps before a retry records its next attempt', () => {
+    const update = coSpeakerInvitationRetryEmailUpdate();
+
+    expect(update.status).toBe('queued');
+    expect(update.attemptedAt.constructor.name).toBe('DeleteTransform');
+    expect(update.sentAt.constructor.name).toBe('DeleteTransform');
+    expect(update.retryRequestedAt.constructor.name).toBe('ServerTimestampTransform');
+  });
+
   const future = Timestamp.fromMillis(Date.now() + 60_000);
   const baseInvitation = {
     cfpId: 'event-a',

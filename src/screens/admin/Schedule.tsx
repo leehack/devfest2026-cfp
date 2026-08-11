@@ -6,12 +6,15 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type Dispatch,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
 } from 'react';
 
 import { SelectField, TextAreaField, TextField } from '../../components/fields';
+import { CustomScheduleSpeakerPhoto } from '../../components/CustomScheduleSpeakerPhoto';
 import { Link } from '../../components/Link';
 import { useI18n } from '../../i18n/context';
 import { formatCalendarDay, formatDate } from '../../i18n';
@@ -36,7 +39,7 @@ import {
   type ScheduleEntry,
   type ScheduleLanguage,
   type ScheduleRoom,
-  type PublicScheduleSpeaker,
+  type CustomScheduleSpeaker,
 } from '@shared/schedule';
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
@@ -1202,6 +1205,7 @@ export function Schedule({
 
       {editing && config && (
         <EntryEditor
+          cfpId={cfpId}
           entry={editing}
           config={config}
           proposal={editing.kind === 'proposal' ? byId.get(editing.proposalId) : undefined}
@@ -1921,6 +1925,7 @@ function TimeGrid({
 }
 
 function EntryEditor({
+  cfpId,
   entry,
   config,
   proposal,
@@ -1933,23 +1938,27 @@ function EntryEditor({
   onRemove,
   onReload,
 }: {
+  cfpId: string;
   entry: ScheduleEntry;
   config: ScheduleConfig;
   proposal?: ProposalRow;
   submissionForm: SubmissionForm | null;
   busy: boolean;
   error: string;
-  onChange: (entry: ScheduleEntry) => void;
+  onChange: Dispatch<SetStateAction<ScheduleEntry | null>>;
   onSave: () => void;
   onCancel: () => void;
   onRemove: () => void;
   onReload: () => void;
 }) {
   const { t, locale } = useI18n();
+  const [photoBusy, setPhotoBusy] = useState(false);
   const proposalLanguage = proposal && entry.kind === 'proposal'
     ? scheduledProposalLanguage(proposal, entry)
     : null;
-  const dialogRef = useModalFocus(onCancel);
+  const dialogRef = useModalFocus(() => {
+    if (!busy && !photoBusy) onCancel();
+  });
   const feedbackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1959,38 +1968,55 @@ function EntryEditor({
   const customSpeakers = entry.kind === 'custom' ? entry.speakers ?? [] : [];
   const customSpeakerNamesReady = customSpeakers.every((speaker) => speaker.name.trim());
 
-  function updateCustomSpeaker(index: number, patch: Partial<PublicScheduleSpeaker>) {
-    if (entry.kind !== 'custom') return;
-    const speakers = [...customSpeakers];
-    speakers[index] = { ...speakers[index], ...patch };
-    onChange({ ...entry, speakers });
+  function updateCustomSpeaker(index: number, patch: Partial<CustomScheduleSpeaker>) {
+    onChange((current) => {
+      if (current?.kind !== 'custom') return current;
+      const speakers = [...(current.speakers ?? [])];
+      const speaker = speakers[index];
+      if (!speaker) return current;
+      const updated = { ...speaker, ...patch };
+      if ('photoAssetRef' in patch && patch.photoAssetRef === undefined) {
+        delete updated.photoAssetRef;
+      }
+      speakers[index] = updated;
+      return { ...current, speakers };
+    });
   }
 
   function addCustomSpeaker() {
-    if (entry.kind !== 'custom' || customSpeakers.length >= SCHEDULE_LIMITS.customSpeakers) return;
-    const newSpeakerIndex = customSpeakers.length;
-    onChange({ ...entry, speakers: [...customSpeakers, { name: '' }] });
+    onChange((current) => {
+      if (current?.kind !== 'custom') return current;
+      const speakers = current.speakers ?? [];
+      if (speakers.length >= SCHEDULE_LIMITS.customSpeakers) return current;
+      return { ...current, speakers: [...speakers, { name: '' }] };
+    });
     requestAnimationFrame(() => {
-      const newSpeakerName = dialogRef.current
-        ?.querySelectorAll<HTMLInputElement>('.schedule-custom-speaker input[aria-required="true"]')[newSpeakerIndex];
-      newSpeakerName?.focus();
+      const speakerNames = dialogRef.current
+        ?.querySelectorAll<HTMLInputElement>('.schedule-custom-speaker input[aria-required="true"]');
+      speakerNames?.item(speakerNames.length - 1)?.focus();
     });
   }
 
   function removeCustomSpeaker(index: number) {
-    if (entry.kind !== 'custom') return;
-    const speakers = customSpeakers.filter((_, speakerIndex) => speakerIndex !== index);
-    if (speakers.length) {
-      onChange({ ...entry, speakers });
-      return;
-    }
-    const withoutSpeakers = { ...entry };
-    delete withoutSpeakers.speakers;
-    onChange(withoutSpeakers);
+    onChange((current) => {
+      if (current?.kind !== 'custom') return current;
+      const speakers = (current.speakers ?? []).filter(
+        (_, speakerIndex) => speakerIndex !== index,
+      );
+      if (speakers.length) return { ...current, speakers };
+      const withoutSpeakers = { ...current };
+      delete withoutSpeakers.speakers;
+      return withoutSpeakers;
+    });
   }
 
   return (
-    <div className="schedule-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+    <div
+      className="schedule-dialog-backdrop"
+      onMouseDown={(event) => {
+        if (!busy && !photoBusy && event.target === event.currentTarget) onCancel();
+      }}
+    >
       <section
         ref={dialogRef}
         className="schedule-dialog"
@@ -2025,7 +2051,13 @@ function EntryEditor({
               </div>
             )}
           </div>
-          <button data-autofocus type="button" className="btn btn--ghost btn--compact" onClick={onCancel}>
+          <button
+            data-autofocus
+            type="button"
+            className="btn btn--ghost btn--compact"
+            disabled={busy || photoBusy}
+            onClick={onCancel}
+          >
             {t.schedule.cancelEdit}
           </button>
         </div>
@@ -2169,7 +2201,9 @@ function EntryEditor({
                 <button
                   type="button"
                   className="btn btn--compact"
-                  disabled={busy || customSpeakers.length >= SCHEDULE_LIMITS.customSpeakers}
+                  disabled={
+                    busy || photoBusy || customSpeakers.length >= SCHEDULE_LIMITS.customSpeakers
+                  }
                   onClick={addCustomSpeaker}
                 >
                   {t.schedule.addCustomSpeaker}
@@ -2192,13 +2226,23 @@ function EntryEditor({
                         <button
                           type="button"
                           className="btn btn--ghost btn--compact"
-                          disabled={busy}
+                          disabled={busy || photoBusy}
                           onClick={() => removeCustomSpeaker(index)}
                           aria-label={t.schedule.removeCustomSpeaker(index + 1)}
                         >
                           {t.schedule.removeCustomSpeakerShort}
                         </button>
                       </div>
+                      <CustomScheduleSpeakerPhoto
+                        cfpId={cfpId}
+                        speakerNumber={index + 1}
+                        photoAssetRef={speaker.photoAssetRef}
+                        disabled={busy || photoBusy}
+                        onBusyChange={setPhotoBusy}
+                        onChange={(photoAssetRef) =>
+                          updateCustomSpeaker(index, { photoAssetRef })
+                        }
+                      />
                       <div className="grid grid--2 schedule-custom-speaker__fields">
                         <TextField
                           label={t.schedule.customSpeakerName(index + 1)}
@@ -2255,12 +2299,12 @@ function EntryEditor({
           </div>
         )}
         <div className="schedule-dialog__actions">
-          <button type="button" className="btn btn--danger" disabled={busy} onClick={onRemove}>
+          <button type="button" className="btn btn--danger" disabled={busy || photoBusy} onClick={onRemove}>
             {t.schedule.remove}
           </button>
           <span className="schedule-dialog__actions-spacer" />
-          <button type="button" className="btn" disabled={busy} onClick={onCancel}>{t.schedule.cancelEdit}</button>
-          <button type="button" className="btn btn--primary" disabled={busy || !customSpeakerNamesReady} onClick={onSave}>{t.schedule.saveItem}</button>
+          <button type="button" className="btn" disabled={busy || photoBusy} onClick={onCancel}>{t.schedule.cancelEdit}</button>
+          <button type="button" className="btn btn--primary" disabled={busy || photoBusy || !customSpeakerNamesReady} onClick={onSave}>{t.schedule.saveItem}</button>
         </div>
       </section>
     </div>

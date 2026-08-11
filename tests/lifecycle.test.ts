@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { editScope } from '../src/lib/lifecycle';
+import { editScope, lateSpeakerNeedsScheduleRelease } from '../src/lib/lifecycle';
 import { PROPOSAL_STATUSES } from '../shared/enums';
 
 describe('editScope', () => {
@@ -47,5 +47,38 @@ describe('editScope', () => {
       if (status === 'draft' || status === 'submitted') expect(scope).toBe('all');
       else expect(scope).not.toBe('all');
     }
+  });
+});
+
+describe('late-speaker schedule visibility', () => {
+  const preserved = {
+    lateSpeakerSchedulePreserved: true,
+    lateSpeakerScheduleBaselineIds: ['lead', 'original-co-speaker'],
+  };
+
+  it('waits for a new release only for a speaker outside the preserved roster', () => {
+    expect(lateSpeakerNeedsScheduleRelease(preserved, 'late-speaker')).toBe(true);
+    expect(lateSpeakerNeedsScheduleRelease(preserved, 'lead')).toBe(false);
+  });
+
+  it('does not hide a current release without a valid preservation marker', () => {
+    expect(
+      lateSpeakerNeedsScheduleRelease(
+        { ...preserved, lateSpeakerSchedulePreserved: false },
+        'late-speaker',
+      ),
+    ).toBe(false);
+    expect(
+      lateSpeakerNeedsScheduleRelease(
+        { lateSpeakerSchedulePreserved: true, lateSpeakerScheduleBaselineIds: [null] },
+        'late-speaker',
+      ),
+    ).toBe(false);
+    expect(
+      lateSpeakerNeedsScheduleRelease(
+        { lateSpeakerSchedulePreserved: true, lateSpeakerScheduleBaselineIds: [] },
+        'late-speaker',
+      ),
+    ).toBe(false);
   });
 });
