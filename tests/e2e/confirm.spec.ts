@@ -57,6 +57,8 @@ test.describe('answering an acceptance', () => {
     await expect(page.getByText(/organisers can plan a slot/)).toBeVisible();
     await expect(page.getByText(/published programme/)).toHaveCount(0);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await expect(page.locator('.speaker-photo').getByText('Optional', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
 
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
     await expect(
@@ -91,6 +93,7 @@ test.describe('answering an acceptance', () => {
     expect(await statusOf('p-change')).toBe('declined');
 
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
     expect(await statusOf('p-change')).toBe('confirmed');
   });
@@ -283,11 +286,17 @@ test.describe('the confirmation questions', () => {
     expect((await readProposalById('p-q'))?.confirmAnswers).toBeUndefined();
   });
 
-  test('with no questions configured, confirming stays one click', async ({ page }) => {
+  test('with no custom questions configured, confirmation still offers the optional programme photo', async ({
+    page,
+  }) => {
     await accepted();
 
     await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await expect(page.getByRole('heading', { name: 'Speaker photo', exact: true })).toBeVisible();
+    await expect(page.locator('.speaker-photo').getByText('Optional', { exact: true })).toBeVisible();
+    expect(await statusOf('p-q')).toBe('accepted');
+    await page.getByRole('button', { name: 'Confirm my talk' }).click();
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
   });
 
@@ -453,6 +462,14 @@ test.describe('the confirmation questions', () => {
     const panel = page.locator('.section', {
       has: page.getByRole('heading', { name: 'Confirmation questions' }),
     });
+    await expect(
+      panel.getByText('It is optional unless you require it below.', { exact: false }),
+    ).toBeVisible();
+    await expect(
+      panel.getByRole('checkbox', {
+        name: 'Require every speaker to have a profile photo before confirming',
+      }),
+    ).not.toBeChecked();
     await panel.getByRole('button', { name: 'Add a question' }).click();
 
     // The placeholder is deliberately blank and disabled; every real choice

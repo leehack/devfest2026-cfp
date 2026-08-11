@@ -20,14 +20,27 @@ import {
   SpeakerProfileSummary,
   speakerProfileComplete,
 } from '../components/SpeakerFields';
+import { CoSpeakerInvitation } from '../components/CoSpeakerInvitation';
+import { CoSpeakerRoster } from '../components/CoSpeakerRoster';
 import { formatCalendarDay, formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { COC_URL } from '../lib/env';
 import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { track } from '../lib/analytics';
-import { editScope, type EditScope } from '../lib/lifecycle';
+import {
+  editScope,
+  lateSpeakerNeedsScheduleRelease,
+  type EditScope,
+} from '../lib/lifecycle';
 import { goTo, href } from '../lib/router';
+import { coSpeakerInviteQuery } from '../lib/coSpeakers';
+import { proposalSelectionQuery } from '../lib/proposalLinks';
+import {
+  listSpeakerProfileUpdateRequests,
+  type ProfileUpdateRequestSummary,
+} from '../lib/profileUpdateRequests';
+import { profileUpdateRequestsByProposal } from '../lib/profileUpdateRequestSummary';
 import {
   loadPublishedSchedule,
   loadSharedSchedule,
@@ -55,12 +68,16 @@ import {
   type LoadedProposal,
 } from '../lib/proposals';
 import type { ProposalStatus } from '@shared/enums';
+import { primarySpeakerIdOf, type ProposalSpeakerRoster } from '@shared/coSpeakers';
 import { calendarDate } from '@shared/cfp';
 import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
 import { HeadshotField } from '../components/HeadshotField';
+import { SpeakerProfilePhoto } from '../components/SpeakerProfilePhoto';
+import { ProfileSnapshotRefresh } from '../components/ProfileSnapshotRefresh';
 import {
   EMPTY_FORM,
   FORM_LIMITS,
+  SPEAKER_PHOTO_KEY,
   localised,
   validateAnswers,
   type AnswerFaults,
@@ -68,14 +85,15 @@ import {
   type Answers,
   type ConfirmField,
   type ConfirmForm,
+  type SpeakerPhotoQuestion,
 } from '@shared/confirmForm';
 
 type Errors = Record<string, string>;
 type SaveSource = 'background' | 'manual' | 'transition';
 
-function confirmationAnswersFrom(proposal: Record<string, any>): Answers {
-  const loaded = { ...((proposal.confirmAnswers ?? {}) as Answers) };
-  const uploads = proposal.headshotUploads;
+function confirmationAnswersFrom(talk: LoadedProposal): Answers {
+  const loaded = { ...(talk.ownConfirmation?.answers ?? {}) };
+  const uploads = talk.ownConfirmation?.headshotUploads;
   if (!uploads || typeof uploads !== 'object' || Array.isArray(uploads)) return loaded;
   for (const [key, pointer] of Object.entries(uploads)) {
     if (
@@ -89,6 +107,17 @@ function confirmationAnswersFrom(proposal: Record<string, any>): Answers {
     }
   }
   return loaded;
+}
+
+function proposalForCurrentSpeaker(talk: LoadedProposal): Record<string, any> {
+  const ids = Array.isArray(talk.proposal.speakerIds) ? talk.proposal.speakerIds : [];
+  const perSpeaker = Boolean(talk.proposal.primarySpeakerId) || ids.length > 1;
+  if (!perSpeaker) return talk.proposal;
+  return {
+    ...talk.proposal,
+    acks: talk.ownParticipation?.acks ?? {},
+    attendance: talk.ownParticipation?.attendance ?? {},
+  };
 }
 const PAST_STATUSES = new Set<ProposalStatus>(['withdrawn', 'rejected', 'declined']);
 
@@ -104,6 +133,7 @@ interface TalkPickerProps {
   busy: boolean;
   canAdd: boolean;
   atCap: boolean;
+  profileRequests: ReadonlyMap<string, ProfileUpdateRequestSummary[]>;
   onOpen: (id: string) => void;
   onAdd: () => void;
 }
@@ -116,6 +146,7 @@ function TalkPicker({
   busy,
   canAdd,
   atCap,
+  profileRequests,
   onOpen,
   onAdd,
 }: TalkPickerProps) {
@@ -149,6 +180,9 @@ function TalkPicker({
         <span className="talks__title">{title}</span>
         {talk.status !== 'draft' && (
           <span className="talks__status">{t.enums.status[talk.status]}</span>
+        )}
+        {(profileRequests.get(talk.id) ?? []).some((request) => request.state === 'waiting') && (
+          <span className="talks__attention">{t.profileSnapshot.pickerBadge}</span>
         )}
       </button>
     );
@@ -209,12 +243,16 @@ function AckLabel({ ack }: { ack: ConfirmField }) {
 interface QuestionsProps {
   cfpId: string;
   proposalId: string | null;
+  speakerPhoto?: SpeakerPhotoQuestion;
   fields: ConfirmField[];
   answers: Answers;
   faults: AnswerFaults;
   busy: boolean;
   onAnswer: (key: string, value: AnswerValue) => void;
   onUploadBusyChange?: (key: string, busy: boolean) => void;
+  sessionPhotoGeneration?: string | null;
+  onCurrentPhotoGenerationChange?: (generation: string | null) => void;
+  onUsePhotoForSession?: (generation: string | null) => Promise<boolean>;
 }
 
 /**
@@ -228,12 +266,16 @@ interface QuestionsProps {
 function Questions({
   cfpId,
   proposalId,
+  speakerPhoto,
   fields,
   answers,
   faults,
   busy,
   onAnswer,
   onUploadBusyChange,
+  sessionPhotoGeneration,
+  onCurrentPhotoGenerationChange,
+  onUsePhotoForSession,
 }: QuestionsProps) {
   const { t, locale } = useI18n();
   const message = (key: string) => {
@@ -243,6 +285,18 @@ function Questions({
 
   return (
     <>
+      {speakerPhoto && (
+        <SpeakerProfilePhoto
+          required={speakerPhoto.required}
+          disabled={busy}
+          error={message(SPEAKER_PHOTO_KEY)}
+          onChanged={(generation) => onAnswer(SPEAKER_PHOTO_KEY, generation ?? '')}
+          onCurrentGenerationChange={onCurrentPhotoGenerationChange}
+          onBusyChange={(next) => onUploadBusyChange?.(SPEAKER_PHOTO_KEY, next)}
+          sessionGeneration={sessionPhotoGeneration}
+          onUseForSession={onUsePhotoForSession}
+        />
+      )}
       {fields.map((field) => {
         const label = localised(field.label, locale);
         const help = localised(field.help, locale) || undefined;
@@ -336,6 +390,8 @@ function Questions({
 interface StatusBannerProps {
   status: ProposalStatus;
   scope: EditScope;
+  personalScope: EditScope;
+  isCoSpeaker: boolean;
   busy: boolean;
   /** Absent once withdrawing is no longer something they can do. */
   onWithdraw?: () => void;
@@ -357,7 +413,7 @@ interface StatusBannerProps {
     public: boolean;
     href?: string;
   };
-  /** A newer shared preview exists, but this confirmed talk has no placement in it. */
+  /** This speaker is not in the current release, or its preview has no placement. */
   schedulePending?: boolean;
   /** The current shared preview could not be loaded, so no older placement is shown. */
   scheduleUnavailable?: boolean;
@@ -413,6 +469,8 @@ function ProposalJourney({
 function StatusBanner({
   status,
   scope,
+  personalScope,
+  isCoSpeaker,
   busy,
   onWithdraw,
   onRespond,
@@ -427,7 +485,7 @@ function StatusBanner({
 }: StatusBannerProps) {
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
-  const hasQuestions = questions.fields.length > 0;
+  const hasQuestions = questions.fields.length > 0 || questions.speakerPhoto !== undefined;
   const canConfirm = status !== 'confirmed';
   const canDecline = status !== 'declined';
 
@@ -548,7 +606,9 @@ function StatusBanner({
         </>
       )}
 
-      <p className="muted">{t.form.editHelp[scope]}</p>
+      <p className="muted">
+        {isCoSpeaker ? t.coSpeakers.personalEditHelp[personalScope] : t.form.editHelp[scope]}
+      </p>
       {onWithdraw && (
         <button type="button" className="btn btn--ghost" disabled={busy} onClick={onWithdraw}>
           {t.form.withdraw}
@@ -587,7 +647,45 @@ interface SubmitPageProps {
   cfpId: string;
 }
 
-export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
+export function SubmitPage(props: SubmitPageProps) {
+  const { t } = useI18n();
+  const [invite, setInvite] = useState<ReturnType<typeof coSpeakerInviteQuery> | undefined>(
+    undefined,
+  );
+  const [preferredProposalId, setPreferredProposalId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setInvite(coSpeakerInviteQuery(window.location.search));
+  }, []);
+
+  if (invite === undefined) return <p className="muted">{t.app.loading}</p>;
+  if (invite) {
+    return (
+      <CoSpeakerInvitation
+        user={props.user}
+        cfpId={props.cfpId}
+        proposalId={invite.proposalId}
+        invitationId={invite.invitationId}
+        onJoined={() => {
+          setPreferredProposalId(invite.proposalId);
+          const url = new URL(window.location.href);
+          url.searchParams.delete('proposal');
+          url.searchParams.delete('speakerInvite');
+          history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+          setInvite(null);
+        }}
+      />
+    );
+  }
+  return <ProposalFormPage {...props} preferredProposalId={preferredProposalId} />;
+}
+
+function ProposalFormPage({
+  user,
+  cfp,
+  cfpId,
+  preferredProposalId,
+}: SubmitPageProps & { preferredProposalId: string | null }) {
   const { t, locale } = useI18n();
 
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -616,6 +714,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
   const [answerSaveState, setAnswerSaveState] =
     useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [sessionPhotoGeneration, setSessionPhotoGeneration] = useState<string | null>(null);
   const [uploadingAnswer, setUploadingAnswer] = useState(false);
   /**
    * Faults on *this call's own* questions, kept apart from `answerFaults`.
@@ -626,24 +725,58 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const [extraFaults, setExtraFaults] = useState<AnswerFaults>({});
   const [asking, setAsking] = useState(false);
   const [speakerEditing, setSpeakerEditing] = useState(true);
+  const [speakerRoster, setSpeakerRoster] = useState<
+    ProposalSpeakerRoster | null | undefined
+  >(undefined);
+  const [speakerRosterRefresh, setSpeakerRosterRefresh] = useState(0);
+  const [profileRequestRefresh, setProfileRequestRefresh] = useState(0);
+  const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
+  const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
 
+  const transitionFocus = useRef<
+    'join-waiting' | 'join-loading' | 'leave-waiting' | 'leave-loading' | null
+  >(
+    preferredProposalId ? 'join-waiting' : null,
+  );
   const dirty = useRef(false);
   const revision = useRef(0);
   const activeSave = useRef<Promise<string> | null>(null);
   const answerDirty = useRef(false);
   const answerRevision = useRef(0);
   const activeAnswerSave = useRef<Promise<boolean> | null>(null);
+  const currentProfilePhotoGeneration = useRef<string | null>(null);
+  const sessionPhotoGenerations = useRef(new Map<string, string | null>());
+  const confirmFormRef = useRef(confirmForm);
   const uploadingFields = useRef(new Set<string>());
   const historyGuard = useRef(false);
   const historyTransition = useRef(false);
   const archived = cfp.state === 'archived';
-  const scope = editScope(status, cfp.state === 'open', archived);
+  const selectedTalk = talks.find((talk) => talk.id === proposalId);
+  const selectedPrimaryId = selectedTalk ? primarySpeakerIdOf(selectedTalk.proposal) : user.uid;
+  const isCoSpeaker =
+    proposalId !== null && selectedPrimaryId !== null && selectedPrimaryId !== user.uid;
+  const isPrimarySpeaker = !isCoSpeaker;
+  const usesPersonalConfirmation = Boolean(
+    selectedTalk?.proposal.primarySpeakerId ||
+      (Array.isArray(selectedTalk?.proposal.speakerIds) &&
+        selectedTalk.proposal.speakerIds.length > 1),
+  );
+  const ownResponse = selectedTalk?.ownConfirmation?.response;
+  const speakerStatus: ProposalStatus =
+    usesPersonalConfirmation && (status === 'accepted' || status === 'confirmed')
+      ? (ownResponse ?? (status === 'confirmed' ? 'confirmed' : 'accepted'))
+      : status;
+  const personalScope = editScope(status, cfp.state === 'open', archived);
+  const scope = isCoSpeaker ? 'none' : personalScope;
   const formRef = useRef(form);
   const proposalIdRef = useRef(proposalId);
   const scopeRef = useRef(scope);
   const talksRef = useRef(talks);
   const speakerRef = useRef(speaker);
   const statusRef = useRef(status);
+  const speakerStatusRef = useRef(speakerStatus);
+  const personalLifecycleRef = useRef(usesPersonalConfirmation);
+  const personalScopeRef = useRef(personalScope);
   const answersRef = useRef(answers);
   const savedAnswersRef = useRef<Answers>({});
   const tRef = useRef(t);
@@ -654,15 +787,20 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   talksRef.current = talks;
   speakerRef.current = speaker;
   statusRef.current = status;
+  speakerStatusRef.current = speakerStatus;
+  personalLifecycleRef.current = usesPersonalConfirmation;
+  personalScopeRef.current = personalScope;
   answersRef.current = answers;
+  confirmFormRef.current = confirmForm;
   tRef.current = t;
   localeRef.current = locale;
   /** The talk itself: what the committee scores. */
   const readOnly = scope !== 'all';
   /** Travel answers: no bearing on the score, so they outlive the freeze. */
-  const travelReadOnly = scope === 'none';
+  const travelReadOnly = personalScope === 'none';
   const talkDisabled = readOnly || submitting;
   const travelDisabled = travelReadOnly || submitting;
+  const acknowledgementDisabled = personalScope !== 'all' || submitting;
 
   /*
    * Next owns browser Back before this client screen sees `popstate`. A guard
@@ -700,7 +838,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked, schedule, sharedResult] = await Promise.all([
+        const [{ talks: found, speaker: profile }, questions, asked, schedule, sharedResult, requestResult] = await Promise.all([
           loadMyProposals(cfpId, user),
           loadConfirmForm(cfpId),
           loadSubmissionForm(cfpId),
@@ -712,36 +850,57 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
+          listSpeakerProfileUpdateRequests({ cfpId })
+            .then(({ data }) => ({ requests: data.own, failed: false }))
+            .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
         ]);
         if (cancelled) return;
         setTalks(found);
         talksRef.current = found;
         setSpeaker(profile);
         speakerRef.current = profile;
+        currentProfilePhotoGeneration.current =
+          typeof profile?.profilePhoto?.generation === 'string'
+            ? profile.profilePhoto.generation
+            : null;
+        sessionPhotoGenerations.current = new Map(
+          found.map((talk) => [
+            talk.id,
+            talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
+          ]),
+        );
         setConfirmForm(questions);
         setShape(asked);
         setPublishedSchedule(schedule);
         setSharedSchedule(sharedResult.value);
         setSharedScheduleFailed(sharedResult.failed);
+        setProfileRequests(requestResult.requests);
+        setProfileRequestsFailed(requestResult.failed);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
         const currentTalks = found.filter((talk) => !isPastTalk(talk));
+        const requestedProposalId = preferredProposalId ?? proposalSelectionQuery(window.location.search);
+        const preferred = requestedProposalId
+          ? currentTalks.find((talk) => talk.id === requestedProposalId)
+          : undefined;
         const open =
-          cfp.state === 'open'
+          preferred ??
+          (cfp.state === 'open'
             ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? found[0])
             : (currentTalks.find((talk) => talk.status === 'accepted') ??
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
               currentTalks[0] ??
-              found[0]);
+              found[0]));
         if (open) {
-          const next = fromDocuments(open.proposal, profile);
+          const next = fromDocuments(proposalForCurrentSpeaker(open), profile);
           setForm(next);
           setSpeakerEditing(!speakerProfileComplete(next));
           setProposalId(open.id);
           proposalIdRef.current = open.id;
           setStatus(open.status);
-          const loadedAnswers = confirmationAnswersFrom(open.proposal);
+          setSessionPhotoGeneration(sessionPhotoGenerations.current.get(open.id) ?? null);
+          const loadedAnswers = confirmationAnswersFrom(open);
           setAnswers(loadedAnswers);
           savedAnswersRef.current = loadedAnswers;
           answerDirty.current = false;
@@ -756,6 +915,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           };
           setForm(next);
           setSpeakerEditing(!speakerProfileComplete(next));
+          setSessionPhotoGeneration(null);
           setAnswers({});
           savedAnswersRef.current = {};
           answerDirty.current = false;
@@ -769,7 +929,42 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [cfp.publishedScheduleId, cfp.sharedScheduleId, cfp.state, cfpId, loadAttempt, user]);
+  }, [
+    cfp.publishedScheduleId,
+    cfp.sharedScheduleId,
+    cfp.state,
+    cfpId,
+    loadAttempt,
+    preferredProposalId,
+    user,
+  ]);
+
+  useEffect(() => {
+    const transition = transitionFocus.current;
+    if (!transition) return;
+    if (transition.endsWith('waiting')) {
+      if (loading) {
+        transitionFocus.current = transition.startsWith('join')
+          ? 'join-loading'
+          : 'leave-loading';
+      }
+      return;
+    }
+    if (loading) return;
+    const joining = transition === 'join-loading';
+    if (joining && preferredProposalId && proposalId !== preferredProposalId) return;
+    transitionFocus.current = null;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const talkHeading = document.querySelector<HTMLElement>('#submission-talk h2');
+        const target = joining || talks.length > 0
+          ? talkHeading
+          : document.getElementById('main-content');
+        target?.focus({ preventScroll: true });
+      });
+    });
+  }, [loadAttempt, loading, preferredProposalId, proposalId, talks.length]);
 
   // ----------------------------------------------------------------- autosave
 
@@ -785,17 +980,18 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     if (
       id &&
       typeof value === 'string' &&
-      value.startsWith(`cfps/${cfpId}/workingHeadshots/${id}/${key}/`)
+      value.startsWith(`cfps/${cfpId}/workingHeadshots/${id}/`) &&
+      value.includes(`/${key}/`)
     ) {
       const updated = talksRef.current.map((talk) =>
         talk.id === id
           ? {
               ...talk,
-              proposal: {
-                ...talk.proposal,
-                headshotUploads: {
-                  ...(talk.proposal.headshotUploads ?? {}),
-                  [key]: { path: value },
+              ownConfirmation: {
+                ...(talk.ownConfirmation ?? { answers: {} }),
+                answers: {
+                  ...(talk.ownConfirmation?.answers ?? {}),
+                  [key]: value,
                 },
               },
             }
@@ -819,15 +1015,15 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
    * slot before the speaker presses the explicit confirmation button.
    */
   const saveConfirmationAnswers = useCallback(
-    async (source: SaveSource = 'background'): Promise<boolean> => {
+    async (source: SaveSource = 'background', force = false): Promise<boolean> => {
       if (activeAnswerSave.current) {
         const saved = await activeAnswerSave.current;
         if (!saved) return false;
       }
-      if (!answerDirty.current) return true;
+      if (!answerDirty.current && !force) return true;
       if (
         archived ||
-        statusRef.current !== 'confirmed' ||
+        speakerStatusRef.current !== 'confirmed' ||
         uploadingFields.current.size > 0 ||
         proposalIdRef.current === null
       ) {
@@ -850,6 +1046,12 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
           if (answerRevision.current === savedRevision) {
             answerDirty.current = false;
             savedAnswersRef.current = snapshot;
+            if (confirmFormRef.current.speakerPhoto) {
+              const generation = currentProfilePhotoGeneration.current;
+              sessionPhotoGenerations.current.set(id, generation);
+              if (proposalIdRef.current === id) setSessionPhotoGeneration(generation);
+            }
+            setProfileRequestRefresh((value) => value + 1);
             setAnswerSaveState('saved');
             if (source !== 'transition' && !dirty.current) collapseHistoryGuard();
           } else {
@@ -876,10 +1078,17 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   );
 
   useEffect(() => {
-    if (archived || status !== 'confirmed' || uploadingAnswer || !answerDirty.current) return;
+    if (
+      archived ||
+      speakerStatus !== 'confirmed' ||
+      uploadingAnswer ||
+      !answerDirty.current
+    ) {
+      return;
+    }
     const handle = window.setTimeout(() => void saveConfirmationAnswers('background'), 1500);
     return () => clearTimeout(handle);
-  }, [answers, archived, saveConfirmationAnswers, status, uploadingAnswer]);
+  }, [answers, archived, saveConfirmationAnswers, speakerStatus, uploadingAnswer]);
 
   const persist = useCallback(async (source: SaveSource = 'background'): Promise<boolean> => {
     if (scopeRef.current === 'none' && proposalIdRef.current === null) return false;
@@ -902,16 +1111,27 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     const snapshot = formRef.current;
     const currentId = proposalIdRef.current;
     const currentScope = scopeRef.current;
+    const personalLifecycle = personalLifecycleRef.current;
     setSaveState('saving');
     setSaveError('');
 
-    const request = saveDraft(cfpId, user, snapshot, currentId, currentScope, localeRef.current);
+    const request = saveDraft(
+      cfpId,
+      user,
+      snapshot,
+      currentId,
+      currentScope,
+      localeRef.current,
+      personalLifecycle,
+      personalScopeRef.current,
+    );
     activeSave.current = request;
     let shouldFlushAgain = false;
 
     try {
       const id = await request;
       const { proposalDoc, speakerDoc } = toDocuments(snapshot);
+      const { acks, attendance, ...talkDoc } = proposalDoc;
       const cachedSpeaker = {
         ...speakerRef.current,
         ...speakerDoc,
@@ -933,7 +1153,13 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             talk.id === id
               ? {
                   ...talk,
-                  proposal: { ...talk.proposal, ...proposalDoc },
+                  proposal: {
+                    ...talk.proposal,
+                    ...(personalLifecycle ? talkDoc : proposalDoc),
+                  },
+                  ownParticipation: personalLifecycle
+                    ? { ...talk.ownParticipation, acks, attendance }
+                    : talk.ownParticipation,
                   speaker: cachedSpeaker,
                 }
               : talk,
@@ -953,6 +1179,10 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       if (revision.current === savedRevision) {
         dirty.current = false;
         setSaveState('saved');
+        if (personalLifecycle) {
+          setSpeakerRoster(undefined);
+          setSpeakerRosterRefresh((value) => value + 1);
+        }
         if (source === 'manual') {
           showToast(
             currentScope === 'none'
@@ -1187,16 +1417,83 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     setTalks(updated);
   }
 
+  function markOwnResponse(
+    id: string,
+    response: 'confirmed' | 'declined',
+    responseAnswers: Answers,
+  ) {
+    const updated = talksRef.current.map((talk) =>
+      talk.id === id
+        ? {
+            ...talk,
+            ownConfirmation: {
+              ...talk.ownConfirmation,
+              response,
+              answers: responseAnswers,
+            },
+          }
+        : talk,
+    );
+    talksRef.current = updated;
+    setTalks(updated);
+  }
+
+  function applyRoster(next: ProposalSpeakerRoster | null) {
+    setSpeakerRoster(next);
+    const id = proposalIdRef.current;
+    if (!next || !id) return;
+    const activeIds = next.items
+      .filter((item) => item.kind === 'active')
+      .map((item) => item.uid);
+    const { proposalDoc } = toDocuments(formRef.current);
+    const updated = talksRef.current.map((talk) =>
+      talk.id === id
+        ? {
+            ...talk,
+            proposal: {
+              ...talk.proposal,
+              ...(next.usesPersonalLifecycle
+                ? { primarySpeakerId: next.primarySpeakerId }
+                : {}),
+              speakerIds: activeIds,
+            },
+            ownParticipation:
+              next.usesPersonalLifecycle && activeIds.includes(user.uid)
+              ? {
+                  ...talk.ownParticipation,
+                  role:
+                    next.primarySpeakerId === user.uid
+                      ? ('primary' as const)
+                      : ('coSpeaker' as const),
+                  acks: proposalDoc.acks,
+                  attendance: proposalDoc.attendance,
+                }
+              : talk.ownParticipation,
+          }
+        : talk,
+    );
+    talksRef.current = updated;
+    setTalks(updated);
+  }
+
   // -------------------------------------------------------------- switching
 
   function showTalk(talk?: LoadedProposal) {
     revision.current += 1;
+    setSpeakerRoster(undefined);
     if (talk) {
-      setForm(fromDocuments(talk.proposal, speakerRef.current));
+      setForm(fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current));
       setProposalId(talk.id);
       proposalIdRef.current = talk.id;
       setStatus(talk.status);
-      const loadedAnswers = confirmationAnswersFrom(talk.proposal);
+      if (!sessionPhotoGenerations.current.has(talk.id)) {
+        sessionPhotoGenerations.current.set(
+          talk.id,
+          talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
+        );
+      }
+      setSessionPhotoGeneration(sessionPhotoGenerations.current.get(talk.id) ?? null);
+      const loadedAnswers = confirmationAnswersFrom(talk);
       setAnswers(loadedAnswers);
       savedAnswersRef.current = loadedAnswers;
     } else {
@@ -1204,6 +1501,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       setProposalId(null);
       proposalIdRef.current = null;
       setStatus('draft');
+      setSessionPhotoGeneration(null);
       setAnswers({});
       savedAnswersRef.current = {};
     }
@@ -1242,6 +1540,23 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (!isPrimarySpeaker) return;
+    if (proposalId && !speakerRoster) {
+      setBanner(t.coSpeakers.loadFailed);
+      document.getElementById('submission-co-speakers')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+      return;
+    }
+    if (speakerRoster?.pendingBlocksSubmit) {
+      setBanner(t.coSpeakers.pendingBlockHelp);
+      document.getElementById('submission-co-speakers')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+      return;
+    }
     const found = liveErrors;
     const faults = liveExtraFaults;
     setErrors(found);
@@ -1378,7 +1693,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       // and the old answers win if the speaker later confirms again.
       if (
         response === 'decline' &&
-        statusRef.current === 'confirmed' &&
+        speakerStatusRef.current === 'confirmed' &&
         answerDirty.current &&
         !(await saveConfirmationAnswers('transition'))
       ) {
@@ -1396,9 +1711,22 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       setStatus(data.status);
       statusRef.current = data.status;
       markTalk(proposalId, data.status);
+      markOwnResponse(
+        proposalId,
+        data.response,
+        response === 'confirm' ? responseAnswers : savedAnswersRef.current,
+      );
+      const nextPhotoGeneration =
+        response === 'confirm' && confirmFormRef.current.speakerPhoto
+          ? currentProfilePhotoGeneration.current
+          : null;
+      sessionPhotoGenerations.current.set(proposalId, nextPhotoGeneration);
+      setSessionPhotoGeneration(nextPhotoGeneration);
       if (response === 'confirm') savedAnswersRef.current = responseAnswers;
       answerDirty.current = false;
       setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
+      setSpeakerRosterRefresh((value) => value + 1);
+      setProfileRequestRefresh((value) => value + 1);
       setAsking(false);
       setBanner(null);
     } catch (error: any) {
@@ -1478,9 +1806,8 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     );
   }
 
-  const submittedCount = talks.filter((talk) =>
-    inStatusSet('live', talk.status),
-  ).length;
+  const submittedCount = talks.filter((talk) => inStatusSet('live', talk.status)).length;
+  const profileRequestsByProposal = profileUpdateRequestsByProposal(profileRequests);
 
   const picker = (
     <TalkPicker
@@ -1501,12 +1828,17 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         submittedCount < LIMITS.maxTalksPerSpeaker
       }
       atCap={submittedCount >= LIMITS.maxTalksPerSpeaker}
+      profileRequests={profileRequestsByProposal}
       onOpen={openTalk}
       onAdd={startNewTalk}
     />
   );
 
   const withdrawable = status !== 'draft' && inStatusSet('withdrawable', status);
+  const lateSpeakerSchedulePending = lateSpeakerNeedsScheduleRelease(
+    selectedTalk?.proposal,
+    user.uid,
+  );
   const sharedEntry: PublishedScheduleEntry | undefined =
     proposalId && sharedSchedule?.schedule
       ? sharedSchedule.entries.find(
@@ -1530,7 +1862,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
   const hasNewerSharedPreview = Boolean(
     cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId,
   );
-  const displayedEntry = hasNewerSharedPreview ? sharedEntry : publishedEntry;
+  const displayedEntry = lateSpeakerSchedulePending
+    ? undefined
+    : hasNewerSharedPreview
+      ? sharedEntry
+      : publishedEntry;
   const displayedSchedule = hasNewerSharedPreview
     ? sharedSchedule?.schedule
     : publishedSchedule?.schedule;
@@ -1587,6 +1923,16 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
       attention:
         showErrors && hasAny(['proposal.deliveryLanguage', 'proposal.languagePreference']),
     },
+    ...(proposalId
+      ? [
+          {
+            id: 'submission-co-speakers',
+            label: t.coSpeakers.title,
+            complete: speakerRoster != null && !speakerRoster.pendingBlocksSubmit,
+            attention: speakerRoster === null || Boolean(speakerRoster?.pendingBlocksSubmit),
+          },
+        ]
+      : []),
     {
       id: 'submission-speaker',
       label: t.sections.speaker,
@@ -1621,38 +1967,39 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
     },
   ];
 
-  const speakerNext = archived
+  const lifecycleNext = archived
     ? t.form.nextSteps.archived
-    : status === 'draft'
+    : speakerStatus === 'draft'
       ? cfp.state === 'open'
         ? t.form.nextSteps.draft
         : t.form.nextSteps.draftClosed
-      : status === 'submitted'
+      : speakerStatus === 'submitted'
         ? scope === 'all'
           ? t.form.nextSteps.submittedEditable
           : t.form.nextSteps.submitted
-        : status === 'under_review'
+        : speakerStatus === 'under_review'
           ? t.form.nextSteps.underReview
-          : status === 'accepted'
+          : speakerStatus === 'accepted'
             ? t.form.nextSteps.accepted
-            : status === 'confirmed'
-              ? speakerSchedule?.public
-                ? t.form.nextSteps.confirmedPublic
-                : speakerSchedule
-                  ? t.form.nextSteps.confirmedShared
-                  : sharedScheduleFailed
-                    ? t.form.nextSteps.confirmedUnavailable
-                    : hasNewerSharedPreview
-                      ? t.form.nextSteps.confirmedPending
-                      : t.form.nextSteps.confirmedWaiting
-              : status === 'waitlisted'
+            : speakerStatus === 'confirmed'
+              ? lateSpeakerSchedulePending
+                ? t.form.nextSteps.confirmedPending
+                : speakerSchedule?.public
+                  ? t.form.nextSteps.confirmedPublic
+                  : speakerSchedule
+                    ? t.form.nextSteps.confirmedShared
+                    : sharedScheduleFailed
+                      ? t.form.nextSteps.confirmedUnavailable
+                      : hasNewerSharedPreview
+                        ? t.form.nextSteps.confirmedPending
+                        : t.form.nextSteps.confirmedWaiting
+              : speakerStatus === 'waitlisted'
                 ? t.form.nextSteps.waitlisted
-                : status === 'rejected'
+                : speakerStatus === 'rejected'
                   ? t.form.nextSteps.rejected
-                  : status === 'declined'
+                  : speakerStatus === 'declined'
                     ? t.form.nextSteps.declined
                     : t.form.nextSteps.withdrawn;
-
   return (
     <form className="form submission-form" onSubmit={onSubmit} noValidate>
       {picker}
@@ -1661,11 +2008,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <div className="submission-context__identity">
           <span className="submission-context__event">{cfp.name}</span>
           <span
-            className={`submission-context__status submission-context__status--${status === 'draft' && cfp.state === 'open' ? 'open' : 'set'}`}
+            className={`submission-context__status submission-context__status--${speakerStatus === 'draft' && cfp.state === 'open' ? 'open' : 'set'}`}
           >
-            {status === 'draft' && cfp.state === 'open'
+            {speakerStatus === 'draft' && cfp.state === 'open'
               ? t.form.acceptingNow
-              : t.enums.status[status]}
+              : t.enums.status[speakerStatus]}
           </span>
         </div>
         <div className="submission-context__deadline">
@@ -1684,51 +2031,87 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         </div>
       </section>
 
-      <ProposalJourney status={status} next={speakerNext} />
+      <ProposalJourney status={speakerStatus} next={lifecycleNext} />
+
+      {profileRequestsFailed && (
+        <aside className="profile-request-load-error" role="alert">
+          <div>
+            <h2>{t.profileSnapshot.taskLoadFailed}</h2>
+            <p>{t.profileSnapshot.taskLoadFailedHelp}</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            {t.errors.reload}
+          </button>
+        </aside>
+      )}
 
       {/*
         The talk stays on screen after submitting. A speaker who cannot re-read
         what they sent has no way to check it went in, and the withdraw button
         on its own made the page look like a dead end.
       */}
-      {status !== 'draft' && (
+      {speakerStatus !== 'draft' && (
         <StatusBanner
-          status={status}
+          status={speakerStatus}
           scope={scope}
+          personalScope={personalScope}
+          isCoSpeaker={isCoSpeaker}
           busy={archived || submitting || answerSaveState === 'saving' || uploadingAnswer}
-          onWithdraw={!archived && withdrawable ? onWithdraw : undefined}
+          onWithdraw={
+            !archived && isPrimarySpeaker && withdrawable ? onWithdraw : undefined
+          }
           onRespond={
-            !archived && (status === 'accepted' || inStatusSet('speakerResponse', status))
+            !archived &&
+            (speakerStatus === 'accepted' || inStatusSet('speakerResponse', speakerStatus))
               ? onRespond
               : undefined
           }
           questions={{
             cfpId,
             proposalId,
+            speakerPhoto: confirmForm.speakerPhoto,
             fields: confirmForm.fields,
             answers,
             faults: answerFaults,
             busy: archived || submitting || answerSaveState === 'saving' || uploadingAnswer,
             onAnswer: setConfirmationAnswer,
             onUploadBusyChange: setAnswerUploadBusy,
+            sessionPhotoGeneration:
+              speakerStatus === 'confirmed' ? sessionPhotoGeneration : undefined,
+            onCurrentPhotoGenerationChange: (generation) => {
+              currentProfilePhotoGeneration.current = generation;
+            },
+            onUsePhotoForSession:
+              !archived && speakerStatus === 'confirmed'
+                ? async (generation) => {
+                    if (currentProfilePhotoGeneration.current !== generation) return false;
+                    return saveConfirmationAnswers('manual', true);
+                  }
+                : undefined,
           }}
           asking={asking}
           onAsk={() => setAsking(true)}
           onCancelAsk={cancelConfirmationAnswers}
           onSaveAnswers={
-            !archived && status === 'confirmed'
+            !archived && speakerStatus === 'confirmed'
               ? () => void saveConfirmationAnswers('manual')
               : undefined
           }
           schedule={speakerSchedule}
           schedulePending={
-            status === 'confirmed' &&
-            hasNewerSharedPreview &&
-            !sharedEntry &&
-            !sharedScheduleFailed
+            speakerStatus === 'confirmed' &&
+            (lateSpeakerSchedulePending ||
+              (hasNewerSharedPreview && !sharedEntry && !sharedScheduleFailed))
           }
           scheduleUnavailable={
-            status === 'confirmed' && hasNewerSharedPreview && sharedScheduleFailed
+            speakerStatus === 'confirmed' &&
+            !lateSpeakerSchedulePending &&
+            hasNewerSharedPreview &&
+            sharedScheduleFailed
           }
         />
       )}
@@ -1755,7 +2138,7 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
 
       {/* ------------------------------------------------------- the talk */}
       <section className="section submission-section" id="submission-talk" tabIndex={-1}>
-        <h2>{t.sections.proposal}</h2>
+        <h2 tabIndex={-1}>{t.sections.proposal}</h2>
         <p className="section__help">{t.sections.proposalHelp}</p>
 
         <TextField
@@ -1823,6 +2206,35 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         </div>
       </section>
 
+      {/* ----------------------------------------------------- co-speakers */}
+      <section
+        className="section submission-section"
+        id="submission-co-speakers"
+        tabIndex={-1}
+      >
+        <h2>{t.coSpeakers.title}</h2>
+        {proposalId ? (
+          <CoSpeakerRoster
+            key={proposalId}
+            cfpId={cfpId}
+            proposalId={proposalId}
+            refreshKey={speakerRosterRefresh}
+            onChange={applyRoster}
+            onLeft={() => {
+              transitionFocus.current = 'leave-waiting';
+              setSpeakerRoster(undefined);
+              setProposalId(null);
+              proposalIdRef.current = null;
+              setStatus('draft');
+              showToast(t.coSpeakers.leftNotice, 'success');
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+          />
+        ) : (
+          <p className="section__help">{t.coSpeakers.startDraftFirst}</p>
+        )}
+      </section>
+
       {/* ------------------------------------------------------- language */}
       <section className="section submission-section" id="submission-language" tabIndex={-1}>
         <h2>{t.sections.language}</h2>
@@ -1877,6 +2289,18 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
         <h2>{t.sections.speaker}</h2>
         <p className="section__help">{t.sections.speakerHelp}</p>
 
+        {/* Confirmation renders this same account-owned control while it is
+            open, including the event-version action. Keep only one live copy. */}
+        {!(confirmForm.speakerPhoto && (asking || speakerStatus === 'confirmed')) && (
+          <SpeakerProfilePhoto
+            disabled={submitting}
+            onBusyChange={(next) => setAnswerUploadBusy(SPEAKER_PHOTO_KEY, next)}
+            onCurrentGenerationChange={(generation) => {
+              currentProfilePhotoGeneration.current = generation;
+            }}
+          />
+        )}
+
         {speakerEditing || !speakerProfileComplete(form) ? (
           <div className="speaker-editor">
             <SpeakerFields form={form} set={set} err={err} disabled={submitting} />
@@ -1893,6 +2317,53 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
                   )
                   ?.focus();
               });
+            }}
+          />
+        )}
+
+        {proposalId && status !== 'draft' && status !== 'withdrawn' && (
+          <ProfileSnapshotRefresh
+            cfpId={cfpId}
+            proposalId={proposalId}
+            disabled={archived || submitting || saveState === 'saving'}
+            showRequestState={speakerStatus === 'accepted' || speakerStatus === 'confirmed'}
+            requestRefreshKey={profileRequestRefresh}
+            beforeRefresh={async () => !dirty.current || persist('transition')}
+            onEditProfile={() => {
+              setSpeakerEditing(true);
+              requestAnimationFrame(() => {
+                document
+                  .querySelector<HTMLElement>(
+                    '#submission-speaker input:not([disabled]), #submission-speaker textarea:not([disabled])',
+                  )
+                  ?.focus({ preventScroll: true });
+              });
+            }}
+            onEditPhoto={() => {
+              const photo = document.querySelector<HTMLElement>('.speaker-photo');
+              photo?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              requestAnimationFrame(() =>
+                photo
+                  ?.querySelector<HTMLButtonElement>('button:not([disabled])')
+                  ?.focus({ preventScroll: true }),
+              );
+            }}
+            onRefreshed={() => setSpeakerRosterRefresh((value) => value + 1)}
+            onRequestChanged={(request) => {
+              setProfileRequests((current) =>
+                request.status === 'pending'
+                  ? current.map((summary) =>
+                      summary.proposalId === proposalId &&
+                      summary.requestId === request.requestId
+                        ? { ...summary, resolvedScopes: request.resolvedScopes }
+                        : summary,
+                    )
+                  : current.filter(
+                      (summary) =>
+                        summary.proposalId !== proposalId ||
+                        summary.requestId !== request.requestId,
+                    ),
+              );
             }}
           />
         )}
@@ -1929,16 +2400,12 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               checked={form.acks[ack.key] === true}
               onChange={(v) => set('acks', { ...form.acks, [ack.key]: v })}
               error={err(`acks.${ack.key}`)}
-              disabled={talkDisabled}
+              disabled={acknowledgementDisabled}
             />
           ))}
         </section>
       )}
 
-      {/*
-        §3: attendance follows immediately after the acknowledgements. The
-        question only reads naturally once "travel is not covered" is on screen.
-      */}
       <section className="section submission-section" id="submission-attendance" tabIndex={-1}>
         <h2>{t.sections.attendance}</h2>
 
@@ -2036,6 +2503,11 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
             {banner}
           </p>
         )}
+        {isPrimarySpeaker && status === 'draft' && proposalId && speakerRoster === null && (
+          <p className="field__error" role="status" id="co-speaker-submit-blocked">
+            {t.coSpeakers.loadFailed}
+          </p>
+        )}
 
         <div className="actions__buttons">
           {(!profileOnly || dirty.current) && (
@@ -2046,13 +2518,15 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               onClick={() => void persist('manual')}
             >
               {profileOnly
-                ? t.profile.save
+                ? isCoSpeaker
+                  ? t.coSpeakers.saveDetails
+                  : t.profile.save
                 : status === 'draft'
                   ? t.form.save
                   : t.form.saveChanges}
             </button>
           )}
-          {!archived && status === 'draft' && proposalId !== null && (
+          {!archived && isPrimarySpeaker && status === 'draft' && proposalId !== null && (
             <button
               type="button"
               className="btn btn--danger"
@@ -2062,8 +2536,21 @@ export function SubmitPage({ user, cfp, cfpId }: SubmitPageProps) {
               {t.form.deleteDraft}
             </button>
           )}
-          {status === 'draft' && (
-            <button type="submit" className="btn btn--primary" disabled={talkDisabled}>
+          {isPrimarySpeaker && status === 'draft' && (
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={
+                talkDisabled ||
+                (proposalId !== null && !speakerRoster) ||
+                Boolean(speakerRoster?.pendingBlocksSubmit)
+              }
+              aria-describedby={
+                proposalId !== null && speakerRoster === null
+                  ? 'co-speaker-submit-blocked'
+                  : undefined
+              }
+            >
               {submitting ? t.form.submitting : t.form.submit}
             </button>
           )}

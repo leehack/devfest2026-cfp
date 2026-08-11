@@ -6,6 +6,8 @@
  * one, an account that does not exist yet.
  */
 
+import { createHash } from 'node:crypto';
+
 const PROJECT = 'demo-devfest-cfp';
 const FIRESTORE = 'http://127.0.0.1:8080';
 const AUTH = 'http://127.0.0.1:9099';
@@ -14,6 +16,7 @@ const STORAGE = 'http://127.0.0.1:9199';
 const BUCKET = 'demo-devfest-cfp.appspot.com';
 const REGION = 'northamerica-northeast1';
 const DOCS = `${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents`;
+const FIRESTORE_CLEAR_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
 const day = 24 * 60 * 60 * 1000;
 
@@ -30,13 +33,35 @@ async function expectOk(response: Response, what: string) {
   if (!response.ok) throw new Error(`${what} failed: ${response.status} ${await response.text()}`);
 }
 
+export function isRetryableFirestoreClearConflict(status: number, body: string): boolean {
+  if (status !== 409) return false;
+  try {
+    const error = (JSON.parse(body) as { error?: { status?: unknown; message?: unknown } }).error;
+    return (
+      error?.status === 'ABORTED' &&
+      typeof error.message === 'string' &&
+      /\btransaction lock timeout\b/i.test(error.message)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function clearFirestore() {
-  await expectOk(
-    await fetch(`${FIRESTORE}/emulator/v1/projects/${PROJECT}/databases/(default)/documents`, {
+  const url = `${FIRESTORE}/emulator/v1/projects/${PROJECT}/databases/(default)/documents`;
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(url, {
       method: 'DELETE',
-    }),
-    'clearFirestore',
-  );
+    });
+    if (response.ok) return;
+
+    const body = await response.text();
+    const delay = FIRESTORE_CLEAR_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined || !isRetryableFirestoreClearConflict(response.status, body)) {
+      throw new Error(`clearFirestore failed: ${response.status} ${body}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 /**
@@ -109,6 +134,29 @@ export async function clearSharedSchedulePointerDirect(cfpId = CFP_ID) {
     ),
     'clearSharedSchedulePointerDirect',
   );
+}
+
+/** Minimal working-schedule state for callables that only care whether it exists. */
+export async function setScheduleNeedsAttentionDirect(
+  needsAttention: boolean,
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/config/schedule`, {
+    revision: { integerValue: '0' },
+    needsAttention: { booleanValue: needsAttention },
+  });
+}
+
+export async function readScheduleConfigDirect(
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/schedule`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readScheduleConfigDirect');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
 }
 
 /**
@@ -572,9 +620,59 @@ export async function setPublicUrlDirect(url: string) {
  * that check any organiser could write as somebody else's verified domain.
  */
 export async function setSendingDomainDirect(domain: string, cfpId = CFP_ID) {
+  const domainId = `dom-${domain}`;
+  await setSendingDomainPointerDirect(domain, domainId, cfpId);
+  await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    cfpId: { stringValue: cfpId },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+  });
+}
+
+/** A legacy/stale config pointer without changing the platform assignment. */
+export async function setSendingDomainPointerDirect(
+  domain: string,
+  domainId: string,
+  cfpId = CFP_ID,
+) {
   await patch(`cfps/${cfpId}/config/email`, {
     domain: { stringValue: domain },
-    domainId: { stringValue: `dom-${domain}` },
+    domainId: { stringValue: domainId },
+  });
+}
+
+export async function readEmailDomainBinding(domainId: string): Promise<Record<string, any> | null> {
+  const id = createHash('sha256').update(domainId).digest('hex');
+  const response = await fetch(`${DOCS}/emailDomainBindings/${id}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readEmailDomainBinding');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/**
+ * Makes manual delivery actions testable without contacting Resend.
+ *
+ * The function honours this marker only under FUNCTIONS_EMULATOR. Production
+ * still reads the real secret and live Resend domain, while the empty emulator
+ * secret keeps the resulting delivery receipts truthful as `dry_run`.
+ */
+export async function setEmailDeliveryReadyDirect(cfpId = CFP_ID) {
+  const domain = 'delivery.example.test';
+  const domainId = `dom-${domain}`;
+  await patch(`cfps/${cfpId}/config/email`, {
+    from: { stringValue: `Test CFP <cfp@${domain}>` },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+    emulatorDeliveryReady: { booleanValue: true },
+  });
+  await patch('config/emailProvider', { keyHint: { stringValue: '…test' } });
+  await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    cfpId: { stringValue: cfpId },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
   });
 }
 
@@ -643,6 +741,11 @@ export async function setSubmissionFormDirect(
 function encode(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') return { stringValue: value };
   if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Number.isSafeInteger(value)
+      ? { integerValue: String(value) }
+      : { doubleValue: value };
+  }
   if (Array.isArray(value)) return { arrayValue: { values: value.map(encode) } };
   return {
     mapValue: {
@@ -656,6 +759,84 @@ export async function setEmailStatusDirect(logId: string, status: string, cfpId 
   await patch(`cfps/${cfpId}/emailLog/${logId}`, { status: { stringValue: status } });
 }
 
+/** Models a failed provider handoff whose idempotency identity must be retried in place. */
+export async function setEmailAmbiguousFailureDirect(logId: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}/emailLog/${logId}`, {
+    status: { stringValue: 'failed' },
+    providerAttemptId: { stringValue: 'ambiguous-provider-attempt' },
+  });
+}
+
+/** Exact address binding returned by the admin queue preview. */
+export function reviewedEmailRecipients(
+  rows: Array<{ logId: string; to: string }>,
+): Array<{ logId: string; to: string }> {
+  return rows.map(({ logId, to }) => ({ logId, to }));
+}
+
+/** Holds a queue row in a claimed send, with a caller-selected lease age. */
+export async function setEmailSendingDirect(
+  logId: string,
+  sendingStartedAt: Date,
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/emailLog/${logId}`, {
+    status: { stringValue: 'sending' },
+    sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() },
+  });
+}
+
+/** Puts one queue row at an exact retry boundary and clears prior claim metadata. */
+export async function setEmailDeliveryDirect(
+  logId: string,
+  {
+    status,
+    attempts,
+    sendingStartedAt,
+  }: {
+    status: string;
+    attempts: number;
+    sendingStartedAt?: Date;
+  },
+  cfpId = CFP_ID,
+) {
+  await patchWithMask(
+    `cfps/${cfpId}/emailLog/${logId}`,
+    {
+      status: { stringValue: status },
+      attempts: { integerValue: String(attempts) },
+      ...(sendingStartedAt
+        ? { sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() } }
+        : {}),
+    },
+    [
+      'status',
+      'attempts',
+      'sendingStartedAt',
+      'sendingClaimId',
+      'providerAttemptId',
+      'attemptedAt',
+      'sentAt',
+      'providerId',
+      'error',
+      'retryRequestedAt',
+    ],
+  );
+}
+
+/** Seeds a global invitation throttle without spending real delivery attempts. */
+export async function setSpeakerInvitationRateDirect(
+  kind: 'speaker' | 'recipient',
+  value: string,
+  count: number,
+) {
+  const id = createHash('sha256').update(`${kind}:${value}`).digest('hex');
+  await patch(`speakerInvitationLimits/${id}`, {
+    windowStart: { integerValue: String(Date.now()) },
+    count: { integerValue: String(count) },
+  });
+}
+
 export async function seedEmailLog(
   logId: string,
   {
@@ -666,6 +847,14 @@ export async function seedEmailLog(
     sendingStartedAt,
     sendingClaimId,
     providerAttemptId,
+    recipientUid,
+    to = 'speaker@example.org',
+    reviewedTo,
+    subject,
+    body,
+    attemptedAt,
+    sentAt,
+    createdAt,
   }: {
     status: string;
     kind?: string;
@@ -674,6 +863,14 @@ export async function seedEmailLog(
     sendingStartedAt?: Date;
     sendingClaimId?: string;
     providerAttemptId?: string;
+    recipientUid?: string;
+    to?: string;
+    reviewedTo?: string;
+    subject?: string;
+    body?: string;
+    attemptedAt?: Date;
+    sentAt?: Date;
+    createdAt?: Date;
   },
   cfpId = CFP_ID,
 ) {
@@ -681,9 +878,16 @@ export async function seedEmailLog(
     status: { stringValue: status },
     kind: { stringValue: kind },
     proposalId: { stringValue: proposalId },
-    to: { stringValue: 'speaker@example.org' },
+    to: { stringValue: to },
+    ...(reviewedTo ? { reviewedTo: { stringValue: reviewedTo } } : {}),
+    ...(recipientUid ? { recipientUid: { stringValue: recipientUid } } : {}),
+    ...(subject ? { subject: { stringValue: subject } } : {}),
+    ...(body ? { body: { stringValue: body } } : {}),
     locale: { stringValue: 'en' },
     attempts: { integerValue: String(attempts) },
+    ...(attemptedAt ? { attemptedAt: { timestampValue: attemptedAt.toISOString() } } : {}),
+    ...(sentAt ? { sentAt: { timestampValue: sentAt.toISOString() } } : {}),
+    ...(createdAt ? { createdAt: { timestampValue: createdAt.toISOString() } } : {}),
     ...(sendingStartedAt
       ? { sendingStartedAt: { timestampValue: sendingStartedAt.toISOString() } }
       : {}),
@@ -796,6 +1000,7 @@ export async function seedSpeaker(
     bio,
     company,
     jobTitle,
+    basedIn,
     isGde,
     pastTalks,
   }: {
@@ -805,6 +1010,7 @@ export async function seedSpeaker(
     bio?: string;
     company?: string;
     jobTitle?: string;
+    basedIn?: string;
     isGde?: boolean;
     pastTalks?: string;
   },
@@ -813,13 +1019,155 @@ export async function seedSpeaker(
     name: { stringValue: name },
     email: { stringValue: email },
     bio: { stringValue: bio ?? 'x'.repeat(120) },
-    basedIn: { stringValue: 'Montréal, QC' },
+    basedIn: { stringValue: basedIn ?? 'Montréal, QC' },
     isGde: { booleanValue: isGde ?? false },
     ...(company ? { company: { stringValue: company } } : {}),
     ...(jobTitle ? { jobTitle: { stringValue: jobTitle } } : {}),
     ...(pastTalks ? { pastTalks: { stringValue: pastTalks } } : {}),
     ...(locale ? { locale: { stringValue: locale } } : {}),
   });
+}
+
+/**
+ * One proposal-scoped speaker membership.
+ *
+ * Co-speaker specs use this to put a linked proposal at a precise lifecycle
+ * boundary without granting a browser access to somebody else's private
+ * logistics. Production writes these rows through the invitation callables.
+ */
+export async function seedSpeakerParticipant(
+  proposalId: string,
+  uid: string,
+  {
+    role,
+    status = 'active',
+    invitationId,
+    acks,
+    attendance,
+  }: {
+    role: 'primary' | 'coSpeaker';
+    status?: 'active' | 'inactive';
+    invitationId?: string;
+    acks?: Record<string, boolean>;
+    attendance?: Record<string, unknown>;
+  },
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/speakerParticipants/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    proposalId: { stringValue: proposalId },
+    uid: { stringValue: uid },
+    role: { stringValue: role },
+    status: { stringValue: status },
+    ...(invitationId ? { invitationId: { stringValue: invitationId } } : {}),
+    ...(acks ? { acks: encode(acks) } : {}),
+    ...(attendance ? { attendance: encode(attendance) } : {}),
+  });
+}
+
+/** Private participation data, read only through the emulator owner surface. */
+export async function readSpeakerParticipant(
+  proposalId: string,
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/proposals/${proposalId}/speakerParticipants/${uid}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readSpeakerParticipant');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** One speaker's decision answers, isolated from the other speakers. */
+export async function readSpeakerConfirmation(
+  proposalId: string,
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/proposals/${proposalId}/speakerConfirmations/${uid}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readSpeakerConfirmation');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** A personal decision row for direct callable lifecycle tests. */
+export async function seedSpeakerConfirmation(
+  proposalId: string,
+  uid: string,
+  response: 'confirmed' | 'declined',
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/speakerConfirmations/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    proposalId: { stringValue: proposalId },
+    uid: { stringValue: uid },
+    response: { stringValue: response },
+    answers: { mapValue: { fields: {} } },
+  });
+}
+
+/** A server-owned request row placed at a lifecycle edge without a UI round-trip. */
+export async function seedProfileUpdateRequestDirect(
+  proposalId: string,
+  uid: string,
+  {
+    requestId = 'profile-update-request-1',
+    generation = 1,
+    scopes = ['profile'],
+  }: {
+    requestId?: string;
+    generation?: number;
+    scopes?: Array<'profile' | 'photo'>;
+  } = {},
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/proposals/${proposalId}/profileUpdateRequests/${uid}`, {
+    cfpId: { stringValue: cfpId },
+    proposalId: { stringValue: proposalId },
+    speakerUid: { stringValue: uid },
+    requestId: { stringValue: requestId },
+    generation: { integerValue: String(generation) },
+    status: { stringValue: 'pending' },
+    scopes: { arrayValue: { values: scopes.map((scope) => ({ stringValue: scope })) } },
+    resolvedScopes: { arrayValue: { values: [] } },
+    requestedBy: { stringValue: 'fixture-admin' },
+    requestedAt: { timestampValue: new Date().toISOString() },
+  });
+}
+
+export async function readProfileUpdateRequestDirect(
+  proposalId: string,
+  uid: string,
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(
+    `${DOCS}/cfps/${cfpId}/proposals/${proposalId}/profileUpdateRequests/${uid}`,
+    { headers: { authorization: 'Bearer owner' } },
+  );
+  if (response.status === 404) return null;
+  await expectOk(response, 'readProfileUpdateRequestDirect');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+/** Forces the immutable invitation deadline without moving the event window. */
+export async function setSpeakerInvitationExpiryDirect(
+  proposalId: string,
+  invitationId: string,
+  expiresAt: Date,
+  cfpId = CFP_ID,
+) {
+  await patch(
+    `cfps/${cfpId}/proposals/${proposalId}/speakerInvitations/${invitationId}`,
+    { expiresAt: { timestampValue: expiresAt.toISOString() } },
+  );
 }
 
 /**
@@ -1031,6 +1379,37 @@ export async function readScheduleEntry(
   return unwrap(fields ?? {});
 }
 
+/** Models a release written before private cancellation carry metadata existed. */
+export async function clearScheduleCancellationCarrySourceDirect(
+  releaseId: string,
+  cfpId = CFP_ID,
+) {
+  await patchWithMask(
+    `cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`,
+    {},
+    ['pendingScheduleCancellations', 'scheduledProposalEntries'],
+  );
+}
+
+/** Models a shared release written before schedule-photo provenance existed. */
+export async function clearSchedulePhotoProvenanceDirect(
+  releaseId: string,
+  cfpId = CFP_ID,
+) {
+  await Promise.all([
+    patchWithMask(
+      `cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`,
+      {},
+      ['speakerPhotoFingerprint'],
+    ),
+    patchWithMask(
+      `cfps/${cfpId}/config/schedule`,
+      {},
+      ['sharedSpeakerPhotoFingerprint'],
+    ),
+  ]);
+}
+
 /** Rewrites one release into the shape produced before taxonomy labels were frozen. */
 export async function makeScheduleReleaseLegacyDirect(
   releaseId: string,
@@ -1145,6 +1524,7 @@ function unwrap(fields: Record<string, any>): Record<string, any> {
     if ('stringValue' in value) out[key] = value.stringValue;
     else if ('booleanValue' in value) out[key] = value.booleanValue;
     else if ('integerValue' in value) out[key] = Number(value.integerValue);
+    else if ('doubleValue' in value) out[key] = Number(value.doubleValue);
     else if ('timestampValue' in value) out[key] = value.timestampValue;
     else if ('mapValue' in value) out[key] = unwrap(value.mapValue.fields);
     else if ('arrayValue' in value) out[key] = (value.arrayValue.values ?? []).map(unwrapOne);

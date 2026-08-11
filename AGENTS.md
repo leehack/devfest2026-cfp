@@ -45,10 +45,19 @@ tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
 the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
-creator access), `signInLinks` (a platform-wide throttle) and `config/platform`
-sit outside. Storage keeps server-only working versions under
-`cfps/{cfpId}/workingHeadshots/{proposalId}/{key}/{uploadId}` and confirmed
-copies under `cfps/{cfpId}/confirmedHeadshots/{proposalId}/{key}/{generation}`.
+creator access), `signInLinks` and `speakerInvitationLimits` (platform-wide
+hashed throttles) and `config/platform` sit outside. Storage keeps server-only
+working versions under
+`cfps/{cfpId}/workingHeadshots/{proposalId}/{uid}/{key}/{uploadId}` and confirmed
+copies under
+`cfps/{cfpId}/confirmedHeadshots/{proposalId}/{uid}/{key}/{generation}`.
+Reusable profile originals live under `speakerProfilePhotos/{uid}/{uploadId}`;
+custom programme originals live under
+`cfps/{cfpId}/workingScheduleSpeakerPhotos/{assetRef}` with callable-only
+metadata in `scheduleSpeakerPhotoAssets/{assetRef}`;
+public square derivatives are cached under the immutable release prefix
+`cfps/{cfpId}/publicSchedulePhotos/{releaseId}/{photoRef}.webp` and remain
+callable-only.
 `headshots/{uid}/{key}` is a read-only compatibility fallback for uploads made
 before proposal pointers existed.
 
@@ -92,13 +101,20 @@ the committee starts reading, then travel answers only, then nothing. The speake
 profile is outside it — that document belongs to the account and never freezes.
 The rules are the enforcement; `editScope` only decides what to disable.
 
-An accepted speaker answers with `respondToDecision` — `confirmed` or `declined`,
-from `accepted` only. No token in the link: the CFP is behind Google sign-in and
-the proposal is already theirs, so the session is the authentication. Idempotent,
-and reversible, because plans change and the alternative is an organiser editing
-a status by hand from an email. Admins cannot set either speaker response: doing
-so would bypass every required confirmation answer and image. Moving a committee
-decision back re-enters `under_review`, never editable `submitted`.
+Each accepted speaker answers with `respondToDecision` — `confirmed` or
+`declined`, from `accepted` only. Roster proposals store the answer, required
+form data and image pointers under `speakerConfirmations/{uid}`; legacy
+single-speaker proposals retain the root fallback. The proposal becomes
+`confirmed` only when every active speaker confirms. A co-speaker decline leaves
+the talk accepted and needing organiser attention; a lead decline declines it.
+An admin may invite a late co-speaker after acceptance. The pending invite changes
+nothing; acceptance moves a confirmed working session back to `accepted`, while
+the previous immutable release stays valid for its original roster until the new
+speaker confirms and an organiser re-shares it.
+No token in the link: the signed-in session is the authentication. Admins cannot
+set a speaker response, because doing so would bypass that person's required
+answers and image. Moving a committee decision back clears every personal
+response and re-enters `under_review`, never editable `submitted`.
 
 Email is a queue, not a send: callables write a deterministic `emailLog` row and
 the `sendQueuedEmail` trigger delivers. Proposal decisions key by proposal;
@@ -111,15 +127,20 @@ immediate, but re-check the grant/member, proposal or shared pointer before send
 An explicit `locale` on the event member or pending grant is honoured; otherwise
 one notice renders both EN and FR, including both organiser overrides.
 
-Email setup is entirely `/admin`, no redeploy: key, domain, sender, wording.
+Email setup needs no redeploy: a platform owner/admin rotates the one shared key,
+then each event admin manages its bound domain, sender and wording from `/admin`.
 Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
 the built-in and an organiser's override are the same shape and one editor
 prefills from either. Overrides live in `config/email.templates`; a half-written
 one (blank subject or body) falls back rather than sending a blank.
 Addresses are data (`cfps/{id}/config/email`, `setEmailSettings`); the **key is
 Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
-a response — the client sees `keyHint`, the last four characters. Resend's domain
-API is proxied by `emailDomain` so the DNS records can be shown and re-checked.
+a response — callable-only `config/emailProvider` holds only `keyHint`, the last
+four characters. Resend's domain API is proxied by `emailDomain` so the DNS
+records can be shown and re-checked. `emailDomainBindings/{hash(domainId)}` is
+the callable-only, exclusive tenant assignment; an event admin may create a new
+domain or migrate its CFP's unique exact legacy pointer, never adopt an existing
+unbound domain by typing its public name.
 `functions/.env*` is only a fallback. `config` is *not* world-readable as a
 collection — the rule names the two readable documents one at a time.
 
@@ -197,12 +218,20 @@ collection — the rule names the two readable documents one at a time.
 - **Status groupings live in `STATUS_SETS` (`shared/enums.ts`).** They had drifted
   across the form, the callables and the admin screen. `firestore.rules` restates
   them because the rules language cannot import — change one, change both.
-- **Reviewers never see a draft.** An unsubmitted proposal is nobody's but its
-  author's, so committee queries must carry `where('status', '!=', 'draft')` or
-  the rules deny the whole listing.
-- **`speakerIds` is fixed at creation** and must equal `[uid()]`. Naming someone
-  hands them write access and disqualifies them from reviewing the talk; that
-  needs their consent, so co-presenters wait for an invitation callable.
+- **Reviewers never see a draft.** It belongs to its active speaker roster; an
+  exact pending invitee sees only a callable-projected consent summary. Committee
+  queries must carry `where('status', '!=', 'draft')` or the rules deny the
+  whole listing.
+- **`speakerIds` starts as `[uid()]` and is callable-only thereafter.** A verified
+  email invitation is still only pending metadata: the exact invited account must
+  accept before its uid is added. The first speaker remains `primarySpeakerId`
+  and owns talk edits. Removed participants stay in `formerSpeakerIds` and remain
+  conflicted from reviews permanently.
+- **Late invitations do not mutate a confirmed roster until acceptance.** Only an
+  event admin may create one, and the invitee must supply their own acknowledgements
+  and attendance before joining. A marker preserves only the roster in the prior
+  immutable schedule release; it is cleared by a successful re-share, not merely
+  by the new speaker confirming.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.
@@ -379,17 +408,24 @@ collection — the rule names the two readable documents one at a time.
   what `languagePreference` exists for and what the scheduling dashboard counts,
   so a call picks which of the four to offer and what to call them — not what
   they are. `validateSubmissionForm` refuses anything else.
-- **No photographs on the submission form.** ~70% of applicants are turned down
-  and we should not be holding their picture, so `image` is refused there (§3)
-  and offered on the confirmation form, where the speaker is already in.
+- **No proposal-scoped photographs on the submission form.** ~70% of applicants
+  are turned down, so `image` is refused there (§3). The account-profile section
+  may expose the same optional reusable photo control as `/me`, but that private
+  asset is not copied into the proposal or shown to reviewers. An event may
+  require it only after acceptance; confirmation freezes one exact generation
+  for the programme without exposing the private profile pointer.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.
 - **One Resend account serves the whole platform.** So `emailDomain` is pinned to
-  the domain id stored on *this* CFP — `list` used to return the account's whole
-  roster, and `get`/`verify` took an id straight from the caller. `setEmailSettings`
-  refuses a sender that is not on that domain, or one organiser could write as
-  another organiser's verified event.
+  the domain id stored on *this* CFP and its exclusive
+  `emailDomainBindings/{hash(domainId)}` row — `list` used to return the account's
+  whole roster, and `get`/`verify` took an id straight from the caller. An existing
+  unbound Resend domain is never adopted by name; legacy migration needs exactly
+  one matching CFP config. `setEmailSettings`, readiness and the delivery trigger
+  all re-check the binding, or one organiser could write as another organiser's
+  verified event. The shared key is rotatable only by a current verified platform
+  owner/admin; event administration alone is deliberately insufficient.
 - **`config/platform` is unwritable by anyone.** `publicUrl` is the origin of
   every link the server mails, sign-in links included, and those are bearer
   credentials — an organiser who could edit it could aim other people's sign-in
@@ -398,7 +434,11 @@ collection — the rule names the two readable documents one at a time.
   is global and a role is per CFP, so reading profiles would hand every committee
   on the platform the whole speaker directory — and would show a bio edited in
   2028 to the 2026 committee. `submitProposal` freezes the copy; it deliberately
-  omits the email address.
+  omits the email address. Later profile writes never propagate automatically.
+  An active speaker may explicitly refresh their own proposal copy; an event
+  admin may do the same for an active speaker. The callable copies only the
+  public whitelist, leaves confirmation and logistics alone, and marks an
+  existing schedule config stale so immutable releases change only on reshare.
 - **A collection-group query cannot be filtered by ancestor.** `recomputeAggregates`
   and the "where you help out" listing both are one, so `reviews` and `members`
   carry a denormalised `cfpId`/`uid` that the rules pin to the path on write.
@@ -463,6 +503,19 @@ collection — the rule names the two readable documents one at a time.
   status change marks shared and public copies cancelled rather than deleting
   them, so links and calendar UIDs remain stable. Schedule emails are held when
   sharing, not while editing or promoting, and dedupe by release id.
+- **Custom programme photos have two opaque identities.** The admin editor keeps
+  only a server-generated `photoAssetRef`; its callable-owned metadata binds the
+  exact private object and generation. Sharing replaces it with a release-only
+  `photoRef` and a private source record. The anonymous image callable accepts
+  only the exact current published entry and speaker index, so a working ref,
+  path or generation never appears in attendee data. Replacing or removing the
+  draft photo cannot rewrite an immutable release.
+- **Profile-update requests are tasks, not profile access.** A new request
+  generation queues one exact-speaker email and appears in that speaker's talk
+  picker plus the organiser's waiting/ready queue. Claim, send, resend and
+  completion revalidate the exact active confirmed speaker and request
+  generation. Only the speaker adopts the photo or completes the request; an
+  included schedule re-share marks that resolved generation handled.
 - **An email send is leased and idempotent at the provider.** The queue claim
   stores the CloudEvent id, `sendingStartedAt`, and a durable provider-attempt
   id. Automatic retries and recovery of an ambiguous failure use the same

@@ -13,6 +13,18 @@ function codeOf(error: unknown): string {
   return String((error as { code?: unknown })?.code ?? '').replace(/^functions\//, '');
 }
 
+function reasonOf(error: unknown): string {
+  const details = (error as { details?: unknown } | null)?.details;
+  return details && typeof details === 'object'
+    ? String((details as { reason?: unknown }).reason ?? '')
+    : '';
+}
+
+function detailsOf(error: unknown): Record<string, unknown> {
+  const details = (error as { details?: unknown } | null)?.details;
+  return details && typeof details === 'object' ? (details as Record<string, unknown>) : {};
+}
+
 export function friendlyError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {
     case 'permission-denied':
@@ -56,7 +68,56 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
+export function isSpeakerMessageRecipientsChanged(error: unknown): boolean {
+  return (
+    codeOf(error) === 'failed-precondition' &&
+    reasonOf(error) === 'speaker_message_recipients_changed'
+  );
+}
+
+/** Email actions have lifecycle failures of their own, never the last-admin guard. */
+export function emailError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'failed-precondition') {
+    switch (reasonOf(error)) {
+      case 'email_delivery_not_ready':
+        return t.admin.emailDeliveryNotReady;
+      case 'speaker_message_recipients_changed':
+      case 'email_recipients_changed':
+        return t.admin.messageRecipientChanged;
+      default:
+        return t.admin.emailActionInvalid;
+    }
+  }
+  switch (codeOf(error)) {
+    case 'invalid-argument':
+      return t.admin.emailBadInput;
+    case 'not-found':
+      return t.admin.emailMissing;
+    case 'permission-denied':
+      return t.nav.forbidden;
+    default:
+      return friendlyError(error, t);
+  }
+}
+
 export function scheduleError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'failed-precondition') {
+    if (detailsOf(error).speakerPhoto === 'required') {
+      return t.schedule.speakerPhotoRequired;
+    }
+    switch (reasonOf(error)) {
+      case 'schedule-email-in-flight':
+        return t.schedule.emailDeliveryInProgress;
+      case 'schedule-email-retry-required':
+        return t.schedule.emailDeliveryRetryRequired;
+      case 'schedule-cancellation-pending':
+        return t.schedule.cancellationDeliveryPending;
+      case 'schedule-cancellation-processing':
+        return t.schedule.cancellationProcessing;
+      case 'schedule-preview-stale':
+        return t.schedule.publishNeedsReshare;
+    }
+  }
   switch (codeOf(error)) {
     case 'aborted':
       return t.schedule.stale;

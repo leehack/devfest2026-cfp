@@ -52,6 +52,34 @@ function answerKeys(
   return [...ordered, ...[...historical].sort()];
 }
 
+const speakerName = (row: ProposalRow, uid: string): string => {
+  const index = (row.speakerIds ?? []).indexOf(uid);
+  return row.speakerSnapshot?.[index]?.name || uid;
+};
+
+const confirmationAnswers = (row: ProposalRow): Record<string, unknown> | undefined => {
+  if (!row.speakerConfirmations?.length) return row.confirmAnswers;
+  return Object.assign({}, ...row.speakerConfirmations.map((item) => item.answers ?? {}));
+};
+
+const perSpeakerConfirmation = (
+  row: ProposalRow,
+  key: string,
+  field: ConfirmField | undefined,
+  locale: 'en' | 'fr',
+): string => {
+  if (!row.speakerConfirmations?.length) {
+    return answer(row.confirmAnswers?.[key], field, locale);
+  }
+  return row.speakerConfirmations
+    .map((item) => {
+      const value = answer(item.answers?.[key], field, locale);
+      return value ? `${speakerName(row, item.uid)}: ${value}` : '';
+    })
+    .filter(Boolean)
+    .join('; ');
+};
+
 /**
  * One stable row per selected talk. Human labels sit beside stored codes, while
  * custom answers get their own columns so the file is useful in a spreadsheet
@@ -64,7 +92,7 @@ export function selectedSpeakersCsv(
   locale: 'en' | 'fr',
 ): string {
   const submissionKeys = answerKeys(shape.fields, rows, (row) => row.answers);
-  const confirmationKeys = answerKeys(confirmation, rows, (row) => row.confirmAnswers);
+  const confirmationKeys = answerKeys(confirmation, rows, confirmationAnswers);
   const submissionFields = new Map(shape.fields.map((field) => [field.key, field]));
   const confirmationFields = new Map(confirmation.map((field) => [field.key, field]));
   const headers = [
@@ -93,6 +121,12 @@ export function selectedSpeakersCsv(
     'speaker_past_talks',
     'speaker_socials',
     'speaker_sessionize_urls',
+    'speaker_confirmation_statuses',
+    'speaker_attendance_statuses',
+    'speaker_funding_sources',
+    'speaker_funding_decision_dates',
+    'speaker_needs_visa',
+    'speaker_acknowledgements',
     'attendance_status',
     'funding_source',
     'funding_decision_by',
@@ -141,6 +175,28 @@ export function selectedSpeakersCsv(
         )
         .join('; '),
       speakers.map((speaker) => speaker.sessionizeUrl).filter(Boolean).join('; '),
+      (row.speakerConfirmations ?? [])
+        .map((item) => `${speakerName(row, item.uid)}: ${item.response ?? 'pending'}`)
+        .join('; '),
+      (row.speakerParticipants ?? [])
+        .map((item) => `${speakerName(row, item.uid)}: ${item.attendance?.status ?? ''}`)
+        .join('; '),
+      (row.speakerParticipants ?? [])
+        .map((item) => `${speakerName(row, item.uid)}: ${item.attendance?.fundingSource ?? ''}`)
+        .join('; '),
+      (row.speakerParticipants ?? [])
+        .map((item) => `${speakerName(row, item.uid)}: ${item.attendance?.decisionBy ?? ''}`)
+        .join('; '),
+      (row.speakerParticipants ?? [])
+        .map((item) => `${speakerName(row, item.uid)}: ${String(item.attendance?.needsVisa ?? '')}`)
+        .join('; '),
+      (row.speakerParticipants ?? [])
+        .map((item) =>
+          `${speakerName(row, item.uid)}: ${Object.entries(item.acks ?? {})
+            .map(([key, value]) => `${key}=${String(value)}`)
+            .join('|')}`,
+        )
+        .join('; '),
       row.attendance?.status,
       row.attendance?.fundingSource,
       row.attendance?.decisionBy,
@@ -155,7 +211,7 @@ export function selectedSpeakersCsv(
         answer(row.answers?.[key], submissionFields.get(key), locale),
       ),
       ...confirmationKeys.map((key) =>
-        answer(row.confirmAnswers?.[key], confirmationFields.get(key), locale),
+        perSpeakerConfirmation(row, key, confirmationFields.get(key), locale),
       ),
     ];
     return values.map(csvCell).join(',');

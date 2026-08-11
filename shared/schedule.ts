@@ -28,6 +28,7 @@ export const SCHEDULE_LIMITS = {
   durationMax: 480,
   durationStep: 5,
   customSpeakers: 20,
+  speakerPhotos: 200,
   speakerName: LIMITS.nameMax,
   speakerBio: LIMITS.bioMax,
   speakerCompany: LIMITS.companyMax,
@@ -78,7 +79,7 @@ export interface CustomScheduleEntry extends ScheduleEntryBase {
   title: Localised;
   description?: Localised;
   /** Optional attendee-facing people for keynotes, panels, and ceremonies. */
-  speakers?: PublicScheduleSpeaker[];
+  speakers?: CustomScheduleSpeaker[];
 }
 
 export type ScheduleEntry = ProposalScheduleEntry | CustomScheduleEntry;
@@ -119,16 +120,26 @@ export interface PublicScheduleSpeaker {
   bio?: string;
   company?: string;
   jobTitle?: string;
+  /** Opaque release member id. It is never a Storage path or account uid. */
+  photoRef?: string;
+}
+
+/** Draft-only custom speaker data. Releases replace the asset ref with `photoRef`. */
+export interface CustomScheduleSpeaker extends Omit<PublicScheduleSpeaker, 'photoRef'> {
+  /** Opaque callable-owned asset; never a bucket path or object generation. */
+  photoAssetRef?: string;
 }
 
 export function publicScheduleSpeakers(
   speakers: readonly SpeakerSnapshot[],
+  photoRefs: ReadonlyMap<string, string> = new Map(),
 ): PublicScheduleSpeaker[] {
   return speakers.map((speaker) => ({
     name: speaker.name,
     bio: speaker.bio,
     ...(speaker.company ? { company: speaker.company } : {}),
     ...(speaker.jobTitle ? { jobTitle: speaker.jobTitle } : {}),
+    ...(photoRefs.get(speaker.uid) ? { photoRef: photoRefs.get(speaker.uid) } : {}),
   }));
 }
 
@@ -244,6 +255,7 @@ const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ENTRY_ID = /^(?!__)[A-Za-z0-9_-]{1,160}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const CUSTOM_SPEAKER_PHOTO_REF = /^[A-Za-z0-9_-]{43}$/;
 
 export function validTimeZone(value: string): boolean {
   try {
@@ -404,7 +416,10 @@ export function validateScheduleEntry(
             speaker.company.length > SCHEDULE_LIMITS.speakerCompany)) ||
         (speaker.jobTitle !== undefined &&
           (typeof speaker.jobTitle !== 'string' ||
-            speaker.jobTitle.length > SCHEDULE_LIMITS.speakerJobTitle))
+            speaker.jobTitle.length > SCHEDULE_LIMITS.speakerJobTitle)) ||
+        (speaker.photoAssetRef !== undefined &&
+          (typeof speaker.photoAssetRef !== 'string' ||
+            !CUSTOM_SPEAKER_PHOTO_REF.test(speaker.photoAssetRef)))
       ) {
         return 'entrySpeakers';
       }

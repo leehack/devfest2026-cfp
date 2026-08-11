@@ -12,10 +12,12 @@ import {
   readProposalIdsForSpeaker,
   readPublicScheduleEntry,
   readScheduleEntry,
+  reviewedEmailRecipients,
   reset,
   seedMember,
   seedProposal,
   seedSpeaker,
+  setEmailDeliveryReadyDirect,
   setConfirmFormDirect,
   storeObjectDirect,
   waitForEmail,
@@ -113,17 +115,22 @@ async function signInForEvidence(page: Page, who: Identity, path: string) {
 }
 
 async function releaseHeldDecisions(adminToken: string, proposalIds: readonly string[]) {
+  await setEmailDeliveryReadyDirect();
   const preview = await callJson(adminToken, 'emailQueue', { action: 'preview' });
-  const selected = preview.held
+  const selectedRows = preview.held
     .filter(
       (row: { logId: string; kind: string }) =>
         ['accepted', 'waitlisted', 'rejected'].includes(row.kind) &&
         proposalIds.includes(row.logId.slice(row.kind.length + 2)),
-    )
-    .map((row: { logId: string }) => row.logId) as string[];
+    ) as Array<{ logId: string; to: string }>;
+  const selected = selectedRows.map((row) => row.logId);
   expect(selected).toHaveLength(proposalIds.length);
   await expect(
-    callJson(adminToken, 'emailQueue', { action: 'release', logIds: selected }),
+    callJson(adminToken, 'emailQueue', {
+      action: 'release',
+      logIds: selected,
+      reviewedRecipients: reviewedEmailRecipients(selectedRows),
+    }),
   ).resolves.toMatchObject({ ok: true, released: proposalIds.length, stale: 0 });
   await waitForEmail(
     (rows) =>
@@ -137,18 +144,23 @@ async function releaseHeldSchedule(
   proposalId: string,
   releaseId: string,
 ) {
+  await setEmailDeliveryReadyDirect();
   const preview = await callJson(adminToken, 'emailQueue', { action: 'preview' });
-  const selected = preview.held
+  const selectedRows = preview.held
     .filter(
       (row: { logId: string; kind: string }) =>
         ['schedule_assigned', 'schedule_changed'].includes(row.kind) &&
         row.logId.includes(`__${proposalId}__`) &&
         row.logId.endsWith(`__${releaseId}`),
-    )
-    .map((row: { logId: string }) => row.logId) as string[];
+    ) as Array<{ logId: string; to: string }>;
+  const selected = selectedRows.map((row) => row.logId);
   expect(selected).toHaveLength(1);
   await expect(
-    callJson(adminToken, 'emailQueue', { action: 'release', logIds: selected }),
+    callJson(adminToken, 'emailQueue', {
+      action: 'release',
+      logIds: selected,
+      reviewedRecipients: reviewedEmailRecipients(selectedRows),
+    }),
   ).resolves.toMatchObject({ ok: true, released: 1, stale: 0 });
   await waitForEmail(
     (rows) =>

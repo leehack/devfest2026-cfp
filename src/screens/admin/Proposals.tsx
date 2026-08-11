@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link } from '../../components/Link';
+import { CoSpeakerRosterDialog } from '../../components/CoSpeakerRoster';
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { href } from '../../lib/router';
@@ -18,7 +19,12 @@ import {
   inStatusSet,
   type ProposalStatus,
 } from '@shared/enums';
-import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
+import {
+  SPEAKER_PHOTO_KEY,
+  localised,
+  type Answers,
+  type ConfirmField,
+} from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -30,6 +36,17 @@ import { downloadSelectedSpeakersCsv } from './proposalExport';
 import { Result } from './Result';
 import { DECISION_KINDS } from '@shared/emailTemplates';
 import { compareNormalizedScores } from '@shared/aggregate';
+import type { SpeakerSnapshot } from '@shared/types';
+import { reconcileProposalSpeakerSnapshot } from './proposalSnapshots';
+import {
+  listSpeakerProfileUpdateRequests,
+  type ProfileUpdateRequestSummary,
+} from '../../lib/profileUpdateRequests';
+import {
+  profileUpdateRequestsByProposal,
+  proposalHasProfileUpdateAttention,
+  type ProfileUpdateRequestAttention,
+} from '../../lib/profileUpdateRequestSummary';
 
 const HIGH_DISAGREEMENT = 1;
 const ADMIN_PROPOSAL_STATUSES = ['under_review', 'accepted', 'waitlisted', 'rejected'] as const;
@@ -46,10 +63,12 @@ function Headshot({
   cfpId,
   proposalId,
   fieldKey,
+  speakerUid,
 }: {
   cfpId: string;
   proposalId: string;
   fieldKey: string;
+  speakerUid?: string;
 }) {
   const { t } = useI18n();
   const [url, setUrl] = useState('');
@@ -60,7 +79,12 @@ function Headshot({
     setBusy(true);
     setError('');
     try {
-      const { data } = await headshotImage({ cfpId, proposalId, key: fieldKey });
+      const { data } = await headshotImage({
+        cfpId,
+        proposalId,
+        key: fieldKey,
+        ...(speakerUid ? { speakerUid } : {}),
+      });
       setUrl(data.dataUrl);
     } catch (e) {
       setError(adminError(e, t));
@@ -90,12 +114,14 @@ function Answered({
   fields,
   answers,
   proposalId,
+  speakerUid,
   title,
 }: {
   cfpId: string;
   fields: ConfirmField[];
   answers?: Answers;
   proposalId?: string;
+  speakerUid?: string;
   title: string;
 }) {
   const { t, locale } = useI18n();
@@ -126,7 +152,12 @@ function Answered({
           <dd>
             {field?.type === 'image' || storedImage ? (
               proposalId ? (
-                <Headshot cfpId={cfpId} proposalId={proposalId} fieldKey={key} />
+                <Headshot
+                  cfpId={cfpId}
+                  proposalId={proposalId}
+                  fieldKey={key}
+                  speakerUid={speakerUid}
+                />
               ) : null
             ) : typeof value === 'boolean' ? (
               value ? (
@@ -143,6 +174,81 @@ function Answered({
       })}
       </dl>
     </>
+  );
+}
+
+function SpeakerConfirmations({
+  cfpId,
+  row,
+  fields,
+}: {
+  cfpId: string;
+  row: ProposalRow;
+  fields: ConfirmField[];
+}) {
+  const { t } = useI18n();
+  const ids = row.speakerIds ?? [];
+  const perSpeaker = Boolean(row.primarySpeakerId) || ids.length > 1;
+  if (!perSpeaker) {
+    return (
+      <>
+        {row.speakerPhoto && (
+          <>
+            <h4 className="card__subtitle">{t.profilePhoto.title}</h4>
+            <Headshot cfpId={cfpId} proposalId={row.id} fieldKey={SPEAKER_PHOTO_KEY} />
+          </>
+        )}
+        <Answered
+          cfpId={cfpId}
+          fields={fields}
+          answers={row.confirmAnswers}
+          proposalId={row.id}
+          title={t.admin.form}
+        />
+      </>
+    );
+  }
+
+  const snapshots = row.speakerSnapshot ?? [];
+  return (
+    <div className="speaker-confirmations">
+      {ids.map((uid, index) => {
+        const confirmation = row.speakerConfirmations?.find((item) => item.uid === uid);
+        const name = snapshots[index]?.name || uid;
+        const response = confirmation?.response;
+        return (
+          <section className="speaker-confirmation" key={uid}>
+            <header className="speaker-confirmation__header">
+              <h4>{t.coSpeakers.confirmationFor(name)}</h4>
+              <span
+                className={`status-chip${response ? ` status-chip--${response}` : ''}`}
+              >
+                {response ? t.enums.status[response] : t.coSpeakers.awaitingConfirmation}
+              </span>
+            </header>
+            <Answered
+              cfpId={cfpId}
+              fields={fields}
+              answers={confirmation?.answers as Answers | undefined}
+              proposalId={row.id}
+              speakerUid={uid}
+              title={t.admin.form}
+            />
+            {confirmation?.speakerPhoto && (
+              <div className="speaker-confirmation__photo">
+                <h5>{t.profilePhoto.title}</h5>
+                <Headshot
+                  cfpId={cfpId}
+                  proposalId={row.id}
+                  fieldKey={SPEAKER_PHOTO_KEY}
+                  speakerUid={uid}
+                />
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -205,15 +311,68 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
     (value): value is [string, string] => value !== null && Boolean(value[1]),
   );
 
+  const personalLogistics = (row.speakerParticipants ?? []).map((participant) => {
+    const index = (row.speakerIds ?? []).indexOf(participant.uid);
+    return {
+      ...participant,
+      name: speakers[index]?.name || participant.uid,
+    };
+  });
+
   return (
-    <dl className="answers">
-      {values.map(([label, value]) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd>{value}</dd>
+    <>
+      <dl className="answers">
+        {values.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {personalLogistics.length > 0 && (
+        <div className="speaker-logistics">
+          {personalLogistics.map((participant) => {
+            const attendance = participant.attendance;
+            return (
+              <section key={participant.uid} className="speaker-logistics__person">
+                <h4>
+                  {participant.name}{' '}
+                  <span className="muted">
+                    · {participant.role === 'primary' ? t.coSpeakers.lead : t.coSpeakers.joined}
+                  </span>
+                </h4>
+                <dl className="answers">
+                  {attendance?.status && (
+                    <div>
+                      <dt>{t.review.travel}</dt>
+                      <dd>{t.review.attendance[attendance.status] ?? attendance.status}</dd>
+                    </div>
+                  )}
+                  {attendance?.fundingSource && (
+                    <div><dt>{t.review.funding}</dt><dd>{attendance.fundingSource}</dd></div>
+                  )}
+                  {attendance?.decisionBy && (
+                    <div><dt>{t.review.decisionBy}</dt><dd>{attendance.decisionBy}</dd></div>
+                  )}
+                  {attendance && (
+                    <div>
+                      <dt>{t.review.visa}</dt>
+                      <dd>{attendance.needsVisa ? t.admin.formYes : t.admin.formNo}</dd>
+                    </div>
+                  )}
+                  {shape.acks.map((ack) => (
+                    <div key={ack.key}>
+                      <dt>{localised(ack.label, locale)}</dt>
+                      <dd>{participant.acks?.[ack.key] ? t.admin.formYes : t.admin.formNo}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            );
+          })}
         </div>
-      ))}
-    </dl>
+      )}
+    </>
   );
 }
 
@@ -330,6 +489,102 @@ function Dashboard({ rows, shape }: { rows: ProposalRow[]; shape: SubmissionForm
 type ScoreFilter = 'all' | 'scored' | 'unscored' | 'disagreement';
 type ProposalSort = 'score' | 'spread' | 'reviews' | 'title' | 'status';
 type StatusFilter = 'current' | 'all' | 'undecided' | ProposalStatus;
+type ProfileAttentionFilter = 'all' | ProfileUpdateRequestAttention;
+
+function profileRequestSpeakerName(row: ProposalRow | undefined, speakerUid: string): string {
+  return (
+    row?.speakerSnapshot?.find((speaker) => speaker.uid === speakerUid)?.name ||
+    speakerUid
+  );
+}
+
+function ProfileUpdateQueue({
+  rows,
+  requests,
+  failed,
+  onOpen,
+  onRetry,
+}: {
+  rows: ProposalRow[];
+  requests: ProfileUpdateRequestSummary[];
+  failed: boolean;
+  onOpen: (proposalId: string, speakerUid: string) => void;
+  onRetry: () => void;
+}) {
+  const { t } = useI18n();
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const waiting = requests.filter((request) => request.state === 'waiting');
+  const ready = requests.filter((request) => request.state === 'ready');
+  const ordered = [...ready, ...waiting];
+
+  return (
+    <section className="section profile-request-queue" aria-labelledby="profile-request-queue-title">
+      <div className="profile-request-queue__heading">
+        <div>
+          <span className="profile-request-queue__eyebrow">
+            {t.profileSnapshot.adminQueueEyebrow}
+          </span>
+          <h2 id="profile-request-queue-title">{t.profileSnapshot.adminQueueTitle}</h2>
+          <p className="section__help">{t.profileSnapshot.adminQueueHelp}</p>
+        </div>
+        <div className="profile-request-queue__counts" aria-label={t.profileSnapshot.adminQueueTitle}>
+          <span className="profile-attention profile-attention--waiting">
+            {t.profileSnapshot.waitingCount(waiting.length)}
+          </span>
+          <span className="profile-attention profile-attention--ready">
+            {t.profileSnapshot.readyCount(ready.length)}
+          </span>
+        </div>
+      </div>
+
+      {failed ? (
+        <div className="profile-request-queue__empty" role="alert">
+          <p>{t.profileSnapshot.adminQueueLoadFailed}</p>
+          <button type="button" className="btn btn--ghost btn--small" onClick={onRetry}>
+            {t.errors.reload}
+          </button>
+        </div>
+      ) : ordered.length === 0 ? (
+        <p className="profile-request-queue__empty">{t.profileSnapshot.adminQueueEmpty}</p>
+      ) : (
+        <ul className="profile-request-queue__list">
+          {ordered.map((request) => {
+            const row = byId.get(request.proposalId);
+            const name = profileRequestSpeakerName(row, request.speakerUid);
+            return (
+              <li key={`${request.proposalId}:${request.speakerUid}:${request.generation}`}>
+                <span
+                  className={`profile-request-queue__state profile-request-queue__state--${request.state}`}
+                >
+                  {request.state === 'waiting'
+                    ? t.profileSnapshot.waitingOnSpeaker
+                    : t.profileSnapshot.readyToReview}
+                </span>
+                <span className="profile-request-queue__identity">
+                  <strong>{name}</strong>
+                  <span>{row?.title || t.admin.untitled}</span>
+                </span>
+                <span className="profile-request-queue__scopes">
+                  {request.scopes.map((scope) => t.profileSnapshot.scope[scope]).join(' · ')}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--small"
+                  aria-label={t.profileSnapshot.reviewSpeakerRequest(name, row?.title || t.admin.untitled)}
+                  onClick={() => onOpen(request.proposalId, request.speakerUid)}
+                >
+                  {request.state === 'waiting'
+                    ? t.profileSnapshot.viewRequest
+                    : t.profileSnapshot.reviewReady}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 interface UndoDecision {
   action: number;
@@ -500,12 +755,54 @@ export function Proposals({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('current');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
+  const [profileFilter, setProfileFilter] = useState<ProfileAttentionFilter>('all');
   const [sort, setSort] = useState<ProposalSort>('score');
+  const [managedProposalId, setManagedProposalId] = useState<string | null>(null);
+  const [managedSpeakerUid, setManagedSpeakerUid] = useState<string | null>(null);
+  const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
+  const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
   const loadGeneration = useRef(0);
   const activeCfp = useRef(cfpId);
   const decisionSequence = useRef(0);
   const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
   activeCfp.current = cfpId;
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    const proposalId = search.get('manageSpeakers');
+    const speakerUid = search.get('profileSpeaker');
+    setManagedProposalId(proposalId?.trim() || null);
+    setManagedSpeakerUid(proposalId?.trim() && speakerUid?.trim() ? speakerUid.trim() : null);
+  }, [cfpId]);
+
+  const openSpeakerManagement = useCallback((proposalId: string, speakerUid?: string) => {
+    setManagedProposalId(proposalId);
+    setManagedSpeakerUid(speakerUid ?? null);
+    const url = new URL(window.location.href);
+    url.searchParams.set('manageSpeakers', proposalId);
+    if (speakerUid) url.searchParams.set('profileSpeaker', speakerUid);
+    else url.searchParams.delete('profileSpeaker');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const closeSpeakerManagement = useCallback(() => {
+    setManagedProposalId(null);
+    setManagedSpeakerUid(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('manageSpeakers');
+    url.searchParams.delete('profileSpeaker');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const onSnapshotRefreshed = useCallback(
+    (speakerUid: string, snapshot: SpeakerSnapshot) => {
+      if (!managedProposalId || activeCfp.current !== cfpId) return;
+      setRows((current) =>
+        reconcileProposalSpeakerSnapshot(current, managedProposalId, speakerUid, snapshot),
+      );
+    },
+    [cfpId, managedProposalId],
+  );
 
   const refresh = useCallback(async (reset = false) => {
     const request = ++loadGeneration.current;
@@ -530,20 +827,30 @@ export function Proposals({
       setStatusFilter('current');
       setCategoryFilter('all');
       setScoreFilter('all');
+      setProfileFilter('all');
       setSort('score');
+      setProfileRequests([]);
+      setProfileRequestsFailed(false);
       committedDecisions.current.clear();
       decisionSequence.current = 0;
     }
     try {
-      const [all, form, submission] = await Promise.all([
-        loadAllProposals(cfpId),
+      const [all, form, submission, updateRequests] = await Promise.all([
+        loadAllProposals(cfpId, { speakerDetails: true }),
         loadConfirmForm(cfpId),
         loadSubmissionForm(cfpId),
+        readOnly
+          ? Promise.resolve({ requests: [] as ProfileUpdateRequestSummary[], failed: false })
+          : listSpeakerProfileUpdateRequests({ cfpId })
+              .then(({ data }) => ({ requests: data.admin, failed: false }))
+              .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setRows(all);
       setQuestions(form.fields);
       setShape(submission);
+      setProfileRequests(updateRequests.requests);
+      setProfileRequestsFailed(updateRequests.failed);
       setLoadedFor(cfpId);
       setLoadFailed(false);
       setError('');
@@ -572,7 +879,7 @@ export function Proposals({
         setLoading(false);
       }
     }
-  }, [cfpId, t]);
+  }, [cfpId, readOnly, t]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -715,6 +1022,10 @@ export function Proposals({
   const inCurrentScope = loadedFor === cfpId;
   const scopedRows = useMemo(() => (inCurrentScope ? rows : []), [inCurrentScope, rows]);
   const scopedShape = inCurrentScope ? shape : DEFAULT_SUBMISSION_FORM;
+  const profileRequestsByProposal = useMemo(
+    () => profileUpdateRequestsByProposal(inCurrentScope ? profileRequests : []),
+    [inCurrentScope, profileRequests],
+  );
 
   const categories = useMemo(() => {
     const configured = scopedShape.category.map((option) => option.value);
@@ -741,6 +1052,14 @@ export function Proposals({
         return false;
       }
       if (categoryFilter !== 'all' && row.category !== categoryFilter) return false;
+      if (
+        !proposalHasProfileUpdateAttention(
+          profileRequestsByProposal.get(row.id) ?? [],
+          profileFilter,
+        )
+      ) {
+        return false;
+      }
 
       const reviewCount = row.aggregate?.reviewCount ?? 0;
       if (scoreFilter === 'scored' && reviewCount === 0) return false;
@@ -771,6 +1090,8 @@ export function Proposals({
     categoryFilter,
     locale,
     names,
+    profileFilter,
+    profileRequestsByProposal,
     scopedRows,
     scoreFilter,
     search,
@@ -784,6 +1105,7 @@ export function Proposals({
     statusFilter !== 'current' ||
     categoryFilter !== 'all' ||
     scoreFilter !== 'all' ||
+    profileFilter !== 'all' ||
     sort !== 'score';
 
   // Best first for the accepted-speaker summary, regardless of how the table is
@@ -820,6 +1142,15 @@ export function Proposals({
   return (
     <>
       <Dashboard rows={scopedRows} shape={scopedShape} />
+      {!readOnly && (
+        <ProfileUpdateQueue
+          rows={scopedRows}
+          requests={profileRequests}
+          failed={profileRequestsFailed}
+          onOpen={openSpeakerManagement}
+          onRetry={() => void refresh()}
+        />
+      )}
       <ReviewCoverage
         coverage={coverage}
         loading={coverageLoading}
@@ -936,6 +1267,23 @@ export function Proposals({
             </select>
           </label>
 
+          {!readOnly && (
+            <label className="decision-filter">
+              <span>{t.profileSnapshot.filterLabel}</span>
+              <select
+                className="field__input field__input--select"
+                value={profileFilter}
+                onChange={(event) =>
+                  setProfileFilter(event.target.value as ProfileAttentionFilter)
+                }
+              >
+                <option value="all">{t.profileSnapshot.filterAll}</option>
+                <option value="waiting">{t.profileSnapshot.waitingOnSpeaker}</option>
+                <option value="ready">{t.profileSnapshot.readyToReview}</option>
+              </select>
+            </label>
+          )}
+
           <label className="decision-filter">
             <span>{t.admin.sortBy}</span>
             <select
@@ -965,6 +1313,7 @@ export function Proposals({
                 setStatusFilter('current');
                 setCategoryFilter('all');
                 setScoreFilter('all');
+                setProfileFilter('all');
                 setSort('score');
               }}
             >
@@ -1007,6 +1356,13 @@ export function Proposals({
                 {filtered.map((row) => {
                   const saving = pending.has(row.id);
                   const rowError = rowErrors.get(row.id);
+                  const rowProfileRequests = profileRequestsByProposal.get(row.id) ?? [];
+                  const waitingProfileRequests = rowProfileRequests.filter(
+                    (request) => request.state === 'waiting',
+                  ).length;
+                  const readyProfileRequests = rowProfileRequests.filter(
+                    (request) => request.state === 'ready',
+                  ).length;
                   return (
                     <tr key={row.id} className={saving ? 'decision-table__row--saving' : undefined}>
                       <td data-label={t.admin.colTitle}>
@@ -1015,7 +1371,29 @@ export function Proposals({
                           {labelOf(scopedShape.category, row.category, locale)}
                         </span>
                       </td>
-                      <td data-label={t.admin.colSpeaker}>{names(row) || '—'}</td>
+                      <td data-label={t.admin.colSpeaker}>
+                        <div className="decision-speakers">
+                          <span>{names(row) || '—'}</span>
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--small"
+                            aria-label={t.coSpeakers.manageFor(row.title || t.admin.untitled)}
+                            onClick={() => openSpeakerManagement(row.id)}
+                          >
+                            {t.coSpeakers.manage}
+                          </button>
+                          {waitingProfileRequests > 0 && (
+                            <span className="profile-attention profile-attention--waiting">
+                              {t.profileSnapshot.waitingCount(waitingProfileRequests)}
+                            </span>
+                          )}
+                          {readyProfileRequests > 0 && (
+                            <span className="profile-attention profile-attention--ready">
+                              {t.profileSnapshot.readyCount(readyProfileRequests)}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td data-label={t.admin.colScore}>
                         {row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}
                       </td>
@@ -1126,20 +1504,62 @@ export function Proposals({
                   answers={row.answers}
                   title={t.admin.extraTitle}
                 />
-                {/* The whole reason for asking. Without it an organiser reads
-                    shirt sizes out of the Firestore console. */}
-                <Answered
+                <SpeakerConfirmations
                   cfpId={cfpId}
+                  row={row}
                   fields={questions}
-                  answers={row.confirmAnswers}
-                  proposalId={row.id}
-                  title={t.admin.form}
                 />
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      {managedProposalId && (
+        <CoSpeakerRosterDialog
+          open
+          cfpId={cfpId}
+          proposalId={managedProposalId}
+          proposalTitle={
+            scopedRows.find((row) => row.id === managedProposalId)?.title || t.admin.untitled
+          }
+          readOnly={readOnly}
+          canRequestProfileUpdate={
+            !readOnly &&
+            ['accepted', 'confirmed'].includes(
+              scopedRows.find((row) => row.id === managedProposalId)?.status ?? '',
+            )
+          }
+          autoReviewSpeakerUid={managedSpeakerUid ?? undefined}
+          onProfileUpdateRequestChanged={(speakerUid, request) => {
+            if (!managedProposalId) return;
+            const proposalId = managedProposalId;
+            setProfileRequests((current) => {
+              const withoutCurrent = current.filter(
+                (summary) =>
+                  summary.proposalId !== proposalId || summary.speakerUid !== speakerUid,
+              );
+              if (request.status === 'cancelled') return withoutCurrent;
+              return [
+                ...withoutCurrent,
+                {
+                  proposalId,
+                  speakerUid,
+                  requestId: request.requestId,
+                  generation: request.generation,
+                  state: request.status === 'resolved' ? 'ready' : 'waiting',
+                  scopes: request.scopes,
+                  resolvedScopes: request.resolvedScopes,
+                  requestedAt: null,
+                  resolvedAt: null,
+                },
+              ];
+            });
+          }}
+          onSnapshotRefreshed={onSnapshotRefreshed}
+          onClose={closeSpeakerManagement}
+        />
+      )}
     </>
   );
 }

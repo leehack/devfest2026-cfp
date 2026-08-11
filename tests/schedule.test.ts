@@ -139,6 +139,18 @@ describe('schedule validation', () => {
 
     expect(validateScheduleEntry({ ...custom, speakers: [speaker] }, config)).toBeNull();
     expect(validateScheduleEntry({ ...custom, speakers: [{ name: 'Host' }] }, config)).toBeNull();
+    expect(
+      validateScheduleEntry(
+        { ...custom, speakers: [{ name: 'Host', photoAssetRef: 'a'.repeat(43) }] },
+        config,
+      ),
+    ).toBeNull();
+    expect(
+      validateScheduleEntry(
+        { ...custom, speakers: [{ name: 'Host', photoAssetRef: 'bucket/path' }] },
+        config,
+      ),
+    ).toBe('entrySpeakers');
     expect(validateScheduleEntry({ ...custom, speakers: [{ name: '' }] }, config)).toBe(
       'entrySpeakers',
     );
@@ -422,6 +434,28 @@ describe('shared schedule disclosure', () => {
         bio: 'Builds reliable systems.',
         company: 'Example Co',
         jobTitle: 'Engineer',
+      },
+    ]);
+
+    expect(
+      publicScheduleSpeakers(
+        [
+          {
+            uid: 'speaker-one',
+            name: 'Ada Speaker',
+            bio: 'Builds reliable systems.',
+            basedIn: 'Montréal',
+            socials: [],
+            isGde: false,
+          },
+        ],
+        new Map([['speaker-one', 'opaque-release-member']]),
+      ),
+    ).toEqual([
+      {
+        name: 'Ada Speaker',
+        bio: 'Builds reliable systems.',
+        photoRef: 'opaque-release-member',
       },
     ]);
   });

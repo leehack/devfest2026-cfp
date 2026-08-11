@@ -4,9 +4,21 @@ import { describe, expect, it } from 'vitest';
 
 import {
   decodeHeadshotUpload,
+  decodeSpeakerProfilePhotoUpload,
+  isSpeakerConfirmedHeadshotPath,
+  publicSpeakerPhotoDerivative,
+  speakerConfirmedHeadshotPath,
+  speakerProfilePhotoFrom,
+  speakerWorkingHeadshotFrom,
+  speakerWorkingHeadshotMatches,
+  speakerWorkingHeadshotPath,
   workingHeadshotMatches,
 } from '../functions/src/headshots';
-import { FORM_LIMITS, workingHeadshotPath } from '../shared/confirmForm';
+import {
+  FORM_LIMITS,
+  speakerProfilePhotoPath,
+  workingHeadshotPath,
+} from '../shared/confirmForm';
 
 const valid = {
   'image/jpeg': Buffer.from(
@@ -125,6 +137,60 @@ describe('headshot upload payload', () => {
   });
 });
 
+describe('reusable speaker profile photos', () => {
+  it('requires at least 800 pixels on the shortest edge', async () => {
+    const tooSmall = await sharp({
+      create: { width: 1_200, height: 799, channels: 3, background: '#4466aa' },
+    })
+      .jpeg()
+      .toBuffer();
+    const minimum = await sharp({
+      create: { width: 1_200, height: 800, channels: 3, background: '#4466aa' },
+    })
+      .jpeg()
+      .toBuffer();
+
+    await expect(
+      decodeSpeakerProfilePhotoUpload('image/jpeg', tooSmall.toString('base64')),
+    ).rejects.toMatchObject({ code: 'invalid-argument' });
+    await expect(
+      decodeSpeakerProfilePhotoUpload('image/jpeg', minimum.toString('base64')),
+    ).resolves.toMatchObject({ contentType: 'image/jpeg' });
+  });
+
+  it('normalises a metadata-free square WebP public derivative', async () => {
+    const original = await sharp({
+      create: { width: 1_200, height: 800, channels: 3, background: '#4466aa' },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const derivative = await publicSpeakerPhotoDerivative(original);
+    const metadata = await sharp(derivative.bytes).metadata();
+
+    expect(derivative.contentType).toBe('image/webp');
+    expect(metadata).toMatchObject({
+      width: FORM_LIMITS.speakerPhotoPublicSize,
+      height: FORM_LIMITS.speakerPhotoPublicSize,
+      format: 'webp',
+    });
+    expect(metadata.exif).toBeUndefined();
+  });
+
+  it('accepts only the account-owned server pointer shape', () => {
+    const path = speakerProfilePhotoPath('speaker-a', 'upload-1');
+    const pointer = {
+      path,
+      generation: '123',
+      contentType: 'image/png' as const,
+      size: 8,
+    };
+    expect(speakerProfilePhotoFrom(pointer, 'speaker-a')).toEqual(pointer);
+    expect(speakerProfilePhotoFrom(pointer, 'speaker-b')).toBeNull();
+    expect(speakerProfilePhotoFrom({ ...pointer, generation: '' }, 'speaker-a')).toBeNull();
+  });
+});
+
 describe('working headshot pointer recovery', () => {
   const path = workingHeadshotPath('my-cfp', 'proposal-1', 'photo', 'upload-1');
   const expected = { path, generation: '123' };
@@ -141,5 +207,63 @@ describe('working headshot pointer recovery', () => {
       }),
     ).toBe(false);
     expect(workingHeadshotMatches(uploads, 'other-cfp', 'proposal-1', 'photo', expected)).toBe(false);
+  });
+
+  it('isolates linked-speaker working and confirmed paths by uid', () => {
+    const speakerPath = speakerWorkingHeadshotPath(
+      'my-cfp',
+      'proposal-1',
+      'speaker-a',
+      'photo',
+      'upload-1',
+    );
+    const pointer = { path: speakerPath, generation: '123' };
+    const uploads = { photo: { ...pointer, contentType: 'image/png', size: 8 } };
+
+    expect(
+      speakerWorkingHeadshotFrom(
+        uploads,
+        'my-cfp',
+        'proposal-1',
+        'speaker-a',
+        'photo',
+      ),
+    ).toEqual(pointer);
+    expect(
+      speakerWorkingHeadshotMatches(
+        uploads,
+        'my-cfp',
+        'proposal-1',
+        'speaker-b',
+        'photo',
+        pointer,
+      ),
+    ).toBe(false);
+
+    const confirmed = speakerConfirmedHeadshotPath(
+      'my-cfp',
+      'proposal-1',
+      'speaker-a',
+      'photo',
+      '123',
+    );
+    expect(
+      isSpeakerConfirmedHeadshotPath(
+        confirmed,
+        'my-cfp',
+        'proposal-1',
+        'speaker-a',
+        'photo',
+      ),
+    ).toBe(true);
+    expect(
+      isSpeakerConfirmedHeadshotPath(
+        confirmed,
+        'my-cfp',
+        'proposal-1',
+        'speaker-b',
+        'photo',
+      ),
+    ).toBe(false);
   });
 });

@@ -48,6 +48,8 @@ import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
 import type { PlatformAccessStatus } from '@shared/platform';
 import type { PublishedScheduleBundle } from './lib/schedule';
+import { coSpeakerInviteQuery } from './lib/coSpeakers';
+import { proposalSelectionQuery } from './lib/proposalLinks';
 
 const SubmitPage = lazy(() =>
   import('./screens/SubmitPage').then(({ SubmitPage }) => ({ default: SubmitPage })),
@@ -114,6 +116,7 @@ export function App({
    */
   const [askConsent, setAskConsent] = useState(false);
   const [analyticsConsent, setAnalyticsConsent] = useState<Consent>('unasked');
+  const focusedIdentity = useRef<string | null | undefined>(undefined);
   const { route, cfpId } = place;
   currentCfpId.current = cfpId;
   const placeKey = `${route}:${cfpId ?? ''}:${place.tab}:${place.entryId ?? ''}`;
@@ -235,13 +238,42 @@ export function App({
         window.location.href,
       );
     }
-    requestAnimationFrame(() => document.getElementById('main-content')?.focus());
+    requestAnimationFrame(() => {
+      const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
+      if (modal) {
+        modal.focus({ preventScroll: true });
+        return;
+      }
+      document.getElementById('main-content')?.focus();
+    });
   }, [cfpId, placeKey, role, route, visibleCfp?.publishedScheduleId, visibleCfp?.sharedScheduleId]);
 
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);
     setAuthReady(true);
   }), []);
+
+  // Signing in and out replaces the protected screen without changing its URL.
+  // Treat that as a screen transition too, after ignoring the initial restored
+  // session, so focus never stays on a control that just unmounted.
+  useEffect(() => {
+    if (!authReady) return;
+    const identity = user?.uid ?? null;
+    if (focusedIdentity.current === undefined) {
+      focusedIdentity.current = identity;
+      return;
+    }
+    if (focusedIdentity.current === identity) return;
+    focusedIdentity.current = identity;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
+        const target = modal ?? document.getElementById('sign-in') ?? document.getElementById('main-content');
+        target?.focus({ preventScroll: true });
+      });
+    });
+  }, [authReady, user?.uid]);
 
   const retryCfp = useCallback(() => setCfpAttempt((attempt) => attempt + 1), []);
   const refreshCfp = useCallback(async () => {
@@ -270,7 +302,7 @@ export function App({
     if (
       seeded?.stillOnInitialRoute &&
       seeded.id === cfpId &&
-      route === 'cfp' &&
+      (route === 'cfp' || route === 'schedule' || route === 'session') &&
       cfpAttempt === 0
     ) {
       setCfpError(false);
@@ -721,6 +753,7 @@ function Routed({
       archived={cfp.state === 'archived'}
       tab={tab}
       role={role!}
+      isPlatformAdmin={platformStatus?.isPlatformAdmin === true}
       onCfpChange={() => void refreshCfp()}
     />
   ) : (
@@ -878,10 +911,24 @@ export function SignIn({
     setSending(true);
     setLinkError('');
     try {
+      const invite =
+        destination === 'submit' ? coSpeakerInviteQuery(window.location.search) : null;
+      const proposalId =
+        destination === 'submit' && !invite
+          ? proposalSelectionQuery(window.location.search)
+          : null;
       await requestSignInLink({
         email: email.trim(),
         locale,
         ...(cfpId ? { cfpId, destination } : {}),
+        ...(invite
+          ? {
+              proposalId: invite.proposalId,
+              speakerInvitationId: invite.invitationId,
+            }
+          : proposalId
+            ? { proposalId }
+            : {}),
       });
       // Stored before the confirmation is shown: this is what lets the link
       // complete without asking again when it is opened in this browser.

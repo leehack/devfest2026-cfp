@@ -1,16 +1,21 @@
 /**
- * When the committee's copy of a speaker is allowed to move.
+ * The committee's copy of a speaker moves only after an explicit refresh.
  *
  * `speakerSnapshot` is frozen so a bio rewritten years later cannot change what
- * the committee actually read. The question these prove is *when* the freeze
- * starts: at submission is too early — a speaker who fills in their employer an
- * hour after submitting is not rewriting history, and the first real submission
- * in production lost exactly that.
+ * the committee actually read. A speaker can deliberately pull their current
+ * public profile into one proposal without changing any other proposal.
  */
 
 import { expect, test } from '@playwright/test';
 
-import { createAccount, readProposalById, reset, seedProposal, seedSpeaker } from './backend';
+import {
+  callJson,
+  createAccount,
+  readProposalById,
+  reset,
+  seedProposal,
+  seedSpeaker,
+} from './backend';
 import type { Identity } from './form';
 
 const SPEAKER: Identity = { sub: 'snap-speaker', email: 'sam@example.org', name: 'Sam' };
@@ -19,7 +24,7 @@ const company = async (id: string): Promise<string | undefined> =>
   (await readProposalById(id))?.speakerSnapshot?.[0]?.company;
 
 test.describe('the speaker snapshot', () => {
-  test('picks up a profile filled in after submitting, and stops once decided', async () => {
+  test('stays frozen after a profile edit until the speaker explicitly refreshes it', async () => {
     await reset();
     const speaker = await createAccount(SPEAKER);
     await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
@@ -47,14 +52,27 @@ test.describe('the speaker snapshot', () => {
       pastTalks: 'DevFest Montréal 2024',
     });
 
-    await expect.poll(() => company('snap-open')).toBe('Unity');
+    expect(await company('snap-open')).toBeUndefined();
+    expect(await company('snap-decided')).toBeUndefined();
 
-    // The committee has answered on this one. What they read stays what they
-    // read — this is the half of the freeze that must not regress.
+    const openPreview = await callJson(
+      speaker.idToken,
+      'previewProposalSpeakerProfile',
+      { proposalId: 'snap-open' },
+    );
+    await callJson(speaker.idToken, 'refreshProposalSpeakerSnapshot', {
+      proposalId: 'snap-open',
+      expectedCurrentFingerprint: openPreview.currentFingerprint,
+      expectedLatestFingerprint: openPreview.latestFingerprint,
+    });
+    expect(await company('snap-open')).toBe('Unity');
+
+    // Refreshing one session never turns a global profile edit into a bulk
+    // rewrite of every historical proposal for that account.
     expect(await company('snap-decided')).toBeUndefined();
   });
 
-  test('leaves a co-presenter alone', async () => {
+  test('refreshes only the requested active speaker entry', async () => {
     await reset();
     const speaker = await createAccount(SPEAKER);
     await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
@@ -77,7 +95,18 @@ test.describe('the speaker snapshot', () => {
       company: 'Unity',
     });
 
-    await expect.poll(() => company('snap-pair')).toBe('Unity');
+    expect(await company('snap-pair')).toBeUndefined();
+    const pairPreview = await callJson(
+      speaker.idToken,
+      'previewProposalSpeakerProfile',
+      { proposalId: 'snap-pair' },
+    );
+    await callJson(speaker.idToken, 'refreshProposalSpeakerSnapshot', {
+      proposalId: 'snap-pair',
+      expectedCurrentFingerprint: pairPreview.currentFingerprint,
+      expectedLatestFingerprint: pairPreview.latestFingerprint,
+    });
+    expect(await company('snap-pair')).toBe('Unity');
     expect((await readProposalById('snap-pair'))?.speakerSnapshot?.[0]?.uid).toBe(speaker.uid);
   });
 });

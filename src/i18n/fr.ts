@@ -243,7 +243,7 @@ export const fr: Dictionary = {
     title: 'Votre profil',
     editorTitle: 'Renseignements du conférencier',
     help:
-      'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Le modifier ici le change partout, y compris sur les conférences déjà soumises que personne n’a encore commencé à lire.',
+      'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Après l’enregistrement, ouvrez une séance soumise pour choisir si sa copie pour l’événement doit utiliser ces renseignements à jour.',
     complete: 'Prêt à utiliser',
     needsAttention: 'À compléter',
     unsaved: 'Modifications non enregistrées',
@@ -271,7 +271,7 @@ export const fr: Dictionary = {
     language: 'Langue',
     speaker: 'À propos de vous',
     speakerHelp:
-      'Rattaché à votre compte, pas à une conférence — le modifier ici le change partout, et il reste modifiable après une soumission.',
+      'Rattaché à votre compte, pas à une conférence. Il reste modifiable après la soumission; chaque séance soumise conserve sa propre copie jusqu’à ce que vous la mettiez à jour explicitement.',
     extra: 'Quelques questions de plus',
     acks: 'Avant de soumettre',
     attendance: 'Venir à Montréal',
@@ -366,6 +366,167 @@ export const fr: Dictionary = {
     emailHelp: 'Provient de votre compte Google. Toute la correspondance y sera envoyée.',
     gdeGuidance:
       "Les GDE doivent communiquer avec leur gestionnaire de programme GDE concernant le soutien aux déplacements. L'événement ne l'offre pas directement.",
+  },
+
+  profilePhoto: {
+    title: 'Photo du conférencier',
+    help:
+      'Cette photo de profil réutilisable n’est pas jointe aux propositions ni montrée au comité. Si une séance est retenue, vous pourrez approuver sa version exacte pour le programme au moment de la confirmation.',
+    previewAlt: 'Photo actuelle du profil de conférencier',
+    chooseLabel: 'Choisir la photo du profil de conférencier',
+    requirements: (pixels: number) =>
+      `JPEG, PNG ou WebP · jusqu’à 5 Mo · au moins ${pixels} × ${pixels} pixels.`,
+    tooSmall: (pixels: number) =>
+      `Choisissez une photo d’au moins ${pixels} pixels de chaque côté.`,
+    loadFailed: 'Impossible de charger la photo actuelle du conférencier.',
+    uploadFailed: 'Impossible de téléverser la photo du conférencier. Réessayez.',
+    remove: 'Retirer la photo',
+    removeConfirm:
+      'Retirer cette photo de votre profil réutilisable ? Les copies déjà approuvées pour un événement resteront inchangées.',
+    removeFailed: 'Impossible de retirer la photo du conférencier. Réessayez.',
+    sessionUpdateTitle: 'Une nouvelle photo de profil est disponible',
+    sessionUpdateHelp:
+      'Cette séance utilise encore la photo approuvée précédemment. Remplacez-la seulement lorsque la nouvelle photo est prête pour le programme.',
+    sessionCurrentTitle: 'Photo approuvée pour cette séance',
+    sessionCurrentHelp:
+      'La séance utilise exactement cette photo de profil. Le programme publié conserve sa copie actuelle jusqu’à une nouvelle publication.',
+    sessionRemovalTitle: 'Photo retirée du profil',
+    sessionRemovalHelp:
+      'Cette séance utilise encore la photo approuvée précédemment. Retirez cette copie de l’événement seulement si vous ne voulez aucune photo dans le programme.',
+    sessionEmptyTitle: 'Aucune photo approuvée pour cette séance',
+    sessionEmptyHelp:
+      'La photo facultative de cette séance est vide. Vous pourrez en ajouter une à votre profil lorsque vous serez prêt.',
+    sessionRequiredTitle: 'Cette séance exige une photo de conférencier',
+    sessionRequiredHelp:
+      'Ajoutez une photo de profil avant de mettre cette séance à jour. Toute copie déjà approuvée pour le programme reste inchangée.',
+    useForSession: 'Utiliser cette photo pour cette séance',
+    removeFromSession: 'Retirer la photo de cette séance',
+    sessionUpdating: 'Mise à jour de la photo de la séance…',
+    sessionUpdateFailed: 'Impossible de mettre à jour la photo de la séance. Réessayez.',
+  },
+
+  profileSnapshot: {
+    title: 'Profil utilisé pour cette séance',
+    help:
+      'Le profil de votre compte reste modifiable. Cette séance conserve une copie distincte pour l’événement afin que les changements ultérieurs ne modifient pas silencieusement ce que voient le comité ou le public.',
+    adminHelp:
+      'Ceci copie dans la séance les derniers champs publics du profil du conférencier. Les organisateurs n’obtiennent pas accès au profil global privé et les réponses de confirmation et de déplacement ne changent pas.',
+    updateSelf: 'Utiliser mon profil à jour pour cette séance',
+    updateSpeaker: (name: string) => `Utiliser le profil à jour de ${name}`,
+    updating: 'Mise à jour de la copie de la séance…',
+    updated: 'Profil de la séance mis à jour.',
+    unchanged: 'Cette séance utilise déjà le profil à jour.',
+    scheduleNotice:
+      'L’horaire de travail doit maintenant être vérifié. Les versions partagée et publiée du programme restent inchangées jusqu’à un nouveau partage et une nouvelle publication.',
+    notReady:
+      'Complétez le profil et vérifiez que ce compte fait toujours partie des conférenciers actifs.',
+    failed: 'Impossible de mettre à jour le profil de la séance. Réessayez.',
+    gdeLabel: 'Google Developer Expert',
+    yes: 'Oui',
+    no: 'Non',
+    notProvided: 'Non renseigné',
+    reviewAdmin: 'Vérifier les changements au profil',
+    reviewSelf: 'Vérifier les changements pour cette séance',
+    reviewing: 'Vérification du profil…',
+    reviewEyebrow: 'Comparaison de la copie de la séance',
+    reviewTitle: (name: string) =>
+      name ? `Changements au profil de ${name}` : 'Changements au profil',
+    reviewHelp:
+      'Seuls les champs différents sont affichés. Rien ne change sans votre confirmation explicite.',
+    closeReview: 'Fermer la comparaison',
+    sessionCopy: 'Utilisé par cette séance',
+    latestProfile: 'Dernier profil du compte',
+    noChangesTitle: 'Les renseignements du profil sont déjà à jour',
+    noChangesHelp: 'Aucun changement au profil ne doit être appliqué à cette séance.',
+    photoChangedTitle: 'La photo de profil est différente',
+    photoChangedHelp:
+      'La photo reste sous le contrôle du conférencier. Demandez-lui d’approuver sa photo de profil actuelle pour cette séance.',
+    photoState: {
+      present: 'Photo enregistrée',
+      absent: 'Aucune photo',
+    },
+    apply: 'Appliquer les changements au profil',
+    applying: 'Application des changements…',
+    reviewChanged:
+      'Le profil a changé pendant que cette comparaison était ouverte. Vérifiez les différences à jour avant de les appliquer.',
+    requestUpdate: 'Demander une mise à jour',
+    expandRequest: 'Demander un autre élément',
+    requestAgain: 'Demander une autre mise à jour',
+    requestItems: 'Que doit mettre à jour le conférencier ?',
+    requestHelp:
+      'Cette demande concerne uniquement cette personne et cette séance. Sélectionnez au moins un élément.',
+    scope: {
+      profile: 'Renseignements du profil',
+      photo: 'Photo du conférencier',
+    },
+    scopeHelp: {
+      profile: 'Nom, biographie, entreprise, poste, liens et titres publics.',
+      photo: 'La photo de profil réutilisable, approuvée séparément pour cette séance.',
+    },
+    requestInAppOnly:
+      'La demande apparaît dans l’espace de cette séance et un courriel avec le lien exact de la séance est mis en file automatiquement.',
+    sendRequest: 'Ajouter la demande',
+    requesting: 'Ajout de la demande…',
+    cancelRequest: 'Annuler',
+    requestCreated:
+      'La demande a été ajoutée. Un courriel de notification est mis en file pour le conférencier.',
+    requestExpanded: 'L’élément supplémentaire a été ajouté à la demande existante.',
+    requestAlreadyPending: 'Cette mise à jour est déjà demandée.',
+    cancelPendingRequest: 'Annuler la demande',
+    cancellingRequest: 'Annulation…',
+    cancelRequestConfirm:
+      'Annuler cette demande de mise à jour du profil ? Elle ne sera plus présentée au conférencier comme une action à terminer.',
+    requestCancelled: 'Demande de mise à jour du profil annulée.',
+    requestPendingAdmin: 'Mise à jour demandée',
+    requestShareHelp:
+      'Un courriel de notification a été mis en file automatiquement. Vous pouvez aussi copier le lien exact de la séance comme solution de rechange.',
+    copySessionLink: 'Copier le lien de la séance',
+    sessionLinkCopied: 'Lien de séance copié.',
+    sessionLinkCopyFailed: 'Impossible de copier le lien de la séance. Réessayez.',
+    requestEyebrow: 'Demande de l’organisation',
+    requestPendingTitle: 'Votre profil demande une intervention pour cette séance',
+    requestPendingHelp:
+      'Votre séance reste confirmée. Mettez à jour l’élément demandé dans le profil de votre compte, puis appliquez-le explicitement à cette séance.',
+    requestedItems: 'Éléments du profil demandés',
+    requestStepEdit: 'Modifiez et enregistrez l’élément demandé dans le profil de votre compte.',
+    requestStepAdopt:
+      'Appliquez les renseignements ici ou choisissez « Utiliser cette photo pour cette séance » pour la photo.',
+    requestStepPublish:
+      'L’organisation vérifie et republie; le programme actuel demeure inchangé entre-temps.',
+    editProfile: 'Modifier le profil du compte',
+    editPhoto: 'Aller à la photo du conférencier',
+    completeRequest: 'Marquer les éléments demandés comme terminés',
+    completingRequest: 'Vérification des éléments…',
+    completeRequestHelp:
+      'Utilisez cette action si les renseignements demandés sont déjà corrects ou après avoir appliqué vos changements à cette séance.',
+    requestCompleted: 'Demande de mise à jour du profil terminée.',
+    requestPartlyComplete:
+      'Les éléments à jour sont terminés. Complétez le reste de la demande.',
+    requestNotReady:
+      'La copie de la séance n’est pas encore à jour. Appliquez les renseignements ou la photo, puis réessayez.',
+    requestResolvedTitle: 'Demande de mise à jour terminée',
+    requestResolvedHelp:
+      'Les éléments demandés sont maintenant liés à cette séance. L’organisation peut vérifier et republier le programme.',
+    pickerBadge: 'Mise à jour du profil demandée',
+    taskLoadFailed: 'Impossible de vérifier les demandes de profil',
+    taskLoadFailedHelp:
+      'Vos propositions restent accessibles, mais certaines pastilles peuvent manquer jusqu’à ce que cette vérification réussisse.',
+    adminQueueEyebrow: 'Suivi des conférenciers',
+    adminQueueTitle: 'File des mises à jour de profil',
+    adminQueueHelp:
+      'Les demandes en attente nécessitent une action du conférencier. Les demandes prêtes nécessitent une vérification et un nouveau partage du programme.',
+    adminQueueEmpty: 'Aucune mise à jour de profil ne demande une intervention.',
+    adminQueueLoadFailed: 'Impossible de charger les demandes de mise à jour de profil.',
+    waitingOnSpeaker: 'En attente du conférencier',
+    readyToReview: 'Prête à vérifier',
+    waitingCount: (count: number) => `En attente du conférencier · ${count}`,
+    readyCount: (count: number) => `Prête à vérifier · ${count}`,
+    viewRequest: 'Voir la demande',
+    reviewReady: 'Vérifier la mise à jour',
+    reviewSpeakerRequest: (speaker: string, session: string) =>
+      `Vérifier la mise à jour du profil de ${speaker} pour ${session}`,
+    filterLabel: 'Suivi du profil',
+    filterAll: 'Tous les états du profil',
   },
 
   acks: {
@@ -774,6 +935,7 @@ export const fr: Dictionary = {
     setupEmail: 'Terminer l’envoi des courriels',
     setupEmailDone: 'La clé API, le domaine vérifié et l’expéditeur sont configurés.',
     setupEmailTodo: 'Terminez la clé API, le domaine vérifié et l’expéditeur.',
+    setupEmailProblems: (problems: string[]) => `Encore requis : ${problems.join('; ')}.`,
     setupEmailUnavailable:
       'Impossible de vérifier la configuration du courriel pour le moment. Ouvrez Courriel pour réessayer.',
     setupEmailAction: 'Configurer le courriel',
@@ -798,6 +960,14 @@ export const fr: Dictionary = {
     noPeople: 'Personne ne détient de rôle pour l’instant.',
     isYou: 'vous',
     lastAdmin: 'C’est le seul administrateur restant — accordez d’abord le rôle à quelqu’un d’autre.',
+    emailDeliveryNotReady:
+      'La configuration de la livraison n’est plus prête. Vérifiez la clé API, le domaine et l’expéditeur avant de réessayer.',
+    emailActionInvalid:
+      'L’état du courriel a changé avant la fin de l’action. Actualisez l’espace de livraison et vérifiez-le de nouveau.',
+    emailBadInput:
+      'Vérifiez le texte du courriel et les destinataires sélectionnés, puis réessayez.',
+    emailMissing:
+      'Cette entrée de courriel n’existe plus. Actualisez l’espace de livraison.',
     badInput: 'Vérifiez l’adresse courriel et les dates.',
 
     identity: 'Cet appel à conférences',
@@ -872,11 +1042,13 @@ export const fr: Dictionary = {
     windowSaved: 'Enregistré.',
 
     email: 'Courriels',
-    emailStepKey: 'Clé API Resend',
+    emailStepKey: 'Clé API Resend partagée',
     emailKeyHelp:
-      'Conservée dans Secret Manager, pas dans la base de données, et jamais réaffichée. Vérifiée auprès de Resend avant l’enregistrement : une faute de frappe échoue ici plutôt que le soir des décisions.',
+      'Une seule clé dessert toute la plateforme. Seuls les administrateurs de la plateforme peuvent la remplacer; elle est conservée dans Secret Manager, vérifiée auprès de Resend et jamais réaffichée.',
+    emailKeyPlatformManaged:
+      'La clé Resend est partagée entre tous les appels. Demandez à un administrateur de la plateforme de la configurer ou de la remplacer; les administrateurs d’un événement ne peuvent pas la modifier.',
     emailKeySteps: [
-      'Créez un compte sur resend.com — l’offre gratuite suffit pour un appel à conférenciers.',
+      'Utilisez le compte Resend de la plateforme.',
       'Ouvrez API Keys, puis Create API Key.',
       'Choisissez la permission Full access. Une clé limitée à l’envoi ne peut pas gérer les domaines, et l’étape suivante en a besoin.',
       'Copiez la clé — elle commence par re_, et Resend ne l’affiche qu’une fois — puis collez-la ci-dessous.',
@@ -918,6 +1090,7 @@ export const fr: Dictionary = {
     emailStepSender: 'Expéditeur',
     emailPreview: 'Aperçu',
     emailPreviewLocale: 'Langue',
+    emailLanguageNames: { en: 'Anglais', fr: 'Français' },
     emailPreviewVisa: 'Afficher le paragraphe sur le visa',
     emailPreviewPlain: 'Texte brut',
     emailEdit: 'Modifier le texte',
@@ -939,8 +1112,12 @@ export const fr: Dictionary = {
     emailSubject: 'Objet :',
     emailTest: 'Me l’envoyer',
     emailTestSent: 'Envoyé à {to}.',
-    emailTestDryRun: 'Rien envoyé — complétez d’abord la clé et l’expéditeur ci-dessus.',
-    emailTestNeedsSetup: 'Un test nécessite la clé et l’adresse d’expéditeur.',
+    emailTestDryRun:
+      'Test non livré — terminez la configuration, puis relancez le test.',
+    emailTestNeedsSetup:
+      'Terminez la clé API, le domaine vérifié et l’expéditeur avant le test.',
+    emailTestSaveFirst:
+      'Enregistrez ce texte avant de le tester; le test utilise le modèle enregistré.',
     emailFrom: 'Expéditeur',
     emailReplyTo: 'Répondre à',
     emailFromHelp:
@@ -950,7 +1127,7 @@ export const fr: Dictionary = {
       'Vous envoyez depuis {sender}, mais le domaine vérifié auprès de Resend est {verified}. Resend vérifie un domaine exact : le message sera mis en file puis échouera à l’envoi.',
     emailSaveSender: 'Enregistrer l’adresse',
     emailNoSender:
-      'Aucune adresse d’expéditeur n’est configurée : rien n’est envoyé. Les messages sont tout de même mis en file et partiront dès qu’une adresse sera définie.',
+      'Aucune adresse d’expéditeur n’est configurée : la livraison est verrouillée. Après l’avoir enregistrée, vérifiez explicitement les messages retenus ou en échec avant de les libérer.',
     emailSender: {
       empty: 'Une adresse d’expéditeur est requise.',
       format: 'Cela ne ressemble pas à une adresse courriel.',
@@ -984,6 +1161,14 @@ export const fr: Dictionary = {
     pendingEmailReview: 'Vérifier et envoyer',
     pendingEmailTabLabel: (count: number) =>
       `Courriel, ${count} notification${count === 1 ? '' : 's'} en attente`,
+    emailAttentionTabLabel: (waiting: number, attention: number) =>
+      `Courriel, ${waiting} en attente d’approbation, ${attention} livraison${attention === 1 ? '' : 's'} demandant une intervention`,
+    emailAttentionShort: 'à corriger',
+    emailAttentionTitle: (count: number) =>
+      count === 1
+        ? '1 livraison de courriel demande une intervention.'
+        : `${count} livraisons de courriel demandent une intervention.`,
+    emailReviewAttention: 'Vérifier les livraisons',
     pendingEmailUnknownTitle: 'État de la file de courriels indisponible',
     pendingEmailUnknownHelp:
       'La décision est enregistrée, mais son courriel n’a pas pu être vérifié. Ouvrez Courriel pour contrôler la file avant d’aviser les conférenciers.',
@@ -992,7 +1177,7 @@ export const fr: Dictionary = {
       queued: 'En file',
       sending: 'Envoi en cours',
       sent: 'Envoyés',
-      dry_run: 'Non envoyés — expéditeur non configuré',
+      dry_run: 'Non livré — configuration incomplète',
       failed: 'Échecs',
     },
     emailRecoverableStatus: 'Envoi interrompu — nouvelle tentative possible',
@@ -1001,6 +1186,8 @@ export const fr: Dictionary = {
     emailKinds: {
       submission_received: 'Proposition reçue',
       committee_role_invited: 'Invitation au comité',
+      co_speaker_invited: 'Invitation à coprésenter',
+      profile_update_requested: 'Demande de mise à jour du profil',
       committee_proposal_submitted: 'Nouvelle proposition pour le comité',
       committee_schedule_shared: 'Aperçu partagé pour le comité',
       withdrawn: 'Retirée',
@@ -1021,45 +1208,139 @@ export const fr: Dictionary = {
     emailDeliveryAutomatic: 'Notification automatique de l’événement',
     emailDeliveryAutomaticHelp:
       'L’action correspondante met ce message en file immédiatement; l’envoi dépend toujours de l’expéditeur configuré.',
-    messageTitle: 'Écrire à une personne',
+    messageTitle: 'Écrire à tous les conférenciers d’une conférence',
     messageHelp:
-      'Pour tout ce que les modèles ne couvrent pas : une question, une correction, un détail sur la journée. Le message part de la même adresse et figure dans le journal ci-dessous, afin que le reste du comité sache qu’il a été envoyé.',
+      'Pour tout ce que les modèles ne couvrent pas : une question, une correction, un détail sur la journée. Vérifiez d’abord les adresses actuelles; une copie est ensuite mise en file pour chaque personne conférencière active et consignée ci-dessous.',
+    messageRecipients: (count: number) =>
+      `Les ${count} conférencier${count === 1 ? '' : 's'} recevront ce message`,
     messageTalk: 'Conférence',
     messagePick: 'Choisir une conférence…',
     messageSubject: 'Objet',
     messageBody: 'Message',
     messageBodyHelp:
       'Une ligne vide commence un nouveau paragraphe. {speakerName}, {title} et {proposalUrl} sont remplis automatiquement.',
-    messageSend: 'Envoyer le message',
-    messageSending: 'Envoi…',
-    messageConfirm: 'Envoyer ceci à {name} ? Le message part immédiatement.',
-    messageSent: 'Envoyé à {name}.',
+    messageSend: 'Vérifier les destinataires',
+    messageSending: 'Mise en file…',
+    messageConfirm: 'Mettre ce message en file pour {name} ?',
+    messageSent: 'Mis en file pour livraison à {name}.',
+    messageQueued: (count: number) =>
+      `${count} copie${count === 1 ? '' : 's'} mise${count === 1 ? '' : 's'} en file pour livraison.`,
+    messageSetupNeeded:
+      'Terminez la configuration de la livraison avant de mettre un message en file.',
+    messageRecipientPreview: 'Adresses de livraison actuelles',
+    messageRecipientPreviewHelp:
+      'Ces adresses proviennent des comptes actifs, et non de l’ancien instantané de la proposition.',
+    messageRecipientChanged:
+      'La liste des destinataires a changé pendant votre vérification. Vérifiez les adresses actuelles et réessayez.',
     messageNoReplyTo:
       'Aucune adresse de réponse n’est définie : une réponse n’arriverait à personne. Définissez-en une ci-dessus avant d’écrire.',
     messageNoTalks: 'Rien à écrire pour l’instant — aucune proposition n’a été soumise.',
     emailRefresh: 'Actualiser',
     emailRelease: (count: number) =>
-      `Envoyer ${count} notification${count === 1 ? '' : 's'}`,
+      `Vérifier ${count} notification${count === 1 ? '' : 's'}`,
     emailNothing: 'Rien à envoyer',
     emailStaleHeld:
       'Notifications remplacées conservées : {count}. Elles restent dans l’historique et ne peuvent être envoyées que si elles redeviennent actuelles.',
     emailStaleStatus: 'Conservé — remplacé',
-    emailConfirm: 'Envoyer {count} notifications maintenant ? C’est irréversible.',
-    emailRetry: 'Renvoyer {count} non envoyés',
+    emailConfirm: 'Mettre {count} notifications en file maintenant ? C’est irréversible.',
+    emailRetry: 'Vérifier {count} nouvelles tentatives',
+    emailBatchRemaining:
+      'Il reste {count} messages. Ils apparaîtront pour une vérification distincte après la mise en file de ce lot.',
     emailSent: (count: number) =>
       `${count} courriel${count === 1 ? '' : 's'} mis en file.`,
-    emailLog: 'Ce qui a été envoyé',
+    emailLog: 'Historique de livraison',
+    emailLogHelp:
+      'Les tentatives suivies dans cet espace apparaissent ici, y compris les messages en attente, en cours, en échec ou non livrés. La livraison des invitations privées à coprésenter reste dans la liste des conférenciers.',
     emailLogEmpty: 'Rien n’a encore été mis en file.',
     emailLogFilter: 'Afficher',
     emailLogAll: 'Tout',
     emailStatusColumn: 'Résultat',
-    emailSentAt: 'Envoyé',
+    emailSentAt: 'Dernière tentative',
     emailActions: 'Actions',
-    emailResend: 'Renvoyer',
+    emailResend: 'Envoyer une autre copie',
+    emailRetryOne: 'Réessayer la livraison',
     emailResendConfirm:
       'Renvoyer ce message à {to} ? La personne en recevra une seconde copie.',
     emailResent: 'Remis en file pour {to}.',
     emailLogTruncated: '{count} messages plus anciens ne sont pas affichés.',
+
+    emailOperations: 'Vue d’ensemble des livraisons',
+    emailOperationsHelp:
+      'Suivez chaque message, de la vérification par l’organisation jusqu’à sa livraison confirmée.',
+    emailAwaiting: 'En attente d’approbation',
+    emailAwaitingHelp:
+      'Décisions et changements d’horaire à vérifier par une personne organisatrice.',
+    emailNeedsAttention: 'Attention requise',
+    emailNeedsAttentionHelp:
+      'Messages actuels en échec, non livrés ou dont la tentative est interrompue.',
+    emailInProgress: 'En cours',
+    emailInProgressHelp: 'Messages en file ou en cours de remise au fournisseur.',
+    emailDelivered: 'Livrés',
+    emailDeliveredHelp: 'Messages acceptés par le fournisseur de livraison.',
+    emailNoAttention: 'Aucune livraison actuelle ne demande d’attention.',
+    emailNoProgress: 'Aucun message n’est en cours.',
+    emailDeliveryStatus: 'État de la livraison',
+    emailDeliveryReady: 'Prêt à livrer',
+    emailDeliveryReadyHelp: 'La clé API, le domaine vérifié et l’expéditeur sont prêts.',
+    emailDeliveryBlocked: 'Configuration requise',
+    emailDeliveryBlockedHelp:
+      'Les messages peuvent encore être créés et retenus, mais leur libération, les nouvelles tentatives, les tests et les messages ponctuels restent verrouillés jusqu’à ce que tout soit prêt.',
+    emailDeliveryChecking: 'Vérification de la configuration…',
+    emailDeliveryProblems: {
+      missing_key: 'Ajouter une clé API Resend',
+      invalid_key: 'Remplacer la clé API refusée par Resend',
+      missing_domain: 'Ajouter un domaine d’envoi',
+      domain_unverified: 'Vérifier le domaine d’envoi',
+      invalid_sender: 'Enregistrer une adresse d’expéditeur valide',
+      sender_domain_mismatch: 'Utiliser le domaine vérifié dans l’adresse d’expéditeur',
+      setup_unavailable: 'Vérifier la connexion au fournisseur de livraison',
+    } as Record<string, string>,
+    emailCompleteSetup: 'Terminer la configuration',
+    emailActionSetupReason: 'Indisponible tant que la configuration n’est pas terminée.',
+    emailHeldTableLabel: 'Notifications en attente d’approbation',
+    emailAttentionTableLabel: 'Messages dont la livraison demande une intervention',
+    emailHistoryTableLabel: 'Historique des livraisons de courriels',
+    emailReview: {
+      eyebrow: 'Vérification finale',
+      releaseTitle: 'Libérer les notifications aux conférenciers',
+      releaseHelp:
+        'Vérifiez chaque adresse et chaque type de message. La confirmation met exactement cet ensemble en file; il ne peut plus être rappelé dès que la livraison commence.',
+      retryTitle: 'Réessayer les livraisons non résolues',
+      retryHelp:
+        'Seules les lignes actuelles non résolues ci-dessous seront réessayées. Confirmez les adresses avant de créer une autre tentative.',
+      resendTitle: 'Vérifier une autre copie',
+      resendHelp:
+        'Ce message a déjà fait l’objet d’une tentative. Vérifiez l’adresse et l’état avant de le remettre intentionnellement en file.',
+      composeTitle: 'Vérifier le message aux conférenciers',
+      composeHelp:
+        'Vérifiez les adresses de livraison actuelles et votre texte. La confirmation met une copie privée en file pour chaque personne indiquée.',
+      messages: 'Messages',
+      recipients: 'Destinataires',
+      types: 'Types de message',
+      typeBreakdown: 'Messages regroupés par type',
+      listLabel: 'Messages et destinataires exacts en cours de vérification',
+      close: 'Fermer la vérification',
+      cancel: 'Ne rien changer',
+      confirmRelease: (count: number) =>
+        `Mettre ${count} notification${count === 1 ? '' : 's'} en file`,
+      confirmRetry: (count: number) =>
+        `Réessayer ${count} livraison${count === 1 ? '' : 's'}`,
+      confirmResend: 'Mettre une autre copie en file',
+      confirmCompose: (count: number) =>
+        `Mettre ${count} copie${count === 1 ? '' : 's'} en file`,
+    },
+    emailPreviewBilingual: 'Afficher le repli bilingue',
+    emailPreviewBilingualHelp:
+      'Lorsqu’un membre du comité ou une personne invitée n’a pas de langue enregistrée, le vrai message contient le français et l’anglais.',
+    emailPreviewSelectedTest: 'Le test utilise uniquement la langue sélectionnée.',
+    emailPreviewSample: {
+      speakerName: 'Ada Lovelace',
+      title: 'Notes sur la machine analytique',
+      scheduleDate: 'samedi 14 novembre',
+      scheduleTime: '10 h à 10 h 40',
+      scheduleRoom: 'Salle A',
+    },
+    emailApplicablePlaceholders: 'Disponibles pour ce message :',
 
     proposals: 'Décisions sur les propositions',
     proposalsHelp:
@@ -1116,8 +1397,14 @@ export const fr: Dictionary = {
         : `${n} propositions n’ont pas encore de note.`,
     form: 'Questions de confirmation',
     formHelp:
-      'Posées dès qu’une personne accepte. Rien n’est obligatoire — laissez vide et confirmer reste un simple clic.',
-    formEmpty: 'Aucune question. Les conférenciers confirment, et c’est tout.',
+      'Chaque personne retenue répond séparément à ces questions. Utilisez-les pour les renseignements individuels, comme la taille du chandail ou les besoins alimentaires; rendez chaque réponse obligatoire lorsque l’événement l’exige. Un conférencier ajouté plus tard doit remplir sa propre confirmation avant que la conférence soit de nouveau confirmée.',
+    speakerPhotoTitle: 'Photo du conférencier pour le programme',
+    speakerPhotoHelp:
+      'Chaque personne retenue peut vérifier ici la photo de son profil réutilisable. Elle reste facultative, sauf si vous la rendez obligatoire ci-dessous. La confirmation fige la version approuvée pour cet événement, et le programme publié conserve cette version jusqu’à la publication d’une nouvelle version.',
+    speakerPhotoRequired:
+      'Exiger une photo de profil pour chaque conférencier avant sa confirmation',
+    formEmpty:
+      'Aucune question personnalisée. Les conférenciers vérifient tout de même leur photo pour le programme, puis confirment.',
     formUntitled: 'Nouvelle question',
     formLabelEn: 'Question (anglais)',
     formLabelFr: 'Question (français)',
@@ -1337,6 +1624,152 @@ export const fr: Dictionary = {
     conflictDeclared: 'conflit déclaré',
   },
 
+  coSpeakers: {
+    title: 'Conférenciers de cette proposition',
+    help:
+      'Invitez jusqu’à trois co-conférenciers avant la soumission. Chaque personne complète sa propre préparation et, si la proposition est retenue, confirme séparément. La conférence est confirmée seulement lorsque tous les conférenciers actifs ont confirmé.',
+    adminHelp:
+      'Le conférencier principal invite les co-conférenciers avant la soumission. Une fois la proposition retenue, l’organisation peut envoyer ici une invitation vérifiée. Une invitation tardive ne change pas la conférence avant son acceptation; celle-ci attend ensuite la confirmation de tous les conférenciers actifs.',
+    readOnlyHelp:
+      'Vous êtes co-conférencier de cette proposition. Le conférencier principal gère le contenu; votre profil et votre confirmation demeurent les vôtres.',
+    saveDetails: 'Enregistrer mes renseignements',
+    loading: 'Chargement des conférenciers…',
+    loadFailed: 'Impossible de charger la liste des conférenciers.',
+    retry: 'Réessayer',
+    refresh: 'Actualiser les conférenciers',
+    refreshing: 'Actualisation…',
+    refreshed: 'Liste des conférenciers actualisée.',
+    empty: 'Aucun autre conférencier pour le moment.',
+    inviteLabel: 'Courriel du co-conférencier',
+    invitePlaceholder: 'conferencier@exemple.com',
+    invite: 'Envoyer l’invitation',
+    inviting: 'Envoi…',
+    invited: (email: string) => `Invitation envoyée à ${email}.`,
+    deliveryState: {
+      queued: 'Courriel en file d’attente',
+      sending: 'Envoi du courriel…',
+      sent: 'Courriel envoyé',
+      notDelivered: 'Courriel non livré',
+    },
+    retryDelivery: 'Réessayer l’envoi',
+    retryingDelivery: 'Nouvel essai…',
+    retryDeliveryFor: (email: string) => `Réessayer l’envoi de l’invitation à ${email}`,
+    retryingDeliveryFor: (email: string) => `Nouvel essai d’envoi de l’invitation à ${email}…`,
+    deliveryRetried: (email: string) => `Un nouveau courriel d’invitation a été mis en file d’attente pour ${email}.`,
+    alreadyInvited:
+      'Cette personne est déjà conférencière ou possède une invitation active.',
+    inviteLimit:
+      'Aucun autre co-conférencier ni aucune autre invitation ne peut être ajouté à cette proposition.',
+    inviteHelp:
+      'Utilisez l’adresse avec laquelle cette personne se connectera. Elle doit accepter avant la soumission.',
+    lateInviteHelp:
+      'Utilisez l’adresse avec laquelle cette personne se connectera. La conférence reste inchangée jusqu’à son acceptation; après son arrivée, cette personne doit remplir sa propre confirmation avant que la conférence soit de nouveau confirmée.',
+    lateInvitePendingTitle: 'Cette personne ne fait pas encore partie de la conférence',
+    lateInvitePendingHelp:
+      'La liste et la confirmation actuelles restent inchangées tant que l’invitation est en attente. Son acceptation ajoute le conférencier et remet la conférence en attente des confirmations.',
+    atCapacity: 'Cette proposition compte déjà le maximum de quatre conférenciers.',
+    manage: 'Liste des conférenciers',
+    close: 'Fermer la liste des conférenciers',
+    lead: 'Conférencier principal',
+    joined: 'A rejoint',
+    pending: 'Invitation en attente',
+    declined: 'Refusée',
+    revoked: 'Invitation révoquée',
+    currentAccount: 'Vous',
+    awaitingConfirmation: 'Confirmation en attente',
+    confirmationFor: (name: string) => `Confirmation — ${name}`,
+    profileReadyLabel: 'Profil prêt',
+    profileNeeded: 'Profil incomplet',
+    detailsReady: 'Renseignements de participation prêts',
+    detailsNeeded: 'Renseignements de participation requis',
+    revoke: 'Révoquer l’invitation',
+    revoking: 'Révocation…',
+    revokeInvitation: (email: string) => `Révoquer l’invitation de ${email}`,
+    revokingInvitation: (email: string) => `Révocation de l’invitation de ${email}…`,
+    revokedNotice: (email: string) => `Invitation de ${email} révoquée.`,
+    revokeConfirm: (email: string) =>
+      `Révoquer l’invitation de co-conférencier envoyée à ${email} ? Ce lien ne permettra plus de rejoindre la proposition.`,
+    remove: 'Retirer le co-conférencier',
+    removing: 'Retrait…',
+    removeSpeaker: (name: string) => `Retirer le co-conférencier ${name}`,
+    removingSpeaker: (name: string) => `Retrait du co-conférencier ${name}…`,
+    removedNotice: (name: string) => `${name} a été retiré de cette proposition.`,
+    removeConfirm: (name: string) =>
+      `Retirer ${name} de cette proposition ? Cette personne perdra son accès et disparaîtra de la liste. Si un aperçu du programme est déjà partagé ou public, vérifiez-le et partagez-le de nouveau.`,
+    leave: 'Quitter la proposition',
+    leaving: 'Départ…',
+    leaveProposal: 'Quitter cette proposition',
+    leavingProposal: 'Départ de cette proposition…',
+    leaveConfirm:
+      'Quitter cette proposition ? Vous perdrez votre accès et ne figurerez plus parmi les conférenciers.',
+    leftNotice: 'Vous avez quitté cette proposition.',
+    pendingBlockTitle: 'Complétez la préparation de chaque conférencier avant de soumettre',
+    pendingBlockHelp:
+      'Attendez l’acceptation des invitations et demandez à chaque personne de compléter son profil et ses renseignements de participation. Vous pouvez révoquer une invitation en attente pour soumettre sans cette personne.',
+    yourSetupTitle: 'Le conférencier principal attend la préparation des participants',
+    yourSetupHelp:
+      'Complétez votre profil et vos renseignements de participation ci-dessous. La proposition ne peut pas être soumise avant que chaque personne soit prête.',
+    waitingOnTeamTitle: 'Votre préparation est terminée',
+    waitingOnTeamHelp:
+      'Le conférencier principal attend qu’une autre personne invitée ou participante termine sa préparation.',
+    startDraftFirst: 'Enregistrez le brouillon avant d’inviter un co-conférencier.',
+    invitationEyebrow: 'Invitation à titre de co-conférencier',
+    invitationTitle: 'Rejoindre cette proposition',
+    invitationFrom: (name: string) =>
+      `${name} vous invite à présenter cette conférence ensemble.`,
+    lateInvitationFrom: (name: string) =>
+      `L’organisation vous invite à rejoindre la conférence retenue de ${name} à titre de co-conférencier.`,
+    eventLabel: 'Événement',
+    proposalLabel: 'Proposition',
+    accountLabel: 'Compte invité',
+    talkDetailsTitle: 'Vérifiez la conférence avant de vous joindre',
+    conflictTitle: 'Votre accès au comité change si vous acceptez',
+    conflictHelp:
+      'En acceptant, vous devenez conférencier de cette proposition. Vous ne pourrez pas l’évaluer ni lire les évaluations du comité, même si vous faites aussi partie du comité.',
+    profileTitle: 'Complétez votre profil de conférencier',
+    profileHelp:
+      'Votre nom et votre biographie demeurent liés à votre compte et paraîtront avec la conférence si elle est publiée.',
+    profileReady: 'Votre profil de conférencier est prêt.',
+    participationTitle: 'Vos renseignements de participation',
+    participationHelp:
+      'Puisque cette conférence est déjà retenue, complétez les attestations de l’événement et vos renseignements de déplacement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
+    join: 'Enregistrer le profil et accepter',
+    joinLate: 'Enregistrer les renseignements et accepter',
+    joining: 'Acceptation…',
+    decline: 'Refuser l’invitation',
+    declineConfirm: 'Refuser cette invitation de co-conférencier ?',
+    wrongAccountTitle: 'Cette invitation appartient à un autre compte',
+    wrongAccountHelp: (email: string) =>
+      `Connectez-vous avec ${email} pour accepter ou refuser cette invitation.`,
+    switchAccount: 'Changer de compte',
+    expiredTitle: 'Cette invitation est expirée',
+    expiredHelp:
+      'Demandez au conférencier principal d’envoyer une nouvelle invitation.',
+    revokedTitle: 'Cette invitation a été révoquée',
+    revokedHelp: 'Le conférencier principal a révoqué cette invitation.',
+    pausedTitle: 'Cette invitation est temporairement indisponible',
+    pausedHelp: 'L’appel à conférences est en pause. Réessayez lorsque celui-ci reprendra.',
+    unavailableTitle: 'Cette invitation est indisponible',
+    unavailableHelp: 'L’événement ne peut plus accepter de réponse à cette invitation.',
+    acceptedTitle: 'Vous avez rejoint cette proposition',
+    acceptedHelp: 'La conférence est maintenant visible avec vos autres propositions.',
+    lateAcceptedHelp:
+      'Vous faites maintenant partie des conférenciers de cette conférence. Ouvrez-la pour fournir les renseignements requis et confirmer votre participation.',
+    declinedTitle: 'Invitation refusée',
+    declinedHelp: 'Vous ne figurez pas parmi les conférenciers de cette proposition.',
+    openProposal: 'Ouvrir la proposition',
+    backToEvent: 'Retour à l’événement',
+    personalEditHelp: {
+      all:
+        'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil, vos attestations de participation et vos détails de voyage.',
+      logistics:
+        'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil et vos détails de voyage.',
+      none:
+        'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
+    } as Record<string, string>,
+    manageFor: (title: string) => `Ouvrir la liste des conférenciers pour ${title}`,
+  },
+
   schedule: {
     title: 'Programme',
     adminTitle: 'Construire le programme',
@@ -1479,6 +1912,20 @@ export const fr: Dictionary = {
     customSpeakerJobTitle: (n: number) => `Rôle ou poste du conférencier ${n}`,
     customSpeakerCompany: (n: number) => `Organisation du conférencier ${n}`,
     customSpeakerBio: (n: number) => `Biographie du conférencier ${n}`,
+    customSpeakerPhoto: 'Photo du conférencier',
+    customSpeakerPhotoHelp:
+      'Facultative. Ce portrait apparaît seulement après le partage et la publication du programme.',
+    customSpeakerPhotoChoose: 'Choisir une photo',
+    customSpeakerPhotoReplace: 'Remplacer la photo',
+    customSpeakerPhotoRemove: 'Retirer',
+    customSpeakerPhotoInput: (n: number) => `Choisir la photo du conférencier ${n} pour le programme`,
+    customSpeakerPhotoUploading: 'Téléversement…',
+    customSpeakerPhotoPending: 'Photo prête. Enregistrez cet élément du programme pour la joindre.',
+    customSpeakerPhotoUploadFailed:
+      'La photo du conférencier n’a pas pu être téléversée. Réessayez.',
+    customSpeakerPhotoLoadFailed: 'La photo enregistrée du conférencier n’a pas pu être chargée.',
+    customSpeakerPhotoRemoveConfirm:
+      'Retirer cette photo de l’élément de programme en cours de préparation?',
     removeCustomSpeaker: (n: number) => `Retirer le conférencier ${n}`,
     removeCustomSpeakerShort: 'Retirer',
     customSpeakerNameMissing: 'Saisissez le nom de ce conférencier.',
@@ -1547,6 +1994,16 @@ export const fr: Dictionary = {
     stale: 'Quelqu’un a modifié l’horaire dans un autre onglet. Rechargez avant de continuer.',
     conflict: 'Ce placement chevauche une salle ou un conférencier déjà programmé.',
     invalidState: 'Seules les conférences acceptées ou confirmées peuvent être planifiées; la publication exige une confirmation.',
+    emailDeliveryInProgress:
+      'Les notifications d’horaire sont en cours d’envoi. Attendez la fin de la livraison avant de partager un autre aperçu.',
+    emailDeliveryRetryRequired:
+      'Le résultat de livraison d’une notification d’horaire est incertain. Relancez-la dans Courriels avant de partager un autre aperçu.',
+    cancellationDeliveryPending:
+      'Envoyez ou relancez l’avis d’annulation précédent avant de remettre cette séance au programme.',
+    cancellationProcessing:
+      'Une annulation d’horaire précédente est toujours en cours de traitement. Attendez un instant, puis partagez de nouveau.',
+    speakerPhotoRequired:
+      'Chaque conférencier à l’horaire doit confirmer une photo pour le programme avant le partage de cet aperçu.',
     badInput: 'Vérifiez les jours, les salles, les heures, la durée et les titres obligatoires.',
     reload: 'Recharger l’horaire',
     types: {

@@ -54,6 +54,11 @@ At our scale (~200 proposals, ~10 reviewers, ~400 emails) every quota has signif
 2. Use Brevo for the decision batch (300/day).
 3. Queue and stagger — acceptable only if every applicant in a given tier is notified in the same window.
 
+The deployed platform uses one provider account and credential. Only a verified
+platform owner or administrator may rotate that shared key. Each Resend domain
+id is exclusively bound to one CFP; event admins manage their own bound domain,
+sender and wording but cannot adopt an existing unbound domain by name.
+
 ### Gotchas to handle before launch
 
 - **Domain authentication (SPF/DKIM) is mandatory.** Without it, decision emails land in spam wholesale. This is the single most common operational failure in CFP tooling.
@@ -94,6 +99,7 @@ Anything not needed to evaluate the proposal is collected *after* acceptance. Th
 | `socials` | array | `[{platform, handle}]` — an array is more flexible than fixed columns |
 | `isGde` | boolean | Triggers conditional guidance in the form |
 | `pastTalks` | string | Optional links to recordings. Reference material, not a filter against new speakers |
+| `profilePhoto` | private server pointer | Optional reusable account photo, editable from the profile page or the proposal's account-profile section; never part of the committee snapshot |
 
 **Acknowledgements — all required checkboxes**
 
@@ -107,10 +113,19 @@ Anything not needed to evaluate the proposal is collected *after* acceptance. Th
 
 | Field | Why it waits |
 |---|---|
-| `headshot` | Image upload is the single biggest driver of form abandonment, and it also keeps Cloud Storage usage proportional to accepted speakers rather than all applicants |
+| `programme photo approval` | A reusable account photo may already exist, but the event may require one here and freezes the exact speaker-approved generation only after acceptance |
 | `tshirtSize` | No reason to hold shirt sizes for 200 rejected applicants |
 | `dietaryNeeds` | Same |
 | `slidesUrl` | Due shortly before the event |
+
+An individually confirmed speaker may later receive a session-scoped profile
+update request. The organiser chooses public profile details, programme photo,
+or both. The platform emails the exact session link, badges that talk for the
+speaker, and keeps a waiting/ready organiser queue; a copied link remains a
+fallback. The speaker owns the update and explicitly adopts each requested item
+into that session. A profile comparison is versioned, so an organiser cannot
+apply a different account profile than the one they reviewed. Ready requests
+remain visible until the session is included in a new shared schedule release.
 
 ### Conditional fields
 
@@ -247,16 +262,22 @@ Size it from the share of `pending` responses and non-Canadian applicants. Holdi
 speakers/{uid}
   name, bio_en, bio_fr, company, jobTitle, basedIn,
   socials[], isGde, email
-  photoUrl, tshirtSize, dietaryNeeds     // post-acceptance only
+  profilePhoto?                           // server-owned reusable private original
   createdAt, updatedAt
 
 proposals/{proposalId}
-  speakerIds[]                            // array — supports co-presenters
+  primarySpeakerId                       // lead; owns talk content and withdrawal
+  speakerIds[]                            // active, explicitly consenting presenters
+  formerSpeakerIds[]?                     // permanent review-conflict history
+  speakerSnapshot[]?                      // submitted event copy, no email; explicit refresh only
+  formerSpeakerSnapshot[]?                // audit copy after post-submit removal
+  lateSpeakerPendingIds[]?                 // accepted late additions awaiting response
+  lateSpeakerScheduleBaselineIds[]?        // roster frozen in the prior release
+  lateSpeakerSchedulePreserved?            // prior release remains valid until reshare
   title, abstract, pitch
   category, format, level
   deliveryLanguage, languagePreference          // slideLanguage removed, see §4
-  acks { noTravelSupport, coc, recording }
-  attendance { status, fundingSource, decisionBy, needsVisa }
+  acks, attendance                        // legacy single-speaker fallback only
   status                                  // draft | submitted | under_review |
                                           // accepted | confirmed | declined |
                                           // waitlisted | rejected | withdrawn
@@ -265,6 +286,29 @@ proposals/{proposalId}
   aggregate {                             // written by Cloud Function only
     avgScore, normalizedScore, reviewCount, stdDev
   }
+
+proposals/{proposalId}/profileUpdateRequests/{speakerUid}
+  requestId, generation                   // exact version; terminal requests can be superseded
+  scopes[], resolvedScopes[]              // profile | photo
+  status                                  // pending | resolved | cancelled
+  requestedBy, requestedAt, updatedAt     // callable-only participant workflow
+
+proposals/{proposalId}/speakerInvitations/{invitationId}
+  email, status                           // pending | accepted | declined | revoked
+  phase                                   // draft | postAcceptance
+  expiresAt, createdBy, createdAt, respondedBy?, respondedAt?
+
+proposals/{proposalId}/speakerParticipants/{uid}
+  role                                    // primary | coSpeaker
+  status                                  // active | inactive
+  acks, attendance                        // presenter-private; admins after submission
+  invitationId?, joinedPhase?, joinedAt, removedAt?
+
+proposals/{proposalId}/speakerConfirmations/{uid}
+  response                                // confirmed | declined
+  answers, headshotUploads                // presenter-private; admins after submission
+  speakerPhoto?                           // exact reusable-photo generation frozen for event
+  respondedAt, confirmedAt?
 
 proposals/{proposalId}/reviews/{reviewerUid}
   score                                   // 1 Pass · 2 Maybe · 3 Yes · 4 Strong yes
@@ -288,7 +332,11 @@ scheduleDraft/{entryId}
   proposalId, assignedLanguage?             // proposal item; assignment only for `either`
   customType, title, description?            // custom item
   language?                                 // optional custom-item attendee language
-  speakers[]? { name, bio?, company?, jobTitle? } // optional public custom speakers
+  speakers[]? { name, bio?, company?, jobTitle?, photoAssetRef? }
+                                             // opaque working ref for custom speakers
+
+scheduleSpeakerPhotoAssets/{photoAssetRef}   // callable-only immutable metadata;
+                                             // exact Storage path/generation stay private
 
 scheduleReleases/{releaseId}
   version, timeZone, days[], rooms[], publishedAt?
@@ -302,7 +350,9 @@ scheduleReleases/{releaseId}
       level, levelLabel
       speakers[] { name, bio, company?, jobTitle? }
     }
-    customType, title, description?, language?, speakers[]? // custom item
+    customType, title, description?, language? // custom item
+    speakers[]? { name, bio?, company?, jobTitle?, photoRef? }
+                                             // release-only opaque public photo member
   internal/source                           // admin-only release metadata
     sharedAt, sharedBy, sourceRevision
     sourceFingerprint                       // frozen config + entry projection
@@ -322,6 +372,11 @@ cfps/{cfpId}
 ### Security rules — non-negotiable
 
 - Applicants read/write **only their own** proposal, and only before the deadline
+- Co-speakers join only through a verified-email callable while the proposal is a
+  draft. The lead owns talk edits; each active presenter owns only their personal
+  participation data. Pending invitees receive no proposal access.
+- A former presenter remains in the proposal's conflict history and may never
+  review it, even after removal from the active roster.
 - **Applicants must never be able to read the `reviews` subcollection.** Hiding it in the UI is not enough — the Firestore SDK queries directly from the browser
 - `status` and `aggregate` are function-writable only; block all client writes
 - Reviewers write only their own review document, so nobody can overwrite a colleague's score
@@ -380,6 +435,8 @@ committee meeting     ← sorted by disagreement; track & language balance appli
 accepted / waitlisted / rejected
    ↓  reviewed decision batch is released
 confirmed | declined  ← the speaker answers and completes required follow-up fields
+   ↳ a late admin invitation leaves this unchanged until accepted
+   ↳ acceptance returns the working session to accepted until everyone confirms
    ↓
 private schedule → shared preview → public programme
    ↳ bounded late intake → review → decision → confirmation → republish
@@ -396,8 +453,8 @@ required confirmation answer or headshot cannot be bypassed from the admin
 table.
 
 Submitting a proposal queues one generic, private-data-free notice for each
-active claimed event owner, admin and reviewer except its author. Pending,
-revoked, unverified and platform-only identities receive nothing. The notice is
+active claimed event owner, admin and reviewer except every current or former
+speaker on that proposal. Pending, revoked, unverified and platform-only identities receive nothing. The notice is
 deduplicated per proposal and recipient, revalidated immediately before
 delivery, and links to the authenticated review workspace. Sharing a schedule
 preview applies the same rule per immutable release, excluding the organiser

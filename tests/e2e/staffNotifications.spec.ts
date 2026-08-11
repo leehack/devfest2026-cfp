@@ -132,7 +132,11 @@ test('a pending committee invite dedupes role edits, becomes stale on revoke, an
     expect.objectContaining({ logId: firstLogId, stale: true }),
   );
   expect(
-    await callAs(admin.idToken, 'emailQueue', { action: 'resend', logId: firstLogId }),
+    await callAs(admin.idToken, 'emailQueue', {
+      action: 'resend',
+      logId: firstLogId,
+      reviewedTo: INVITEE_EMAIL,
+    }),
   ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 
   const attemptsBeforeRetry = firstInvite?.attempts;

@@ -51,6 +51,21 @@ export const unpublishSchedule = httpsCallable<
   { ok: boolean; releaseId: string | null; version: number | null }
 >(functions, 'unpublishSchedule');
 
+export const publicSchedulePhoto = httpsCallable<
+  WithCfp<{ releaseId: string; entryId: string; speakerIndex: number }>,
+  { ok: true; contentType: 'image/webp'; base64: string }
+>(functions, 'publicSchedulePhoto');
+
+export const uploadCustomScheduleSpeakerPhoto = httpsCallable<
+  WithCfp<{ contentType: string; base64: string }>,
+  { ok: true; assetRef: string }
+>(functions, 'uploadCustomScheduleSpeakerPhoto');
+
+export const customScheduleSpeakerPhotoImage = httpsCallable<
+  WithCfp<{ assetRef: string }>,
+  { ok: true; contentType: string; base64: string }
+>(functions, 'customScheduleSpeakerPhotoImage');
+
 export interface ScheduleDraft {
   config: ScheduleConfig | null;
   entries: ScheduleEntry[];

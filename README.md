@@ -27,7 +27,8 @@ check: there is no second index to keep honest, and no window in which two peopl
 both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
 account, not to any one talk), `platformMembers/{uid}` and
 `platformRoleGrants/{email}` (global creator access), `signInLinks` (a
-platform-wide throttle) and `config/platform` sit outside.
+platform-wide throttle), `speakerInvitationLimits` (hashed invitation-rate
+limits) and `config/platform` sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
 `/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
@@ -52,11 +53,15 @@ Deletion first reserves the archived call, then clears Storage before Firestore;
 if Storage is unavailable the owner can retry without leaving private files
 behind or letting another tab unarchive the call mid-delete.
 
-One speaker, up to three talks. The picker on the form switches between them;
-the speaker profile and the travel answers are shared, so a second submission
-does not mean retyping a bio. The cap is enforced in `submitProposal`, because
-rules cannot count documents — drafts above it are allowed and simply never
-reach a reviewer.
+A speaker may lead up to three talks and invite up to three verified
+co-speakers onto each draft. After a session is accepted or confirmed, an event
+admin may send the same verified invitation for a late co-speaker. The pending
+invitation changes nothing; acceptance reopens the working session until the new
+speaker completes their own participation details and confirmation. The picker on the form switches between talks; the
+speaker profile and travel answers carry over, so a second submission does not
+mean retyping a bio. The talk cap is enforced in `submitProposal`, because rules
+cannot count documents — drafts above it are allowed and simply never reach a
+reviewer.
 
 ## Running it locally
 
@@ -253,21 +258,48 @@ change the content already being judged. Admins choose committee outcomes;
 `confirmed` and `declined` remain speaker responses, so the required confirmation
 form and photo cannot be bypassed from the proposal table.
 
-**A draft is private to its author.** Reviewers see a proposal only once it has
-been submitted — someone may have typed something into a pitch and thought better
-of sending it, and the committee has no claim on that. Committee-side queries
-carry `where('status', '!=', 'draft')`; without it the rules deny the listing
-outright rather than quietly filtering.
+**A draft is private to its active speaker roster.** Before accepting, an exact
+invited account sees only the talk summary needed to make an informed choice.
+Reviewers and event admins see a proposal only once it has been submitted —
+someone may have typed something into a pitch and thought better of sending it,
+and the committee has no claim on that. Committee-side queries carry
+`where('status', '!=', 'draft')`; without it the rules deny the listing outright
+rather than quietly filtering.
 
-**`speakerIds` is fixed at creation.** The field is an array because §6 wants
-co-presenters, but naming someone is a claim about *them* — it grants them write
-access and, since nobody may review their own talk, silently disqualifies them
-from reviewing it. Both need consent, so the write surface stays shut until there
-is an invitation flow.
+**A roster changes only through verified invitations.** A proposal starts with
+one lead speaker. While it is still a draft, the lead may invite up to three
+co-speakers by verified email; the invitation grants nothing until that exact
+account reviews the talk, accepts, and completes its own profile and participation
+details. Pending invitations block submission. The lead owns talk content and
+withdrawal, while each active speaker owns their personal logistics,
+confirmation answers, and photo. Every active speaker must confirm before the
+proposal becomes `confirmed`.
+
+Once accepted, only an event admin may add a late co-speaker. The current roster,
+confirmation state, and published programme remain unchanged while the invite is
+pending. Acceptance adds the person, moves a confirmed working session back to
+`accepted`, and marks its schedule stale. The previous immutable public release
+stays visible until every active speaker confirms and an organiser shares and
+publishes a new release.
+
+Accepting also creates a permanent conflict for that proposal. Removing someone
+from the active roster does not make them eligible to review material they have
+already seen; their inactive participant record and `formerSpeakerIds` preserve
+that history. Invite delivery is throttled through hashed counters, and its
+private draft title/address never appears in the admin email queue.
 
 **The speaker profile belongs to the account, not to a talk.** One
 `speakers/{uid}` shared by every proposal, editable throughout — including while
 a talk is frozen, because a changed employer is not a changed talk.
+
+The reusable speaker photo belongs there too. A speaker may add or replace it
+from `/me` or from the account-profile section while preparing a proposal; it
+remains optional and is not copied into the proposal reviewers see. Its private
+original is replaced through a server callable, not a browser Storage write. An
+event may make the photo mandatory at confirmation; confirming freezes that
+exact generation into the speaker's event response. A published programme
+serves a square derivative through an opaque release member, so replacing or
+removing the global profile photo never rewrites an already-published schedule.
 
 **But the committee reads a copy, not the profile.** `submitProposal` freezes a
 `speakerSnapshot` onto the proposal. Two reasons, one answer: a profile is global
@@ -275,7 +307,22 @@ while a role is per call, so letting reviewers read profiles would hand every
 committee on the platform the whole speaker directory; and a bio rewritten in
 2028 would otherwise change what the 2026 committee is recorded as having judged.
 The snapshot deliberately omits the email address — a reviewer judging a talk has
-no need of it.
+no need of it. Later profile edits do not silently rewrite that event copy. The
+speaker, or an event admin acting on an active speaker, may explicitly refresh
+one proposal from the current profile. The refresh first shows the changed public
+fields side by side and refuses to apply a profile that changed after that
+comparison. An admin never sees or adopts a newer private location or the photo
+itself; photo approval remains the speaker's action.
+
+After a speaker has confirmed, an admin may request updated profile details, the
+programme photo, or both. A targeted email opens that exact session, the speaker
+picker shows a task badge, and the admin proposal table keeps a waiting/ready
+queue; copying the session link remains a fallback. The speaker edits the account
+profile, explicitly applies the requested details or photo to that session, and
+marks the request complete. Confirmation answers and travel details stay
+untouched. The ready state remains visible until an organiser includes the
+session in a new shared release; an existing shared or published programme never
+changes in place.
 
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept
@@ -301,8 +348,8 @@ site is not the same thing.
 
 ```bash
 npm run verify                                  # lint, types, build, bundle gates, 3 suites
-npm run deploy:app                              # the app, from local source
 npm run deploy:backend                          # callables and both rule sets
+npm run deploy:app                              # the app, from local source; backend must land first
 npm run smoke:production                        # edge headers, public routes and Auth handler
 ```
 
@@ -339,7 +386,10 @@ to autoscale past that — anything beyond is a loop or an attack, and should
 queue rather than bill.
 
 One Resend account serves every call on the platform, so each one registers its
-own sending domain and `setEmailSettings` refuses a `from` that is not on it.
+own sending domain. A callable-only platform binding assigns each Resend domain
+id to exactly one CFP; typing another event's public domain name cannot adopt it.
+`setEmailSettings` and delivery both refuse a `from` whose exact binding is not
+owned by that CFP. Only platform owners and administrators rotate the shared key.
 `config/platform` holds the site's own origin and is writable by nobody through
 the app — it is where every mailed link points, sign-in links included, and those
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
@@ -361,7 +411,11 @@ and edits the start, duration, room and resolved language. Planner cards keep th
 title, speakers, category, format, level, language and confirmation state visible.
 Custom programme items cover breaks, meals, opening/closing remarks, keynotes and
 social events, with optional language, description and attendee-facing speaker
-names, roles, organisations and bios.
+names, roles, organisations, bios and photos. A custom photo upload returns only
+an opaque working-asset handle to the editor. Sharing substitutes a different
+release-scoped reference, and the anonymous programme receives only a derived
+square image for the current published release—never a Storage path or object
+generation.
 
 Draft writes are admin-only callables with an optimistic `revision`; a stale tab
 must reload instead of overwriting another organiser. The server rejects room,
@@ -421,7 +475,7 @@ changes are reviewed before delivery. Receipts do not wait.
 Committee operations do not depend on somebody refreshing a dashboard at the
 right moment. Submitting a proposal queues one immediate, generic review notice
 per active event owner/admin/reviewer and recipient, excluding the proposal's
-author. Sharing a preview does the same for the committee, excluding the acting
+current and former speakers. Sharing a preview does the same for the committee, excluding the acting
 organiser. An explicit locale on the event member or pending grant is honoured;
 without one, the single committee notice contains both English and French.
 These messages deliberately omit proposal, speaker and schedule
@@ -432,22 +486,26 @@ With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
 without sending anything, and the log never claims a send that did not happen.
 
-**Set it all up from `/admin`**, under Email. Four steps, each of which says
+**Set event mail up from `/admin`**, under Email. Four steps, each of which says
 whether it is done, because the failure this replaces was silent — the pipeline
 queued perfectly and sent nothing, and no screen said why.
 
-1. **API key.** Paste a Resend key. Give it **Full access** when you create it:
+1. **Shared API key.** A platform owner or administrator pastes the platform's
+   Resend key. Event administrators can see whether it is ready but cannot
+   replace it. Give it **Full access** when you create it:
    the next step manages domains, and Resend's sending-only keys cannot. The key
    is checked against Resend before being saved, so a typo fails here rather than
    on the night the decisions go out. It goes to **Secret Manager, never to
    Firestore** — Firestore has no version history, no access audit, and a copy of
    every document lands in every export. The page shows the last four characters
    and nothing more.
-2. **Sending domain.** Add it, and the page lists the exact DNS records Resend
+2. **Sending domain.** Add a new domain, and the page lists the exact DNS records Resend
    wants and re-checks them on a button. Those records are generated per domain
    and exist only in Resend's dashboard, which is the one part of the setup
    nobody can be told in advance. This is the long pole — DNS propagation plus
-   Resend's own check.
+   Resend's own check. An exact legacy domain pointer migrates only when no
+   other CFP references it; an existing unbound Resend domain is refused rather
+   than implicitly claimed by its public name.
 3. **Sender.** The from address and reply-to, stored in `config/email`.
    `CFP_EMAIL_FROM` and `CFP_REPLY_TO` in `functions/.env*` remain a fallback for
    a fresh project, empty on purpose so nothing sends until someone says so.
@@ -511,7 +569,9 @@ readable. The rules suite exercises every boundary and is mutation-checked.
   admin-only because it is a list of addresses; `emailLog` is closed to every
   client including admins, who reach its recipient data through the
   `emailQueue` callable. A client that could write there could mail anyone from
-  our verified domain, so the deny covers writes as well as reads.
+  our verified domain, so the deny covers writes as well as reads. Draft
+  co-speaker invitation rows are deliberately excluded even from that callable;
+  only the lead and invited address may see the draft roster flow.
 - **`config` is closed by default.** `submissionForm` is public because it
   defines what the call asks, and `confirmForm` is readable only after sign-in.
   The window lives on the public CFP document. `config/email` remains private

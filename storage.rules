@@ -1,10 +1,8 @@
 rules_version = '2';
 
-// Headshots, and nothing else.
-//
-// Collected after acceptance (§3), so the bucket holds objects for the handful
-// of speakers on each programme rather than for every applicant — which is both
-// the storage bill and the thing that would leak if this file were wrong.
+// Speaker photos, and nothing else. Reusable profile originals stay private;
+// confirmation freezes exact event copies, and public schedule derivatives are
+// still served only through a release-membership-checking callable.
 service firebase.storage {
   match /b/{bucket}/o {
 

@@ -14,7 +14,12 @@ import type {
   Score,
   SocialPlatform,
 } from './enums';
-import type { Answers, HeadshotUploads } from './confirmForm';
+import type {
+  Answers,
+  ConfirmedSpeakerPhoto,
+  HeadshotUploads,
+  SpeakerProfilePhoto,
+} from './confirmForm';
 import type { CfpProfile, CfpRole, GrantableRole, Visibility } from './cfp';
 
 export interface Social {
@@ -43,6 +48,8 @@ export interface Speaker {
 
   // Post-acceptance only — absent at submission time.
   photoUrl?: string;
+  /** Server-owned reusable original; browser profile writes may not forge it. */
+  profilePhoto?: SpeakerProfilePhoto;
   tshirtSize?: string;
   dietaryNeeds?: string;
 
@@ -108,8 +115,8 @@ export interface CfpMember {
 }
 
 /**
- * The speaker as the committee read them, frozen onto the proposal at
- * submission.
+ * The speaker as the committee reads them, copied onto the proposal at
+ * submission and changed later only by the explicit profile-refresh callable.
  *
  * Two problems, one answer. A profile belongs to the account rather than to any
  * one talk, so a bio edited in 2028 would otherwise rewrite what the 2026
@@ -128,6 +135,63 @@ export interface SpeakerSnapshot {
   isGde: boolean;
   pastTalks?: string;
   sessionizeUrl?: string;
+}
+
+/** The two independently adopted parts of one speaker's programme profile. */
+export type SpeakerProfileUpdateScope = 'profile' | 'photo';
+
+/**
+ * Public profile fields safe to compare across the account and event copies.
+ * `basedIn` is returned only to the speaker themself. An organiser preview may
+ * compare a private global profile with an event copy, so it must not disclose
+ * a newer location the speaker has not adopted for that event.
+ */
+export interface SpeakerProfilePreviewFields {
+  name: string;
+  bio: string;
+  company?: string;
+  jobTitle?: string;
+  basedIn?: string;
+  socials: Social[];
+  isGde: boolean;
+  pastTalks?: string;
+  sessionizeUrl?: string;
+}
+
+export type SpeakerProfilePreviewField = keyof SpeakerProfilePreviewFields;
+export type SpeakerProfilePreviewValue = string | boolean | Social[] | null;
+
+export interface SpeakerProfilePreviewChange {
+  field: SpeakerProfilePreviewField;
+  before: SpeakerProfilePreviewValue;
+  after: SpeakerProfilePreviewValue;
+}
+
+/** Safe request state returned by the preview callable to the speaker/admin. */
+export interface SpeakerProfileUpdateRequestState {
+  requestId: string;
+  generation: number;
+  status: 'pending' | 'resolved' | 'cancelled';
+  scopes: SpeakerProfileUpdateScope[];
+  resolvedScopes: SpeakerProfileUpdateScope[];
+  requestedAt: unknown;
+  resolvedAt?: unknown;
+  cancelledAt?: unknown;
+  /** A shared schedule release has incorporated this exact resolved generation. */
+  handledAt?: unknown;
+}
+
+/** Safe list-level state for speaker and organiser attention badges. */
+export interface SpeakerProfileUpdateRequestSummary {
+  proposalId: string;
+  speakerUid: string;
+  requestId: string;
+  generation: number;
+  state: 'waiting' | 'ready';
+  scopes: SpeakerProfileUpdateScope[];
+  resolvedScopes: SpeakerProfileUpdateScope[];
+  requestedAt: number | null;
+  resolvedAt: number | null;
 }
 
 /**
@@ -165,8 +229,21 @@ export interface Proposal {
   speakerIds: string[];
 
   /**
-   * The speakers as the committee reads them, frozen at submission. Parallel to
-   * `speakerIds`. Absent on a draft, which nobody but its author ever sees.
+   * The account that owns talk content and lifecycle actions. Older proposals
+   * infer this from `speakerIds[0]` until a callable first touches the roster.
+   */
+  primarySpeakerId?: string;
+
+  /** Former participants remain conflicted from reviewing this proposal. */
+  formerSpeakerIds?: string[];
+
+  /** Frozen audit copy for people removed after the committee saw the roster. */
+  formerSpeakerSnapshot?: SpeakerSnapshot[];
+
+  /**
+   * The speakers as the committee reads them. Parallel to `speakerIds`, absent
+   * until submission, and refreshed only by an explicit speaker/admin action;
+   * draft access stays within the active speaker roster.
    */
   speakerSnapshot?: SpeakerSnapshot[];
 
@@ -194,19 +271,31 @@ export interface Proposal {
   /** Only meaningful when deliveryLanguage is `either`. */
   languagePreference?: string;
 
-  acks: Acks;
+  /** Legacy single-speaker storage; roster proposals keep this per participant. */
+  acks?: Acks;
   /** Answers to this call's own questions, if it asks any. */
   answers?: Answers;
-  attendance: Attendance;
+  /** Legacy single-speaker storage; roster proposals keep this per participant. */
+  attendance?: Attendance;
 
   /** Function-writable only — see firestore.rules. */
   status: ProposalStatus;
   confirmDeadline?: unknown;
   confirmedAt?: unknown;
+  /** Function-only state while accepted late additions finish confirmation. */
+  lateSpeakerPendingIds?: string[];
+  lateSpeakerPendingInvitations?: Array<{ uid: string; invitationId: string }>;
+  /** Original confirmed roster whose existing immutable schedule release remains valid. */
+  lateSpeakerScheduleBaselineIds?: string[];
+  lateSpeakerSchedulePreserved?: boolean;
+  /** Function-only signal to invalidate that release when a baseline speaker leaves. */
+  scheduleCancellationRequired?: boolean;
   /** The organiser's own questions, answered on confirmation. */
   confirmAnswers?: Answers;
   /** Function-written pointers to replaceable post-acceptance image uploads. */
   headshotUploads?: HeadshotUploads;
+  /** Legacy single-speaker storage for the event-frozen reusable profile photo. */
+  speakerPhoto?: ConfirmedSpeakerPhoto;
   /** Set at scheduling when deliveryLanguage is `either`. */
   assignedLanguage?: ResolvedLanguage;
 

@@ -41,6 +41,8 @@ function Step({ done, title, children }: { done: boolean; title: string; childre
 export function EmailSetup({
   cfpId,
   keyHint,
+  keyConfigured,
+  canManageProvider,
   domainId,
   readOnly = false,
   onKeySet,
@@ -49,6 +51,8 @@ export function EmailSetup({
 }: {
   cfpId: string;
   keyHint: string;
+  keyConfigured: boolean;
+  canManageProvider: boolean;
   domainId: string;
   readOnly?: boolean;
   onKeySet: (hint: string) => void;
@@ -67,7 +71,7 @@ export function EmailSetup({
   const activeCfp = useRef(cfpId);
   const refreshGeneration = useRef(0);
   activeCfp.current = cfpId;
-  const dirty = !readOnly && (apiKey !== '' || name !== '');
+  const dirty = !readOnly && ((canManageProvider && apiKey !== '') || name !== '');
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -88,7 +92,7 @@ export function EmailSetup({
     const generation = ++refreshGeneration.current;
     const current = () =>
       activeCfp.current === scope && refreshGeneration.current === generation;
-    if (!keyHint) {
+    if (!keyConfigured) {
       if (current()) setDomains([]);
       return;
     }
@@ -100,7 +104,7 @@ export function EmailSetup({
     } catch (e) {
       if (current()) setError(resendError(e, tRef.current));
     }
-  }, [cfpId, keyHint, tRef]);
+  }, [cfpId, keyConfigured, tRef]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -118,7 +122,7 @@ export function EmailSetup({
     setNote('');
     setError('');
     void refresh();
-  }, [cfpId, keyHint, refresh]);
+  }, [cfpId, keyConfigured, keyHint, refresh]);
 
   async function run(fn: (current: () => boolean) => Promise<string>) {
     if (readOnly) return;
@@ -139,50 +143,60 @@ export function EmailSetup({
 
   return (
     <div className="setup">
-      <Step done={Boolean(keyHint)} title={t.admin.emailStepKey}>
-        <p className="field__help">{t.admin.emailKeyHelp}</p>
-        <Steps items={t.admin.emailKeySteps} />
-        <p>
-          <a className="link" href="https://resend.com/api-keys" target="_blank" rel="noreferrer">
-            {t.admin.emailKeyLink}
-          </a>
-        </p>
+      <Step done={keyConfigured} title={t.admin.emailStepKey}>
+        {canManageProvider ? (
+          <>
+            <p className="field__help">{t.admin.emailKeyHelp}</p>
+            <Steps items={t.admin.emailKeySteps} />
+            <p>
+              <a className="link" href="https://resend.com/api-keys" target="_blank" rel="noreferrer">
+                {t.admin.emailKeyLink}
+              </a>
+            </p>
+          </>
+        ) : (
+          <p className="field__help">{t.admin.emailKeyPlatformManaged}</p>
+        )}
         {keyHint && <p className="muted">{t.admin.emailKeySet.replace('{hint}', keyHint)}</p>}
-        <div className="grid grid--2">
-          <TextField
-            label={t.admin.emailKeyLabel}
-            type="password"
-            required
-            value={apiKey}
-            onChange={setApiKey}
-            disabled={busy || readOnly}
-          />
-        </div>
-        <button
-          type="button"
-          className="btn"
-          disabled={busy || readOnly || !apiKey.trim()}
-          onClick={() =>
-            run(async (current) => {
-              const { data } = await setEmailSecret({ cfpId, apiKey: apiKey.trim() });
-              if (!current()) return '';
-              // Out of the page as soon as it is stored; it is not ours to keep.
-              setApiKey('');
-              onKeySet(data.keyHint);
-              await refresh();
-              return current() ? tRef.current.admin.emailKeySaved : '';
-            })
-          }
-        >
-          {keyHint ? t.admin.emailKeyReplace : t.admin.emailKeySave}
-        </button>
+        {canManageProvider && (
+          <>
+            <div className="grid grid--2">
+              <TextField
+                label={t.admin.emailKeyLabel}
+                type="password"
+                required
+                value={apiKey}
+                onChange={setApiKey}
+                disabled={busy || readOnly}
+              />
+            </div>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || readOnly || !apiKey.trim()}
+              onClick={() =>
+                run(async (current) => {
+                  const { data } = await setEmailSecret({ apiKey: apiKey.trim() });
+                  if (!current()) return '';
+                  // Out of the page as soon as it is stored; it is not ours to keep.
+                  setApiKey('');
+                  onKeySet(data.keyHint);
+                  await refresh();
+                  return current() ? tRef.current.admin.emailKeySaved : '';
+                })
+              }
+            >
+              {keyConfigured ? t.admin.emailKeyReplace : t.admin.emailKeySave}
+            </button>
+          </>
+        )}
       </Step>
 
       <Step done={verified} title={t.admin.emailStepDomain}>
         <p className="field__help">{t.admin.emailDomainHelp}</p>
         <Steps items={t.admin.emailDomainSteps} />
 
-        {!keyHint ? (
+        {!keyConfigured ? (
           <p className="muted">{t.admin.emailKeyFirst}</p>
         ) : !active || changing ? (
           <>
@@ -280,6 +294,8 @@ export function EmailSetup({
                     const { data } = await emailDomain({ cfpId, action: 'verify' });
                     if (!current()) return '';
                     await refresh();
+                    if (!current()) return '';
+                    await onDomainChanged?.();
                     if (!current()) return '';
                     return data.domain?.status === 'verified'
                       ? tRef.current.admin.emailDomainVerified

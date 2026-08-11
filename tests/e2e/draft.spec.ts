@@ -152,6 +152,78 @@ test('switching talks keeps every saved talk field and the latest speaker profil
   await expect(field(page, 'Company')).toHaveValue('Current employer');
 });
 
+test('a session link selects that active talk for a speaker with multiple proposals', async ({
+  page,
+}) => {
+  const speaker = await createAccount(RETURNING);
+  await seedSpeaker(speaker.uid, { name: RETURNING.name, email: RETURNING.email });
+  await Promise.all([
+    seedProposal('linked-talk-first', {
+      speakerUid: speaker.uid,
+      title: 'The other active session',
+      status: 'submitted',
+    }),
+    seedProposal('linked-talk-target', {
+      speakerUid: speaker.uid,
+      title: 'The requested profile update session',
+      status: 'confirmed',
+    }),
+  ]);
+
+  await signInAs(page, RETURNING, `${at()}?proposal=linked-talk-target`);
+
+  await expect(field(page, 'Title')).toHaveValue('The requested profile update session');
+  await expect(
+    page.getByRole('button', {
+      name: 'The requested profile update session Confirmed',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-current', 'true');
+});
+
+test('a session link ignores past, unknown, malformed, and another speaker\'s proposals', async ({
+  page,
+}) => {
+  const [speaker, other] = await Promise.all([
+    createAccount(RETURNING),
+    createAccount({
+      sub: 'other-linked-speaker',
+      email: 'other-linked-speaker@example.org',
+      name: 'Other Linked Speaker',
+    }),
+  ]);
+  await Promise.all([
+    seedSpeaker(speaker.uid, { name: RETURNING.name, email: RETURNING.email }),
+    seedSpeaker(other.uid, {
+      name: 'Other Linked Speaker',
+      email: 'other-linked-speaker@example.org',
+    }),
+    seedProposal('only-owned-active-talk', {
+      speakerUid: speaker.uid,
+      title: 'The only active owned session',
+      status: 'submitted',
+    }),
+    seedProposal('past-owned-talk', {
+      speakerUid: speaker.uid,
+      title: 'A withdrawn owned session',
+      status: 'withdrawn',
+    }),
+    seedProposal('another-speaker-talk', {
+      speakerUid: other.uid,
+      title: 'Another speaker\'s session',
+      status: 'submitted',
+    }),
+  ]);
+
+  await signInAs(page, RETURNING, `${at()}?proposal=another-speaker-talk`);
+  await expect(field(page, 'Title')).toHaveValue('The only active owned session');
+
+  for (const proposalId of ['unknown-talk', 'past-owned-talk', 'bad%2Fproposal']) {
+    await page.goto(`${at()}?proposal=${proposalId}`);
+    await expect(field(page, 'Title')).toHaveValue('The only active owned session');
+  }
+});
+
 test('historical outcomes do not consume the live-talk cap', async ({ page }) => {
   const speaker = await createAccount(RETURNING);
   await seedSpeaker(speaker.uid, { name: RETURNING.name, email: RETURNING.email });

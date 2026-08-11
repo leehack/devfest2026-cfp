@@ -21,10 +21,25 @@ import type { EditScope } from './lifecycle';
 import { cfpState } from '@shared/cfpWindow';
 import type { ProposalStatus } from '@shared/enums';
 import type { SessionizeProfile } from '@shared/sessionize';
-import { EMPTY_FORM, type Answers, type ConfirmForm } from '@shared/confirmForm';
+import {
+  EMPTY_FORM,
+  type Answers,
+  type ConfirmForm,
+  confirmFormFromData,
+  type ConfirmedSpeakerPhoto,
+  type HeadshotUploads,
+  type SpeakerProfilePhoto,
+} from '@shared/confirmForm';
 import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
 import type { CfpProfile, Visibility } from '@shared/cfp';
-import type { Cfp } from '@shared/types';
+import type {
+  Cfp,
+  SpeakerProfilePreviewField,
+  SpeakerProfilePreviewFields,
+  SpeakerProfileUpdateRequestState,
+  SpeakerProfileUpdateScope,
+  SpeakerSnapshot,
+} from '@shared/types';
 
 export interface CfpWindow {
   name: string;
@@ -96,6 +111,18 @@ export interface LoadedProposal {
   status: ProposalStatus;
   proposal: Record<string, any>;
   speaker: Record<string, any> | undefined;
+  ownConfirmation?: {
+    response?: 'confirmed' | 'declined';
+    answers: Answers;
+    headshotUploads?: HeadshotUploads;
+    speakerPhoto?: ConfirmedSpeakerPhoto;
+  };
+  ownParticipation?: {
+    role?: 'primary' | 'coSpeaker';
+    acks?: Record<string, boolean>;
+    attendance?: Record<string, any>;
+    detailsComplete?: boolean;
+  };
 }
 
 /**
@@ -120,14 +147,81 @@ export async function loadMyProposals(
   ]);
 
   const speaker = speakerSnap.exists() ? speakerSnap.data() : undefined;
+  const [confirmationSnaps, participationSnaps] = await Promise.all([
+    Promise.all(
+      snap.docs.map((proposal) =>
+        getDoc(
+          doc(
+            db,
+            'cfps',
+            cfpId,
+            'proposals',
+            proposal.id,
+            'speakerConfirmations',
+            user.uid,
+          ),
+        ),
+      ),
+    ),
+    Promise.all(
+      snap.docs.map((proposal) =>
+        getDoc(
+          doc(
+            db,
+            'cfps',
+            cfpId,
+            'proposals',
+            proposal.id,
+            'speakerParticipants',
+            user.uid,
+          ),
+        ),
+      ),
+    ),
+  ]);
 
   return {
-    talks: snap.docs.map((d) => ({
-      id: d.id,
-      status: (d.data().status ?? 'draft') as ProposalStatus,
-      proposal: d.data(),
-      speaker,
-    })),
+    talks: snap.docs.map((d, index) => {
+      const proposal = d.data();
+      const confirmation = confirmationSnaps[index];
+      const participation = participationSnaps[index];
+      const ids = Array.isArray(proposal.speakerIds) ? proposal.speakerIds : [];
+      const usesPersonalConfirmation = Boolean(proposal.primarySpeakerId) || ids.length > 1;
+      const legacyResponse =
+        proposal.status === 'confirmed' || proposal.status === 'declined'
+          ? proposal.status
+          : undefined;
+      const ownConfirmation = confirmation.exists()
+        ? {
+            response: confirmation.data().response as 'confirmed' | 'declined' | undefined,
+            answers: (confirmation.data().answers ?? {}) as Answers,
+            headshotUploads: confirmation.data().headshotUploads as HeadshotUploads | undefined,
+            speakerPhoto: confirmation.data().speakerPhoto as ConfirmedSpeakerPhoto | undefined,
+          }
+        : usesPersonalConfirmation
+          ? undefined
+          : {
+              response: legacyResponse,
+              answers: (proposal.confirmAnswers ?? {}) as Answers,
+              headshotUploads: proposal.headshotUploads as HeadshotUploads | undefined,
+              speakerPhoto: proposal.speakerPhoto as ConfirmedSpeakerPhoto | undefined,
+            };
+      return {
+        id: d.id,
+        status: (proposal.status ?? 'draft') as ProposalStatus,
+        proposal,
+        speaker,
+        ownConfirmation,
+        ownParticipation: participation.exists()
+          ? {
+              role: participation.data().role,
+              acks: participation.data().acks,
+              attendance: participation.data().attendance,
+              detailsComplete: participation.data().detailsComplete,
+            }
+          : undefined,
+      };
+    }),
     speaker,
   };
 }
@@ -143,6 +237,8 @@ export async function saveDraft(
   proposalId: string | null,
   scope: EditScope = 'all',
   locale: Locale = 'en',
+  usesPersonalLifecycle = false,
+  personalScope: EditScope = scope,
 ): Promise<string> {
   const { proposalDoc, speakerDoc } = toDocuments(form);
   const existing = proposalId !== null;
@@ -169,15 +265,38 @@ export async function saveDraft(
   );
 
   if (proposalId) {
+    const { acks, attendance, ...talkDoc } = proposalDoc;
+    if (usesPersonalLifecycle && personalScope !== 'none') {
+      const personalPatch =
+        personalScope === 'logistics' ? { attendance } : { acks, attendance };
+      await setDoc(
+        doc(
+          db,
+          'cfps',
+          cfpId,
+          'proposals',
+          proposalId,
+          'speakerParticipants',
+          user.uid,
+        ),
+        {
+          ...forWrite(personalPatch),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
     // Under review the rules accept `attendance` and nothing else, so send
     // nothing else — a full write would be rejected in its entirety, taking
     // the speaker's profile edit down with it.
     const patch =
       scope === 'logistics'
-        ? { attendance: proposalDoc.attendance }
-        : forWrite(proposalDoc);
+        ? usesPersonalLifecycle
+          ? {}
+          : { attendance: proposalDoc.attendance }
+        : forWrite(usesPersonalLifecycle ? talkDoc : proposalDoc);
 
-    if (scope !== 'none') {
+    if (scope !== 'none' && Object.keys(patch).length > 0) {
       await setDoc(
         doc(db, 'cfps', cfpId, 'proposals', proposalId),
         { ...patch, updatedAt: serverTimestamp() },
@@ -232,6 +351,102 @@ export async function saveProfile(user: User, form: FormState, locale: Locale): 
   );
 }
 
+export const uploadProfilePhoto = httpsCallable<
+  { contentType: string; base64: string },
+  { ok: true; generation: string }
+>(functions, 'uploadProfilePhoto');
+
+export const profilePhotoImage = httpsCallable<
+  Record<string, never>,
+  { ok: true; generation: string; contentType: string; base64: string }
+>(functions, 'profilePhotoImage');
+
+export const removeProfilePhoto = httpsCallable<
+  Record<string, never>,
+  { ok: true }
+>(functions, 'removeProfilePhoto');
+
+export type ProposalSpeakerProfileField = SpeakerProfilePreviewField;
+export type ProposalSpeakerProfileScope = SpeakerProfileUpdateScope;
+export type ProposalSpeakerProfileValue = SpeakerProfilePreviewFields;
+export type ProposalSpeakerProfileUpdateRequest = SpeakerProfileUpdateRequestState;
+
+export const refreshProposalSpeakerSnapshot = httpsCallable<
+  {
+    cfpId: string;
+    proposalId: string;
+    speakerUid?: string;
+    expectedCurrentFingerprint: string;
+    expectedLatestFingerprint: string;
+  },
+  {
+    ok: true;
+    changed: boolean;
+    speakerUid: string;
+    snapshot: SpeakerSnapshot;
+    currentFingerprint: string;
+    latestFingerprint: string;
+    scheduleNeedsAttention: boolean;
+  }
+>(functions, 'refreshProposalSpeakerSnapshot');
+
+export interface ProposalSpeakerProfilePreview {
+  ok: true;
+  speakerUid: string;
+  currentFingerprint: string;
+  latestFingerprint: string;
+  current: ProposalSpeakerProfileValue;
+  latest: ProposalSpeakerProfileValue;
+  changes: Array<{
+    field: ProposalSpeakerProfileField;
+    before: unknown | null;
+    after: unknown | null;
+  }>;
+  photo: {
+    enabled: boolean;
+    current: 'present' | 'absent';
+    latest: 'present' | 'absent';
+    changed: boolean;
+  };
+  request: ProposalSpeakerProfileUpdateRequest | null;
+}
+
+export const previewProposalSpeakerProfile = httpsCallable<
+  { cfpId: string; proposalId: string; speakerUid?: string },
+  ProposalSpeakerProfilePreview
+>(functions, 'previewProposalSpeakerProfile');
+
+export const requestProposalSpeakerProfileUpdate = httpsCallable<
+  {
+    cfpId: string;
+    proposalId: string;
+    speakerUid: string;
+    scopes: ProposalSpeakerProfileScope[];
+  },
+  {
+    ok: true;
+    created: boolean;
+    request: ProposalSpeakerProfileUpdateRequest;
+  }
+>(functions, 'requestProposalSpeakerProfileUpdate');
+
+export const cancelProposalSpeakerProfileUpdate = httpsCallable<
+  { cfpId: string; proposalId: string; speakerUid: string; requestId: string },
+  { ok: true; changed: boolean; request: ProposalSpeakerProfileUpdateRequest }
+>(functions, 'cancelProposalSpeakerProfileUpdate');
+
+export const completeProposalSpeakerProfileUpdate = httpsCallable<
+  { cfpId: string; proposalId: string; requestId: string },
+  {
+    ok: true;
+    changed: boolean;
+    request: ProposalSpeakerProfileUpdateRequest;
+    remainingScopes: ProposalSpeakerProfileScope[];
+  }
+>(functions, 'completeProposalSpeakerProfileUpdate');
+
+export type { SpeakerProfilePhoto };
+
 interface CallableResult {
   ok: boolean;
   proposalId?: string;
@@ -272,7 +487,10 @@ export const workingHeadshotImage = httpsCallable<
 
 export const respondToDecision = httpsCallable<
   { cfpId: string; proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
-  CallableResult & { status: 'confirmed' | 'declined' }
+  CallableResult & {
+    status: ProposalStatus;
+    response: 'confirmed' | 'declined';
+  }
 >(functions, 'respondToDecision');
 
 /**
@@ -282,8 +500,7 @@ export const respondToDecision = httpsCallable<
  */
 export async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
   const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
-  const fields = snap.exists() ? snap.data().fields : null;
-  return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
+  return snap.exists() ? confirmFormFromData(snap.data()) : EMPTY_FORM;
 }
 
 /**

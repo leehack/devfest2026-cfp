@@ -14,16 +14,19 @@ import { useEffect, useRef, useState } from 'react';
 
 import { SelectField, TextField, TextAreaField, Checkbox } from './fields';
 import { useI18n } from '../i18n/context';
-import { adminError } from '../lib/errors';
+import { emailError } from '../lib/errors';
 import { sendTestEmail, setEmailTemplate } from '../lib/roles';
 import {
   EMAIL_KINDS,
   DECISION_KINDS,
+  CO_SPEAKER_INVITATION_KINDS,
   PLACEHOLDERS,
+  ROLE_INVITATION_EMAIL_KINDS,
   SCHEDULE_EMAIL_KINDS,
   STAFF_EMAIL_KINDS,
   activeTemplate,
   builtInTemplate,
+  renderBilingualEmail,
   renderEmail,
   validateTemplate,
   type EmailKind,
@@ -52,6 +55,7 @@ export function EmailPreview({
   const { t, locale } = useI18n();
   const [kind, setKind] = useState<EmailKind>('accepted');
   const [previewLocale, setPreviewLocale] = useState<EmailLocale>(locale);
+  const [bilingual, setBilingual] = useState(false);
   const [needsVisa, setNeedsVisa] = useState(true);
   const [plain, setPlain] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -63,6 +67,7 @@ export function EmailPreview({
   const [error, setError] = useState('');
   const selection = `${kind}:${previewLocale}`;
   const previousSelection = useRef(selection);
+  const localeTouched = useRef(false);
   const dirty =
     !readOnly && (draft.subject !== baseline.subject || draft.body !== baseline.body);
 
@@ -85,6 +90,12 @@ export function EmailPreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection, templates]);
 
+  // The app locale settles after mount. Follow it until the organiser makes an
+  // explicit preview-language choice, then preserve that choice.
+  useEffect(() => {
+    if (!localeTouched.current) setPreviewLocale(locale);
+  }, [locale]);
+
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -105,29 +116,47 @@ export function EmailPreview({
   const problem = validateTemplate(draft);
   const staffImmediate = STAFF_EMAIL_KINDS.includes(kind);
   const heldSpeaker = [...DECISION_KINDS, ...SCHEDULE_EMAIL_KINDS].includes(kind);
+  const bilingualEligible = [
+    ...STAFF_EMAIL_KINDS,
+    ...ROLE_INVITATION_EMAIL_KINDS,
+    ...CO_SPEAKER_INVITATION_KINDS,
+  ].includes(kind);
   const deliveryMode = staffImmediate ? 'staff' : heldSpeaker ? 'held' : 'automatic';
   const sampleOrigin = typeof window === 'undefined' ? 'https://cfp.example.org' : window.location.origin;
+  const applicablePlaceholders = PLACEHOLDERS.filter((name) =>
+    (['en', 'fr'] as const).some((language) => {
+      const template = builtInTemplate(kind, language);
+      return `${template.subject}\n${template.body}`.includes(`{${name}}`);
+    }),
+  );
+
+  const previewOverrides: TemplateOverrides = {
+    ...templates,
+    [kind]: {
+      ...templates[kind],
+      [previewLocale]: draft,
+    },
+  };
 
   // From the draft, not from storage: the point is to see an edit before saving.
-  const email = renderEmail(
-    kind,
-    previewLocale,
-    {
-      speakerName: 'Ada Lovelace',
-      title: 'Notes on the Analytical Engine',
-      proposalUrl: `${sampleOrigin}/c/${cfpId}/submit`,
-      // The real name, because {event} appears in every subject line and a
-      // stand-in reads as "Your Your event talk has been accepted".
-      event: cfpName,
-      needsVisa,
-      scheduleDate: 'Saturday, November 14',
-      scheduleTime: '10:00–10:40',
-      scheduleRoom: 'Room A',
-      scheduleUrl: `${sampleOrigin}/c/${cfpId}/${kind === 'committee_schedule_shared' ? 'schedule' : 'submit'}`,
-      reviewUrl: `${sampleOrigin}/c/${cfpId}/review`,
-    },
-    { [kind]: { [previewLocale]: draft } },
-  );
+  const sampleData = {
+    speakerName: t.admin.emailPreviewSample.speakerName,
+    title: t.admin.emailPreviewSample.title,
+    proposalUrl: `${sampleOrigin}/c/${cfpId}/submit`,
+    // The real name, because {event} appears in every subject line and a
+    // stand-in reads as "Your Your event talk has been accepted".
+    event: cfpName,
+    needsVisa,
+    scheduleDate: t.admin.emailPreviewSample.scheduleDate,
+    scheduleTime: t.admin.emailPreviewSample.scheduleTime,
+    scheduleRoom: t.admin.emailPreviewSample.scheduleRoom,
+    scheduleUrl: `${sampleOrigin}/c/${cfpId}/${kind === 'committee_schedule_shared' ? 'schedule' : 'submit'}`,
+    reviewUrl: `${sampleOrigin}/c/${cfpId}/review`,
+  };
+  const email =
+    bilingual && bilingualEligible
+      ? renderBilingualEmail(kind, sampleData, previewOverrides)
+      : renderEmail(kind, previewLocale, sampleData, previewOverrides);
 
   async function run(fn: () => Promise<string>) {
     if (readOnly) return;
@@ -137,7 +166,7 @@ export function EmailPreview({
     try {
       setNote(await fn());
     } catch (e) {
-      setError(adminError(e, t));
+      setError(emailError(e, t));
     } finally {
       setBusy(false);
     }
@@ -158,10 +187,15 @@ export function EmailPreview({
           required
           value={previewLocale}
           options={[
-            { value: 'en', label: 'English' },
-            { value: 'fr', label: 'Français' },
+            { value: 'en', label: t.admin.emailLanguageNames.en },
+            { value: 'fr', label: t.admin.emailLanguageNames.fr },
           ]}
-          onChange={(v) => changeSelection(() => setPreviewLocale(v as EmailLocale))}
+          onChange={(v) =>
+            changeSelection(() => {
+              localeTouched.current = true;
+              setPreviewLocale(v as EmailLocale);
+            })
+          }
         />
       </div>
 
@@ -171,6 +205,13 @@ export function EmailPreview({
           <Checkbox label={t.admin.emailPreviewVisa} checked={needsVisa} onChange={setNeedsVisa} />
         )}
         <Checkbox label={t.admin.emailPreviewPlain} checked={plain} onChange={setPlain} />
+        {bilingualEligible && (
+          <Checkbox
+            label={t.admin.emailPreviewBilingual}
+            checked={bilingual}
+            onChange={setBilingual}
+          />
+        )}
         <Checkbox
           label={t.admin.emailEdit}
           checked={editing}
@@ -179,6 +220,10 @@ export function EmailPreview({
         />
         {custom && <span className="muted">{t.admin.emailCustom}</span>}
       </div>
+
+      {bilingualEligible && bilingual && (
+        <p className="field__help">{t.admin.emailPreviewBilingualHelp}</p>
+      )}
 
       <aside className={`email-delivery-mode email-delivery-mode--${deliveryMode}`}>
         <strong>
@@ -215,14 +260,14 @@ export function EmailPreview({
             disabled={busy || readOnly}
           />
           <p className="field__help">
-            {t.admin.emailPlaceholders}{' '}
-            {PLACEHOLDERS.map((name) => (
+            {t.admin.emailApplicablePlaceholders}{' '}
+            {applicablePlaceholders.map((name) => (
               <code key={name} className="mono">
                 {`{${name}}`}{' '}
               </code>
             ))}
           </p>
-          <p className="field__help">{t.admin.emailVisaHelp}</p>
+          {kind === 'accepted' && <p className="field__help">{t.admin.emailVisaHelp}</p>}
 
           {problem && (
             <p className="field__error" role="alert">
@@ -285,7 +330,10 @@ export function EmailPreview({
       <button
         type="button"
         className="btn"
-        disabled={busy || readOnly}
+        disabled={busy || readOnly || !configured || dirty}
+        aria-describedby={
+          !configured ? 'email-test-setup-help' : dirty ? 'email-test-save-help' : undefined
+        }
         onClick={() =>
           run(async () => {
             const { data } = await sendTestEmail({ cfpId, kind, locale: previewLocale, needsVisa });
@@ -297,7 +345,19 @@ export function EmailPreview({
       >
         {t.admin.emailTest}
       </button>
-      {!configured && <p className="field__help">{t.admin.emailTestNeedsSetup}</p>}
+      {!configured && (
+        <p className="field__help" id="email-test-setup-help">
+          {t.admin.emailTestNeedsSetup}
+        </p>
+      )}
+      {configured && dirty && (
+        <p className="field__help" id="email-test-save-help">
+          {t.admin.emailTestSaveFirst}
+        </p>
+      )}
+      {bilingualEligible && bilingual && (
+        <p className="field__help">{t.admin.emailPreviewSelectedTest}</p>
+      )}
 
       <div
         className={note ? 'note note--inline' : undefined}
