@@ -12,10 +12,16 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { FieldRows } from './FieldRows';
+import { Checkbox } from './fields';
 import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
 import { setConfirmForm } from '../lib/roles';
-import { keyFromLabel, validateForm, type ConfirmField } from '@shared/confirmForm';
+import {
+  keyFromLabel,
+  validateForm,
+  type ConfirmField,
+  type ConfirmForm,
+} from '@shared/confirmForm';
 
 /**
  * Keys are filled in at save rather than as the label is typed: generating on
@@ -34,24 +40,24 @@ export function withKeys(fields: ConfirmField[]): ConfirmField[] {
 
 export function ConfirmFormEditor({
   cfpId,
-  fields: saved,
+  form: saved,
   readOnly = false,
   onDirtyChange,
 }: {
   cfpId: string;
-  fields: ConfirmField[];
+  form: ConfirmForm;
   readOnly?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
-  const [fields, setFields] = useState<ConfirmField[]>(saved);
-  const [stored, setStored] = useState<ConfirmField[]>(saved);
+  const [form, setForm] = useState<ConfirmForm>(saved);
+  const [stored, setStored] = useState<ConfirmForm>(saved);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const dirty = useMemo(
-    () => !readOnly && JSON.stringify(fields) !== JSON.stringify(stored),
-    [fields, readOnly, stored],
+    () => !readOnly && JSON.stringify(form) !== JSON.stringify(stored),
+    [form, readOnly, stored],
   );
 
   useEffect(() => {
@@ -70,8 +76,8 @@ export function ConfirmFormEditor({
     setNote('');
     setError('');
 
-    const keyed = withKeys(fields);
-    const fault = validateForm({ fields: keyed });
+    const nextForm = { ...form, fields: withKeys(form.fields) };
+    const fault = validateForm(nextForm);
     if (fault) {
       setError(t.admin.formErrors[fault.problem].replace('{key}', fault.key || '—'));
       return;
@@ -79,11 +85,15 @@ export function ConfirmFormEditor({
 
     setBusy(true);
     try {
-      const { data } = await setConfirmForm({ cfpId, fields: keyed });
+      const { data } = await setConfirmForm({ cfpId, ...nextForm });
       // The server's normalised copy, not ours — it trims and drops, and the
       // editor should show what was actually stored.
-      setFields(data.fields);
-      setStored(data.fields);
+      const savedForm = {
+        fields: data.fields,
+        speakerPhoto: { required: data.speakerPhoto?.required === true },
+      };
+      setForm(savedForm);
+      setStored(savedForm);
       setNote(t.admin.formSaved);
     } catch (e) {
       setError(adminError(e, t));
@@ -96,9 +106,22 @@ export function ConfirmFormEditor({
     <>
       <p className="field__help">{t.admin.formHelp}</p>
 
+      <fieldset className="formfield confirmation-photo-setting">
+        <legend>{t.admin.speakerPhotoTitle}</legend>
+        <p className="field__help">{t.admin.speakerPhotoHelp}</p>
+        <Checkbox
+          label={t.admin.speakerPhotoRequired}
+          checked={form.speakerPhoto?.required === true}
+          onChange={(required) =>
+            setForm((current) => ({ ...current, speakerPhoto: { required } }))
+          }
+          disabled={busy || readOnly}
+        />
+      </fieldset>
+
       <FieldRows
-        fields={fields}
-        onChange={setFields}
+        fields={form.fields}
+        onChange={(fields) => setForm((current) => ({ ...current, fields }))}
         busy={busy || readOnly}
         labels={{
           empty: t.admin.formEmpty,

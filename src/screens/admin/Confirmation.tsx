@@ -5,7 +5,7 @@ import { adminError } from '../../lib/errors';
 import { ConfirmFormEditor } from '../../components/ConfirmFormEditor';
 import { loadConfirmForm } from '../../lib/proposals';
 import { useLatest } from '../../lib/useLatest';
-import type { ConfirmField } from '@shared/confirmForm';
+import type { ConfirmForm } from '@shared/confirmForm';
 
 /**
  * What a speaker is asked once they accept. Its own section rather than part of
@@ -23,7 +23,7 @@ export function Confirmation({
 }) {
   const { t } = useI18n();
   const tRef = useLatest(t);
-  const [fields, setFields] = useState<ConfirmField[] | null>(null);
+  const [form, setForm] = useState<ConfirmForm | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -37,12 +37,12 @@ export function Confirmation({
    */
   useEffect(() => {
     const request = ++generation.current;
-    setFields(null);
+    setForm(null);
     setLoading(true);
     setError('');
     void loadConfirmForm(cfpId)
       .then((loaded) => {
-        if (request === generation.current) setFields(loaded.fields);
+        if (request === generation.current) setForm(loaded);
       })
       .catch((e) => {
         if (request === generation.current) setError(adminError(e, tRef.current));
@@ -68,10 +68,10 @@ export function Confirmation({
           on, and remounting would throw away what is being typed. */}
       {loading ? (
         <p className="muted">{t.app.loading}</p>
-      ) : fields ? (
+      ) : form ? (
         <ConfirmFormEditor
           cfpId={cfpId}
-          fields={fields}
+          form={form}
           readOnly={readOnly}
           onDirtyChange={onDirtyChange}
         />

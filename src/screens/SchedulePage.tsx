@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link } from '../components/Link';
 import { sessionDocumentTitle } from '../components/AppNavigation';
+import { PublicSpeakerPhoto } from '../components/PublicSpeakerPhoto';
 import { useI18n } from '../i18n/context';
 import { formatCalendarDay } from '../i18n';
 import { goTo, href } from '../lib/router';
@@ -579,6 +580,7 @@ function PublicAgenda({
                         <AgendaEntryBody
                           cfpId={cfpId}
                           scheduleId={schedule.id}
+                          photosEnabled={!preview}
                           filters={filters}
                           entry={entry}
                           roomName={rooms.get(entry.roomId) ?? entry.roomId}
@@ -601,6 +603,7 @@ function PublicAgenda({
                   <AgendaEntryBody
                     cfpId={cfpId}
                     scheduleId={schedule.id}
+                    photosEnabled={!preview}
                     filters={filters}
                     entry={entry}
                     roomName={rooms.get(entry.roomId) ?? entry.roomId}
@@ -618,6 +621,7 @@ function PublicAgenda({
 function AgendaEntryBody({
   cfpId,
   scheduleId,
+  photosEnabled,
   filters,
   entry,
   roomName,
@@ -625,6 +629,7 @@ function AgendaEntryBody({
 }: {
   cfpId: string;
   scheduleId: string;
+  photosEnabled: boolean;
   filters: AgendaFilters;
   entry: PublishedScheduleEntry;
   roomName: string;
@@ -664,7 +669,26 @@ function AgendaEntryBody({
           {publicEntryTitle(entry, locale)}
         </Link>
       </h3>
-      {speakers.length > 0 && <p>{speakers.map((speaker) => speaker.name).join(', ')}</p>}
+      {speakers.length > 0 && (
+        <div className="agenda-item__speakers">
+          <span className="agenda-item__speaker-photos">
+            {speakers.slice(0, 3).map((speaker, index) => (
+              <PublicSpeakerPhoto
+                key={`${speaker.name}-${index}`}
+                cfpId={cfpId}
+                releaseId={scheduleId}
+                entryId={entry.id}
+                speakerIndex={index}
+                name={speaker.name}
+                photoRef={speaker.photoRef}
+                enabled={photosEnabled}
+                compact
+              />
+            ))}
+          </span>
+          <p>{speakers.map((speaker) => speaker.name).join(', ')}</p>
+        </div>
+      )}
       {entry.kind === 'proposal' && entry.cancelled && <strong className="agenda-item__cancelled">{t.schedule.cancelled}</strong>}
     </article>
   );
@@ -743,7 +767,15 @@ function SessionDetail({ cfpId, cfpName, bundle, entry, preview }: { cfpId: stri
           <h3>{t.schedule.speakers}</h3>
           {speakers.map((speaker, index) => (
             <div className="session-speaker" key={`${speaker.name}-${index}`}>
-              <div className="session-speaker__monogram" aria-hidden="true">{speaker.name.slice(0, 1)}</div>
+              <PublicSpeakerPhoto
+                cfpId={cfpId}
+                releaseId={bundle.schedule.id}
+                entryId={entry.id}
+                speakerIndex={index}
+                name={speaker.name}
+                photoRef={speaker.photoRef}
+                enabled={!preview}
+              />
               <div><h4>{speaker.name}</h4>{(speaker.jobTitle || speaker.company) && <p>{[speaker.jobTitle, speaker.company].filter(Boolean).join(' · ')}</p>}{speaker.bio && <p>{speaker.bio}</p>}</div>
             </div>
           ))}

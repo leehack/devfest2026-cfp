@@ -113,6 +113,29 @@ export async function clearSharedSchedulePointerDirect(cfpId = CFP_ID) {
   );
 }
 
+/** Minimal working-schedule state for callables that only care whether it exists. */
+export async function setScheduleNeedsAttentionDirect(
+  needsAttention: boolean,
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/config/schedule`, {
+    revision: { integerValue: '0' },
+    needsAttention: { booleanValue: needsAttention },
+  });
+}
+
+export async function readScheduleConfigDirect(
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/schedule`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readScheduleConfigDirect');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
 /**
  * A whole CFP, written straight to Firestore.
  *
@@ -645,6 +668,11 @@ export async function setSubmissionFormDirect(
 function encode(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') return { stringValue: value };
   if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Number.isSafeInteger(value)
+      ? { integerValue: String(value) }
+      : { doubleValue: value };
+  }
   if (Array.isArray(value)) return { arrayValue: { values: value.map(encode) } };
   return {
     mapValue: {
@@ -656,6 +684,14 @@ function encode(value: unknown): Record<string, unknown> {
 /** Puts a queue row into a state the UI cannot reach, e.g. mid-send. */
 export async function setEmailStatusDirect(logId: string, status: string, cfpId = CFP_ID) {
   await patch(`cfps/${cfpId}/emailLog/${logId}`, { status: { stringValue: status } });
+}
+
+/** Models a failed provider handoff whose idempotency identity must be retried in place. */
+export async function setEmailAmbiguousFailureDirect(logId: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}/emailLog/${logId}`, {
+    status: { stringValue: 'failed' },
+    providerAttemptId: { stringValue: 'ambiguous-provider-attempt' },
+  });
 }
 
 /** Holds a queue row in a claimed send, with a caller-selected lease age. */
@@ -1177,6 +1213,18 @@ export async function readScheduleEntry(
   return unwrap(fields ?? {});
 }
 
+/** Models a release written before private cancellation carry metadata existed. */
+export async function clearScheduleCancellationCarrySourceDirect(
+  releaseId: string,
+  cfpId = CFP_ID,
+) {
+  await patchWithMask(
+    `cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`,
+    {},
+    ['pendingScheduleCancellations', 'scheduledProposalEntries'],
+  );
+}
+
 /** Rewrites one release into the shape produced before taxonomy labels were frozen. */
 export async function makeScheduleReleaseLegacyDirect(
   releaseId: string,
@@ -1291,6 +1339,7 @@ function unwrap(fields: Record<string, any>): Record<string, any> {
     if ('stringValue' in value) out[key] = value.stringValue;
     else if ('booleanValue' in value) out[key] = value.booleanValue;
     else if ('integerValue' in value) out[key] = Number(value.integerValue);
+    else if ('doubleValue' in value) out[key] = Number(value.doubleValue);
     else if ('timestampValue' in value) out[key] = value.timestampValue;
     else if ('mapValue' in value) out[key] = unwrap(value.mapValue.fields);
     else if ('arrayValue' in value) out[key] = (value.arrayValue.values ?? []).map(unwrapOne);

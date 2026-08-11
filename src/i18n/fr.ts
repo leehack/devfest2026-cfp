@@ -243,7 +243,7 @@ export const fr: Dictionary = {
     title: 'Votre profil',
     editorTitle: 'Renseignements du conférencier',
     help:
-      'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Le modifier ici le change partout, y compris sur les conférences déjà soumises que personne n’a encore commencé à lire.',
+      'Ceci appartient à votre compte, et non à un appel à conférences en particulier. Après l’enregistrement, ouvrez une séance soumise pour choisir si sa copie pour l’événement doit utiliser ces renseignements à jour.',
     complete: 'Prêt à utiliser',
     needsAttention: 'À compléter',
     unsaved: 'Modifications non enregistrées',
@@ -271,7 +271,7 @@ export const fr: Dictionary = {
     language: 'Langue',
     speaker: 'À propos de vous',
     speakerHelp:
-      'Rattaché à votre compte, pas à une conférence — le modifier ici le change partout, et il reste modifiable après une soumission.',
+      'Rattaché à votre compte, pas à une conférence. Il reste modifiable après la soumission; chaque séance soumise conserve sa propre copie jusqu’à ce que vous la mettiez à jour explicitement.',
     extra: 'Quelques questions de plus',
     acks: 'Avant de soumettre',
     attendance: 'Venir à Montréal',
@@ -366,6 +366,61 @@ export const fr: Dictionary = {
     emailHelp: 'Provient de votre compte Google. Toute la correspondance y sera envoyée.',
     gdeGuidance:
       "Les GDE doivent communiquer avec leur gestionnaire de programme GDE concernant le soutien aux déplacements. L'événement ne l'offre pas directement.",
+  },
+
+  profilePhoto: {
+    title: 'Photo du conférencier',
+    help:
+      'Cette photo de profil réutilisable peut être approuvée pour un événement lorsque vous confirmez une conférence. Le programme publié conserve la version exacte approuvée jusqu’à la publication d’une nouvelle version.',
+    previewAlt: 'Photo actuelle du profil de conférencier',
+    chooseLabel: 'Choisir la photo du profil de conférencier',
+    requirements: (pixels: number) =>
+      `JPEG, PNG ou WebP · jusqu’à 5 Mo · au moins ${pixels} × ${pixels} pixels.`,
+    tooSmall: (pixels: number) =>
+      `Choisissez une photo d’au moins ${pixels} pixels de chaque côté.`,
+    loadFailed: 'Impossible de charger la photo actuelle du conférencier.',
+    uploadFailed: 'Impossible de téléverser la photo du conférencier. Réessayez.',
+    remove: 'Retirer la photo',
+    removeConfirm:
+      'Retirer cette photo de votre profil réutilisable ? Les copies déjà approuvées pour un événement resteront inchangées.',
+    removeFailed: 'Impossible de retirer la photo du conférencier. Réessayez.',
+    sessionUpdateTitle: 'Une nouvelle photo de profil est disponible',
+    sessionUpdateHelp:
+      'Cette séance utilise encore la photo approuvée précédemment. Remplacez-la seulement lorsque la nouvelle photo est prête pour le programme.',
+    sessionCurrentTitle: 'Photo approuvée pour cette séance',
+    sessionCurrentHelp:
+      'La séance utilise exactement cette photo de profil. Le programme publié conserve sa copie actuelle jusqu’à une nouvelle publication.',
+    sessionRemovalTitle: 'Photo retirée du profil',
+    sessionRemovalHelp:
+      'Cette séance utilise encore la photo approuvée précédemment. Retirez cette copie de l’événement seulement si vous ne voulez aucune photo dans le programme.',
+    sessionEmptyTitle: 'Aucune photo approuvée pour cette séance',
+    sessionEmptyHelp:
+      'La photo facultative de cette séance est vide. Vous pourrez en ajouter une à votre profil lorsque vous serez prêt.',
+    sessionRequiredTitle: 'Cette séance exige une photo de conférencier',
+    sessionRequiredHelp:
+      'Ajoutez une photo de profil avant de mettre cette séance à jour. Toute copie déjà approuvée pour le programme reste inchangée.',
+    useForSession: 'Utiliser cette photo pour cette séance',
+    removeFromSession: 'Retirer la photo de cette séance',
+    sessionUpdating: 'Mise à jour de la photo de la séance…',
+    sessionUpdateFailed: 'Impossible de mettre à jour la photo de la séance. Réessayez.',
+  },
+
+  profileSnapshot: {
+    title: 'Profil utilisé pour cette séance',
+    help:
+      'Le profil de votre compte reste modifiable. Cette séance conserve une copie distincte pour l’événement afin que les changements ultérieurs ne modifient pas silencieusement ce que voient le comité ou le public.',
+    adminHelp:
+      'Ceci copie dans la séance les derniers champs publics du profil du conférencier. Les organisateurs n’obtiennent pas accès au profil global privé et les réponses de confirmation et de déplacement ne changent pas.',
+    updateSelf: 'Utiliser mon profil à jour pour cette séance',
+    updateSpeaker: (name: string) => `Utiliser le profil à jour de ${name}`,
+    updating: 'Mise à jour de la copie de la séance…',
+    updated: 'Profil de la séance mis à jour.',
+    unchanged: 'Cette séance utilise déjà le profil à jour.',
+    scheduleNotice:
+      'L’horaire de travail doit maintenant être vérifié. Les versions partagée et publiée du programme restent inchangées jusqu’à un nouveau partage et une nouvelle publication.',
+    notReady:
+      'Complétez le profil et vérifiez que ce compte fait toujours partie des conférenciers actifs.',
+    failed: 'Impossible de mettre à jour le profil de la séance. Réessayez.',
   },
 
   acks: {
@@ -1119,8 +1174,14 @@ export const fr: Dictionary = {
         : `${n} propositions n’ont pas encore de note.`,
     form: 'Questions de confirmation',
     formHelp:
-      'Chaque personne retenue répond séparément à ces questions. Utilisez-les pour les renseignements individuels, comme la taille du chandail, les besoins alimentaires ou une photo; rendez chaque réponse obligatoire lorsque l’événement l’exige. Laissez le formulaire vide pour conserver une confirmation en un clic.',
-    formEmpty: 'Aucune question. Les conférenciers confirment, et c’est tout.',
+      'Chaque personne retenue répond séparément à ces questions. Utilisez-les pour les renseignements individuels, comme la taille du chandail ou les besoins alimentaires; rendez chaque réponse obligatoire lorsque l’événement l’exige. Un conférencier ajouté plus tard doit remplir sa propre confirmation avant que la conférence soit de nouveau confirmée.',
+    speakerPhotoTitle: 'Photo du conférencier pour le programme',
+    speakerPhotoHelp:
+      'Chaque personne retenue peut vérifier ici la photo de son profil réutilisable. Elle reste facultative, sauf si vous la rendez obligatoire ci-dessous. La confirmation fige la version approuvée pour cet événement, et le programme publié conserve cette version jusqu’à la publication d’une nouvelle version.',
+    speakerPhotoRequired:
+      'Exiger une photo de profil pour chaque conférencier avant sa confirmation',
+    formEmpty:
+      'Aucune question personnalisée. Les conférenciers vérifient tout de même leur photo pour le programme, puis confirment.',
     formUntitled: 'Nouvelle question',
     formLabelEn: 'Question (anglais)',
     formLabelFr: 'Question (français)',
@@ -1345,7 +1406,7 @@ export const fr: Dictionary = {
     help:
       'Invitez jusqu’à trois co-conférenciers avant la soumission. Chaque personne complète sa propre préparation et, si la proposition est retenue, confirme séparément. La conférence est confirmée seulement lorsque tous les conférenciers actifs ont confirmé.',
     adminHelp:
-      'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission. Chaque conférencier actif confirme séparément, et la conférence est confirmée seulement lorsque tout le monde a confirmé. L’organisation peut consulter la liste ici et, après la soumission, retirer uniquement un co-conférencier ayant décliné.',
+      'Le conférencier principal invite les co-conférenciers avant la soumission. Une fois la proposition retenue, l’organisation peut envoyer ici une invitation vérifiée. Une invitation tardive ne change pas la conférence avant son acceptation; celle-ci attend ensuite la confirmation de tous les conférenciers actifs.',
     readOnlyHelp:
       'Vous êtes co-conférencier de cette proposition. Le conférencier principal gère le contenu; votre profil et votre confirmation demeurent les vôtres.',
     saveDetails: 'Enregistrer mes renseignements',
@@ -1378,6 +1439,11 @@ export const fr: Dictionary = {
       'Aucun autre co-conférencier ni aucune autre invitation ne peut être ajouté à cette proposition.',
     inviteHelp:
       'Utilisez l’adresse avec laquelle cette personne se connectera. Elle doit accepter avant la soumission.',
+    lateInviteHelp:
+      'Utilisez l’adresse avec laquelle cette personne se connectera. La conférence reste inchangée jusqu’à son acceptation; après son arrivée, cette personne doit remplir sa propre confirmation avant que la conférence soit de nouveau confirmée.',
+    lateInvitePendingTitle: 'Cette personne ne fait pas encore partie de la conférence',
+    lateInvitePendingHelp:
+      'La liste et la confirmation actuelles restent inchangées tant que l’invitation est en attente. Son acceptation ajoute le conférencier et remet la conférence en attente des confirmations.',
     atCapacity: 'Cette proposition compte déjà le maximum de quatre conférenciers.',
     manage: 'Liste des conférenciers',
     close: 'Fermer la liste des conférenciers',
@@ -1428,6 +1494,8 @@ export const fr: Dictionary = {
     invitationTitle: 'Rejoindre cette proposition',
     invitationFrom: (name: string) =>
       `${name} vous invite à présenter cette conférence ensemble.`,
+    lateInvitationFrom: (name: string) =>
+      `L’organisation vous invite à rejoindre la conférence retenue de ${name} à titre de co-conférencier.`,
     eventLabel: 'Événement',
     proposalLabel: 'Proposition',
     accountLabel: 'Compte invité',
@@ -1439,7 +1507,11 @@ export const fr: Dictionary = {
     profileHelp:
       'Votre nom et votre biographie demeurent liés à votre compte et paraîtront avec la conférence si elle est publiée.',
     profileReady: 'Votre profil de conférencier est prêt.',
+    participationTitle: 'Vos renseignements de participation',
+    participationHelp:
+      'Puisque cette conférence est déjà retenue, complétez les attestations de l’événement et vos renseignements de déplacement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
     join: 'Enregistrer le profil et accepter',
+    joinLate: 'Enregistrer les renseignements et accepter',
     joining: 'Acceptation…',
     decline: 'Refuser l’invitation',
     declineConfirm: 'Refuser cette invitation de co-conférencier ?',
@@ -1458,6 +1530,8 @@ export const fr: Dictionary = {
     unavailableHelp: 'L’événement ne peut plus accepter de réponse à cette invitation.',
     acceptedTitle: 'Vous avez rejoint cette proposition',
     acceptedHelp: 'La conférence est maintenant visible avec vos autres propositions.',
+    lateAcceptedHelp:
+      'Vous faites maintenant partie des conférenciers de cette conférence. Ouvrez-la pour fournir les renseignements requis et confirmer votre participation.',
     declinedTitle: 'Invitation refusée',
     declinedHelp: 'Vous ne figurez pas parmi les conférenciers de cette proposition.',
     openProposal: 'Ouvrir la proposition',
@@ -1683,6 +1757,16 @@ export const fr: Dictionary = {
     stale: 'Quelqu’un a modifié l’horaire dans un autre onglet. Rechargez avant de continuer.',
     conflict: 'Ce placement chevauche une salle ou un conférencier déjà programmé.',
     invalidState: 'Seules les conférences acceptées ou confirmées peuvent être planifiées; la publication exige une confirmation.',
+    emailDeliveryInProgress:
+      'Les notifications d’horaire sont en cours d’envoi. Attendez la fin de la livraison avant de partager un autre aperçu.',
+    emailDeliveryRetryRequired:
+      'Le résultat de livraison d’une notification d’horaire est incertain. Relancez-la dans Courriels avant de partager un autre aperçu.',
+    cancellationDeliveryPending:
+      'Envoyez ou relancez l’avis d’annulation précédent avant de remettre cette séance au programme.',
+    cancellationProcessing:
+      'Une annulation d’horaire précédente est toujours en cours de traitement. Attendez un instant, puis partagez de nouveau.',
+    speakerPhotoRequired:
+      'Chaque conférencier à l’horaire doit confirmer une photo pour le programme avant le partage de cet aperçu.',
     badInput: 'Vérifiez les jours, les salles, les heures, la durée et les titres obligatoires.',
     reload: 'Recharger l’horaire',
     types: {

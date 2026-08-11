@@ -247,14 +247,18 @@ Size it from the share of `pending` responses and non-Canadian applicants. Holdi
 speakers/{uid}
   name, bio_en, bio_fr, company, jobTitle, basedIn,
   socials[], isGde, email
+  profilePhoto?                           // server-owned reusable private original
   createdAt, updatedAt
 
 proposals/{proposalId}
   primarySpeakerId                       // lead; owns talk content and withdrawal
   speakerIds[]                            // active, explicitly consenting presenters
   formerSpeakerIds[]?                     // permanent review-conflict history
-  speakerSnapshot[]?                      // frozen at submission, no email
+  speakerSnapshot[]?                      // submitted event copy, no email; explicit refresh only
   formerSpeakerSnapshot[]?                // audit copy after post-submit removal
+  lateSpeakerPendingIds[]?                 // accepted late additions awaiting response
+  lateSpeakerScheduleBaselineIds[]?        // roster frozen in the prior release
+  lateSpeakerSchedulePreserved?            // prior release remains valid until reshare
   title, abstract, pitch
   category, format, level
   deliveryLanguage, languagePreference          // slideLanguage removed, see §4
@@ -270,17 +274,19 @@ proposals/{proposalId}
 
 proposals/{proposalId}/speakerInvitations/{invitationId}
   email, status                           // pending | accepted | declined | revoked
+  phase                                   // draft | postAcceptance
   expiresAt, createdBy, createdAt, respondedBy?, respondedAt?
 
 proposals/{proposalId}/speakerParticipants/{uid}
   role                                    // primary | coSpeaker
   status                                  // active | inactive
   acks, attendance                        // presenter-private; admins after submission
-  invitationId?, joinedAt, removedAt?
+  invitationId?, joinedPhase?, joinedAt, removedAt?
 
 proposals/{proposalId}/speakerConfirmations/{uid}
   response                                // confirmed | declined
   answers, headshotUploads                // presenter-private; admins after submission
+  speakerPhoto?                           // exact reusable-photo generation frozen for event
   respondedAt, confirmedAt?
 
 proposals/{proposalId}/reviews/{reviewerUid}
@@ -402,6 +408,8 @@ committee meeting     ← sorted by disagreement; track & language balance appli
 accepted / waitlisted / rejected
    ↓  reviewed decision batch is released
 confirmed | declined  ← the speaker answers and completes required follow-up fields
+   ↳ a late admin invitation leaves this unchanged until accepted
+   ↳ acceptance returns the working session to accepted until everyone confirms
    ↓
 private schedule → shared preview → public programme
    ↳ bounded late intake → review → decision → confirmation → republish

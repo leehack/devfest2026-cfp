@@ -475,6 +475,30 @@ describe('status and aggregate are function-writable only', () => {
     );
   });
 
+  it('keeps late-speaker lifecycle markers callable-only', async () => {
+    for (const patch of [
+      { lateSpeakerPendingIds: [OTHER_APPLICANT] },
+      {
+        lateSpeakerPendingInvitations: [
+          { uid: OTHER_APPLICANT, invitationId: 'forged-invitation' },
+        ],
+      },
+      { lateSpeakerScheduleBaselineIds: [APPLICANT] },
+      { lateSpeakerSchedulePreserved: true },
+      { scheduleCancellationRequired: true },
+    ]) {
+      await assertFails(
+        updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), patch),
+      );
+    }
+    await assertFails(
+      addDoc(collection(asApplicant(), `${CFP}/proposals`), {
+        ...draft(APPLICANT),
+        scheduleCancellationRequired: true,
+      }),
+    );
+  });
+
   it('denies writing an aggregate score', async () => {
     await assertFails(
       updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), {
@@ -921,6 +945,52 @@ describe('a speaker profile is readable only by its owner', () => {
 
   it('denies listing the directory', async () => {
     await assertFails(getDocs(collection(asReviewer(), 'speakers')));
+  });
+
+  it('allows ordinary profile saves but not forged server photo pointers', async () => {
+    const profilePhoto = {
+      path: `speakerProfilePhotos/${APPLICANT}/forged`,
+      generation: '1',
+      contentType: 'image/png',
+      size: 8,
+    };
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), 'speakers', APPLICANT), { profilePhoto });
+    });
+    await assertSucceeds(
+      updateDoc(doc(asApplicant(), 'speakers', APPLICANT), { company: 'Example Co' }),
+    );
+    await assertFails(
+      updateDoc(doc(asApplicant(), 'speakers', APPLICANT), {
+        profilePhoto: { ...profilePhoto, generation: '2' },
+      }),
+    );
+
+    const newcomer = env
+      .authenticatedContext('new-speaker', {
+        ...VERIFIED,
+        email: 'new@example.org',
+      })
+      .firestore();
+    await assertSucceeds(
+      setDoc(doc(newcomer, 'speakers', 'new-speaker'), {
+        name: 'New Speaker',
+        email: 'new@example.org',
+      }),
+    );
+    const forger = env
+      .authenticatedContext('forged-profile', {
+        ...VERIFIED,
+        email: 'forged@example.org',
+      })
+      .firestore();
+    await assertFails(
+      setDoc(doc(forger, 'speakers', 'forged-profile'), {
+        name: 'Forged Speaker',
+        email: 'forged@example.org',
+        profilePhoto: { ...profilePhoto, path: 'speakerProfilePhotos/forged-profile/forged' },
+      }),
+    );
   });
 });
 

@@ -119,16 +119,20 @@ export interface PublicScheduleSpeaker {
   bio?: string;
   company?: string;
   jobTitle?: string;
+  /** Opaque release member id. It is never a Storage path or account uid. */
+  photoRef?: string;
 }
 
 export function publicScheduleSpeakers(
   speakers: readonly SpeakerSnapshot[],
+  photoRefs: ReadonlyMap<string, string> = new Map(),
 ): PublicScheduleSpeaker[] {
   return speakers.map((speaker) => ({
     name: speaker.name,
     bio: speaker.bio,
     ...(speaker.company ? { company: speaker.company } : {}),
     ...(speaker.jobTitle ? { jobTitle: speaker.jobTitle } : {}),
+    ...(photoRefs.get(speaker.uid) ? { photoRef: photoRefs.get(speaker.uid) } : {}),
   }));
 }
 

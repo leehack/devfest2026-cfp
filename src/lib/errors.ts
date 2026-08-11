@@ -13,6 +13,18 @@ function codeOf(error: unknown): string {
   return String((error as { code?: unknown })?.code ?? '').replace(/^functions\//, '');
 }
 
+function reasonOf(error: unknown): string {
+  const details = (error as { details?: unknown } | null)?.details;
+  return details && typeof details === 'object'
+    ? String((details as { reason?: unknown }).reason ?? '')
+    : '';
+}
+
+function detailsOf(error: unknown): Record<string, unknown> {
+  const details = (error as { details?: unknown } | null)?.details;
+  return details && typeof details === 'object' ? (details as Record<string, unknown>) : {};
+}
+
 export function friendlyError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {
     case 'permission-denied':
@@ -57,6 +69,21 @@ export function adminError(error: unknown, t: Dictionary): string {
 }
 
 export function scheduleError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'failed-precondition') {
+    if (detailsOf(error).speakerPhoto === 'required') {
+      return t.schedule.speakerPhotoRequired;
+    }
+    switch (reasonOf(error)) {
+      case 'schedule-email-in-flight':
+        return t.schedule.emailDeliveryInProgress;
+      case 'schedule-email-retry-required':
+        return t.schedule.emailDeliveryRetryRequired;
+      case 'schedule-cancellation-pending':
+        return t.schedule.cancellationDeliveryPending;
+      case 'schedule-cancellation-processing':
+        return t.schedule.cancellationProcessing;
+    }
+  }
   switch (codeOf(error)) {
     case 'aborted':
       return t.schedule.stale;

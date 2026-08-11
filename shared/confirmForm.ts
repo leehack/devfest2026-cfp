@@ -27,8 +27,11 @@ export const FORM_LIMITS = {
   /** What a speaker may write back, by field type. */
   answerText: 200,
   answerTextarea: 2000,
-  /** Bytes. Re-checked by `uploadHeadshot`, which is what actually enforces it. */
+  /** Bytes. Re-checked by the server upload callables. */
   image: 5 * 1024 * 1024,
+  /** A public programme portrait must remain sharp after a square thumbnail crop. */
+  speakerPhotoMinEdge: 800,
+  speakerPhotoPublicSize: 512,
 } as const;
 
 /** Image types accepted by the upload and preview callables. */
@@ -42,6 +45,34 @@ export interface HeadshotUploadPointer {
 }
 
 export type HeadshotUploads = Record<string, HeadshotUploadPointer>;
+
+/** Server-owned pointer to the speaker's reusable, private profile original. */
+export type SpeakerProfilePhoto = HeadshotUploadPointer;
+
+/** The exact profile generation frozen into one speaker's event confirmation. */
+export interface ConfirmedSpeakerPhoto {
+  path: string;
+  sourceGeneration: string;
+  contentType: (typeof IMAGE_TYPES)[number];
+  size: number;
+}
+
+/** A distinct field so arbitrary legacy image questions never become public photos. */
+export interface SpeakerPhotoQuestion {
+  required: boolean;
+}
+
+export const SPEAKER_PHOTO_KEY = 'speakerPhoto';
+
+export function speakerProfilePhotoPath(uid: string, uploadId: string): string {
+  return `speakerProfilePhotos/${encodeURIComponent(uid)}/${encodeURIComponent(uploadId)}`;
+}
+
+export function isSpeakerProfilePhotoPath(path: string, uid: string): boolean {
+  const prefix = `speakerProfilePhotos/${encodeURIComponent(uid)}/`;
+  const uploadId = path.slice(prefix.length);
+  return path.startsWith(prefix) && uploadId.length > 0 && !uploadId.includes('/');
+}
 
 /**
  * Legacy canonical location used before proposal-backed upload pointers.
@@ -146,9 +177,28 @@ export interface ConfirmField {
 
 export interface ConfirmForm {
   fields: ConfirmField[];
+  /** Missing on older documents; readers treat that as optional. */
+  speakerPhoto?: SpeakerPhotoQuestion;
 }
 
-export const EMPTY_FORM: ConfirmForm = { fields: [] };
+export const EMPTY_FORM: ConfirmForm = {
+  fields: [],
+  speakerPhoto: { required: false },
+};
+
+/** Reads a stored form while preserving the pre-speaker-photo default. */
+export function confirmFormFromData(value: unknown): ConfirmForm {
+  const data = value && typeof value === 'object' ? (value as Partial<ConfirmForm>) : {};
+  return {
+    fields: Array.isArray(data.fields) ? data.fields : [],
+    speakerPhoto: {
+      required:
+        Boolean(data.speakerPhoto) &&
+        typeof data.speakerPhoto === 'object' &&
+        data.speakerPhoto.required === true,
+    },
+  };
+}
 
 export type AnswerValue = string | boolean;
 export type Answers = Record<string, AnswerValue>;
@@ -185,6 +235,17 @@ export interface FormFault {
 export function validateForm(form: ConfirmForm): FormFault | null {
   const fields = form.fields ?? [];
   if (fields.length > FORM_LIMITS.fields) return { problem: 'tooManyFields' };
+  if (
+    form.speakerPhoto !== undefined &&
+    (!form.speakerPhoto ||
+      typeof form.speakerPhoto !== 'object' ||
+      typeof form.speakerPhoto.required !== 'boolean')
+  ) {
+    return { problem: 'badKey', key: SPEAKER_PHOTO_KEY };
+  }
+  if (form.speakerPhoto && fields.some((field) => field.key === SPEAKER_PHOTO_KEY)) {
+    return { problem: 'duplicateKey', key: SPEAKER_PHOTO_KEY };
+  }
 
   const seen = new Set<string>();
   for (const field of fields) {
@@ -254,6 +315,12 @@ export function normaliseForm(form: ConfirmForm): ConfirmForm {
           }
         : {}),
     })),
+    speakerPhoto: {
+      required:
+        Boolean(form.speakerPhoto) &&
+        typeof form.speakerPhoto === 'object' &&
+        form.speakerPhoto.required === true,
+    },
   };
 }
 

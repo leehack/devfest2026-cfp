@@ -54,7 +54,10 @@ if Storage is unavailable the owner can retry without leaving private files
 behind or letting another tab unarchive the call mid-delete.
 
 A speaker may lead up to three talks and invite up to three verified
-co-speakers onto each draft. The picker on the form switches between talks; the
+co-speakers onto each draft. After a session is accepted or confirmed, an event
+admin may send the same verified invitation for a late co-speaker. The pending
+invitation changes nothing; acceptance reopens the working session until the new
+speaker completes their own participation details and confirmation. The picker on the form switches between talks; the
 speaker profile and travel answers carry over, so a second submission does not
 mean retyping a bio. The talk cap is enforced in `submitProposal`, because rules
 cannot count documents — drafts above it are allowed and simply never reach a
@@ -272,6 +275,13 @@ withdrawal, while each active speaker owns their personal logistics,
 confirmation answers, and photo. Every active speaker must confirm before the
 proposal becomes `confirmed`.
 
+Once accepted, only an event admin may add a late co-speaker. The current roster,
+confirmation state, and published programme remain unchanged while the invite is
+pending. Acceptance adds the person, moves a confirmed working session back to
+`accepted`, and marks its schedule stale. The previous immutable public release
+stays visible until every active speaker confirms and an organiser shares and
+publishes a new release.
+
 Accepting also creates a permanent conflict for that proposal. Removing someone
 from the active roster does not make them eligible to review material they have
 already seen; their inactive participant record and `formerSpeakerIds` preserve
@@ -282,13 +292,24 @@ private draft title/address never appears in the admin email queue.
 `speakers/{uid}` shared by every proposal, editable throughout — including while
 a talk is frozen, because a changed employer is not a changed talk.
 
+The reusable speaker photo belongs there too. Its private original is replaced
+through a server callable, not a browser Storage write. An event may make the
+photo mandatory at confirmation; confirming freezes that exact generation into
+the speaker's event response. A published programme serves a square derivative
+through an opaque release member, so replacing or removing the global profile
+photo never rewrites an already-published schedule.
+
 **But the committee reads a copy, not the profile.** `submitProposal` freezes a
 `speakerSnapshot` onto the proposal. Two reasons, one answer: a profile is global
 while a role is per call, so letting reviewers read profiles would hand every
 committee on the platform the whole speaker directory; and a bio rewritten in
 2028 would otherwise change what the 2026 committee is recorded as having judged.
 The snapshot deliberately omits the email address — a reviewer judging a talk has
-no need of it.
+no need of it. Later profile edits do not silently rewrite that event copy. The
+speaker, or an event admin acting on an active speaker, may explicitly refresh
+one proposal from the current profile. Confirmation answers and travel details
+stay untouched; an existing shared or published programme stays immutable, and
+a configured working schedule is marked for review before it is shared again.
 
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept

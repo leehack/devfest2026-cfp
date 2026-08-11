@@ -1,10 +1,9 @@
 /**
  * Cloud Storage rules. Runs under `npm run test:rules`.
  *
- * The bucket holds photographs of people's faces, collected once they are on
- * the programme. Browser writes stay closed because only a callable can hold
- * the same external-mutation lease as archive and deletion. Preview bytes also
- * come from a verified callable, so no browser gets a bucket read surface.
+ * The bucket holds private reusable originals, event-frozen copies and public-
+ * safe derivatives. All three remain browser-closed; callables enforce owner or
+ * published-release membership before returning bytes.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
@@ -115,5 +114,36 @@ describe('a confirmed headshot snapshot', () => {
     await assertFails(getBytes(ref(asSpeaker(), frozen)));
     await assertFails(uploadBytes(ref(asSpeaker(), frozen), bytes(64), jpeg));
     await assertFails(deleteObject(ref(asSpeaker(), frozen)));
+  });
+});
+
+describe('profile originals and public derivative caches', () => {
+  const profile = `speakerProfilePhotos/${SPEAKER}/upload-id`;
+  const derivative =
+    `cfps/${CFP_ID}/publicSchedulePhotos/release-id/opaque-photo-ref.webp`;
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await uploadBytes(ref(ctx.storage(), profile), bytes(), jpeg);
+      await uploadBytes(
+        ref(ctx.storage(), derivative),
+        bytes(),
+        { contentType: 'image/webp' },
+      );
+    });
+  });
+
+  it('keeps the reusable original owner-only through its callable', async () => {
+    for (const client of [asSpeaker(), asOther(), asUnverified(), asStranger()]) {
+      await assertFails(getBytes(ref(client, profile)));
+      await assertFails(uploadBytes(ref(client, profile), bytes(64), jpeg));
+    }
+  });
+
+  it('does not turn a public-safe cache object into a public bucket path', async () => {
+    for (const client of [asSpeaker(), asOther(), asUnverified(), asStranger()]) {
+      await assertFails(getBytes(ref(client, derivative)));
+      await assertFails(deleteObject(ref(client, derivative)));
+    }
   });
 });

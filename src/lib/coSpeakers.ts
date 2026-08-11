@@ -45,6 +45,8 @@ const respond = httpsCallable<
     proposalId: string;
     invitationId: string;
     response: 'accept' | 'decline';
+    acks?: Record<string, boolean>;
+    attendance?: Record<string, unknown>;
   },
   {
     ok: boolean;
@@ -144,7 +146,17 @@ export async function respondToCoSpeakerInvitation(
   proposalId: string,
   invitationId: string,
   response: 'accept' | 'decline',
+  participation?: {
+    acks: Record<string, boolean>;
+    attendance: Record<string, unknown>;
+  },
 ): Promise<{ state: SpeakerInvitationViewState; proposalId: string }> {
-  const result = await respond({ cfpId, proposalId, invitationId, response });
+  const result = await respond({
+    cfpId,
+    proposalId,
+    invitationId,
+    response,
+    ...(response === 'accept' && participation ? participation : {}),
+  });
   return { state: result.data.state, proposalId };
 }

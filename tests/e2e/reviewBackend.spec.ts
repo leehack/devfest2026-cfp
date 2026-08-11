@@ -220,6 +220,8 @@ test.describe('review backend operations', () => {
 
     await seedMember(author.uid, 'admin', undefined, SPEAKER.email);
     await callJson(author.idToken, 'recomputeAggregates', {});
-    expect((await readProposalById('historic'))?.aggregate).toBeUndefined();
+    await expect
+      .poll(async () => (await readProposalById('historic'))?.aggregate)
+      .toBeUndefined();
   });
 });

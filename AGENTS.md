@@ -51,6 +51,10 @@ working versions under
 `cfps/{cfpId}/workingHeadshots/{proposalId}/{uid}/{key}/{uploadId}` and confirmed
 copies under
 `cfps/{cfpId}/confirmedHeadshots/{proposalId}/{uid}/{key}/{generation}`.
+Reusable profile originals live under `speakerProfilePhotos/{uid}/{uploadId}`;
+public square derivatives are cached under the immutable release prefix
+`cfps/{cfpId}/publicSchedulePhotos/{releaseId}/{photoRef}.webp` and remain
+callable-only.
 `headshots/{uid}/{key}` is a read-only compatibility fallback for uploads made
 before proposal pointers existed.
 
@@ -100,6 +104,10 @@ form data and image pointers under `speakerConfirmations/{uid}`; legacy
 single-speaker proposals retain the root fallback. The proposal becomes
 `confirmed` only when every active speaker confirms. A co-speaker decline leaves
 the talk accepted and needing organiser attention; a lead decline declines it.
+An admin may invite a late co-speaker after acceptance. The pending invite changes
+nothing; acceptance moves a confirmed working session back to `accepted`, while
+the previous immutable release stays valid for its original roster until the new
+speaker confirms and an organiser re-shares it.
 No token in the link: the signed-in session is the authentication. Admins cannot
 set a speaker response, because doing so would bypass that person's required
 answers and image. Moving a committee decision back clears every personal
@@ -211,6 +219,11 @@ collection — the rule names the two readable documents one at a time.
   accept before its uid is added. The first speaker remains `primarySpeakerId`
   and owns talk edits. Removed participants stay in `formerSpeakerIds` and remain
   conflicted from reviews permanently.
+- **Late invitations do not mutate a confirmed roster until acceptance.** Only an
+  event admin may create one, and the invitee must supply their own acknowledgements
+  and attendance before joining. A marker preserves only the roster in the prior
+  immutable schedule release; it is cleared by a successful re-share, not merely
+  by the new speaker confirming.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.
@@ -388,8 +401,10 @@ collection — the rule names the two readable documents one at a time.
   so a call picks which of the four to offer and what to call them — not what
   they are. `validateSubmissionForm` refuses anything else.
 - **No photographs on the submission form.** ~70% of applicants are turned down
-  and we should not be holding their picture, so `image` is refused there (§3)
-  and offered on the confirmation form, where the speaker is already in.
+  and we should not be holding their picture, so `image` is refused there (§3).
+  A reusable profile photo is optional until an accepted speaker confirms; the
+  event may require it, and confirmation freezes one exact generation for the
+  programme without exposing the private profile pointer.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.
@@ -406,7 +421,11 @@ collection — the rule names the two readable documents one at a time.
   is global and a role is per CFP, so reading profiles would hand every committee
   on the platform the whole speaker directory — and would show a bio edited in
   2028 to the 2026 committee. `submitProposal` freezes the copy; it deliberately
-  omits the email address.
+  omits the email address. Later profile writes never propagate automatically.
+  An active speaker may explicitly refresh their own proposal copy; an event
+  admin may do the same for an active speaker. The callable copies only the
+  public whitelist, leaves confirmation and logistics alone, and marks an
+  existing schedule config stale so immutable releases change only on reshare.
 - **A collection-group query cannot be filtered by ancestor.** `recomputeAggregates`
   and the "where you help out" listing both are one, so `reviews` and `members`
   carry a denormalised `cfpId`/`uid` that the rules pin to the path on write.

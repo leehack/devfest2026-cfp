@@ -9,10 +9,13 @@ import { mergeSubmissionForm } from '../../shared/submissionForm';
 import {
   MAX_ACTIVE_SPEAKERS,
   MAX_SPEAKER_INVITATION_HISTORY,
+  POST_ACCEPTANCE_INVITATION_TTL_MS,
   maskSpeakerEmail,
   normaliseSpeakerEmail,
   primarySpeakerIdOf,
+  speakerInvitationPhaseOf,
   type ProposalSpeakerRoster,
+  type SpeakerInvitationPhase,
   type SpeakerInvitationSummary,
   type SpeakerInvitationStatus,
   type SpeakerRosterItem,
@@ -26,8 +29,10 @@ import {
 } from './email';
 import {
   coSpeakerInvitationStillTrue,
+  currentScheduleReleaseContainsProposal,
   usesPerSpeakerLifecycle,
 } from './speakerLifecycle';
+import { speakerSnapshotFrom } from './profileSnapshots';
 
 const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
 const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,160}$/;
@@ -127,6 +132,17 @@ function assertActive(cfp: DocumentSnapshot): void {
   }
 }
 
+function assertLateInvitationWindow(cfp: DocumentSnapshot): void {
+  assertActive(cfp);
+  if (cfp.get('paused') === true) {
+    throw new HttpsError('failed-precondition', 'The CFP is currently paused.');
+  }
+}
+
+function postAcceptanceStatus(proposal: DocumentSnapshot): boolean {
+  return proposal.get('status') === 'accepted' || proposal.get('status') === 'confirmed';
+}
+
 function speakerIdsOf(proposal: DocumentSnapshot): string[] {
   const ids = proposal.get('speakerIds');
   return Array.isArray(ids) ? ids.filter((uid): uid is string => typeof uid === 'string' && Boolean(uid)) : [];
@@ -156,6 +172,10 @@ function primaryOf(proposal: DocumentSnapshot): string {
     throw new HttpsError('failed-precondition', 'The proposal has no valid primary speaker.');
   }
   return primary;
+}
+
+function invitationPhase(invitation: DocumentSnapshot): SpeakerInvitationPhase | null {
+  return speakerInvitationPhaseOf(invitation.data() ?? {});
 }
 
 function canManage(
@@ -237,9 +257,10 @@ async function rosterFor(
   const speakerIds = speakerIdsOf(proposal);
   const primarySpeakerId = primaryOf(proposal);
   const isPrimary = identity.uid === primarySpeakerId;
+  const isAdmin = roleAllowsManagement(member, cfpId, identity.uid);
   const managerIdentity =
     isPrimary ||
-    (proposal.get('status') !== 'draft' && roleAllowsManagement(member, cfpId, identity.uid));
+    (proposal.get('status') !== 'draft' && isAdmin);
   if (!managerIdentity && !speakerIds.includes(identity.uid)) {
     throw new HttpsError('not-found', 'Proposal not found.');
   }
@@ -270,6 +291,29 @@ async function rosterFor(
             (proposal.get('status') === 'confirmed' || proposal.get('status') === 'declined')
           ? proposal.get('status')
           : undefined;
+    const participantInvitationId = participant?.get('invitationId');
+    const participantInvitation =
+      typeof participantInvitationId === 'string'
+        ? invitations.docs.find((invitation) => invitation.id === participantInvitationId)
+        : undefined;
+    const removableUnconfirmedLateSpeaker =
+      isAdmin &&
+      response === undefined &&
+      typeof participantInvitationId === 'string' &&
+      INVITATION_ID.test(participantInvitationId) &&
+      participant?.get('cfpId') === cfpId &&
+      participant.get('proposalId') === proposalId &&
+      participant.get('uid') === uid &&
+      participant.get('role') === 'coSpeaker' &&
+      participant.get('status') === 'active' &&
+      participant.get('joinedPhase') === 'postAcceptance' &&
+      participantInvitation?.exists === true &&
+      invitationPhase(participantInvitation) === 'postAcceptance' &&
+      participantInvitation.get('cfpId') === cfpId &&
+      participantInvitation.get('proposalId') === proposalId &&
+      participantInvitation.get('invitationId') === participantInvitationId &&
+      participantInvitation.get('status') === 'accepted' &&
+      participantInvitation.get('respondedBy') === uid;
     return {
       kind: 'active',
       state: 'active',
@@ -290,24 +334,48 @@ async function rosterFor(
           proposal.get('status') === 'draft' &&
           isOpen(cfp)) ||
           (managerIdentity &&
-            response === 'declined' &&
+            (response === 'declined' ||
+              removableUnconfirmedLateSpeaker) &&
             cfp.get('archived') !== true &&
             cfp.get('deleting') !== true)),
       isCurrentUser: uid === identity.uid,
     };
   });
   const setupOpen = draft && isOpen(cfp);
-  if (isPrimary) {
-    const deliveryRows = invitations.docs.length
+  const lateInvitationOpen =
+    postAcceptanceStatus(proposal) &&
+    cfp.exists &&
+    cfp.get('archived') !== true &&
+    cfp.get('deleting') !== true &&
+    cfp.get('paused') !== true;
+  const canInvite = (draft && isPrimary && setupOpen) || (!draft && isAdmin && lateInvitationOpen);
+  const invitePhase: SpeakerInvitationPhase | null = canInvite
+    ? draft
+      ? 'draft'
+      : 'postAcceptance'
+    : null;
+  const visibleInvitations = invitations.docs.filter((invitation) => {
+    const phase = invitationPhase(invitation);
+    if (draft) return isPrimary && phase === 'draft' && invitation.get('status') !== 'accepted';
+    return (
+      (isPrimary || isAdmin) &&
+      phase === 'postAcceptance' &&
+      invitation.get('status') === 'pending' &&
+      !invitationHasExpired(invitation)
+    );
+  });
+  if (visibleInvitations.length) {
+    const deliveryRows = visibleInvitations.length
       ? await db.getAll(
-          ...invitations.docs.map((invitation) =>
+          ...visibleInvitations.map((invitation) =>
             invitationEmailRef(cfpId, proposalId, invitation.id),
           ),
         )
       : [];
-    for (const [index, invitation] of invitations.docs.entries()) {
+    for (const [index, invitation] of visibleInvitations.entries()) {
       const state = invitation.get('status') as SpeakerInvitationStatus;
-      if (state === 'accepted') continue;
+      const phase = invitationPhase(invitation);
+      if (!phase) continue;
       const email = String(invitation.get('email') ?? '');
       const delivery = deliveryRows[index];
       const storedDelivery = String(delivery?.get('status') ?? '');
@@ -326,13 +394,15 @@ async function rosterFor(
         kind: 'invitation',
         state,
         invitationId: invitation.id,
+        phase,
         role: 'coSpeaker',
         name: email,
         email,
         deliveryState,
         canRetryDelivery:
           state === 'pending' &&
-          setupOpen &&
+          canInvite &&
+          invitePhase === phase &&
           deliveryState === 'notDelivered' &&
           Number(delivery?.get('attempts') ?? 0) < 5,
         isCurrentUser: email === identity.email,
@@ -341,7 +411,10 @@ async function rosterFor(
   }
   const pendingBlocksSubmit =
     setupOpen &&
-    (invitations.docs.some((invite) => invite.get('status') === 'pending') ||
+    (invitations.docs.some(
+      (invite) =>
+        invitationPhase(invite) === 'draft' && invite.get('status') === 'pending',
+    ) ||
       items.some(
         (item) =>
           item.kind === 'active' &&
@@ -353,6 +426,8 @@ async function rosterFor(
     proposalId,
     primarySpeakerId,
     canManage: managerIdentity && proposal.get('status') === 'draft' && isOpen(cfp),
+    canInvite,
+    invitePhase,
     canEditTalk: identity.uid === primarySpeakerId,
     usesPersonalLifecycle: usesPerSpeakerLifecycle(proposal.data() ?? {}),
     setupOpen,
@@ -391,13 +466,33 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
       proposalRef,
       db.doc(`cfps/${cfpId}/members/${identity.uid}`),
     );
-    assertOpen(cfp);
-    assertDraft(proposal);
-    if (!canManage(identity, cfpId, proposal, member)) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only the lead speaker can invite a co-speaker, and only while the proposal is a draft.',
-      );
+    if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
+    const phase: SpeakerInvitationPhase = proposal.get('status') === 'draft'
+      ? 'draft'
+      : postAcceptanceStatus(proposal)
+        ? 'postAcceptance'
+        : (() => {
+            throw new HttpsError(
+              'failed-precondition',
+              'Co-speakers can only be invited before submission or after acceptance.',
+            );
+          })();
+    if (phase === 'draft') {
+      assertOpen(cfp);
+      if (!canManage(identity, cfpId, proposal, member)) {
+        throw new HttpsError(
+          'permission-denied',
+          'Only the lead speaker can invite a co-speaker, and only while the proposal is a draft.',
+        );
+      }
+    } else {
+      assertLateInvitationWindow(cfp);
+      if (!roleAllowsManagement(member, cfpId, identity.uid)) {
+        throw new HttpsError(
+          'permission-denied',
+          'Only an event admin can invite a co-speaker after acceptance.',
+        );
+      }
     }
     const primarySpeakerId = primaryOf(proposal);
     const primaryParticipant = await tx.get(participantRef(cfpId, proposalId, primarySpeakerId));
@@ -408,7 +503,16 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
     const [speakerRate, recipientRate] = await tx.getAll(speakerRateRef, recipientRateRef);
     const title = String(proposal.get('title') ?? '').trim();
     const primaryIndex = speakerIdsOf(proposal).indexOf(primarySpeakerId);
-    const primaryName = String(activeProfiles[primaryIndex]?.get('name') ?? '').trim();
+    const frozenSpeakers = proposal.get('speakerSnapshot');
+    const primaryName = String(
+      phase === 'postAcceptance'
+        ? (Array.isArray(frozenSpeakers)
+            ? (frozenSpeakers as SpeakerSnapshot[]).find(
+                (speaker) => speaker.uid === primarySpeakerId,
+              )?.name
+            : '')
+        : activeProfiles[primaryIndex]?.get('name'),
+    ).trim();
     if (!title || !primaryName) {
       throw new HttpsError(
         'failed-precondition',
@@ -420,7 +524,8 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
       invitations.docs.some(
         (invite) =>
           invite.get('email') === email &&
-          invite.get('status') === 'pending',
+          invite.get('status') === 'pending' &&
+          !invitationHasExpired(invite),
       )
     ) {
       throw new HttpsError('already-exists', 'That person is already invited.');
@@ -428,7 +533,9 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
     if (invitations.size >= MAX_SPEAKER_INVITATION_HISTORY) {
       throw new HttpsError('resource-exhausted', 'This proposal has reached its invitation history limit.');
     }
-    const pendingCount = invitations.docs.filter((invite) => invite.get('status') === 'pending').length;
+    const pendingCount = invitations.docs.filter(
+      (invite) => invite.get('status') === 'pending' && !invitationHasExpired(invite),
+    ).length;
     if (speakerIdsOf(proposal).length + pendingCount >= MAX_ACTIVE_SPEAKERS) {
       throw new HttpsError('resource-exhausted', `A proposal can have at most ${MAX_ACTIVE_SPEAKERS} speakers.`);
     }
@@ -469,7 +576,7 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    if (!primaryParticipant.exists) {
+    if (phase === 'draft' && !primaryParticipant.exists) {
       tx.create(primaryParticipant.ref, {
         cfpId,
         proposalId,
@@ -485,7 +592,7 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
         joinedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       });
-    } else {
+    } else if (phase === 'draft') {
       tx.set(
         primaryParticipant.ref,
         {
@@ -500,23 +607,32 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
         { merge: true },
       );
     }
-    tx.update(proposalRef, {
-      primarySpeakerId,
-      ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'acks')
-        ? { acks: FieldValue.delete() }
-        : {}),
-      ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'attendance')
-        ? { attendance: FieldValue.delete() }
-        : {}),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    if (phase === 'draft') {
+      tx.update(proposalRef, {
+        primarySpeakerId,
+        ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'acks')
+          ? { acks: FieldValue.delete() }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'attendance')
+          ? { attendance: FieldValue.delete() }
+          : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Make invite creation conflict with a simultaneous committee decision.
+      tx.update(proposalRef, { updatedAt: FieldValue.serverTimestamp() });
+    }
     tx.create(newInvitationRef, {
       cfpId,
       proposalId,
       invitationId: newInvitationId,
       email,
+      phase,
       status: 'pending',
-      expiresAt: cfp.get('closesAt'),
+      expiresAt:
+        phase === 'draft'
+          ? cfp.get('closesAt')
+          : Timestamp.fromMillis(Date.now() + POST_ACCEPTANCE_INVITATION_TTL_MS),
       createdBy: identity.uid,
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -545,13 +661,31 @@ export const retryCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
       invitationRef(cfpId, proposalId, invitationId),
       emailRef,
     );
-    assertOpen(cfp);
-    assertDraft(proposal);
-    if (!canManage(identity, cfpId, proposal, member)) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only the lead speaker can retry a co-speaker invitation.',
-      );
+    if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
+    if (!invitation.exists) throw new HttpsError('not-found', 'Invitation not found.');
+    const phase = invitationPhase(invitation);
+    if (phase === 'draft') {
+      assertOpen(cfp);
+      assertDraft(proposal);
+      if (!canManage(identity, cfpId, proposal, member)) {
+        throw new HttpsError(
+          'permission-denied',
+          'Only the lead speaker can retry a draft co-speaker invitation.',
+        );
+      }
+    } else if (phase === 'postAcceptance') {
+      assertLateInvitationWindow(cfp);
+      if (!postAcceptanceStatus(proposal)) {
+        throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
+      }
+      if (!roleAllowsManagement(member, cfpId, identity.uid)) {
+        throw new HttpsError(
+          'permission-denied',
+          'Only an event admin can retry a post-acceptance co-speaker invitation.',
+        );
+      }
+    } else {
+      throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
     }
     const email = normaliseSpeakerEmail(invitation.get('email'));
     if (
@@ -657,6 +791,8 @@ export const getCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
   }
   const email = String(invitation.get('email') ?? '');
   const matchesSignedInEmail = email === identity.email;
+  const phase = invitationPhase(invitation);
+  if (!phase) throw new HttpsError('not-found', 'Invitation not found.');
   const storedState = invitation.get('status') as SpeakerInvitationStatus;
   const acceptedSpeakerStillActive =
     storedState !== 'accepted' ||
@@ -672,16 +808,23 @@ export const getCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
           ? 'expired'
           : cfp.get('paused') === true
             ? 'paused'
-            : cfp.get('archived') === true ||
-              proposal.get('status') !== 'draft' ||
-              !isOpen(cfp)
-            ? 'expired'
-            : 'pending';
-  const canViewDraft = matchesSignedInEmail && state === 'pending';
+            : cfp.get('archived') === true
+              ? 'unavailable'
+              : phase === 'draft'
+                ? proposal.get('status') === 'draft' && isOpen(cfp)
+                  ? 'pending'
+                  : 'expired'
+                : postAcceptanceStatus(proposal)
+                  ? 'pending'
+                  : 'unavailable';
+  const canViewInvitation = matchesSignedInEmail && state === 'pending';
   const primarySpeakerId = primaryOf(proposal);
-  const primaryProfile = canViewDraft
+  const primaryProfile = canViewInvitation && phase === 'draft'
     ? await db.doc(`speakers/${primarySpeakerId}`).get()
     : null;
+  const primarySnapshot = ((proposal.get('speakerSnapshot') ?? []) as SpeakerSnapshot[]).find(
+    (speaker) => speaker.uid === primarySpeakerId,
+  );
   const form = mergeSubmissionForm(formSnap.exists ? formSnap.data() : undefined);
   const optionLabel = (key: 'category' | 'format' | 'level' | 'deliveryLanguage') =>
     form[key].find((option) => option.value === proposal.get(key))?.label ?? {
@@ -691,16 +834,22 @@ export const getCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     cfpId,
     proposalId,
     invitationId,
+    phase,
     eventName: String(cfp.get('name') ?? cfpId),
-    title: canViewDraft ? String(proposal.get('title') ?? '') : '',
-    primaryName: canViewDraft ? String(primaryProfile?.get('name') ?? '') : '',
+    title: canViewInvitation ? String(proposal.get('title') ?? '') : '',
+    primaryName: canViewInvitation
+      ? String(primaryProfile?.get('name') ?? primarySnapshot?.name ?? '')
+      : '',
     invitedEmail: matchesSignedInEmail ? email : maskSpeakerEmail(email),
     state,
     matchesSignedInEmail,
     canRespond: matchesSignedInEmail && state === 'pending',
     needsProfile:
-      canViewDraft && (!profile.exists || !speakerSchema.safeParse(profile.data()).success),
-    ...(canViewDraft
+      canViewInvitation && (!profile.exists || !speakerSchema.safeParse(profile.data()).success),
+    ...(canViewInvitation && phase === 'postAcceptance'
+      ? { participation: { acknowledgements: form.acks } }
+      : {}),
+    ...(canViewInvitation
       ? {
           talk: {
             abstract: String(proposal.get('abstract') ?? ''),
@@ -719,7 +868,12 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
   const identity = requireIdentity(request);
   const { cfpId, proposalId } = requireIds(request.data);
   const invitationId = invitationIdFrom(request.data);
-  const response = String((request.data as { response?: unknown } | undefined)?.response ?? '');
+  const input = (request.data ?? {}) as {
+    response?: unknown;
+    acks?: unknown;
+    attendance?: unknown;
+  };
+  const response = String(input.response ?? '');
   if (response !== 'accept' && response !== 'decline') {
     throw new HttpsError('invalid-argument', 'Response must be accept or decline.');
   }
@@ -727,16 +881,28 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
   let accepted = false;
   await db.runTransaction(async (tx) => {
-    const [cfp, proposal, invitation, profile] = await tx.getAll(
+    const [cfp, proposal, invitation, profile, formSnap] = await tx.getAll(
       db.doc(`cfps/${cfpId}`),
       proposalRef,
       invitationRef(cfpId, proposalId, invitationId),
       db.doc(`speakers/${identity.uid}`),
+      db.doc(`cfps/${cfpId}/config/submissionForm`),
     );
-    assertOpen(cfp);
-    assertDraft(proposal);
     if (!invitation.exists || invitation.get('email') !== identity.email) {
       throw new HttpsError('not-found', 'Invitation not found for this account.');
+    }
+    if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
+    const phase = invitationPhase(invitation);
+    if (phase === 'draft') {
+      assertOpen(cfp);
+      assertDraft(proposal);
+    } else if (phase === 'postAcceptance') {
+      assertLateInvitationWindow(cfp);
+      if (!postAcceptanceStatus(proposal)) {
+        throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
+      }
+    } else {
+      throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
     }
     if (invitationHasExpired(invitation)) {
       throw new HttpsError('deadline-exceeded', 'This invitation has expired.');
@@ -770,10 +936,58 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
     if (!profile.exists || !speakerSchema.safeParse(profile.data()).success) {
       throw new HttpsError('failed-precondition', 'Complete your speaker profile before accepting.');
     }
+    const form = mergeSubmissionForm(formSnap.exists ? formSnap.data() : undefined);
+    const parsedAcks = phase === 'postAcceptance'
+      ? acksSchemaFor(form).safeParse(input.acks)
+      : null;
+    const parsedAttendance = phase === 'postAcceptance'
+      ? attendanceSchema.safeParse(input.attendance)
+      : null;
+    if (
+      phase === 'postAcceptance' &&
+      (!parsedAcks?.success || !parsedAttendance?.success)
+    ) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Complete the speaker acknowledgements and attendance details before joining.',
+      );
+    }
     if (speakerIds.length >= MAX_ACTIVE_SPEAKERS) {
       throw new HttpsError('resource-exhausted', `A proposal can have at most ${MAX_ACTIVE_SPEAKERS} speakers.`);
     }
-    const primaryParticipant = await tx.get(participantRef(cfpId, proposalId, primarySpeakerId));
+    const [primaryParticipant, existingReview, scheduleConfig, primaryConfirmation] =
+      await tx.getAll(
+        participantRef(cfpId, proposalId, primarySpeakerId),
+        proposalRef.collection('reviews').doc(identity.uid),
+        db.doc(`cfps/${cfpId}/config/schedule`),
+        proposalRef.collection('speakerConfirmations').doc(primarySpeakerId),
+      );
+    if (phase === 'postAcceptance' && existingReview.exists) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This person already reviewed the proposal and cannot be added as a speaker.',
+      );
+    }
+    const proposalData = proposal.data() ?? {};
+    const currentStatus = String(proposal.get('status') ?? '');
+    const releasedConfirmedSchedule =
+      phase === 'postAcceptance' &&
+      currentStatus === 'confirmed' &&
+      proposal.get('lateSpeakerSchedulePreserved') !== true &&
+      await currentScheduleReleaseContainsProposal(db, tx, cfpId, proposalId, cfp);
+    const storedSnapshots = proposal.get('speakerSnapshot');
+    const snapshots = Array.isArray(storedSnapshots)
+      ? (storedSnapshots as SpeakerSnapshot[])
+      : [];
+    if (
+      phase === 'postAcceptance' &&
+      speakerIds.some((uid) => !snapshots.some((speaker) => speaker.uid === uid))
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The accepted proposal has no complete frozen speaker roster.',
+      );
+    }
     if (!primaryParticipant.exists) {
       tx.create(primaryParticipant.ref, {
         cfpId,
@@ -781,26 +995,26 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
         uid: primarySpeakerId,
         role: 'primary',
         status: 'active',
-        ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'acks')
+        ...(Object.prototype.hasOwnProperty.call(proposalData, 'acks')
           ? { acks: proposal.get('acks') }
           : {}),
-        ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'attendance')
+        ...(Object.prototype.hasOwnProperty.call(proposalData, 'attendance')
           ? { attendance: proposal.get('attendance') }
           : {}),
         joinedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       });
     } else if (
-      Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'acks') ||
-      Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'attendance')
+      Object.prototype.hasOwnProperty.call(proposalData, 'acks') ||
+      Object.prototype.hasOwnProperty.call(proposalData, 'attendance')
     ) {
       tx.set(
         primaryParticipant.ref,
         {
-          ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'acks')
+          ...(Object.prototype.hasOwnProperty.call(proposalData, 'acks')
             ? { acks: proposal.get('acks') }
             : {}),
-          ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'attendance')
+          ...(Object.prototype.hasOwnProperty.call(proposalData, 'attendance')
             ? { attendance: proposal.get('attendance') }
             : {}),
           updatedAt: FieldValue.serverTimestamp(),
@@ -808,13 +1022,94 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
         { merge: true },
       );
     }
+    const legacyConfirmed =
+      phase === 'postAcceptance' &&
+      currentStatus === 'confirmed' &&
+      !usesPerSpeakerLifecycle(proposalData);
+    if (legacyConfirmed) {
+      const legacyAnswers = proposal.get('confirmAnswers');
+      const legacyUploads = proposal.get('headshotUploads');
+      const legacySpeakerPhoto = proposal.get('speakerPhoto');
+      const confirmedAt = proposal.get('confirmedAt');
+      tx.set(
+        primaryConfirmation.ref,
+        {
+          cfpId,
+          proposalId,
+          uid: primarySpeakerId,
+          response: 'confirmed',
+          answers:
+            legacyAnswers && typeof legacyAnswers === 'object' && !Array.isArray(legacyAnswers)
+              ? legacyAnswers
+              : {},
+          ...(legacyUploads && typeof legacyUploads === 'object' && !Array.isArray(legacyUploads)
+            ? { headshotUploads: legacyUploads }
+            : {}),
+          ...(legacySpeakerPhoto &&
+          typeof legacySpeakerPhoto === 'object' &&
+          !Array.isArray(legacySpeakerPhoto)
+            ? { speakerPhoto: legacySpeakerPhoto }
+            : {}),
+          migratedFromLegacy: true,
+          respondedAt: confirmedAt ?? FieldValue.serverTimestamp(),
+          confirmedAt: confirmedAt ?? FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+    const existingLateIds = Array.isArray(proposal.get('lateSpeakerPendingIds'))
+      ? (proposal.get('lateSpeakerPendingIds') as unknown[]).filter(
+          (uid): uid is string => typeof uid === 'string' && Boolean(uid),
+        )
+      : [];
+    const lateSpeakerPendingIds = [...new Set([...existingLateIds, identity.uid])];
+    const existingLateInvitations = Array.isArray(proposal.get('lateSpeakerPendingInvitations'))
+      ? (proposal.get('lateSpeakerPendingInvitations') as unknown[]).filter(
+          (value): value is { uid: string; invitationId: string } =>
+            Boolean(
+              value &&
+              typeof value === 'object' &&
+              typeof (value as { uid?: unknown }).uid === 'string' &&
+              typeof (value as { invitationId?: unknown }).invitationId === 'string',
+            ),
+        )
+      : [];
+    const lateSpeakerPendingInvitations = [
+      ...existingLateInvitations.filter((value) => value.uid !== identity.uid),
+      { uid: identity.uid, invitationId },
+    ];
+    const preserveConfirmedSchedule =
+      phase === 'postAcceptance' &&
+      (releasedConfirmedSchedule || proposal.get('lateSpeakerSchedulePreserved') === true);
+    const storedBaseline = proposal.get('lateSpeakerScheduleBaselineIds');
+    const lateSpeakerScheduleBaselineIds =
+      Array.isArray(storedBaseline) &&
+      storedBaseline.every((uid) => typeof uid === 'string')
+        ? storedBaseline
+        : speakerIds;
     tx.update(proposalRef, {
       primarySpeakerId,
       speakerIds: [...speakerIds, identity.uid],
-      ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'acks')
+      ...(phase === 'postAcceptance'
+        ? {
+            speakerSnapshot: [...snapshots, speakerSnapshotFrom(identity.uid, profile.data()!)],
+            status: 'accepted',
+            confirmedAt: FieldValue.delete(),
+            lateSpeakerPendingIds,
+            lateSpeakerPendingInvitations,
+            ...(preserveConfirmedSchedule
+              ? {
+                  lateSpeakerSchedulePreserved: true,
+                  lateSpeakerScheduleBaselineIds,
+                }
+              : {}),
+          }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(proposalData, 'acks')
         ? { acks: FieldValue.delete() }
         : {}),
-      ...(Object.prototype.hasOwnProperty.call(proposal.data() ?? {}, 'attendance')
+      ...(Object.prototype.hasOwnProperty.call(proposalData, 'attendance')
         ? { attendance: FieldValue.delete() }
         : {}),
       updatedAt: FieldValue.serverTimestamp(),
@@ -828,8 +1123,9 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
         role: 'coSpeaker',
         status: 'active',
         invitationId,
-        acks: {},
-        attendance: {},
+        joinedPhase: phase,
+        acks: phase === 'postAcceptance' ? parsedAcks!.data : {},
+        attendance: phase === 'postAcceptance' ? parsedAttendance!.data : {},
         joinedAt: FieldValue.serverTimestamp(),
         removedBy: FieldValue.delete(),
         removedAt: FieldValue.delete(),
@@ -842,6 +1138,12 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
       respondedBy: identity.uid,
       respondedAt: FieldValue.serverTimestamp(),
     });
+    if (phase === 'postAcceptance' && scheduleConfig.exists) {
+      tx.update(
+        scheduleConfig.ref,
+        { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+      );
+    }
     accepted = true;
   });
   return {
@@ -864,15 +1166,32 @@ export const revokeCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
       db.doc(`cfps/${cfpId}/members/${identity.uid}`),
       invitationRef(cfpId, proposalId, invitationId),
     );
-    assertOpen(cfp);
-    assertDraft(proposal);
-    if (!canManage(identity, cfpId, proposal, member)) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only the lead speaker can revoke a co-speaker invitation, and only while the proposal is a draft.',
-      );
-    }
     if (!invitation.exists) throw new HttpsError('not-found', 'Invitation not found.');
+    if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
+    const phase = invitationPhase(invitation);
+    if (phase === 'draft') {
+      assertOpen(cfp);
+      assertDraft(proposal);
+      if (!canManage(identity, cfpId, proposal, member)) {
+        throw new HttpsError(
+          'permission-denied',
+          'Only the lead speaker can revoke a draft co-speaker invitation.',
+        );
+      }
+    } else if (phase === 'postAcceptance') {
+      assertLateInvitationWindow(cfp);
+      if (!postAcceptanceStatus(proposal)) {
+        throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
+      }
+      if (!roleAllowsManagement(member, cfpId, identity.uid)) {
+        throw new HttpsError(
+          'permission-denied',
+          'Only an event admin can revoke a post-acceptance co-speaker invitation.',
+        );
+      }
+    } else {
+      throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
+    }
     const state = String(invitation.get('status') ?? '');
     if (state === 'revoked') return;
     if (state === 'accepted') {
@@ -881,7 +1200,10 @@ export const revokeCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
         'Remove an active co-speaker from the roster instead of revoking their invitation.',
       );
     }
-    if (state !== 'pending' && state !== 'declined') {
+    if (
+      (phase === 'draft' && state !== 'pending' && state !== 'declined') ||
+      (phase === 'postAcceptance' && state !== 'pending')
+    ) {
       throw new HttpsError('failed-precondition', 'This invitation cannot be revoked.');
     }
     tx.update(invitation.ref, {
@@ -913,6 +1235,39 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
     );
     assertActive(cfp);
     if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
+    const lateBindings = Array.isArray(proposal.get('lateSpeakerPendingInvitations'))
+      ? (proposal.get('lateSpeakerPendingInvitations') as unknown[]).filter(
+          (value): value is { uid: string; invitationId: string } =>
+            Boolean(
+              value &&
+              typeof value === 'object' &&
+              typeof (value as { uid?: unknown }).uid === 'string' &&
+              typeof (value as { invitationId?: unknown }).invitationId === 'string',
+            ),
+        )
+      : [];
+    const participantInvitationId = String(participant.get('invitationId') ?? '');
+    const participantClaimsLateJoin =
+      participant.exists &&
+      participant.get('cfpId') === cfpId &&
+      participant.get('proposalId') === proposalId &&
+      participant.get('uid') === targetUid &&
+      participant.get('role') === 'coSpeaker' &&
+      participant.get('status') === 'active' &&
+      participant.get('joinedPhase') === 'postAcceptance' &&
+      INVITATION_ID.test(participantInvitationId);
+    const participantInvitation = participantClaimsLateJoin
+      ? await tx.get(invitationRef(cfpId, proposalId, participantInvitationId))
+      : null;
+    const verifiedLateParticipant =
+      participantInvitation?.exists === true &&
+      invitationPhase(participantInvitation) === 'postAcceptance' &&
+      participantInvitation.get('cfpId') === cfpId &&
+      participantInvitation.get('proposalId') === proposalId &&
+      participantInvitation.get('invitationId') === participantInvitationId &&
+      participantInvitation.get('status') === 'accepted' &&
+      participantInvitation.get('respondedBy') === targetUid;
+    const adminManager = roleAllowsManagement(member, cfpId, identity.uid);
     const selfLeavingDraft =
       proposal.get('status') === 'draft' && identity.uid === targetUid;
     if (!canManage(identity, cfpId, proposal, member) && !selfLeavingDraft) {
@@ -937,15 +1292,24 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
     const confirmationByUid = new Map(confirmations.map((snap) => [snap.id, snap]));
     const targetResponse = confirmationByUid.get(targetUid)?.get('response');
     const currentStatus = String(proposal.get('status') ?? '');
-    if (currentStatus !== 'draft' && targetResponse !== 'declined') {
+    const removableUnconfirmedLateSpeaker =
+      currentStatus !== 'draft' &&
+      verifiedLateParticipant &&
+      adminManager &&
+      targetResponse !== 'confirmed';
+    if (
+      currentStatus !== 'draft' &&
+      targetResponse !== 'declined' &&
+      !removableUnconfirmedLateSpeaker
+    ) {
       throw new HttpsError(
         'failed-precondition',
-        'After submission, only a co-speaker who declined can be removed.',
+        'After submission, only a declined co-speaker or an unconfirmed late addition can be removed.',
       );
     }
 
     let nextStatus = currentStatus;
-    if (currentStatus !== 'draft') {
+    if (['accepted', 'confirmed', 'declined'].includes(currentStatus)) {
       const primaryResponse = confirmationByUid.get(primarySpeakerId)?.get('response');
       nextStatus = primaryResponse === 'declined'
         ? 'declined'
@@ -976,6 +1340,17 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
     ].filter(
       (speaker, index, all) => all.findIndex((candidate) => candidate.uid === speaker.uid) === index,
     );
+    const remainingLateBindings = lateBindings.filter((value) => value.uid !== targetUid);
+    const remainingLateIds = remainingLateBindings.map((value) => value.uid);
+    const baseline = Array.isArray(proposal.get('lateSpeakerScheduleBaselineIds'))
+      ? (proposal.get('lateSpeakerScheduleBaselineIds') as unknown[]).filter(
+          (uid): uid is string => typeof uid === 'string' && Boolean(uid),
+        )
+      : [];
+    const removedBaselineSpeaker =
+      currentStatus !== 'draft' &&
+      proposal.get('lateSpeakerSchedulePreserved') === true &&
+      baseline.includes(targetUid);
     tx.update(proposalRef, {
       speakerIds: remainingIds,
       formerSpeakerIds,
@@ -983,6 +1358,17 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
         ? { speakerSnapshot: snapshots, formerSpeakerSnapshot }
         : {}),
       status: nextStatus,
+      ...(currentStatus !== 'draft'
+        ? {
+            lateSpeakerPendingIds:
+              remainingLateIds.length > 0 ? remainingLateIds : FieldValue.delete(),
+            lateSpeakerPendingInvitations:
+              remainingLateBindings.length > 0
+                ? remainingLateBindings
+                : FieldValue.delete(),
+            ...(removedBaselineSpeaker ? { scheduleCancellationRequired: true } : {}),
+          }
+        : {}),
       ...(nextStatus === 'accepted'
         ? { confirmedAt: FieldValue.delete() }
         : nextStatus === 'confirmed' && currentStatus !== 'confirmed'

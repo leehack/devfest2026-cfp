@@ -6,11 +6,15 @@ import sharp from 'sharp';
 import {
   FORM_LIMITS,
   IMAGE_TYPES,
+  SPEAKER_PHOTO_KEY,
   confirmedHeadshotPath,
   headshotPath,
+  isSpeakerProfilePhotoPath,
   isWorkingHeadshotPath,
   type ConfirmForm,
+  type ConfirmedSpeakerPhoto,
   type HeadshotUploads,
+  type SpeakerProfilePhoto,
 } from '../../shared/confirmForm';
 
 type Bucket = ReturnType<Storage['bucket']>;
@@ -28,6 +32,11 @@ export interface StoredHeadshot extends UploadedHeadshot {
 export interface HeadshotUploadPayload {
   bytes: Buffer;
   contentType: (typeof IMAGE_TYPES)[number];
+}
+
+export interface PublicSpeakerPhoto {
+  bytes: Buffer;
+  contentType: 'image/webp';
 }
 
 /** New participant-scoped objects; the proposal-only helpers remain the legacy format. */
@@ -204,6 +213,125 @@ export async function decodeHeadshotUpload(
   return {
     bytes,
     contentType: contentType as HeadshotUploadPayload['contentType'],
+  };
+}
+
+/** Profile portraits are publication sources, so tiny but valid images are refused. */
+export async function decodeSpeakerProfilePhotoUpload(
+  contentType: unknown,
+  base64: unknown,
+): Promise<HeadshotUploadPayload> {
+  const upload = await decodeHeadshotUpload(contentType, base64);
+  const metadata = await sharp(upload.bytes, {
+    failOn: 'error',
+    limitInputPixels: MAX_IMAGE_PIXELS,
+  }).metadata();
+  if (
+    !metadata.width ||
+    !metadata.height ||
+    Math.min(metadata.width, metadata.height) < FORM_LIMITS.speakerPhotoMinEdge
+  ) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Choose a photo at least ${FORM_LIMITS.speakerPhotoMinEdge} pixels on its shortest edge.`,
+    );
+  }
+  return upload;
+}
+
+/** Metadata-free square derivative used by the public programme. */
+export async function publicSpeakerPhotoDerivative(
+  bytes: Uint8Array,
+): Promise<PublicSpeakerPhoto> {
+  const output = await sharp(bytes, {
+    failOn: 'error',
+    limitInputPixels: MAX_IMAGE_PIXELS,
+  })
+    .rotate()
+    .resize(FORM_LIMITS.speakerPhotoPublicSize, FORM_LIMITS.speakerPhotoPublicSize, {
+      fit: 'cover',
+      position: 'attention',
+    })
+    .webp({ quality: 84 })
+    .toBuffer();
+  return { bytes: output, contentType: 'image/webp' };
+}
+
+/** Accepts only the server-owned current pointer for this account. */
+export function speakerProfilePhotoFrom(
+  value: unknown,
+  uid: string,
+): SpeakerProfilePhoto | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const pointer = value as Partial<SpeakerProfilePhoto>;
+  if (
+    typeof pointer.path !== 'string' ||
+    !isSpeakerProfilePhotoPath(pointer.path, uid) ||
+    typeof pointer.generation !== 'string' ||
+    !pointer.generation ||
+    !(IMAGE_TYPES as readonly unknown[]).includes(pointer.contentType) ||
+    typeof pointer.size !== 'number' ||
+    !Number.isFinite(pointer.size) ||
+    pointer.size <= 0 ||
+    pointer.size > FORM_LIMITS.image
+  ) {
+    return null;
+  }
+  return pointer as SpeakerProfilePhoto;
+}
+
+export function speakerProfilePhotoMatches(
+  value: unknown,
+  uid: string,
+  expected: Pick<SpeakerProfilePhoto, 'path' | 'generation'>,
+): boolean {
+  const current = speakerProfilePhotoFrom(value, uid);
+  return current?.path === expected.path && current.generation === expected.generation;
+}
+
+/** Copies the exact reusable generation into this speaker's immutable event answer. */
+export async function freezeSpeakerProfilePhoto(
+  bucket: Bucket,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+  pointer: SpeakerProfilePhoto,
+): Promise<ConfirmedSpeakerPhoto> {
+  const current = speakerProfilePhotoFrom(pointer, uid);
+  if (!current) throw new HttpsError('failed-precondition', 'The saved profile photo is invalid.');
+  const stored = await readStoredHeadshot(bucket, current.path, current.generation);
+  if (!stored) throw new HttpsError('failed-precondition', 'The saved profile photo is missing.');
+  const metadata = await sharp(stored.bytes, {
+    failOn: 'error',
+    limitInputPixels: MAX_IMAGE_PIXELS,
+  }).metadata();
+  if (
+    !metadata.width ||
+    !metadata.height ||
+    Math.min(metadata.width, metadata.height) < FORM_LIMITS.speakerPhotoMinEdge
+  ) {
+    throw new HttpsError('failed-precondition', 'The saved profile photo is too small.');
+  }
+  const path = speakerConfirmedHeadshotPath(
+    cfpId,
+    proposalId,
+    uid,
+    SPEAKER_PHOTO_KEY,
+    current.generation,
+  );
+  try {
+    await bucket.file(current.path, { generation: current.generation }).copy(path);
+  } catch {
+    throw new HttpsError(
+      'failed-precondition',
+      'The profile photo changed while it was being confirmed. Try again.',
+    );
+  }
+  return {
+    path,
+    sourceGeneration: current.generation,
+    contentType: stored.contentType,
+    size: stored.bytes.length,
   };
 }
 
@@ -399,6 +527,47 @@ export async function findSpeakerUploadedHeadshots(
       ) {
         throw new HttpsError('failed-precondition', 'The saved photo pointer is invalid.');
       }
+    }),
+  );
+  return found;
+}
+
+/**
+ * A legacy single-speaker confirmation can be promoted to the per-speaker
+ * lifecycle while its working pointers still use the proposal-scoped layout.
+ * Each key may independently move to the new layout as the speaker replaces it.
+ */
+export async function findMigratedSpeakerUploadedHeadshots(
+  bucket: Bucket,
+  cfpId: string,
+  proposalId: string,
+  form: ConfirmForm,
+  uid: string,
+  pointers: unknown,
+): Promise<Record<string, UploadedHeadshot>> {
+  const images = (form.fields ?? []).filter((field) => field.type === 'image');
+  const found: Record<string, UploadedHeadshot> = {};
+
+  await Promise.all(
+    images.map(async (field) => {
+      const pointer =
+        speakerWorkingHeadshotFrom(pointers, cfpId, proposalId, uid, field.key) ??
+        workingHeadshotFrom(pointers, cfpId, proposalId, field.key);
+      if (pointer) {
+        const upload = await uploadedHeadshot(bucket, pointer.path);
+        if (upload?.generation === pointer.generation) found[field.key] = pointer;
+        return;
+      }
+      if (
+        pointers &&
+        typeof pointers === 'object' &&
+        !Array.isArray(pointers) &&
+        Object.prototype.hasOwnProperty.call(pointers, field.key)
+      ) {
+        throw new HttpsError('failed-precondition', 'The saved photo pointer is invalid.');
+      }
+      const legacy = await uploadedHeadshot(bucket, headshotPath(cfpId, uid, field.key));
+      if (legacy) found[field.key] = legacy;
     }),
   );
   return found;

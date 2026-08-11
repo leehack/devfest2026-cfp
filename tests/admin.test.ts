@@ -17,6 +17,7 @@ import {
   friendlyError,
   platformAdminError,
   resendError,
+  scheduleError,
 } from '../src/lib/errors';
 import {
   isLateIntakeWindow,
@@ -199,6 +200,58 @@ describe('resendError', () => {
     expect(resendError(failed('invalid-argument'), en)).toBe(en.admin.emailErrors.rejected);
     expect(resendError(failed('unavailable'), en)).toBe(en.admin.emailErrors.unreachable);
     expect(resendError(failed('permission-denied'), en)).toBe(en.nav.forbidden);
+  });
+});
+
+describe('scheduleError', () => {
+  it('explains each schedule delivery fence without exposing callable copy', () => {
+    for (const dict of [en, fr]) {
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
+            details: { reason: 'schedule-email-in-flight' },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.emailDeliveryInProgress);
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
+            details: { reason: 'schedule-email-retry-required' },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.emailDeliveryRetryRequired);
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
+            details: { reason: 'schedule-cancellation-pending' },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.cancellationDeliveryPending);
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
+            details: { reason: 'schedule-cancellation-processing' },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.cancellationProcessing);
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
+            details: { speakerPhoto: 'required', speakers: ['Private name'] },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.speakerPhotoRequired);
+    }
   });
 });
 

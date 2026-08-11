@@ -3,9 +3,15 @@ import {
   type DocumentReference,
   type DocumentSnapshot,
   type Firestore,
+  type Transaction,
 } from 'firebase-admin/firestore';
 
-import type { Answers, HeadshotUploads } from '../../shared/confirmForm';
+import type {
+  Answers,
+  ConfirmedSpeakerPhoto,
+  HeadshotUploads,
+} from '../../shared/confirmForm';
+import { speakerInvitationPhaseOf } from '../../shared/coSpeakers';
 
 export const SPEAKER_PARTICIPANTS = 'speakerParticipants';
 export const SPEAKER_CONFIRMATIONS = 'speakerConfirmations';
@@ -19,6 +25,7 @@ export interface SpeakerConfirmationData {
   response: SpeakerResponse;
   answers: Answers;
   headshotUploads?: HeadshotUploads;
+  speakerPhoto?: ConfirmedSpeakerPhoto;
   respondedAt: unknown;
   confirmedAt?: unknown;
   updatedAt: unknown;
@@ -84,6 +91,202 @@ export function everySpeakerConfirmed(
   );
 }
 
+/** The roster covered by the current immutable release while a late addition confirms. */
+export function currentReleasedSpeakerIds(
+  proposal: DocumentSnapshot | null | undefined,
+): string[] {
+  if (!proposal?.exists || proposal.get('scheduleCancellationRequired') === true) return [];
+  const status = proposal.get('status');
+  const active = new Set(proposalSpeakerIds(proposal.data() ?? {}));
+  if (proposal.get('lateSpeakerSchedulePreserved') !== true) {
+    return status === 'confirmed' ? [...active] : [];
+  }
+
+  const pending = proposal.get('lateSpeakerPendingIds');
+  const bindings = proposal.get('lateSpeakerPendingInvitations');
+  const baseline = proposal.get('lateSpeakerScheduleBaselineIds');
+  if (
+    !Array.isArray(baseline) ||
+    baseline.length === 0 ||
+    !baseline.every((uid) => typeof uid === 'string' && active.has(uid)) ||
+    new Set(baseline).size !== baseline.length
+  ) {
+    return [];
+  }
+  if (status === 'confirmed') return [...baseline];
+  const noPendingBindings =
+    (pending === undefined || (Array.isArray(pending) && pending.length === 0)) &&
+    (bindings === undefined || (Array.isArray(bindings) && bindings.length === 0));
+  if (status === 'accepted' && noPendingBindings) return [...baseline];
+  if (
+    status !== 'accepted' ||
+    !Array.isArray(pending) ||
+    pending.length === 0 ||
+    !pending.every((uid) => typeof uid === 'string' && active.has(uid)) ||
+    new Set(pending).size !== pending.length ||
+    !Array.isArray(bindings) ||
+    bindings.length !== pending.length ||
+    !bindings.every(
+      (binding) =>
+        binding &&
+        typeof binding === 'object' &&
+        typeof binding.uid === 'string' &&
+        typeof binding.invitationId === 'string' &&
+        pending.includes(binding.uid),
+    ) ||
+    baseline.some((uid) => pending.includes(uid))
+  ) {
+    return [];
+  }
+  return [...new Set(baseline as string[])];
+}
+
+/** The immutable roster addressed when an existing release is cancelled. */
+export function scheduleCancellationRecipientIds(
+  proposal: DocumentSnapshot | null | undefined,
+): string[] {
+  if (!proposal?.exists) return [];
+  const baseline = proposal.get('lateSpeakerScheduleBaselineIds');
+  if (
+    proposal.get('lateSpeakerSchedulePreserved') === true &&
+    Array.isArray(baseline) &&
+    baseline.length > 0 &&
+    baseline.every((uid) => typeof uid === 'string' && Boolean(uid)) &&
+    new Set(baseline).size === baseline.length
+  ) {
+    return [...baseline];
+  }
+  return proposalSpeakerIds(proposal.data() ?? {});
+}
+
+export function scheduleReleaseIds(
+  cfp: DocumentSnapshot | null | undefined,
+): string[] {
+  return [
+    ...new Set(
+      [cfp?.get('sharedScheduleId'), cfp?.get('publishedScheduleId')].filter(
+        (value): value is string => typeof value === 'string' && Boolean(value),
+      ),
+    ),
+  ];
+}
+
+/** Release queries made before a transaction are safe to apply only to this exact pointer set. */
+export function scheduleCancellationSnapshotIsCurrent(
+  observedReleaseIds: readonly string[],
+  currentCfp: DocumentSnapshot | null | undefined,
+): boolean {
+  const currentReleaseIds = scheduleReleaseIds(currentCfp);
+  return (
+    observedReleaseIds.length === currentReleaseIds.length &&
+    observedReleaseIds.every((releaseId, index) => releaseId === currentReleaseIds[index])
+  );
+}
+
+/** A delayed event must not act on a document recreated at the same path. */
+export function proposalEventIsCurrent(
+  observedProposal: DocumentSnapshot | null | undefined,
+  currentProposal: DocumentSnapshot | null | undefined,
+): boolean {
+  const observedCreateTime = observedProposal?.createTime;
+  const currentCreateTime = currentProposal?.createTime;
+  return Boolean(
+    observedProposal?.exists &&
+    currentProposal?.exists &&
+    observedCreateTime &&
+    currentCreateTime &&
+    observedCreateTime.isEqual(currentCreateTime),
+  );
+}
+
+export function scheduleReleaseProposalEntryId(
+  source: DocumentSnapshot | null | undefined,
+  proposalId: string,
+): string | null {
+  const stored = source?.get('scheduledProposalEntries');
+  // Releases created before proposal-level schedule email validation have no
+  // map. Keep their exact-entry checks working while every new release records
+  // an explicit empty string for proposals it does not contain.
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return null;
+  const entryId = (stored as Record<string, unknown>)[proposalId];
+  return typeof entryId === 'string' ? entryId : '';
+}
+
+/** Whether a current shared or published immutable release serves a proposal. */
+export async function currentScheduleReleaseContainsProposal(
+  db: Firestore,
+  tx: Transaction,
+  cfpId: string,
+  proposalId: string,
+  currentCfp?: DocumentSnapshot,
+): Promise<boolean> {
+  const cfp = currentCfp ?? await tx.get(db.doc(`cfps/${cfpId}`));
+  const releaseIds = scheduleReleaseIds(cfp);
+
+  for (const releaseId of releaseIds) {
+    const releaseRef = db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`);
+    const source = await tx.get(
+      releaseRef.collection('internal').doc('source'),
+    );
+    const mappedEntryId = scheduleReleaseProposalEntryId(source, proposalId);
+    if (mappedEntryId === '') continue;
+    if (mappedEntryId) {
+      const entry = await tx.get(releaseRef.collection('entries').doc(mappedEntryId));
+      if (
+        entry.exists &&
+        entry.get('proposalId') === proposalId &&
+        entry.get('cancelled') !== true
+      ) {
+        return true;
+      }
+      continue;
+    }
+
+    const legacyEntries = await tx.get(
+      releaseRef.collection('entries').where('proposalId', '==', proposalId),
+    );
+    if (legacyEntries.docs.some((entry) => entry.get('cancelled') !== true)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function scheduleEmailStillTrue(
+  kind: string,
+  rowReleaseId: string,
+  currentReleaseId: string,
+  entry: DocumentSnapshot | null | undefined,
+  proposal: DocumentSnapshot | null | undefined,
+  recipientUid: string,
+  currentProposalEntryId?: string | null,
+): boolean {
+  if (!currentReleaseId || rowReleaseId !== currentReleaseId) return false;
+  if (kind === 'schedule_cancelled') {
+    if (currentProposalEntryId !== null && currentProposalEntryId !== undefined) {
+      return (
+        currentProposalEntryId === '' ||
+        Boolean(
+          entry &&
+            entry.exists &&
+            entry.id === currentProposalEntryId &&
+            entry.get('cancelled') === true,
+        )
+      );
+    }
+    return Boolean(entry && (!entry.exists || entry.get('cancelled') === true));
+  }
+  return (
+    Boolean(entry) &&
+    (currentProposalEntryId === null ||
+      currentProposalEntryId === undefined ||
+      currentProposalEntryId === entry?.id) &&
+    currentReleasedSpeakerIds(proposal).includes(recipientUid) &&
+    entry?.exists === true &&
+    entry?.get('cancelled') !== true
+  );
+}
+
 /** Revalidates a queued invite against the exact private row before delivery. */
 export function coSpeakerInvitationStillTrue(
   kind: unknown,
@@ -96,6 +299,7 @@ export function coSpeakerInvitationStillTrue(
   cfp: DocumentSnapshot | null,
   now = Date.now(),
 ): boolean {
+  const phase = speakerInvitationPhaseOf(invitation?.data() ?? {});
   const expiresAt = invitation?.get('expiresAt');
   const opensAt = cfp?.get('opensAt');
   const closesAt = cfp?.get('closesAt');
@@ -109,6 +313,16 @@ export function coSpeakerInvitationStillTrue(
   const expiresAtMillis = millis(expiresAt);
   const opensAtMillis = millis(opensAt);
   const closesAtMillis = millis(closesAt);
+  const proposalStatus = proposal?.get('status');
+  const phaseIsCurrent =
+    phase === 'draft'
+      ? proposalStatus === 'draft' &&
+        Number.isFinite(opensAtMillis) &&
+        Number.isFinite(closesAtMillis) &&
+        now >= opensAtMillis &&
+        now < closesAtMillis
+      : phase === 'postAcceptance' &&
+        (proposalStatus === 'accepted' || proposalStatus === 'confirmed');
   return (
     kind === 'co_speaker_invited' &&
     cfp?.exists === true &&
@@ -117,17 +331,13 @@ export function coSpeakerInvitationStillTrue(
     cfp.get('paused') !== true &&
     invitation?.exists === true &&
     proposal?.exists === true &&
-    proposal.get('status') === 'draft' &&
+    phaseIsCurrent &&
     invitation.get('cfpId') === cfpId &&
     invitation.get('proposalId') === proposalId &&
     invitation.get('invitationId') === invitationId &&
     invitation.get('email') === invitationEmail &&
     invitation.get('status') === 'pending' &&
     Number.isFinite(expiresAtMillis) &&
-    Number.isFinite(opensAtMillis) &&
-    Number.isFinite(closesAtMillis) &&
-    now >= opensAtMillis &&
-    now < closesAtMillis &&
     now < expiresAtMillis
   );
 }
@@ -166,6 +376,7 @@ export function coSpeakerSignInInvitationStillTrue(
     !cfp?.exists ||
     cfp.get('deleting') === true ||
     !invitation?.exists ||
+    !speakerInvitationPhaseOf(invitation.data() ?? {}) ||
     !proposal?.exists ||
     invitation.get('cfpId') !== cfpId ||
     invitation.get('proposalId') !== proposalId ||

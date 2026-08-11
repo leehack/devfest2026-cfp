@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FORM_LIMITS,
+  EMPTY_FORM,
+  confirmFormFromData,
   keyFromLabel,
   localised,
   normaliseForm,
@@ -33,6 +35,24 @@ const form = (...fields: ConfirmField[]): ConfirmForm => ({ fields });
 describe('validateForm', () => {
   it('accepts an empty form — asking nothing is a valid choice', () => {
     expect(validateForm({ fields: [] })).toBeNull();
+  });
+
+  it('validates the dedicated reusable speaker-photo requirement', () => {
+    expect(validateForm({ fields: [], speakerPhoto: { required: false } })).toBeNull();
+    expect(validateForm({ fields: [], speakerPhoto: { required: true } })).toBeNull();
+    expect(
+      validateForm({ fields: [], speakerPhoto: { required: 'yes' } } as unknown as ConfirmForm),
+    ).toEqual({ problem: 'badKey', key: 'speakerPhoto' });
+  });
+
+  it('keeps the dedicated photo setting distinct from a legacy question key', () => {
+    expect(validateForm(form(field({ key: 'speakerPhoto', type: 'image' })))).toBeNull();
+    expect(
+      validateForm({
+        fields: [field({ key: 'speakerPhoto', type: 'image' })],
+        speakerPhoto: { required: false },
+      }),
+    ).toEqual({ problem: 'duplicateKey', key: 'speakerPhoto' });
   });
 
   it('accepts one of each type', () => {
@@ -102,6 +122,25 @@ describe('validateForm', () => {
 });
 
 describe('normaliseForm', () => {
+  it('treats an omitted speaker-photo setting as optional', () => {
+    expect(EMPTY_FORM.speakerPhoto).toEqual({ required: false });
+    expect(confirmFormFromData({ fields: [] })).toEqual({
+      fields: [],
+      speakerPhoto: { required: false },
+    });
+    expect(normaliseForm({ fields: [] })).toEqual({
+      fields: [],
+      speakerPhoto: { required: false },
+    });
+  });
+
+  it('preserves an explicit required speaker-photo setting', () => {
+    expect(confirmFormFromData({ fields: [], speakerPhoto: { required: true } })).toEqual({
+      fields: [],
+      speakerPhoto: { required: true },
+    });
+  });
+
   it('drops anything the shape does not define', () => {
     const dirty = { fields: [{ ...field(), colour: 'red', label: { en: 'Shirt', xx: 'no' } }] };
     const clean = normaliseForm(dirty as unknown as ConfirmForm);
@@ -124,6 +163,18 @@ describe('normaliseForm', () => {
   it('keeps a blank French label out of the document rather than storing ""', () => {
     const clean = normaliseForm(form(field({ label: { en: 'Shirt', fr: '   ' } })));
     expect(clean.fields[0].label).toEqual({ en: 'Shirt' });
+  });
+
+  it('normalises the speaker-photo setting independently from legacy image questions', () => {
+    expect(
+      normaliseForm({
+        fields: [field({ key: 'sponsor_headshot', type: 'image' })],
+        speakerPhoto: { required: true, label: 'ignored' } as never,
+      }),
+    ).toEqual({
+      fields: [field({ key: 'sponsor_headshot', type: 'image' })],
+      speakerPhoto: { required: true },
+    });
   });
 });
 

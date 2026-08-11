@@ -559,6 +559,9 @@
 .agenda-item__body h3 a { color: var(--fg); overflow-wrap: anywhere; text-decoration: none; }
 .agenda-item__body h3 a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: .18em; }
 .agenda-item__body p { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--muted); }
+.agenda-item__speakers { min-width: 0; display: flex; gap: var(--s-2); align-items: center; }
+.agenda-item__speaker-photos { display: flex; flex: none; padding-left: .28rem; }
+.agenda-item__speaker-photos .public-speaker-photo + .public-speaker-photo { margin-left: -.28rem; }
 .agenda-item__meta { display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center; color: var(--muted); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .06em; }
 .taxonomy-chip { display: inline-flex; align-items: center; max-width: 100%; padding: .18rem .45rem; overflow: hidden; border: 1px solid color-mix(in srgb, var(--g-green) 30%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--g-green) 8%, var(--surface)); color: color-mix(in srgb, var(--g-green) 68%, var(--fg)); font-size: var(--text-xs); font-weight: 750; letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
 .language-chip { display: inline-flex; align-items: center; padding: .2rem .45rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: var(--text-xs); font-weight: 700; letter-spacing: .02em; }
@@ -587,7 +590,9 @@
 .session-speakers h3 { margin: 0; }
 .session-speaker { min-width: 0; display: grid; grid-template-columns: 3.5rem minmax(0, 1fr); gap: var(--s-3); }
 .session-speaker > div { min-width: 0; }
-.session-speaker__monogram { width: 3.5rem; height: 3.5rem; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(135deg, var(--g-blue), var(--g-green)); color: white; font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; }
+.public-speaker-photo { width: 3.5rem; height: 3.5rem; display: grid; flex: none; place-items: center; overflow: hidden; border: 1px solid color-mix(in srgb, var(--g-blue) 30%, var(--line)); border-radius: 50%; background: linear-gradient(135deg, var(--g-blue), var(--g-green)); color: white; font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; }
+.public-speaker-photo img { width: 100%; height: 100%; object-fit: cover; }
+.public-speaker-photo--compact { width: 1.75rem; height: 1.75rem; border: 2px solid var(--surface); font-size: var(--text-xs); }
 .session-speaker h4, .session-speaker p { margin: 0; }
 .session-speaker h4 { overflow-wrap: anywhere; font-size: var(--text-lg); }
 .session-speaker p { margin-top: var(--s-1); color: var(--muted); overflow-wrap: anywhere; white-space: pre-line; }
@@ -2335,6 +2340,167 @@ p {
 .answers dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.speaker-photo {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s-4) var(--s-5);
+  align-items: center;
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.speaker-photo__copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s-1) var(--s-3);
+  align-items: baseline;
+}
+
+.speaker-photo__copy h3,
+.speaker-photo__copy p,
+.speaker-photo__actions p {
+  margin: 0;
+}
+
+.speaker-photo__copy h3,
+.speaker-photo__copy p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.speaker-photo__copy p {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.speaker-photo__control {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+}
+
+.speaker-photo__preview,
+.speaker-photo__empty {
+  width: 5.5rem;
+  height: 5.5rem;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  object-fit: cover;
+}
+
+.speaker-photo__empty {
+  background:
+    radial-gradient(circle at 50% 36%, var(--line-strong) 0 20%, transparent 21%),
+    radial-gradient(ellipse at 50% 100%, var(--line-strong) 0 36%, transparent 37%),
+    var(--surface);
+}
+
+.speaker-photo__actions {
+  min-width: min(15rem, 100%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.speaker-photo__actions .field__help {
+  flex-basis: 100%;
+}
+
+.speaker-photo__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.speaker-photo > .field__error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.speaker-photo__session-status {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-4);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid color-mix(in srgb, var(--good) 28%, var(--line));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--good-bg) 58%, var(--surface));
+}
+
+.speaker-photo__session-status--update {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+}
+
+.speaker-photo__session-status > div {
+  min-width: min(20rem, 100%);
+  flex: 1 1 28rem;
+}
+
+.speaker-photo__session-status strong,
+.speaker-photo__session-status p {
+  margin: 0;
+}
+
+.speaker-photo__session-status p {
+  margin-top: var(--s-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.speaker-photo__session-status > .field__error {
+  flex-basis: 100%;
+  color: var(--error);
+}
+
+.speaker-confirmation__photo {
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.speaker-confirmation__photo h5 {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 41.99rem) {
+  .speaker-photo {
+    grid-template-columns: 1fr;
+  }
+
+  .speaker-photo__control {
+    align-items: flex-start;
+  }
+
+  .speaker-photo__actions {
+    flex: 1 1 12rem;
+  }
+
+  .speaker-photo__actions .btn {
+    flex: 1 1 9rem;
+  }
 }
 
 /* A headshot answer: the photo beside the control that changes it, so the
@@ -4787,6 +4953,59 @@ body:has(.consent) .editorbar {
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   backdrop-filter: blur(12px);
+}
+
+/* A submitted session keeps an explicit event copy of the global profile. */
+.profile-snapshot-refresh {
+  display: grid;
+  gap: var(--s-3);
+  margin-top: var(--s-5);
+  padding: var(--s-4);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--accent-soft) 48%, var(--surface));
+}
+
+.profile-snapshot-refresh__copy h3,
+.profile-snapshot-refresh__copy p,
+.profile-snapshot-refresh__status {
+  margin: 0;
+}
+
+.profile-snapshot-refresh__copy h3 {
+  font-size: var(--text-lg);
+}
+
+.profile-snapshot-refresh__copy p {
+  max-width: 68ch;
+  margin-top: var(--s-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.profile-snapshot-refresh > .btn {
+  width: fit-content;
+}
+
+.profile-snapshot-refresh__status {
+  display: grid;
+  gap: var(--s-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.profile-snapshot-refresh--compact {
+  grid-column: 2 / -1;
+  justify-items: end;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.profile-snapshot-refresh--compact .profile-snapshot-refresh__status {
+  justify-items: end;
+  text-align: right;
 }
 
 .profile-actions__state {
@@ -7348,6 +7567,19 @@ body:has(.consent) .editorbar {
   margin-top: 0;
 }
 
+.co-speaker-invitation__participation {
+  display: grid;
+  gap: var(--s-3);
+  margin-top: var(--s-6);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--line);
+}
+
+.co-speaker-invitation__participation h2,
+.co-speaker-invitation__participation > .section__help {
+  margin: 0;
+}
+
 .co-speaker-invitation__actions {
   display: flex;
   flex-wrap: wrap;
@@ -7384,6 +7616,21 @@ body:has(.consent) .editorbar {
 
   .co-speaker-person__actions > .btn {
     flex: 1 1 12rem;
+  }
+
+  .profile-snapshot-refresh--compact {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .profile-snapshot-refresh--compact > .btn {
+    width: 100%;
+  }
+
+  .profile-snapshot-refresh--compact .profile-snapshot-refresh__status {
+    justify-items: start;
+    text-align: left;
   }
 
   .co-speaker-invite,

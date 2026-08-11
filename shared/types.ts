@@ -14,7 +14,12 @@ import type {
   Score,
   SocialPlatform,
 } from './enums';
-import type { Answers, HeadshotUploads } from './confirmForm';
+import type {
+  Answers,
+  ConfirmedSpeakerPhoto,
+  HeadshotUploads,
+  SpeakerProfilePhoto,
+} from './confirmForm';
 import type { CfpProfile, CfpRole, GrantableRole, Visibility } from './cfp';
 
 export interface Social {
@@ -43,6 +48,8 @@ export interface Speaker {
 
   // Post-acceptance only — absent at submission time.
   photoUrl?: string;
+  /** Server-owned reusable original; browser profile writes may not forge it. */
+  profilePhoto?: SpeakerProfilePhoto;
   tshirtSize?: string;
   dietaryNeeds?: string;
 
@@ -108,8 +115,8 @@ export interface CfpMember {
 }
 
 /**
- * The speaker as the committee read them, frozen onto the proposal at
- * submission.
+ * The speaker as the committee reads them, copied onto the proposal at
+ * submission and changed later only by the explicit profile-refresh callable.
  *
  * Two problems, one answer. A profile belongs to the account rather than to any
  * one talk, so a bio edited in 2028 would otherwise rewrite what the 2026
@@ -177,9 +184,9 @@ export interface Proposal {
   formerSpeakerSnapshot?: SpeakerSnapshot[];
 
   /**
-   * The speakers as the committee reads them, frozen at submission. Parallel to
-   * `speakerIds`. Absent until submission; draft access stays within the active
-   * speaker roster.
+   * The speakers as the committee reads them. Parallel to `speakerIds`, absent
+   * until submission, and refreshed only by an explicit speaker/admin action;
+   * draft access stays within the active speaker roster.
    */
   speakerSnapshot?: SpeakerSnapshot[];
 
@@ -218,10 +225,20 @@ export interface Proposal {
   status: ProposalStatus;
   confirmDeadline?: unknown;
   confirmedAt?: unknown;
+  /** Function-only state while accepted late additions finish confirmation. */
+  lateSpeakerPendingIds?: string[];
+  lateSpeakerPendingInvitations?: Array<{ uid: string; invitationId: string }>;
+  /** Original confirmed roster whose existing immutable schedule release remains valid. */
+  lateSpeakerScheduleBaselineIds?: string[];
+  lateSpeakerSchedulePreserved?: boolean;
+  /** Function-only signal to invalidate that release when a baseline speaker leaves. */
+  scheduleCancellationRequired?: boolean;
   /** The organiser's own questions, answered on confirmation. */
   confirmAnswers?: Answers;
   /** Function-written pointers to replaceable post-acceptance image uploads. */
   headshotUploads?: HeadshotUploads;
+  /** Legacy single-speaker storage for the event-frozen reusable profile photo. */
+  speakerPhoto?: ConfirmedSpeakerPhoto;
   /** Set at scheduling when deliveryLanguage is `either`. */
   assignedLanguage?: ResolvedLanguage;
 

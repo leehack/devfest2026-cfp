@@ -231,7 +231,10 @@ service cloud.firestore {
           && !request.resource.data.keys().hasAny([
                'aggregate', 'submittedAt', 'confirmDeadline',
                'confirmedAt', 'assignedLanguage', 'speakerSnapshot',
-               'headshotUploads', 'formerSpeakerIds', 'formerSpeakerSnapshot'
+               'headshotUploads', 'speakerPhoto', 'formerSpeakerIds', 'formerSpeakerSnapshot',
+               'lateSpeakerPendingIds', 'lateSpeakerPendingInvitations',
+               'lateSpeakerScheduleBaselineIds', 'lateSpeakerSchedulePreserved',
+               'scheduleCancellationRequired'
              ]);
 
         // Keys the client may never write, on create or update. `status` and
@@ -242,8 +245,10 @@ service cloud.firestore {
           return request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'cfpId', 'status', 'aggregate', 'submittedAt', 'confirmDeadline',
             'confirmedAt', 'assignedLanguage', 'confirmAnswers', 'speakerSnapshot',
-            'headshotUploads', 'primarySpeakerId', 'speakerIds', 'formerSpeakerIds',
-            'formerSpeakerSnapshot'
+            'headshotUploads', 'speakerPhoto', 'primarySpeakerId', 'speakerIds', 'formerSpeakerIds',
+            'formerSpeakerSnapshot', 'lateSpeakerPendingIds',
+            'lateSpeakerPendingInvitations', 'lateSpeakerScheduleBaselineIds',
+            'lateSpeakerSchedulePreserved', 'scheduleCancellationRequired'
           ]);
         }
 
@@ -433,9 +438,11 @@ service cloud.firestore {
       allow get, list: if ownProfile();
 
       allow create: if ownProfile()
-        && request.resource.data.email == request.auth.token.email;
+        && request.resource.data.email == request.auth.token.email
+        && !request.resource.data.keys().hasAny(['profilePhoto']);
       allow update: if ownProfile()
-        && request.resource.data.email == resource.data.email;
+        && request.resource.data.email == resource.data.email
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['profilePhoto']);
       allow delete: if false;
     }
 

@@ -6,8 +6,10 @@ import {
   type ProposalSpeakerRoster,
   type SpeakerRosterItem,
 } from '@shared/coSpeakers';
+import type { SpeakerSnapshot } from '@shared/types';
 
 import { useI18n } from '../i18n/context';
+import { ProfileSnapshotRefresh } from './ProfileSnapshotRefresh';
 import { friendlyError } from '../lib/errors';
 import {
   inviteProposalSpeaker,
@@ -26,6 +28,7 @@ export interface CoSpeakerRosterProps {
   readOnly?: boolean;
   refreshKey?: number;
   onChange?: (roster: ProposalSpeakerRoster | null) => void;
+  onSnapshotRefreshed?: (speakerUid: string, snapshot: SpeakerSnapshot) => void;
   onLeft?: () => void;
 }
 
@@ -60,6 +63,7 @@ export function CoSpeakerRoster({
   readOnly = false,
   refreshKey = 0,
   onChange,
+  onSnapshotRefreshed,
   onLeft,
 }: CoSpeakerRosterProps) {
   const { t } = useI18n();
@@ -277,6 +281,13 @@ export function CoSpeakerRoster({
   const currentSpeakerReady = Boolean(
     currentSpeaker?.profileComplete && currentSpeaker.detailsComplete,
   );
+  const canManageInvitations = roster.canManage || roster.canInvite;
+  const hasPendingLateInvitation = roster.items.some(
+    (item) =>
+      item.kind === 'invitation' &&
+      item.phase === 'postAcceptance' &&
+      item.state === 'pending',
+  );
 
   return (
     <div className="co-speaker-roster">
@@ -304,6 +315,12 @@ export function CoSpeakerRoster({
           {refreshing ? t.coSpeakers.refreshing : t.coSpeakers.refresh}
         </button>
       </div>
+
+      {context === 'admin' && !readOnly && (
+        <p className="section__help co-speaker-roster__profile-help">
+          {t.profileSnapshot.adminHelp}
+        </p>
+      )}
 
       <ul className="co-speaker-list" aria-label={t.coSpeakers.title}>
         {roster.items.map((item) => {
@@ -347,6 +364,20 @@ export function CoSpeakerRoster({
               </span>
               {item.isCurrentUser && (
                 <span className="co-speaker-person__you">{t.coSpeakers.currentAccount}</span>
+              )}
+              {context === 'admin' && item.kind === 'active' && !readOnly && (
+                <ProfileSnapshotRefresh
+                  compact
+                  cfpId={cfpId}
+                  proposalId={proposalId}
+                  speakerUid={item.uid}
+                  speakerName={label}
+                  disabled={actionBusy}
+                  onRefreshed={(result) => {
+                    onSnapshotRefreshed?.(item.uid, result.snapshot);
+                    setReload((value) => value + 1);
+                  }}
+                />
               )}
               {item.kind === 'active' && (roster.setupOpen || roster.confirmationOpen) && (
                 <span className="co-speaker-readiness">
@@ -398,7 +429,7 @@ export function CoSpeakerRoster({
                       : t.coSpeakers.remove}
                 </button>
               )}
-              {item.kind === 'invitation' && item.state === 'pending' && roster.canManage && !readOnly && (
+              {item.kind === 'invitation' && item.state === 'pending' && canManageInvitations && !readOnly && (
                 <span className="co-speaker-person__actions">
                   {item.canRetryDelivery && (
                     <button
@@ -439,7 +470,7 @@ export function CoSpeakerRoster({
 
       {roster.items.length === 1 && <p className="muted">{t.coSpeakers.empty}</p>}
 
-      {roster.canManage && !readOnly && !atCapacity && (
+      {roster.canInvite && !readOnly && !atCapacity && (
         <div className="co-speaker-invite">
           <label className="field co-speaker-invite__field">
             <span className="field__label">{t.coSpeakers.inviteLabel}</span>
@@ -466,7 +497,9 @@ export function CoSpeakerRoster({
               }}
             />
             <span className="field__help" id="co-speaker-email-help">
-              {t.coSpeakers.inviteHelp}
+              {roster.invitePhase === 'postAcceptance'
+                ? t.coSpeakers.lateInviteHelp
+                : t.coSpeakers.inviteHelp}
             </span>
             {emailError && (
               <span className="field__error" id="co-speaker-email-error">
@@ -480,7 +513,14 @@ export function CoSpeakerRoster({
         </div>
       )}
 
-      {roster.canManage && !readOnly && atCapacity && <p className="muted">{t.coSpeakers.atCapacity}</p>}
+      {roster.canInvite && !readOnly && atCapacity && <p className="muted">{t.coSpeakers.atCapacity}</p>}
+
+      {hasPendingLateInvitation && (
+        <aside className="co-speaker-pending" role="status">
+          <strong>{t.coSpeakers.lateInvitePendingTitle}</strong>
+          <p>{t.coSpeakers.lateInvitePendingHelp}</p>
+        </aside>
+      )}
 
       {roster.pendingBlocksSubmit && (
         <aside className="co-speaker-pending" role="status">
@@ -521,6 +561,7 @@ export function CoSpeakerRosterDialog({
   proposalId,
   proposalTitle,
   readOnly = false,
+  onSnapshotRefreshed,
   onClose,
 }: {
   open: boolean;
@@ -528,6 +569,7 @@ export function CoSpeakerRosterDialog({
   proposalId: string;
   proposalTitle: string;
   readOnly?: boolean;
+  onSnapshotRefreshed?: (speakerUid: string, snapshot: SpeakerSnapshot) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -607,6 +649,7 @@ export function CoSpeakerRosterDialog({
           proposalId={proposalId}
           context="admin"
           readOnly={readOnly}
+          onSnapshotRefreshed={onSnapshotRefreshed}
         />
       </div>
     </div>

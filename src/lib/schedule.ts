@@ -51,6 +51,11 @@ export const unpublishSchedule = httpsCallable<
   { ok: boolean; releaseId: string | null; version: number | null }
 >(functions, 'unpublishSchedule');
 
+export const publicSchedulePhoto = httpsCallable<
+  WithCfp<{ releaseId: string; entryId: string; speakerIndex: number }>,
+  { ok: true; contentType: 'image/webp'; base64: string }
+>(functions, 'publicSchedulePhoto');
+
 export interface ScheduleDraft {
   config: ScheduleConfig | null;
   entries: ScheduleEntry[];

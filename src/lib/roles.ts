@@ -16,7 +16,11 @@ import type { ProposalStatus } from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
-import type { ConfirmField } from '@shared/confirmForm';
+import type {
+  ConfirmedSpeakerPhoto,
+  ConfirmField,
+  SpeakerPhotoQuestion,
+} from '@shared/confirmForm';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp, CfpMember, Proposal, RoleGrant } from '@shared/types';
 import type {
@@ -268,8 +272,8 @@ export const headshotImage = httpsCallable<
 >(functions, 'headshotImage');
 
 export const setConfirmForm = httpsCallable<
-  In<{ fields: ConfirmField[] }>,
-  { ok: boolean; fields: ConfirmField[] }
+  In<{ fields: ConfirmField[]; speakerPhoto?: SpeakerPhotoQuestion }>,
+  { ok: true; fields: ConfirmField[]; speakerPhoto?: SpeakerPhotoQuestion }
 >(functions, 'setConfirmForm');
 
 export const setSubmissionForm = httpsCallable<
@@ -379,6 +383,7 @@ export interface ProposalRow extends Proposal {
     uid: string;
     response?: 'confirmed' | 'declined';
     answers?: Record<string, any>;
+    speakerPhoto?: ConfirmedSpeakerPhoto;
   }>;
   speakerParticipants?: Array<{
     uid: string;
@@ -454,6 +459,7 @@ export async function loadAllProposals(
         uid: confirmation.id,
         response: confirmation.data().response,
         answers: confirmation.data().answers,
+        speakerPhoto: confirmation.data().speakerPhoto,
       })),
     speakerParticipants: (participants.get(d.id)?.docs ?? [])
       .filter((participant) => participant.data().status === 'active')

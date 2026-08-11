@@ -1,9 +1,13 @@
 /** Proposal-scoped speaker invitations and the safe roster returned by callables. */
 
-import type { Localised } from './confirmForm';
+import type { ConfirmField, Localised } from './confirmForm';
 
 export const MAX_ACTIVE_SPEAKERS = 4;
 export const MAX_SPEAKER_INVITATION_HISTORY = 20;
+export const POST_ACCEPTANCE_INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1_000;
+
+export const SPEAKER_INVITATION_PHASES = ['draft', 'postAcceptance'] as const;
+export type SpeakerInvitationPhase = (typeof SPEAKER_INVITATION_PHASES)[number];
 
 export const SPEAKER_INVITATION_STATUSES = [
   'pending',
@@ -27,6 +31,8 @@ export interface SpeakerInvitation {
   proposalId: string;
   invitationId: string;
   email: string;
+  /** Missing on historic rows, which are draft invitations. */
+  phase?: SpeakerInvitationPhase;
   status: SpeakerInvitationStatus;
   createdBy: string;
   createdAt: unknown;
@@ -45,6 +51,7 @@ export interface SpeakerParticipant {
   status: 'active' | 'inactive';
   joinedAt: unknown;
   invitationId?: string;
+  joinedPhase?: SpeakerInvitationPhase;
   acks?: Record<string, boolean>;
   attendance?: Record<string, unknown>;
   updatedAt?: unknown;
@@ -70,6 +77,7 @@ export interface InvitedSpeakerRosterItem {
   kind: 'invitation';
   state: SpeakerInvitationStatus;
   invitationId: string;
+  phase: SpeakerInvitationPhase;
   role: 'coSpeaker';
   name: string;
   email?: string;
@@ -85,6 +93,8 @@ export interface ProposalSpeakerRoster {
   proposalId: string;
   primarySpeakerId: string;
   canManage: boolean;
+  canInvite: boolean;
+  invitePhase: SpeakerInvitationPhase | null;
   canEditTalk: boolean;
   usesPersonalLifecycle: boolean;
   setupOpen: boolean;
@@ -93,10 +103,19 @@ export interface ProposalSpeakerRoster {
   items: SpeakerRosterItem[];
 }
 
+export function speakerInvitationPhaseOf(invitation: {
+  phase?: unknown;
+}): SpeakerInvitationPhase | null {
+  if (invitation.phase === 'postAcceptance') return 'postAcceptance';
+  if (invitation.phase === undefined || invitation.phase === 'draft') return 'draft';
+  return null;
+}
+
 export interface SpeakerInvitationSummary {
   cfpId: string;
   proposalId: string;
   invitationId: string;
+  phase: SpeakerInvitationPhase;
   eventName: string;
   title: string;
   primaryName: string;
@@ -105,6 +124,10 @@ export interface SpeakerInvitationSummary {
   matchesSignedInEmail: boolean;
   canRespond: boolean;
   needsProfile: boolean;
+  /** Required only when accepting after the proposal was already accepted. */
+  participation?: {
+    acknowledgements: ConfirmField[];
+  };
   /** Present only for the verified invited account, never for a mismatched user. */
   talk?: {
     abstract: string;

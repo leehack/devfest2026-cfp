@@ -543,7 +543,7 @@ test.describe('archiving and deleting', () => {
     expect(await readExternalMutationLease()).toBeNull();
   });
 
-  test('delayed profile and aggregate triggers cannot rewrite archived history', async () => {
+  test('explicit profile refresh and delayed aggregates cannot rewrite archived history', async () => {
     const owner = await createAccount(OWNER);
     const speaker = await createAccount(SPEAKER);
     await seedMember(owner.uid, 'owner', undefined, OWNER.email);
@@ -554,6 +554,12 @@ test.describe('archiving and deleting', () => {
       status: 'under_review',
     });
     await seedSpeaker(speaker.uid, { ...SPEAKER, name: 'Committee version' });
+    expect(
+      await callJson(owner.idToken, 'refreshProposalSpeakerSnapshot', {
+        proposalId: 'p-frozen-history',
+        speakerUid: speaker.uid,
+      }),
+    ).toMatchObject({ changed: true });
     await seedReview('p-frozen-history', owner.uid, 2);
     await expect
       .poll(async () => await readProposalById('p-frozen-history'))
@@ -564,6 +570,12 @@ test.describe('archiving and deleting', () => {
 
     await callJson(owner.idToken, 'archiveCfp', { archived: true });
     await seedSpeaker(speaker.uid, { ...SPEAKER, name: 'Changed after event' });
+    expect(
+      await callAs(owner.idToken, 'refreshProposalSpeakerSnapshot', {
+        proposalId: 'p-frozen-history',
+        speakerUid: speaker.uid,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     await seedReview('p-frozen-history', owner.uid, 4);
     await new Promise((resolve) => setTimeout(resolve, 1_000));
 

@@ -25,11 +25,14 @@ import {
   EMPTY_FORM,
   type Answers,
   type ConfirmForm,
+  confirmFormFromData,
+  type ConfirmedSpeakerPhoto,
   type HeadshotUploads,
+  type SpeakerProfilePhoto,
 } from '@shared/confirmForm';
 import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
 import type { CfpProfile, Visibility } from '@shared/cfp';
-import type { Cfp } from '@shared/types';
+import type { Cfp, SpeakerSnapshot } from '@shared/types';
 
 export interface CfpWindow {
   name: string;
@@ -105,6 +108,7 @@ export interface LoadedProposal {
     response?: 'confirmed' | 'declined';
     answers: Answers;
     headshotUploads?: HeadshotUploads;
+    speakerPhoto?: ConfirmedSpeakerPhoto;
   };
   ownParticipation?: {
     role?: 'primary' | 'coSpeaker';
@@ -185,6 +189,7 @@ export async function loadMyProposals(
             response: confirmation.data().response as 'confirmed' | 'declined' | undefined,
             answers: (confirmation.data().answers ?? {}) as Answers,
             headshotUploads: confirmation.data().headshotUploads as HeadshotUploads | undefined,
+            speakerPhoto: confirmation.data().speakerPhoto as ConfirmedSpeakerPhoto | undefined,
           }
         : usesPersonalConfirmation
           ? undefined
@@ -192,6 +197,7 @@ export async function loadMyProposals(
               response: legacyResponse,
               answers: (proposal.confirmAnswers ?? {}) as Answers,
               headshotUploads: proposal.headshotUploads as HeadshotUploads | undefined,
+              speakerPhoto: proposal.speakerPhoto as ConfirmedSpeakerPhoto | undefined,
             };
       return {
         id: d.id,
@@ -338,6 +344,33 @@ export async function saveProfile(user: User, form: FormState, locale: Locale): 
   );
 }
 
+export const uploadProfilePhoto = httpsCallable<
+  { contentType: string; base64: string },
+  { ok: true; generation: string }
+>(functions, 'uploadProfilePhoto');
+
+export const profilePhotoImage = httpsCallable<
+  Record<string, never>,
+  { ok: true; generation: string; contentType: string; base64: string }
+>(functions, 'profilePhotoImage');
+
+export const removeProfilePhoto = httpsCallable<
+  Record<string, never>,
+  { ok: true }
+>(functions, 'removeProfilePhoto');
+
+export const refreshProposalSpeakerSnapshot = httpsCallable<
+  { cfpId: string; proposalId: string; speakerUid?: string },
+  {
+    ok: true;
+    changed: boolean;
+    snapshot: SpeakerSnapshot;
+    scheduleNeedsAttention: boolean;
+  }
+>(functions, 'refreshProposalSpeakerSnapshot');
+
+export type { SpeakerProfilePhoto };
+
 interface CallableResult {
   ok: boolean;
   proposalId?: string;
@@ -391,8 +424,7 @@ export const respondToDecision = httpsCallable<
  */
 export async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
   const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
-  const fields = snap.exists() ? snap.data().fields : null;
-  return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
+  return snap.exists() ? confirmFormFromData(snap.data()) : EMPTY_FORM;
 }
 
 /**

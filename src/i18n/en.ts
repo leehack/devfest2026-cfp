@@ -239,7 +239,7 @@ export const en = {
     title: 'Your profile',
     editorTitle: 'Speaker details',
     help:
-      'This belongs to your account, not to any one call for proposals. Editing it here changes it everywhere, including talks you have already submitted but that nobody has started reading.',
+      'This belongs to your account, not to any one call for proposals. After saving, open a submitted session to choose whether its event copy should use these latest details.',
     complete: 'Ready to use',
     needsAttention: 'Needs a little more',
     unsaved: 'Unsaved changes',
@@ -267,7 +267,7 @@ export const en = {
     language: 'Language',
     speaker: 'About you',
     speakerHelp:
-      'Part of your account, not of any one talk — editing it here changes it everywhere, and it stays editable after a talk is submitted.',
+      'Part of your account, not of any one talk. It stays editable after submission; each submitted session keeps its own copy until you explicitly update it.',
     /** Only rendered when the call has questions of its own. */
     extra: 'A few more questions',
     acks: 'Before you submit',
@@ -361,6 +361,59 @@ export const en = {
     emailHelp: 'From your Google account. All CFP correspondence goes here.',
     gdeGuidance:
       'GDEs should contact their GDE program manager regarding travel support. This event does not provide it directly.',
+  },
+
+  profilePhoto: {
+    title: 'Speaker photo',
+    help:
+      'This reusable profile photo can be approved for an event when you confirm a session. Published schedules keep the exact approved version until organisers publish a new release.',
+    previewAlt: 'Current speaker profile photo',
+    chooseLabel: 'Choose speaker profile photo',
+    requirements: (pixels: number) =>
+      `JPEG, PNG, or WebP · up to 5 MB · at least ${pixels} × ${pixels} pixels.`,
+    tooSmall: (pixels: number) => `Choose a photo at least ${pixels} pixels on both sides.`,
+    loadFailed: 'We could not load the current speaker photo.',
+    uploadFailed: 'The speaker photo could not be uploaded. Try again.',
+    remove: 'Remove photo',
+    removeConfirm:
+      'Remove this photo from your reusable profile? Event copies you already confirmed remain unchanged.',
+    removeFailed: 'The speaker photo could not be removed. Try again.',
+    sessionUpdateTitle: 'New profile photo available',
+    sessionUpdateHelp:
+      'This session still uses the photo you approved earlier. Switch it only when the new photo is ready for the programme.',
+    sessionCurrentTitle: 'Photo approved for this session',
+    sessionCurrentHelp:
+      'The session uses this exact profile photo. A published programme keeps its current copy until organisers publish again.',
+    sessionRemovalTitle: 'Profile photo removed',
+    sessionRemovalHelp:
+      'This session still uses the photo you approved earlier. Remove that event copy only if you want the programme to show no photo.',
+    sessionEmptyTitle: 'No photo approved for this session',
+    sessionEmptyHelp:
+      'This optional session photo is empty. You can add one to your profile whenever you are ready.',
+    sessionRequiredTitle: 'This session requires a speaker photo',
+    sessionRequiredHelp:
+      'Add a profile photo before updating this session. Any previously approved programme copy remains unchanged.',
+    useForSession: 'Use this photo for this session',
+    removeFromSession: 'Remove photo from this session',
+    sessionUpdating: 'Updating session photo…',
+    sessionUpdateFailed: 'The session photo could not be updated. Try again.',
+  },
+
+  profileSnapshot: {
+    title: 'Profile used for this session',
+    help:
+      'Your account profile stays editable. This session keeps a separate event copy so later edits do not silently rewrite what the committee or attendees see.',
+    adminHelp:
+      'This copies the speaker’s latest public profile fields into this session. It does not give organisers access to the private global profile or change confirmation and travel answers.',
+    updateSelf: 'Use my latest profile for this session',
+    updateSpeaker: (name: string) => `Use ${name}’s latest profile`,
+    updating: 'Updating session copy…',
+    updated: 'Session profile updated.',
+    unchanged: 'This session already uses the latest profile.',
+    scheduleNotice:
+      'The working schedule now needs review. Existing shared and published programme versions are unchanged until organisers share and publish again.',
+    notReady: 'Complete the profile and make sure this account is still an active speaker.',
+    failed: 'The session profile could not be updated. Try again.',
   },
 
   acks: {
@@ -1113,8 +1166,12 @@ export const en = {
       n === 1 ? '1 proposal has no score yet.' : `${n} proposals have no score yet.`,
     form: 'Confirmation questions',
     formHelp:
-      'Each accepted speaker answers these questions separately. Use them for per-person details such as T-shirt size, dietary needs, or a headshot; mark any field required when the event needs it. Leave the form empty to keep confirmation one click.',
-    formEmpty: 'No questions yet. Speakers just confirm and that is that.',
+      'Each accepted speaker answers these questions separately. Use them for per-person details such as T-shirt size or dietary needs; mark any field required when the event needs it. A speaker added later must complete their own confirmation before the session is confirmed again.',
+    speakerPhotoTitle: 'Speaker photo for the programme',
+    speakerPhotoHelp:
+      'Every accepted speaker can review their reusable profile photo here. It is optional unless you require it below. Confirmation freezes the exact approved version for this event, and a published programme keeps that version until you share and publish a new release.',
+    speakerPhotoRequired: 'Require every speaker to have a profile photo before confirming',
+    formEmpty: 'No custom questions yet. Speakers still review their programme photo and confirm.',
     formUntitled: 'New question',
     formLabelEn: 'Question (English)',
     formLabelFr: 'Question (French)',
@@ -1336,7 +1393,7 @@ export const en = {
     help:
       'Invite up to three co-speakers before submitting. Every joined speaker completes their own setup and, if the proposal is accepted, confirms separately. The session is confirmed only after every active speaker confirms.',
     adminHelp:
-      'Only the lead speaker can invite co-speakers before submission. Each active speaker confirms separately, and the session is confirmed only after everyone confirms. Organisers can review the roster here and, after submission, remove only a co-speaker who declined.',
+      'The lead speaker invites co-speakers before submission. After a proposal is accepted, organisers can send a verified invitation here. A late invitation leaves the session unchanged until the person accepts; it then waits for every active speaker to confirm again.',
     readOnlyHelp:
       'You are a co-speaker on this proposal. The lead speaker owns the talk content; your profile and confirmation remain yours to update.',
     saveDetails: 'Save my details',
@@ -1367,6 +1424,11 @@ export const en = {
     inviteLimit: 'No more co-speakers or invitations can be added to this proposal.',
     inviteHelp:
       'Use the address they will sign in with. They must accept before this proposal can be submitted.',
+    lateInviteHelp:
+      'Use the address they will sign in with. The session stays unchanged until they accept; after joining, they must complete their own confirmation before it is confirmed again.',
+    lateInvitePendingTitle: 'This person is not on the session yet',
+    lateInvitePendingHelp:
+      'The current roster and confirmation stay unchanged while the invitation is pending. Accepting adds the speaker and returns the working session to awaiting confirmations.',
     atCapacity: 'This proposal already has the maximum of four speakers.',
     manage: 'Speaker roster',
     close: 'Close speaker roster',
@@ -1416,6 +1478,8 @@ export const en = {
     invitationEyebrow: 'Co-speaker invitation',
     invitationTitle: 'Join this proposal',
     invitationFrom: (name: string) => `${name} invited you to present this talk together.`,
+    lateInvitationFrom: (name: string) =>
+      `The organisers invited you to join ${name}'s accepted session as a co-speaker.`,
     eventLabel: 'Event',
     proposalLabel: 'Proposal',
     accountLabel: 'Invited account',
@@ -1427,7 +1491,11 @@ export const en = {
     profileHelp:
       'Your name and bio are kept on your own account and will appear beside the talk if it is published.',
     profileReady: 'Your speaker profile is ready.',
+    participationTitle: 'Your participation details',
+    participationHelp:
+      'Because this session was already accepted, complete the event acknowledgements and travel details before joining. You will confirm the session and answer its confirmation questions next.',
     join: 'Save profile and join',
+    joinLate: 'Save details and join',
     joining: 'Joining…',
     decline: 'Decline invitation',
     declineConfirm: 'Decline this co-speaker invitation?',
@@ -1445,6 +1513,8 @@ export const en = {
     unavailableHelp: 'The event can no longer accept a response to this invitation.',
     acceptedTitle: 'You joined this proposal',
     acceptedHelp: 'The talk is now available with your other proposals.',
+    lateAcceptedHelp:
+      'You are now a speaker on this session. Open it to provide the required information and confirm your participation.',
     declinedTitle: 'Invitation declined',
     declinedHelp: 'You are not listed as a speaker on this proposal.',
     openProposal: 'Open the proposal',
@@ -1670,6 +1740,16 @@ export const en = {
     stale: 'Someone changed the schedule in another tab. Reload before continuing.',
     conflict: 'That placement overlaps a room or speaker already scheduled.',
     invalidState: 'Only accepted or confirmed talks can be planned, and publication requires confirmation.',
+    emailDeliveryInProgress:
+      'Schedule notifications are being sent. Wait for delivery to finish before sharing another preview.',
+    emailDeliveryRetryRequired:
+      'A schedule notification has an uncertain delivery result. Retry it from Email before sharing another preview.',
+    cancellationDeliveryPending:
+      'Send or retry the previous cancellation notice before restoring this session to the programme.',
+    cancellationProcessing:
+      'A previous schedule cancellation is still being processed. Wait a moment, then share again.',
+    speakerPhotoRequired:
+      'Every scheduled speaker must confirm a programme photo before this preview can be shared.',
     badInput: 'Check the event days, rooms, times, duration, and required titles.',
     reload: 'Reload schedule',
     types: {

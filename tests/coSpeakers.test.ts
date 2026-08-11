@@ -5,13 +5,18 @@ import {
   maskSpeakerEmail,
   normaliseSpeakerEmail,
   primarySpeakerIdOf,
+  speakerInvitationPhaseOf,
 } from '../shared/coSpeakers';
-import { coSpeakerInvitationStillTrue } from '../functions/src/speakerLifecycle';
+import {
+  coSpeakerInvitationStillTrue,
+  coSpeakerSignInInvitationStillTrue,
+} from '../functions/src/speakerLifecycle';
 
 const snapshot = (data?: Record<string, unknown>) =>
   ({
     exists: data !== undefined,
     get: (field: string) => data?.[field],
+    data: () => data,
   }) as FirebaseFirestore.DocumentSnapshot;
 
 describe('co-speaker identity helpers', () => {
@@ -26,6 +31,13 @@ describe('co-speaker identity helpers', () => {
     expect(normaliseSpeakerEmail('not-an-email')).toBeNull();
     expect(normaliseSpeakerEmail(`${'a'.repeat(243)}@example.org`)).toBeNull();
     expect(maskSpeakerEmail('speaker@example.org')).toBe('s******@example.org');
+  });
+
+  it('normalises historic invitations to the draft phase', () => {
+    expect(speakerInvitationPhaseOf({})).toBe('draft');
+    expect(speakerInvitationPhaseOf({ phase: 'draft' })).toBe('draft');
+    expect(speakerInvitationPhaseOf({ phase: 'postAcceptance' })).toBe('postAcceptance');
+    expect(speakerInvitationPhaseOf({ phase: 'unknown' })).toBeNull();
   });
 });
 
@@ -114,5 +126,48 @@ describe('co-speaker invitation delivery validity', () => {
         now,
       ),
     ).toBe(false);
+  });
+
+  it('keeps post-acceptance invitations independent of the closed submission window', () => {
+    const now = Date.now();
+    const lateInvitation = snapshot({
+      ...baseInvitation,
+      phase: 'postAcceptance',
+      expiresAt: Timestamp.fromMillis(now + 60_000),
+    });
+    const closedCfp = snapshot({
+      archived: false,
+      deleting: false,
+      paused: false,
+      opensAt: Timestamp.fromMillis(1),
+      closesAt: Timestamp.fromMillis(now - 1),
+    });
+    expect(valid(lateInvitation, snapshot({ status: 'confirmed' }), closedCfp, now)).toBe(true);
+    expect(valid(lateInvitation, snapshot({ status: 'accepted' }), closedCfp, now)).toBe(true);
+    expect(valid(lateInvitation, snapshot({ status: 'under_review' }), closedCfp, now)).toBe(false);
+  });
+
+  it('keeps an accepted sign-in route bound to a valid phase and active roster member', () => {
+    const accepted = {
+      ...baseInvitation,
+      phase: 'postAcceptance',
+      status: 'accepted',
+      respondedBy: 'guest',
+    };
+    const acceptedProposal = snapshot({ status: 'accepted', speakerIds: ['lead', 'guest'] });
+    const stillTrue = (invitation: Record<string, unknown>, proposalSnap = acceptedProposal) =>
+      coSpeakerSignInInvitationStillTrue(
+        'invite-a',
+        'event-a',
+        'proposal-a',
+        'guest@example.org',
+        snapshot(invitation),
+        proposalSnap,
+        cfp,
+      );
+
+    expect(stillTrue(accepted)).toBe(true);
+    expect(stillTrue({ ...accepted, phase: 'unknown' })).toBe(false);
+    expect(stillTrue(accepted, snapshot({ status: 'accepted', speakerIds: ['lead'] }))).toBe(false);
   });
 });

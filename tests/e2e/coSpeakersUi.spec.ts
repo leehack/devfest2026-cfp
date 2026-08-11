@@ -19,6 +19,7 @@ const LEAD = { sub: 'ui-lead', email: 'lead-ui@example.org', name: 'Taylor Lead'
 const GUEST = { sub: 'ui-guest', email: 'guest-ui@example.org', name: 'Morgan Guest' };
 const WRONG = { sub: 'ui-wrong', email: 'wrong-ui@example.org', name: 'Wrong Account' };
 const ADMIN = { sub: 'ui-admin', email: 'admin-ui@example.org', name: 'Programme Admin' };
+const LATE = { sub: 'ui-late', email: 'late-ui@example.org', name: 'Late Speaker' };
 const ACKS = { noTravelSupport: true, coc: true, recording: true };
 const ATTENDANCE = { status: 'local', needsVisa: false };
 const INVITE_ABSTRACT =
@@ -344,6 +345,78 @@ test.describe('co-speaker UI', () => {
     await expect(page.getByRole('button', { name: 'Save profile and join' })).toHaveCount(0);
   });
 
+  test('an admin can remove an unconfirmed late speaker after a released speaker declines', async ({
+    page,
+  }) => {
+    const { lead, guest } = await submittedPair();
+    const admin = await createAccount(ADMIN);
+    const late = await createAccount(LATE);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    await callJson(admin.idToken, 'setProposalStatus', {
+      proposalId: 'ui-linked-talk',
+      status: 'accepted',
+    });
+    for (const speaker of [lead, guest]) {
+      await callJson(speaker.idToken, 'respondToDecision', {
+        proposalId: 'ui-linked-talk',
+        response: 'confirm',
+        answers: {},
+      });
+    }
+    const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+      expectedRevision: 0,
+      config: {
+        timeZone: 'America/Toronto',
+        revision: 0,
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
+      },
+    });
+    const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: configured.revision,
+      entry: {
+        id: 'ui-linked-talk',
+        kind: 'proposal',
+        proposalId: 'ui-linked-talk',
+        date: '2026-11-14',
+        startsAt: '10:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      },
+    });
+    await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: scheduled.revision,
+    });
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'ui-linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'ui-linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'ui-linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await signInAs(page, ADMIN, at('/admin/proposals'));
+    await page.getByRole('button', { name: /Open speaker roster for/ }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Speakers for this proposal' });
+    const lateRow = dialog.locator('.co-speaker-person').filter({ hasText: LATE.name });
+    await expect(lateRow).toHaveCount(1);
+    await expect(
+      lateRow.getByRole('button', { name: `Remove co-speaker ${LATE.name}` }),
+    ).toBeVisible();
+    await expectContainedOnMobile(page, dialog);
+  });
+
   test('admin speaker management traps focus, restores it, and stays usable on mobile', async ({
     page,
   }) => {
@@ -363,14 +436,20 @@ test.describe('co-speaker UI', () => {
     await expect(dialog.getByText(GUEST.name, { exact: true })).toBeVisible();
     await expect(dialog).not.toContainText(LEAD.email);
     await expect(dialog).not.toContainText(GUEST.email);
-    await expect(dialog).toContainText('Only the lead speaker can invite co-speakers before submission.');
-    await expect(dialog).toContainText('The session is confirmed only after everyone confirms.');
+    await expect(dialog).toContainText(
+      'After a proposal is accepted, organisers can send a verified invitation here.',
+    );
+    await expect(dialog).toContainText(
+      'it then waits for every active speaker to confirm again.',
+    );
     await expect(dialog.getByLabel('Co-speaker email')).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: 'Send invitation' })).toHaveCount(0);
     await expectContainedOnMobile(page, dialog);
 
     await page.keyboard.press('Shift+Tab');
-    await expect(dialog.getByRole('button', { name: 'Refresh speakers' })).toBeFocused();
+    await expect(
+      dialog.getByRole('button', { name: `Use ${GUEST.name}’s latest profile` }),
+    ).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(
       dialog.getByRole('button', { name: 'Close speaker roster' }),
@@ -390,10 +469,10 @@ test.describe('co-speaker UI', () => {
     });
     await expect(dialogFr).toBeVisible();
     await expect(dialogFr).toContainText(
-      'Seul le conférencier principal peut inviter des co-conférenciers avant la soumission.',
+      'Une fois la proposition retenue, l’organisation peut envoyer ici une invitation vérifiée.',
     );
     await expect(dialogFr).toContainText(
-      'La conférence est confirmée seulement lorsque tout le monde a confirmé.',
+      'celle-ci attend ensuite la confirmation de tous les conférenciers actifs.',
     );
     await expectContainedOnMobile(page, dialogFr);
     await page.keyboard.press('Escape');

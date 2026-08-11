@@ -48,8 +48,14 @@ import {
 import { senderMismatch, validateSettings, type EmailSettings } from '../../shared/emailSettings';
 import {
   EMPTY_FORM,
+  confirmFormFromData,
+  FORM_LIMITS,
+  IMAGE_TYPES,
+  SPEAKER_PHOTO_KEY,
   isConfirmedHeadshotPath,
   headshotPath,
+  isSpeakerProfilePhotoPath,
+  speakerProfilePhotoPath,
   workingHeadshotPath,
   normaliseForm,
   validateAnswers,
@@ -57,8 +63,10 @@ import {
   localised,
   type Answers,
   type ConfirmForm,
+  type ConfirmedSpeakerPhoto,
   type HeadshotUploadPointer,
   type HeadshotUploads,
+  type SpeakerProfilePhoto,
 } from '../../shared/confirmForm';
 import {
   CFP_LIMITS,
@@ -104,14 +112,21 @@ import {
 } from './email';
 import {
   decodeHeadshotUpload,
+  decodeSpeakerProfilePhotoUpload,
+  findMigratedSpeakerUploadedHeadshots,
   findSpeakerUploadedHeadshots,
   findUploadedHeadshots,
   freezeLegacyHeadshotAnswer,
   freezeLegacyHeadshots,
   freezeSpeakerUploadedHeadshots,
+  freezeSpeakerProfilePhoto,
   freezeUploadedHeadshots,
   isSpeakerConfirmedHeadshotPath,
   readStoredHeadshot,
+  publicSpeakerPhotoDerivative,
+  speakerProfilePhotoFrom,
+  speakerProfilePhotoMatches,
+  speakerConfirmedHeadshotPath,
   speakerWorkingHeadshotFrom,
   speakerWorkingHeadshotMatches,
   speakerWorkingHeadshotPath,
@@ -122,9 +137,17 @@ import {
   coSpeakerSignInInvitationStillTrue,
   coSpeakerInvitationStillTrue,
   confirmationResponse,
+  currentScheduleReleaseContainsProposal,
+  currentReleasedSpeakerIds,
   everySpeakerConfirmed,
   primarySpeakerId,
+  proposalEventIsCurrent,
   proposalSpeakerIds,
+  scheduleCancellationSnapshotIsCurrent,
+  scheduleCancellationRecipientIds,
+  scheduleEmailStillTrue,
+  scheduleReleaseIds,
+  scheduleReleaseProposalEntryId,
   speakerConfirmationRef,
   speakerParticipantRef,
   usesPerSpeakerLifecycle,
@@ -149,6 +172,8 @@ export {
   respondToCoSpeakerInvitation,
   revokeCoSpeakerInvitation,
 } from './coSpeakers';
+export { refreshProposalSpeakerSnapshot } from './profileSnapshots';
+import { speakerSnapshotFrom } from './profileSnapshots';
 import {
   SCHEDULE_LIMITS,
   publicScheduleSpeakers,
@@ -601,31 +626,6 @@ function assemble(
  * working document rather than a reason to refuse a submission.
  */
 /**
- * The speaker as the committee will read them.
- *
- * `email` is deliberately absent. A reviewer judging a talk has no need of the
- * address, and this copy is readable by every reviewer on the CFP — the profile
- * it is taken from is not.
- */
-function snapshotOf(uid: string, speaker: FirebaseFirestore.DocumentData): SpeakerSnapshot {
-  return {
-    uid,
-    name: (speaker.name as string) ?? '',
-    bio: (speaker.bio as string) ?? '',
-    ...(speaker.company ? { company: speaker.company as string } : {}),
-    ...(speaker.jobTitle ? { jobTitle: speaker.jobTitle as string } : {}),
-    basedIn: (speaker.basedIn as string) ?? '',
-    socials: (speaker.socials as SpeakerSnapshot['socials']) ?? [],
-    isGde: speaker.isGde === true,
-    ...(speaker.pastTalks ? { pastTalks: speaker.pastTalks as string } : {}),
-    ...(speaker.sessionizeUrl ? { sessionizeUrl: speaker.sessionizeUrl as string } : {}),
-  };
-}
-
-/** Statuses where the committee has not answered yet, so the copy may still move. */
-const STILL_BEING_JUDGED: readonly string[] = ['submitted', 'under_review'];
-
-/**
  * Which proposal statuses a held decision email is still true of.
  *
  * `accepted` covers the speaker's own answer as well: confirming or declining
@@ -648,16 +648,20 @@ function scheduleEmailReleaseId(cfp: DocumentSnapshot | null | undefined): strin
   return String(cfp?.get('sharedScheduleId') ?? cfp?.get('publishedScheduleId') ?? '');
 }
 
-function scheduleEmailStillTrue(
-  kind: string,
-  rowReleaseId: string,
-  currentReleaseId: string,
-  entry: DocumentSnapshot | undefined,
-  proposalStatus: string | undefined,
-): boolean {
-  if (!currentReleaseId || rowReleaseId !== currentReleaseId || !entry) return false;
-  if (kind === 'schedule_cancelled') return !entry.exists || entry.get('cancelled') === true;
-  return proposalStatus === 'confirmed' && entry.exists && entry.get('cancelled') !== true;
+function frozenScheduleBaselineIds(
+  proposal: FirebaseFirestore.DocumentData,
+): string[] | null {
+  const stored = proposal.lateSpeakerScheduleBaselineIds;
+  if (
+    proposal.lateSpeakerSchedulePreserved !== true ||
+    !Array.isArray(stored) ||
+    stored.length === 0 ||
+    !stored.every((uid) => typeof uid === 'string' && Boolean(uid)) ||
+    new Set(stored).size !== stored.length
+  ) {
+    return null;
+  }
+  return [...stored];
 }
 
 /**
@@ -721,6 +725,9 @@ async function currentDecisionEmails(
       )
     : [];
   const scheduleEntryMap = new Map(scheduleEntries.map((entry) => [entry.id, entry]));
+  const scheduleSource = currentReleaseId
+    ? await scheduleReleaseSourceRef(cfpId, currentReleaseId).get()
+    : null;
   const staffUids = [
     ...new Set(staffDocs.map((doc) => String(doc.get('recipientUid') ?? '')).filter(Boolean)),
   ];
@@ -800,6 +807,7 @@ async function currentDecisionEmails(
     const recipientUid = String(doc.get('recipientUid') ?? '');
     if (
       recipientUid &&
+      !isScheduleEmail(kind) &&
       !proposalSpeakerIds(proposalMap.get(String(doc.get('proposalId') ?? ''))?.data() ?? {})
         .includes(recipientUid)
     ) {
@@ -812,7 +820,12 @@ async function currentDecisionEmails(
         String(doc.get('dedupeKey') ?? ''),
         currentReleaseId,
         scheduleEntryMap.get(entryId),
-        current.get(doc.get('proposalId') as string),
+        proposalMap.get(doc.get('proposalId') as string),
+        recipientUid,
+        scheduleReleaseProposalEntryId(
+          scheduleSource,
+          String(doc.get('proposalId') ?? ''),
+        ),
       );
     }
     // A kind with no entry is not a decision at all, so nothing to check.
@@ -881,6 +894,9 @@ async function advanceEmailQueue(
         throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
       }
       const currentReleaseId = scheduleEmailReleaseId(cfp);
+      const scheduleSource = currentReleaseId
+        ? await tx.get(scheduleReleaseSourceRef(cfpId, currentReleaseId))
+        : null;
       const scheduleEntryIds = [
         ...new Set(
           scheduleRows
@@ -1001,6 +1017,7 @@ async function advanceEmailQueue(
         if (
           recipientUid &&
           !isStaffEmail(row.get('kind')) &&
+          !isScheduleEmail(row.get('kind')) &&
           !proposalSpeakerIds(
             proposalMap.get(String(row.get('proposalId') ?? ''))?.data() ?? {},
           ).includes(recipientUid)
@@ -1016,7 +1033,12 @@ async function advanceEmailQueue(
               String(row.get('dedupeKey') ?? ''),
               currentReleaseId,
               scheduleEntryMap.get(entryId),
-              proposalStatuses.get(row.get('proposalId') as string),
+              proposalMap.get(row.get('proposalId') as string),
+              recipientUid,
+              scheduleReleaseProposalEntryId(
+                scheduleSource,
+                String(row.get('proposalId') ?? ''),
+              ),
             )
           ) {
             superseded += 1;
@@ -1050,86 +1072,6 @@ async function advanceEmailQueue(
 }
 
 /**
- * Keeps the committee's copy of a speaker current until their talk is decided.
- *
- * `speakerSnapshot` is frozen so a bio rewritten in 2028 cannot change what the
- * 2026 committee actually read. Freezing it at *submission* went too far: a
- * speaker who fills in their employer, job title or past talks an hour after
- * submitting is not rewriting history, and the committee simply never saw it.
- * That is not hypothetical — it is what happened on the first real submission
- * this ran for. So the freeze starts at the decision instead.
- *
- * Rules cannot express this: the speaker may not write their own snapshot, or
- * they could tell the committee whatever they liked about themselves.
- */
-export const refreshSpeakerSnapshots = onDocumentWritten(
-  {
-    document: 'speakers/{uid}',
-    region: 'northamerica-northeast1',
-    maxInstances: 10,
-    retry: false,
-  },
-  async (event) => {
-    const after = event.data?.after;
-    if (!after?.exists) return;
-
-    const uid = event.params.uid;
-    const next = snapshotOf(uid, after.data()!);
-
-    // Most profile writes are a locale, an email or an `updatedAt`, none of
-    // which the committee reads. Comparing first keeps those from each costing
-    // a collection-group query across every CFP on the platform.
-    const before = event.data?.before;
-    if (before?.exists && JSON.stringify(snapshotOf(uid, before.data()!)) === JSON.stringify(next)) {
-      return;
-    }
-
-    const mine = await db
-      .collectionGroup('proposals')
-      .where('speakerIds', 'array-contains', uid)
-      .get();
-
-    // Filtered here rather than in the query: a speaker has at most a handful
-    // of proposals, and a second `where` would need its own composite index at
-    // collection-group scope for the sake of skipping two documents.
-    const open = mine.docs.filter((doc) =>
-      STILL_BEING_JUDGED.includes(doc.get('status') as string),
-    );
-    if (open.length === 0) return;
-
-    const refreshed = await Promise.all(
-      open.map((doc) =>
-        db.runTransaction(async (tx) => {
-          const cfpId = doc.ref.parent.parent?.id;
-          if (!cfpId) return false;
-          const [cfp, proposal] = await tx.getAll(db.doc(`cfps/${cfpId}`), doc.ref);
-          if (
-            !cfp.exists ||
-            cfp.get('archived') === true ||
-            !proposal.exists ||
-            !STILL_BEING_JUDGED.includes(String(proposal.get('status') ?? ''))
-          ) {
-            return false;
-          }
-          // Replace this speaker's entry and leave any co-presenter's alone.
-          const current =
-            (proposal.get('speakerSnapshot') as SpeakerSnapshot[] | undefined) ?? [];
-          tx.update(proposal.ref, {
-            speakerSnapshot: current.map((person) => (person.uid === uid ? next : person)),
-          });
-          return true;
-        }),
-      ),
-    );
-
-    logger.info('speaker snapshot refreshed', {
-      uid,
-      proposals: refreshed.filter(Boolean).length,
-    });
-  },
-);
-
-/**
  * Everything an email needs about a proposal, gathered inside the caller's
  * transaction. Returns null when there is nobody to write to — an email is
  * never a reason to fail the operation that triggered it.
@@ -1151,8 +1093,11 @@ async function speakerEmailContexts(
   cfpId: string,
   proposalId: string,
   proposal: FirebaseFirestore.DocumentData,
+  recipientIds?: readonly string[],
 ): Promise<SpeakerEmailContext[]> {
-  const speakerIds = proposalSpeakerIds(proposal);
+  const speakerIds = recipientIds
+    ? [...new Set(recipientIds.filter((uid) => typeof uid === 'string' && Boolean(uid)))]
+    : proposalSpeakerIds(proposal);
   if (speakerIds.length === 0) return [];
   const primary = primarySpeakerId(proposal);
   const perSpeakerLifecycle = usesPerSpeakerLifecycle(proposal);
@@ -1463,7 +1408,7 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
       // account and is global; this is the only copy of it this CFP gets, so a
       // bio rewritten years later cannot rewrite what was judged.
       speakerSnapshot: speakerIds.map((speakerId) =>
-        snapshotOf(speakerId, speakerByUid.get(speakerId)!),
+        speakerSnapshotFrom(speakerId, speakerByUid.get(speakerId)!),
       ),
       // Only what the form still asks for, which is what `clean` is.
       answers: clean,
@@ -1682,8 +1627,7 @@ async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
 }
 
 function confirmFormFrom(snap: DocumentSnapshot): ConfirmForm {
-  const fields = snap.data()?.fields;
-  return Array.isArray(fields) ? ({ fields } as ConfirmForm) : EMPTY_FORM;
+  return snap.exists ? confirmFormFromData(snap.data()) : EMPTY_FORM;
 }
 
 function assertDecisionCanBeAnswered(proposal: FirebaseFirestore.DocumentData): void {
@@ -1713,6 +1657,135 @@ function assertWorkingHeadshotAccess(
     throw new HttpsError('invalid-argument', 'That image question is not on the current form.');
   }
 }
+
+async function deleteProfilePhotoObjectQuietly(
+  uid: string,
+  pointer: SpeakerProfilePhoto | null,
+): Promise<void> {
+  if (!pointer || !isSpeakerProfilePhotoPath(pointer.path, uid)) return;
+  try {
+    await getStorage()
+      .bucket()
+      .file(pointer.path, { generation: pointer.generation })
+      .delete({ ignoreNotFound: true });
+  } catch (error) {
+    logger.warn('old profile photo cleanup failed', { uid, error: String(error) });
+  }
+}
+
+/** Uploads the account-owned original; confirmation reuses this exact generation. */
+export const uploadProfilePhoto = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'upload a profile photo');
+  const email = request.auth?.token.email;
+  if (typeof email !== 'string' || !email) {
+    throw new HttpsError('failed-precondition', 'Your account has no email address.');
+  }
+  const data = (request.data ?? {}) as { contentType?: unknown; base64?: unknown };
+  const upload = await decodeSpeakerProfilePhotoUpload(data.contentType, data.base64);
+  const profileRef = db.doc(`speakers/${uid}`);
+  const path = speakerProfilePhotoPath(uid, randomUUID());
+  const file = getStorage().bucket().file(path);
+  let pointer: SpeakerProfilePhoto | undefined;
+  let previous: SpeakerProfilePhoto | null = null;
+
+  try {
+    await file.save(upload.bytes, {
+      resumable: false,
+      metadata: { contentType: upload.contentType, cacheControl: 'private, no-store' },
+    });
+    const [metadata] = await file.getMetadata();
+    const generation = String(metadata.generation ?? '');
+    if (!generation) {
+      throw new HttpsError('failed-precondition', 'The uploaded photo has no stable version.');
+    }
+    pointer = {
+      path,
+      generation,
+      contentType: upload.contentType,
+      size: upload.bytes.length,
+    };
+    await db.runTransaction(async (tx) => {
+      const profile = await tx.get(profileRef);
+      if (profile.exists) {
+        previous = speakerProfilePhotoFrom(profile.get('profilePhoto'), uid);
+        tx.update(profileRef, {
+          profilePhoto: pointer,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        tx.create(profileRef, {
+          email,
+          profilePhoto: pointer,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    });
+  } catch (error) {
+    if (pointer) {
+      try {
+        const current = await profileRef.get();
+        if (current.exists && speakerProfilePhotoMatches(current.get('profilePhoto'), uid, pointer)) {
+          await deleteProfilePhotoObjectQuietly(uid, previous);
+          return { ok: true, generation: pointer.generation };
+        }
+      } catch (verificationError) {
+        logger.error('profile photo pointer could not be verified', {
+          uid,
+          error: String(verificationError),
+        });
+        throw new HttpsError('unavailable', 'The profile photo upload could not be settled. Try again.');
+      }
+    }
+    try {
+      await file.delete({ ignoreNotFound: true });
+    } catch (cleanupError) {
+      logger.warn('failed profile photo cleanup failed', { uid, error: String(cleanupError) });
+    }
+    if (error instanceof HttpsError) throw error;
+    logger.error('profile photo upload failed', { uid, error: String(error) });
+    throw new HttpsError('unavailable', 'The profile photo could not be uploaded. Try again.');
+  }
+
+  await deleteProfilePhotoObjectQuietly(uid, previous);
+  logger.info('profile photo uploaded', { uid });
+  return { ok: true, generation: pointer.generation };
+});
+
+/** Owner-only preview; no bucket path or download token reaches the browser. */
+export const profilePhotoImage = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'view a profile photo');
+  const profile = await db.doc(`speakers/${uid}`).get();
+  const pointer = speakerProfilePhotoFrom(profile.get('profilePhoto'), uid);
+  if (!pointer) throw new HttpsError('not-found', 'No profile photo has been saved.');
+  const stored = await readStoredHeadshot(getStorage().bucket(), pointer.path, pointer.generation);
+  if (!stored) throw new HttpsError('not-found', 'The saved profile photo is missing.');
+  return {
+    ok: true,
+    generation: pointer.generation,
+    contentType: stored.contentType,
+    base64: stored.bytes.toString('base64'),
+  };
+});
+
+/** Clears only the reusable pointer; event-frozen confirmations remain immutable. */
+export const removeProfilePhoto = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'remove a profile photo');
+  const profileRef = db.doc(`speakers/${uid}`);
+  const previous = await db.runTransaction(async (tx) => {
+    const profile = await tx.get(profileRef);
+    if (!profile.exists) throw new HttpsError('not-found', 'No speaker profile was found.');
+    const current = speakerProfilePhotoFrom(profile.get('profilePhoto'), uid);
+    if (!current) return null;
+    tx.update(profileRef, {
+      profilePhoto: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return current;
+  });
+  await deleteProfilePhotoObjectQuietly(uid, previous);
+  return { ok: true };
+});
 
 /**
  * Writes one replaceable confirmation photo through the same per-CFP lane as
@@ -1906,7 +1979,10 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
   let leaseId: string | undefined;
   let uploadPaths: Record<string, string> = {};
   let frozenUploads: Record<string, string> = {};
+  let profilePhotoSource: SpeakerProfilePhoto | null = null;
+  let frozenSpeakerPhoto: ConfirmedSpeakerPhoto | undefined;
   let perSpeakerLifecycle = false;
+  let migratedFromLegacy = false;
   if (speakerResponse === 'confirmed') {
     leaseId = await acquireCfpMutation(cfpId, 'speaker-confirmation', async (tx) => {
       const proposal = await readOwnProposal(tx, proposalRef, uid);
@@ -1916,12 +1992,26 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
     try {
       const form = await loadConfirmForm(cfpId);
       const bucket = getStorage().bucket();
-      const [currentProposal, currentConfirmation] = await Promise.all([
+      const [currentProposal, currentConfirmation, currentProfile] = await Promise.all([
         proposalRef.get(),
         confirmationRef.get(),
+        db.doc(`speakers/${uid}`).get(),
       ]);
+      migratedFromLegacy =
+        perSpeakerLifecycle &&
+        currentConfirmation.get('migratedFromLegacy') === true &&
+        primarySpeakerId(currentProposal.data() ?? {}) === uid;
       const uploads = perSpeakerLifecycle
-        ? await findSpeakerUploadedHeadshots(
+        ? migratedFromLegacy
+          ? await findMigratedSpeakerUploadedHeadshots(
+              bucket,
+              cfpId,
+              proposalId,
+              form,
+              uid,
+              currentConfirmation.get('headshotUploads'),
+            )
+          : await findSpeakerUploadedHeadshots(
             bucket,
             cfpId,
             proposalId,
@@ -1947,6 +2037,23 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
       frozenUploads = perSpeakerLifecycle
         ? await freezeSpeakerUploadedHeadshots(bucket, cfpId, proposalId, uid, uploads)
         : await freezeUploadedHeadshots(bucket, cfpId, proposalId, uploads);
+      if (form.speakerPhoto) {
+        profilePhotoSource = speakerProfilePhotoFrom(currentProfile.get('profilePhoto'), uid);
+        if (!profilePhotoSource && form.speakerPhoto.required) {
+          throw new HttpsError('invalid-argument', 'Add a speaker photo before confirming.', {
+            speakerPhoto: 'required',
+          });
+        }
+        if (profilePhotoSource) {
+          frozenSpeakerPhoto = await freezeSpeakerProfilePhoto(
+            bucket,
+            cfpId,
+            proposalId,
+            uid,
+            profilePhotoSource,
+          );
+        }
+      }
       answers = { ...checked.clean, ...frozenUploads };
     } catch (error) {
       await releaseCfpMutationQuietly(cfpId, leaseId);
@@ -1972,14 +2079,16 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
       const speakerIds = proposalSpeakerIds(proposal);
       const formRef = db.doc(`cfps/${cfpId}/config/confirmForm`);
       const configRef = scheduleConfigRef(cfpId);
+      const profileRef = db.doc(`speakers/${uid}`);
       const confirmationRefs = currentPerSpeakerLifecycle
         ? speakerIds.map((speakerId) =>
             speakerConfirmationRef(db, cfpId, proposalId, speakerId),
           )
         : [];
-      const [latestFormSnap, scheduleConfig, ...confirmationSnaps] = await tx.getAll(
+      const [latestFormSnap, scheduleConfig, latestProfile, ...confirmationSnaps] = await tx.getAll(
         formRef,
         configRef,
+        profileRef,
         ...confirmationRefs,
       );
 
@@ -1997,7 +2106,38 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
         for (const [key, path] of Object.entries(frozenUploads)) {
           if (Object.prototype.hasOwnProperty.call(answers, key)) answers[key] = path;
         }
+        if (latestForm.speakerPhoto) {
+          const latestPhoto = speakerProfilePhotoFrom(latestProfile.get('profilePhoto'), uid);
+          if (!latestPhoto && latestForm.speakerPhoto.required) {
+            throw new HttpsError('invalid-argument', 'Add a speaker photo before confirming.', {
+              speakerPhoto: 'required',
+            });
+          }
+          if (
+            (latestPhoto &&
+              (!profilePhotoSource ||
+                !frozenSpeakerPhoto ||
+                !speakerProfilePhotoMatches(latestPhoto, uid, profilePhotoSource))) ||
+            (!latestPhoto && (profilePhotoSource || frozenSpeakerPhoto))
+          ) {
+            throw new HttpsError(
+              'aborted',
+              'The profile photo changed while the answer was being saved. Try again.',
+            );
+          }
+        } else {
+          frozenSpeakerPhoto = undefined;
+        }
       }
+
+      const previousSpeakerPhoto = currentPerSpeakerLifecycle
+        ? confirmationSnaps[speakerIds.indexOf(uid)]?.get('speakerPhoto')
+        : proposal.speakerPhoto;
+      const nextSpeakerPhoto =
+        speakerResponse === 'confirmed' ? frozenSpeakerPhoto : undefined;
+      const speakerPhotoChanged =
+        JSON.stringify(stableScheduleValue(previousSpeakerPhoto ?? null)) !==
+        JSON.stringify(stableScheduleValue(nextSpeakerPhoto ?? null));
 
       if (!currentPerSpeakerLifecycle) {
         finalStatus = speakerResponse;
@@ -2008,7 +2148,16 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
           // Replaced wholesale, not merged: confirming again is how a speaker
           // corrects an answer, and a merge would leave the old one behind.
           ...(speakerResponse === 'confirmed' ? { confirmAnswers: answers } : {}),
+          speakerPhoto:
+            nextSpeakerPhoto ?? FieldValue.delete(),
         });
+        if (speakerPhotoChanged && scheduleConfig.exists) {
+          tx.set(
+            configRef,
+            { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+            { merge: true },
+          );
+        }
         return;
       }
 
@@ -2025,6 +2174,55 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
             ? 'confirmed'
             : 'accepted';
 
+      const latePendingIds = Array.isArray(proposal.lateSpeakerPendingIds)
+        ? proposal.lateSpeakerPendingIds.filter(
+            (speakerId): speakerId is string => typeof speakerId === 'string',
+          )
+        : [];
+      const latePendingInvitations = Array.isArray(proposal.lateSpeakerPendingInvitations)
+        ? proposal.lateSpeakerPendingInvitations.filter(
+            (binding): binding is { uid: string; invitationId: string } =>
+              Boolean(
+                binding &&
+                  typeof binding === 'object' &&
+                  typeof binding.uid === 'string' &&
+                  typeof binding.invitationId === 'string',
+              ),
+          )
+        : [];
+      const lateBaselineIds = frozenScheduleBaselineIds(proposal) ?? [];
+      const hasFrozenScheduleBaseline = lateBaselineIds.length > 0;
+      const scheduleDeclineNeedsCancellation =
+        speakerResponse === 'declined' &&
+        ((proposal.lateSpeakerSchedulePreserved === true && lateBaselineIds.includes(uid)) ||
+          (proposal.status === 'confirmed' && !hasFrozenScheduleBaseline));
+      const hasLiveScheduleRelease =
+        scheduleDeclineNeedsCancellation &&
+        await currentScheduleReleaseContainsProposal(db, tx, cfpId, proposalId);
+      const establishesScheduleBaseline =
+        hasLiveScheduleRelease &&
+        proposal.status === 'confirmed' &&
+        !hasFrozenScheduleBaseline;
+      const confirmedLateSpeaker =
+        speakerResponse === 'confirmed' && latePendingIds.includes(uid);
+      const baselineDeclined =
+        scheduleDeclineNeedsCancellation && hasLiveScheduleRelease;
+      const baselineRestored =
+        speakerResponse === 'confirmed' &&
+        proposal.lateSpeakerSchedulePreserved === true &&
+        lateBaselineIds.length > 0 &&
+        lateBaselineIds.every(
+          (speakerId) =>
+            speakerIds.includes(speakerId) &&
+            confirmationResponse(confirmations.get(speakerId)) === 'confirmed',
+        );
+      const remainingLateIds = confirmedLateSpeaker
+        ? latePendingIds.filter((speakerId) => speakerId !== uid)
+        : latePendingIds;
+      const remainingLateInvitations = confirmedLateSpeaker
+        ? latePendingInvitations.filter((binding) => binding.uid !== uid)
+        : latePendingInvitations;
+
       tx.set(
         confirmationRef,
         {
@@ -2033,6 +2231,11 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
           uid,
           response: speakerResponse,
           answers: speakerResponse === 'confirmed' ? answers : {},
+          speakerPhoto:
+            nextSpeakerPhoto ?? FieldValue.delete(),
+          ...(migratedFromLegacy && speakerResponse === 'confirmed'
+            ? { migratedFromLegacy: FieldValue.delete() }
+            : {}),
           respondedAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
           ...(speakerResponse === 'confirmed'
@@ -2044,11 +2247,47 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
       tx.update(proposalRef, {
         status: finalStatus,
         updatedAt: FieldValue.serverTimestamp(),
+        ...(confirmedLateSpeaker
+          ? {
+              lateSpeakerPendingIds:
+                remainingLateIds.length > 0 ? remainingLateIds : FieldValue.delete(),
+              lateSpeakerPendingInvitations:
+                remainingLateInvitations.length > 0
+                  ? remainingLateInvitations
+                  : FieldValue.delete(),
+            }
+          : {}),
+        ...(baselineDeclined
+          ? {
+              scheduleCancellationRequired: true,
+              ...(establishesScheduleBaseline
+                ? {
+                    lateSpeakerSchedulePreserved: true,
+                    lateSpeakerScheduleBaselineIds: speakerIds,
+                  }
+                : {}),
+              lateSpeakerPendingIds: FieldValue.delete(),
+              lateSpeakerPendingInvitations: FieldValue.delete(),
+            }
+          : {}),
+        ...(baselineRestored
+          ? { scheduleCancellationRequired: FieldValue.delete() }
+          : {}),
+        ...(migratedFromLegacy && speakerResponse === 'confirmed'
+          ? {
+              confirmAnswers: FieldValue.delete(),
+              headshotUploads: FieldValue.delete(),
+              speakerPhoto: FieldValue.delete(),
+            }
+          : {}),
         ...(finalStatus === 'confirmed'
           ? { confirmedAt: FieldValue.serverTimestamp() }
           : { confirmedAt: FieldValue.delete() }),
       });
-      if (speakerResponse === 'declined' && uid !== primaryUid && scheduleConfig.exists) {
+      if (
+        scheduleConfig.exists &&
+        (speakerPhotoChanged || (speakerResponse === 'declined' && uid !== primaryUid))
+      ) {
         tx.set(
           configRef,
           { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
@@ -2131,7 +2370,10 @@ export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) 
         ? confirmation.get('headshotUploads')
         : proposal.get('headshotUploads');
       const current = perSpeakerLifecycle
-        ? speakerWorkingHeadshotFrom(uploads, cfpId, proposalId, uid, key)
+        ? speakerWorkingHeadshotFrom(uploads, cfpId, proposalId, uid, key) ??
+          (confirmation.get('migratedFromLegacy') === true
+            ? workingHeadshotFrom(uploads, cfpId, proposalId, key)
+            : null)
         : workingHeadshotFrom(uploads, cfpId, proposalId, key);
       if (current) return current;
       if (
@@ -2142,7 +2384,7 @@ export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) 
       ) {
         throw new HttpsError('failed-precondition', 'The saved photo pointer is invalid.');
       }
-      if (perSpeakerLifecycle) {
+      if (perSpeakerLifecycle && confirmation.get('migratedFromLegacy') !== true) {
         throw new HttpsError('not-found', 'No headshot for that speaker.');
       }
       // Calls created before pointer-backed uploads keep their canonical live
@@ -2165,6 +2407,48 @@ export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) 
   if (!targetUid || !speakerIds.includes(targetUid)) {
     throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
   }
+  if (key === SPEAKER_PHOTO_KEY) {
+    let photo = !perSpeakerLifecycle
+      ? confirmedScheduleSpeakerPhoto(
+          proposal.get('speakerPhoto'),
+          cfpId,
+          proposalId,
+          targetUid,
+        )
+      : null;
+    if (perSpeakerLifecycle) {
+      const confirmation = await speakerConfirmationRef(
+        db,
+        cfpId,
+        proposalId,
+        targetUid,
+      ).get();
+      photo = confirmedScheduleSpeakerPhoto(
+        confirmation.get('speakerPhoto'),
+        cfpId,
+        proposalId,
+        targetUid,
+      );
+      if (
+        !photo &&
+        confirmation.get('migratedFromLegacy') === true &&
+        targetUid === primarySpeakerId(proposalData)
+      ) {
+        photo = confirmedScheduleSpeakerPhoto(
+          proposal.get('speakerPhoto'),
+          cfpId,
+          proposalId,
+          targetUid,
+        );
+      }
+    }
+    if (photo) {
+      const image = await readHeadshotBytes(photo.path);
+      return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
+    }
+    // A pre-feature arbitrary image question may already use this key. With no
+    // dedicated frozen pointer, let the legacy answer branch below handle it.
+  }
   if (perSpeakerLifecycle) {
     const confirmation = await speakerConfirmationRef(
       db,
@@ -2177,14 +2461,15 @@ export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) 
       answers && typeof answers === 'object' && !Array.isArray(answers)
         ? (answers as Record<string, unknown>)[key]
         : undefined;
-    if (
-      typeof path !== 'string' ||
-      !isSpeakerConfirmedHeadshotPath(path, cfpId, proposalId, targetUid, key)
-    ) {
+    if (typeof path === 'string' && isSpeakerConfirmedHeadshotPath(path, cfpId, proposalId, targetUid, key)) {
+      const image = await readHeadshotBytes(path);
+      return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
+    }
+    if (confirmation.get('migratedFromLegacy') !== true || targetUid !== primarySpeakerId(proposalData)) {
       throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
     }
-    const image = await readHeadshotBytes(path);
-    return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
+    // The legacy root remains authoritative until the primary speaker next
+    // confirms, including its existing one-time live-path upgrade below.
   }
 
   const answers = proposal.get('confirmAnswers');
@@ -2277,12 +2562,13 @@ export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) 
 export const setConfirmForm = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'change the confirmation form');
-  const fields = (request.data as { fields?: unknown } | undefined)?.fields;
+  const input = (request.data ?? {}) as { fields?: unknown; speakerPhoto?: unknown };
+  const fields = input.fields;
   if (!Array.isArray(fields)) {
     throw new HttpsError('invalid-argument', 'fields must be a list.');
   }
 
-  const form = normaliseForm({ fields } as ConfirmForm);
+  const form = normaliseForm({ fields, speakerPhoto: input.speakerPhoto } as ConfirmForm);
   const fault = validateForm(form);
   if (fault) {
     throw new HttpsError(
@@ -2294,10 +2580,24 @@ export const setConfirmForm = onCall(CALLABLE, async (request) => {
 
   await db.runTransaction(async (tx) => {
     await assertCfpNotArchived(tx, cfpId);
-    tx.set(db.doc(`cfps/${cfpId}/config/confirmForm`), form);
+    const formRef = db.doc(`cfps/${cfpId}/config/confirmForm`);
+    const scheduleRef = scheduleConfigRef(cfpId);
+    const [current, schedule] = await tx.getAll(formRef, scheduleRef);
+    const currentForm = confirmFormFrom(current);
+    tx.set(formRef, form);
+    if (
+      schedule.exists &&
+      JSON.stringify(currentForm.speakerPhoto ?? null) !== JSON.stringify(form.speakerPhoto ?? null)
+    ) {
+      tx.set(
+        scheduleRef,
+        { needsAttention: true, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+    }
   });
   logger.info('confirm form saved', { byUid, fields: form.fields.length });
-  return { ok: true, fields: form.fields };
+  return { ok: true, ...form };
 });
 
 /**
@@ -3476,14 +3776,33 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
         `A proposal with status "${current}" cannot be decided.`,
       );
     }
-    const resetSpeakerResponses =
-      usesPerSpeakerLifecycle(snap.data()!) && current !== status;
+    const perSpeakerLifecycle = usesPerSpeakerLifecycle(snap.data()!);
+    const resetSpeakerResponses = perSpeakerLifecycle && current !== status;
+    const existingScheduleBaseline = frozenScheduleBaselineIds(snap.data()!);
+    const scheduleDecisionNeedsCancellation =
+      current !== status &&
+      (Boolean(existingScheduleBaseline) ||
+        (current === 'confirmed' && perSpeakerLifecycle));
+    const hasLiveScheduleRelease =
+      scheduleDecisionNeedsCancellation &&
+      await currentScheduleReleaseContainsProposal(db, tx, cfpId, proposalId, cfp);
+    const establishesScheduleBaseline =
+      hasLiveScheduleRelease &&
+      current === 'confirmed' &&
+      perSpeakerLifecycle &&
+      !existingScheduleBaseline;
     const confirmationRefs = resetSpeakerResponses
       ? proposalSpeakerIds(snap.data()!).map((speakerId) =>
           speakerConfirmationRef(db, cfpId, proposalId, speakerId),
         )
       : [];
     if (confirmationRefs.length) await tx.getAll(...confirmationRefs);
+    const pendingLateInvitations =
+      current !== status
+        ? await tx.get(
+            ref.collection('speakerInvitations').where('status', '==', 'pending'),
+          )
+        : null;
     // Decisions queue `held`, and an admin releases the whole batch at once
     // (§8) — otherwise the first people alphabetically learn their fate hours
     // before the rest, and rejections trickle out ahead of acceptances.
@@ -3511,6 +3830,7 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
         {
           response: FieldValue.delete(),
           answers: FieldValue.delete(),
+          speakerPhoto: FieldValue.delete(),
           respondedAt: FieldValue.delete(),
           confirmedAt: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
@@ -3518,10 +3838,42 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
         { merge: true },
       );
     }
+    for (const invitation of pendingLateInvitations?.docs ?? []) {
+      if (invitation.get('phase') !== 'postAcceptance') continue;
+      tx.update(invitation.ref, {
+        status: 'revoked',
+        revokedBy: byUid,
+        revokedAt: FieldValue.serverTimestamp(),
+      });
+    }
     tx.update(ref, {
       status,
       updatedAt: FieldValue.serverTimestamp(),
-      ...(resetSpeakerResponses ? { confirmedAt: FieldValue.delete() } : {}),
+      ...(current !== status &&
+      (snap.get('lateSpeakerSchedulePreserved') === true || establishesScheduleBaseline)
+        ? {
+            ...(hasLiveScheduleRelease ? { scheduleCancellationRequired: true } : {}),
+            ...(establishesScheduleBaseline
+              ? {
+                  lateSpeakerSchedulePreserved: true,
+                  lateSpeakerScheduleBaselineIds: proposalSpeakerIds(snap.data()!),
+                }
+              : {}),
+            lateSpeakerPendingIds: FieldValue.delete(),
+            lateSpeakerPendingInvitations: FieldValue.delete(),
+          }
+        : {}),
+      ...(current !== status
+        ? {
+            confirmedAt: FieldValue.delete(),
+            ...(!perSpeakerLifecycle
+              ? {
+                  confirmAnswers: FieldValue.delete(),
+                  speakerPhoto: FieldValue.delete(),
+                }
+              : {}),
+          }
+        : {}),
     });
   });
 
@@ -3677,7 +4029,8 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
           );
         }
       }
-      const speakerRecipientUid = !isStaffEmail(snap.get('kind'))
+      const speakerRecipientUid =
+        !isStaffEmail(snap.get('kind')) && !isScheduleEmail(snap.get('kind'))
         ? String(snap.get('recipientUid') ?? '')
         : '';
       if (speakerRecipientUid) {
@@ -3710,9 +4063,12 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
         const currentReleaseId = scheduleEmailReleaseId(cfp);
         const entryId = snap.get('data')?.scheduleEntryId as string;
         const proposalId = snap.get('proposalId') as string;
-        const proposal = proposalId
-          ? await tx.get(db.doc(`cfps/${cfpId}/proposals/${proposalId}`))
-          : undefined;
+        const [proposal, source] = proposalId && currentReleaseId
+          ? await tx.getAll(
+              db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+              scheduleReleaseSourceRef(cfpId, currentReleaseId),
+            )
+          : [undefined, undefined];
         const entry = currentReleaseId && entryId
           ? await tx.get(
               db.doc(`cfps/${cfpId}/scheduleReleases/${currentReleaseId}/entries/${entryId}`),
@@ -3724,7 +4080,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
             String(snap.get('dedupeKey') ?? ''),
             currentReleaseId,
             entry,
-            proposal?.exists ? (proposal.get('status') as string) : undefined,
+            proposal,
+            String(snap.get('recipientUid') ?? ''),
+            scheduleReleaseProposalEntryId(source, proposalId),
           )
         ) {
           throw new HttpsError(
@@ -4520,6 +4878,11 @@ const scheduleSubmissionFormRef = (cfpId: string) =>
 const scheduleDraft = (cfpId: string) => db.collection(`cfps/${cfpId}/scheduleDraft`);
 const scheduleReleaseSourceRef = (cfpId: string, releaseId: string) =>
   db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`);
+const publicSchedulePhotoCachePath = (
+  cfpId: string,
+  releaseId: string,
+  photoRef: string,
+) => `cfps/${cfpId}/publicSchedulePhotos/${releaseId}/${photoRef}.webp`;
 
 function scheduleConfigFrom(value: unknown): ScheduleConfig {
   const data = (value ?? {}) as Record<string, unknown>;
@@ -4759,15 +5122,40 @@ function stableScheduleValue(value: unknown): unknown {
   );
 }
 
+function scheduleSessionNotificationValue(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const session = value as Record<string, unknown>;
+  const speakers = Array.isArray(session.speakers)
+    ? session.speakers.map((speaker) => {
+        if (!speaker || typeof speaker !== 'object' || Array.isArray(speaker)) return speaker;
+        const publicFacts = { ...(speaker as Record<string, unknown>) };
+        delete publicFacts.photoRef;
+        return publicFacts;
+      })
+    : session.speakers;
+  return stableScheduleValue({ ...session, speakers });
+}
+
 function scheduleProjectionFingerprint(
   config: Pick<ScheduleConfig, 'timeZone' | 'days' | 'rooms'>,
   entries: readonly PublishedScheduleEntry[],
 ): string {
+  const entriesWithoutPhotoRefs = entries.map((entry) =>
+    entry.kind === 'custom'
+      ? entry
+      : {
+          ...entry,
+          session: {
+            ...entry.session,
+            speakers: entry.session.speakers.map(({ photoRef: _photoRef, ...speaker }) => speaker),
+          },
+        },
+  );
   const source = stableScheduleValue({
     timeZone: config.timeZone,
     days: config.days,
     rooms: config.rooms,
-    entries: [...entries].sort((left, right) => left.id.localeCompare(right.id)),
+    entries: entriesWithoutPhotoRefs.sort((left, right) => left.id.localeCompare(right.id)),
   });
   return createHash('sha256').update(JSON.stringify(source)).digest('hex');
 }
@@ -4811,14 +5199,113 @@ function scheduleEntriesWithTaxonomyLabels(
   );
 }
 
+interface ScheduleReleaseSpeakerPhoto {
+  entryId: string;
+  speakerIndex: number;
+  proposalId: string;
+  uid: string;
+  path: string;
+  sourceGeneration: string;
+}
+
+interface SchedulePhotoProjectionInput {
+  cfpId: string;
+  releaseId: string;
+  form: ConfirmForm;
+  confirmations: ReadonlyMap<string, DocumentSnapshot>;
+}
+
+function scheduleConfirmationKey(proposalId: string, uid: string): string {
+  return `${proposalId}\u0000${uid}`;
+}
+
+function scheduleConfirmationRefs(
+  cfpId: string,
+  proposals: readonly DocumentSnapshot[],
+): Array<{ key: string; ref: FirebaseFirestore.DocumentReference }> {
+  const refs = new Map<string, FirebaseFirestore.DocumentReference>();
+  for (const proposal of proposals) {
+    if (!proposal.exists) continue;
+    for (const uid of proposalSpeakerIds(proposal.data() ?? {})) {
+      const key = scheduleConfirmationKey(proposal.id, uid);
+      refs.set(key, speakerConfirmationRef(db, cfpId, proposal.id, uid));
+    }
+  }
+  return [...refs].map(([key, ref]) => ({ key, ref }));
+}
+
+function confirmedScheduleSpeakerPhoto(
+  value: unknown,
+  cfpId: string,
+  proposalId: string,
+  uid: string,
+): ConfirmedSpeakerPhoto | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const photo = value as Partial<ConfirmedSpeakerPhoto>;
+  if (
+    typeof photo.path !== 'string' ||
+    typeof photo.sourceGeneration !== 'string' ||
+    !photo.sourceGeneration ||
+    photo.path !==
+      speakerConfirmedHeadshotPath(
+        cfpId,
+        proposalId,
+        uid,
+        SPEAKER_PHOTO_KEY,
+        photo.sourceGeneration,
+      ) ||
+    !(IMAGE_TYPES as readonly unknown[]).includes(photo.contentType) ||
+    typeof photo.size !== 'number' ||
+    !Number.isFinite(photo.size) ||
+    photo.size <= 0 ||
+    photo.size > FORM_LIMITS.image
+  ) {
+    return null;
+  }
+  return photo as ConfirmedSpeakerPhoto;
+}
+
+function schedulePhotoRef(
+  releaseId: string,
+  entryId: string,
+  speakerIndex: number,
+  photo: ConfirmedSpeakerPhoto,
+): string {
+  return createHash('sha256')
+    .update(`${releaseId}\u0000${entryId}\u0000${speakerIndex}\u0000${photo.sourceGeneration}`)
+    .digest('base64url');
+}
+
+function scheduleSpeakerPhotoFingerprint(
+  photos: Readonly<Record<string, ScheduleReleaseSpeakerPhoto>>,
+): string {
+  const sources = Object.values(photos).sort((left, right) =>
+    `${left.entryId}\u0000${left.speakerIndex}`.localeCompare(
+      `${right.entryId}\u0000${right.speakerIndex}`,
+    ),
+  );
+  return createHash('sha256')
+    .update(JSON.stringify(stableScheduleValue(sources)))
+    .digest('hex');
+}
+
 function sharedProjection(
   config: ScheduleConfig,
   entries: readonly ScheduleEntry[],
   proposals: ReadonlyMap<string, DocumentSnapshot>,
   form: SubmissionForm,
-): { entries: PublishedScheduleEntry[]; omittedCount: number; fingerprint: string } {
+  photoInput?: SchedulePhotoProjectionInput,
+): {
+  entries: PublishedScheduleEntry[];
+  omittedCount: number;
+  fingerprint: string;
+  speakerPhotos: Record<string, ScheduleReleaseSpeakerPhoto>;
+  speakerPhotoFingerprint: string;
+} {
   const projected: PublishedScheduleEntry[] = [];
   const eligibleDraft: ScheduleEntry[] = [];
+  const speakerPhotos: Record<string, ScheduleReleaseSpeakerPhoto> = {};
+  const missingRequiredPhotos: string[] = [];
   let omittedCount = 0;
 
   for (const entry of entries) {
@@ -4843,6 +5330,48 @@ function sharedProjection(
     const category = String(data.category ?? '');
     const format = String(data.format ?? '');
     const level = String(data.level ?? '');
+    const snapshots = (data.speakerSnapshot ?? []) as SpeakerSnapshot[];
+    const photoRefs = new Map<string, string>();
+    if (photoInput?.form.speakerPhoto) {
+      const primaryUid = primarySpeakerId(data);
+      snapshots.forEach((speaker, speakerIndex) => {
+        const confirmation = photoInput.confirmations.get(
+          scheduleConfirmationKey(entry.proposalId, speaker.uid),
+        );
+        const photo =
+          confirmedScheduleSpeakerPhoto(
+            confirmation?.get('speakerPhoto'),
+            photoInput.cfpId,
+            entry.proposalId,
+            speaker.uid,
+          ) ??
+          (speaker.uid === primaryUid &&
+          (!usesPerSpeakerLifecycle(data) || confirmation?.get('migratedFromLegacy') === true)
+            ? confirmedScheduleSpeakerPhoto(
+                proposal.get('speakerPhoto'),
+                photoInput.cfpId,
+                entry.proposalId,
+                speaker.uid,
+              )
+            : null);
+        if (!photo) {
+          if (photoInput.form.speakerPhoto?.required) {
+            missingRequiredPhotos.push(speaker.name || `speaker ${speakerIndex + 1}`);
+          }
+          return;
+        }
+        const photoRef = schedulePhotoRef(photoInput.releaseId, entry.id, speakerIndex, photo);
+        photoRefs.set(speaker.uid, photoRef);
+        speakerPhotos[photoRef] = {
+          entryId: entry.id,
+          speakerIndex,
+          proposalId: entry.proposalId,
+          uid: speaker.uid,
+          path: photo.path,
+          sourceGeneration: photo.sourceGeneration,
+        };
+      });
+    }
     projected.push({
       id: entry.id,
       kind: 'proposal',
@@ -4862,11 +5391,17 @@ function sharedProjection(
         level,
         levelLabel: scheduleTaxonomyLabel(form.level, level),
         language,
-        speakers: publicScheduleSpeakers(
-          (data.speakerSnapshot ?? []) as SpeakerSnapshot[],
-        ),
+        speakers: publicScheduleSpeakers(snapshots, photoRefs),
       },
     });
+  }
+
+  if (missingRequiredPhotos.length) {
+    throw new HttpsError(
+      'failed-precondition',
+      `Add confirmed speaker photos for: ${[...new Set(missingRequiredPhotos)].join(', ')}.`,
+      { speakerPhoto: 'required', speakers: [...new Set(missingRequiredPhotos)] },
+    );
   }
 
   const speakers = new Map(
@@ -4879,6 +5414,8 @@ function sharedProjection(
     entries: projected,
     omittedCount,
     fingerprint: scheduleProjectionFingerprint(config, projected),
+    speakerPhotos,
+    speakerPhotoFingerprint: scheduleSpeakerPhotoFingerprint(speakerPhotos),
   };
 }
 
@@ -4886,11 +5423,12 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireScheduleAdmin(request, cfpId, 'share the schedule preview');
   const input = (request.data ?? {}) as Record<string, unknown>;
-  const [configSnap, entriesSnap, cfpBefore, formSnap] = await Promise.all([
+  const [configSnap, entriesSnap, cfpBefore, formSnap, confirmFormSnap] = await Promise.all([
     scheduleConfigRef(cfpId).get(),
     scheduleDraft(cfpId).get(),
     db.doc(`cfps/${cfpId}`).get(),
     scheduleSubmissionFormRef(cfpId).get(),
+    db.doc(`cfps/${cfpId}/config/confirmForm`).get(),
   ]);
   if (!cfpBefore.exists) throw new HttpsError('not-found', 'No such call for proposals.');
   if (cfpBefore.get('archived') === true) {
@@ -4915,7 +5453,19 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       )
     : [];
   const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap]));
-  const projection = sharedProjection(config, entries, proposals, form);
+  const releaseRef = db.collection(`cfps/${cfpId}/scheduleReleases`).doc();
+  const photoConfirmationRefs = scheduleConfirmationRefs(cfpId, proposalSnaps);
+  const photoConfirmationSnaps = photoConfirmationRefs.length
+    ? await db.getAll(...photoConfirmationRefs.map(({ ref }) => ref))
+    : [];
+  const projection = sharedProjection(config, entries, proposals, form, {
+    cfpId,
+    releaseId: releaseRef.id,
+    form: confirmFormFrom(confirmFormSnap),
+    confirmations: new Map(
+      photoConfirmationSnaps.map((snap, index) => [photoConfirmationRefs[index].key, snap]),
+    ),
+  });
   const sharedEntries = projection.entries;
   if (!sharedEntries.length) {
     throw new HttpsError(
@@ -4936,10 +5486,15 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
   const previousFingerprint = String(
     previousSource?.get('sourceFingerprint') ?? previousRelease?.get('sourceFingerprint') ?? '',
   );
+  const previousSpeakerPhotoFingerprint = String(
+    previousSource?.get('speakerPhotoFingerprint') ?? '',
+  );
   const projectionChanged =
     previousRelease?.exists !== true ||
     !previousFingerprint ||
-    previousFingerprint !== projection.fingerprint;
+    previousFingerprint !== projection.fingerprint ||
+    !previousSpeakerPhotoFingerprint ||
+    previousSpeakerPhotoFingerprint !== projection.speakerPhotoFingerprint;
   if (configSnap.get('needsAttention') !== true && !projectionChanged) {
     throw new HttpsError('failed-precondition', 'There are no unpublished schedule changes.');
   }
@@ -4985,8 +5540,8 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
         JSON.stringify(stableScheduleValue(previousRooms.get(String(previous.roomId))?.name)) !==
           JSON.stringify(stableScheduleValue(currentRooms.get(entry.roomId)?.name)) ||
         timeZoneChanged ||
-        previous.session?.title !== entry.session.title ||
-        previous.session?.language !== entry.session.language ||
+        JSON.stringify(scheduleSessionNotificationValue(previous.session)) !==
+          JSON.stringify(scheduleSessionNotificationValue(entry.session)) ||
         previous.cancelled === true);
     if (!previous || moved) {
       changes.push({
@@ -5017,8 +5572,36 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     if (old.cancelled === true) alreadyCancelled.push(cancellation);
     else changes.push(cancellation);
   }
+  type PendingScheduleCancellation = {
+    proposalId: string;
+    entryId: string;
+    uid: string;
+    primary: boolean;
+  };
+  // The public release no longer has an entry to carry this fact. Its private
+  // source keeps the exact frozen recipients until their cancellation is sent.
+  const previousPendingCancellations = (
+    Array.isArray(previousSource?.get('pendingScheduleCancellations'))
+      ? (previousSource?.get('pendingScheduleCancellations') as unknown[])
+      : []
+  ).flatMap((value): PendingScheduleCancellation[] => {
+    if (!value || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    return typeof record.proposalId === 'string' &&
+      record.proposalId.length > 0 &&
+      typeof record.entryId === 'string' &&
+      record.entryId.length > 0 &&
+      typeof record.uid === 'string' &&
+      record.uid.length > 0 &&
+      typeof record.primary === 'boolean'
+      ? [record as PendingScheduleCancellation]
+      : [];
+  });
   const changeProposalIds = [
-    ...new Set([...changes, ...alreadyCancelled].map((change) => change.proposalId)),
+    ...new Set([
+      ...[...changes, ...alreadyCancelled].map((change) => change.proposalId),
+      ...previousPendingCancellations.map((pending) => pending.proposalId),
+    ]),
   ];
   const changeProposalSnaps = changeProposalIds.length
     ? await db.getAll(
@@ -5034,15 +5617,19 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
   const notificationProposals = new Map(
     [...proposalSnaps, ...changeProposalSnaps].map((proposal) => [proposal.id, proposal]),
   );
-  const recipientsFor = (proposalId: string) => {
+  const recipientsFor = (proposalId: string, kind?: ScheduleEmailChange['kind']) => {
     const proposal = notificationProposals.get(proposalId);
     if (!proposal?.exists) return [];
     const data = proposal.data()!;
     const primary = primarySpeakerId(data);
-    return proposalSpeakerIds(data).map((uid) => ({ uid, primary: uid === primary }));
+    const recipientIds =
+      kind === 'schedule_cancelled'
+        ? scheduleCancellationRecipientIds(proposal)
+        : proposalSpeakerIds(data);
+    return recipientIds.map((uid) => ({ uid, primary: uid === primary }));
   };
   const changeRecipients: ScheduleEmailRecipient[] = changes.flatMap((change) =>
-    recipientsFor(change.proposalId).map((recipient) => ({ change, ...recipient })),
+    recipientsFor(change.proposalId, change.kind).map((recipient) => ({ change, ...recipient })),
   );
 
   const cancelledCarrySources: {
@@ -5054,7 +5641,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
   }[] = [];
   if (previousReleaseId && alreadyCancelled.length) {
     const candidates = alreadyCancelled.flatMap((change) =>
-      recipientsFor(change.proposalId).map((recipient) => ({ change, ...recipient })),
+      recipientsFor(change.proposalId, change.kind).map((recipient) => ({ change, ...recipient })),
     );
     const sourceRefs = candidates.map(({ change, uid, primary }) =>
       db.doc(
@@ -5084,8 +5671,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     }
   }
 
-  const releaseRef = db.collection(`cfps/${cfpId}/scheduleReleases`).doc();
-  const carryCandidates = previousReleaseId
+  const rawCarryCandidates = previousReleaseId
     ? [
         ...unchanged.flatMap(({ proposalId, entryId }) =>
           recipientsFor(proposalId).flatMap(({ uid, primary }) =>
@@ -5093,6 +5679,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
               proposalId,
               entryId,
               uid,
+              primary,
               sourceRef: db.doc(
                 `cfps/${cfpId}/emailLog/${logId(
                   kind,
@@ -5116,6 +5703,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
           proposalId,
           entryId,
           uid,
+          primary,
           sourceRef,
           targetRef: db.doc(
             `cfps/${cfpId}/emailLog/${logId(
@@ -5126,8 +5714,53 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
             )}`,
           ),
         })),
+        ...previousPendingCancellations
+          .filter(({ proposalId }) => !currentProposalIds.has(proposalId))
+          .map(({ proposalId, entryId, uid, primary }) => ({
+            proposalId,
+            entryId,
+            uid,
+            primary,
+            sourceRef: db.doc(
+              `cfps/${cfpId}/emailLog/${logId(
+                'schedule_cancelled',
+                proposalId,
+                previousReleaseId,
+                primary ? undefined : uid,
+              )}`,
+            ),
+            targetRef: db.doc(
+              `cfps/${cfpId}/emailLog/${logId(
+                'schedule_cancelled',
+                proposalId,
+                releaseRef.id,
+                primary ? undefined : uid,
+              )}`,
+            ),
+          })),
       ]
     : [];
+  const carryCandidates = [
+    ...new Map(
+      rawCarryCandidates.map((candidate) => [
+        `${candidate.sourceRef.path}\u0000${candidate.targetRef.path}`,
+        candidate,
+      ]),
+    ).values(),
+  ];
+  const previousScheduledProposalEntries = previousSource?.get('scheduledProposalEntries');
+  const previousProposalEntryKeys =
+    previousReleaseId &&
+    previousScheduledProposalEntries &&
+    typeof previousScheduledProposalEntries === 'object' &&
+    !Array.isArray(previousScheduledProposalEntries)
+      ? [...currentProposalIds].flatMap((proposalId) => {
+          const entryId = (previousScheduledProposalEntries as Record<string, unknown>)[proposalId];
+          return typeof entryId === 'string' && entryId
+            ? [{ proposalId, entryId }]
+            : [];
+        })
+      : [];
   const version =
     Math.max(
       Number(configSnap.get('sharedVersion') ?? 0),
@@ -5135,16 +5768,120 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       Number(previousRelease?.get('version') ?? 0),
     ) + 1;
   const { revision, speakerNotificationCount } = await db.runTransaction(async (tx) => {
+    const previousReleaseEmails = previousReleaseId
+      ? await tx.get(
+          db
+            .collection(`cfps/${cfpId}/emailLog`)
+            .where('dedupeKey', '==', previousReleaseId),
+        )
+      : null;
+    if (
+      previousReleaseEmails?.docs.some(
+        (email) =>
+          isScheduleEmail(email.get('kind')) &&
+          (email.get('status') === 'queued' || email.get('status') === 'sending'),
+      )
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Wait for the current schedule email delivery to finish before sharing another preview.',
+        { reason: 'schedule-email-in-flight' },
+      );
+    }
+    if (
+      previousReleaseEmails?.docs.some(
+        (email) =>
+          isScheduleEmail(email.get('kind')) &&
+          CARRY_SCHEDULE_EMAIL_STATUSES.has(email.get('status') as EmailStatus) &&
+          typeof email.get('providerAttemptId') === 'string' &&
+          Boolean(email.get('providerAttemptId')),
+      )
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Retry the current schedule email before sharing another preview.',
+        { reason: 'schedule-email-retry-required' },
+      );
+    }
+    if (
+      previousReleaseEmails?.docs.some(
+        (email) =>
+          email.get('kind') === 'schedule_cancelled' &&
+          currentProposalIds.has(String(email.get('proposalId') ?? '')) &&
+          CARRY_SCHEDULE_EMAIL_STATUSES.has(email.get('status') as EmailStatus),
+      )
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Send the current schedule cancellation before restoring that session.',
+        { reason: 'schedule-cancellation-pending' },
+      );
+    }
+    const representedCarrySources = new Set(
+      carryCandidates.map((candidate) => candidate.sourceRef.path),
+    );
+    const representedCarryTargets = new Set([
+      ...carryCandidates.map((candidate) => candidate.targetRef.path),
+      ...changeRecipients.map(({ change, uid, primary }) =>
+        db.doc(
+          `cfps/${cfpId}/emailLog/${logId(
+            change.kind,
+            change.proposalId,
+            releaseRef.id,
+            primary ? undefined : uid,
+          )}`,
+        ).path,
+      ),
+    ]);
+    const legacyCancellationCarries = (previousReleaseEmails?.docs ?? []).flatMap((email) => {
+      if (
+        email.get('kind') !== 'schedule_cancelled' ||
+        !CARRY_SCHEDULE_EMAIL_STATUSES.has(email.get('status') as EmailStatus) ||
+        representedCarrySources.has(email.ref.path)
+      ) {
+        return [];
+      }
+      const proposalId = email.get('proposalId');
+      const uid = email.get('recipientUid');
+      const entryId = email.get('data')?.scheduleEntryId;
+      if (
+        typeof proposalId !== 'string' ||
+        !proposalId ||
+        currentProposalIds.has(proposalId) ||
+        typeof uid !== 'string' ||
+        !uid ||
+        typeof entryId !== 'string' ||
+        !/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(entryId)
+      ) {
+        return [];
+      }
+      const primaryId = logId('schedule_cancelled', proposalId, previousReleaseId!);
+      const speakerId = logId('schedule_cancelled', proposalId, previousReleaseId!, uid);
+      const primary = email.id === primaryId ? true : email.id === speakerId ? false : null;
+      if (primary === null) return [];
+      const targetRef = db.doc(
+        `cfps/${cfpId}/emailLog/${logId(
+          'schedule_cancelled',
+          proposalId,
+          releaseRef.id,
+          primary ? undefined : uid,
+        )}`,
+      );
+      if (representedCarryTargets.has(targetRef.path)) return [];
+      representedCarryTargets.add(targetRef.path);
+      return [{ proposalId, entryId, uid, primary, source: email, targetRef }];
+    });
     const allProposalIds = [
       ...new Set([
         ...proposalEntries.map((entry) => entry.proposalId),
+        ...changeProposalIds,
         ...changeRecipients.map(({ change }) => change.proposalId),
+        ...carryCandidates.map((candidate) => candidate.proposalId),
+        ...legacyCancellationCarries.map((candidate) => candidate.proposalId),
       ]),
     ];
     const proposalRefs = allProposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`));
-    const speakerIds = [
-      ...new Set(changeProposalSnaps.flatMap((snap) => (snap.get('speakerIds') ?? []) as string[])),
-    ];
+    const speakerIds = [...new Set(changeRecipients.map((recipient) => recipient.uid))];
     const speakerRefs = speakerIds.map((id) => db.doc(`speakers/${id}`));
     const participantKeys = [
       ...new Map(
@@ -5169,6 +5906,11 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     );
     const carrySourceRefs = carryCandidates.map((candidate) => candidate.sourceRef);
     const carryTargetRefs = carryCandidates.map((candidate) => candidate.targetRef);
+    const previousProposalEntryRefs = previousProposalEntryKeys.map(({ entryId }) =>
+      db.doc(
+        `cfps/${cfpId}/scheduleReleases/${previousReleaseId}/entries/${entryId}`,
+      ),
+    );
     const comparisonRefs = previousReleaseId
       ? [
           db.doc(`cfps/${cfpId}/scheduleReleases/${previousReleaseId}`),
@@ -5179,7 +5921,10 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       scheduleConfigRef(cfpId),
       db.doc(`cfps/${cfpId}`),
       scheduleSubmissionFormRef(cfpId),
+      db.doc(`cfps/${cfpId}/config/confirmForm`),
+      ...photoConfirmationRefs.map(({ ref }) => ref),
       ...comparisonRefs,
+      ...previousProposalEntryRefs,
       ...proposalRefs,
       ...speakerRefs,
       ...participantRefs,
@@ -5190,10 +5935,22 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     const freshConfig = snapshots[0];
     const cfpSnap = snapshots[1];
     const freshForm = snapshots[2];
+    const freshConfirmForm = snapshots[3];
     const freshFormValue = scheduleFormFrom(freshForm);
-    const dataStart = 3 + comparisonRefs.length;
-    const freshPreviousRelease = previousReleaseId ? snapshots[3] : null;
-    const freshPreviousSource = previousReleaseId ? snapshots[4] : null;
+    const photoStart = 4;
+    const freshPhotoConfirmations = snapshots.slice(
+      photoStart,
+      photoStart + photoConfirmationRefs.length,
+    );
+    const comparisonStart = photoStart + photoConfirmationRefs.length;
+    const previousProposalEntryStart = comparisonStart + comparisonRefs.length;
+    const dataStart = previousProposalEntryStart + previousProposalEntryRefs.length;
+    const freshPreviousRelease = previousReleaseId ? snapshots[comparisonStart] : null;
+    const freshPreviousSource = previousReleaseId ? snapshots[comparisonStart + 1] : null;
+    const freshPreviousProposalEntries = snapshots.slice(
+      previousProposalEntryStart,
+      dataStart,
+    );
     const freshProposals = snapshots.slice(dataStart, dataStart + proposalRefs.length);
     const freshSpeakers = snapshots.slice(
       dataStart + proposalRefs.length,
@@ -5217,6 +5974,51 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
     if (cfpSnap.get('archived') === true) {
       throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
     }
+    if (
+      freshProposals.some(
+        (proposal) => proposal.exists && proposal.get('scheduleCancellationRequired') === true,
+      )
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Wait for the current schedule cancellation to finish before sharing another preview.',
+        { reason: 'schedule-cancellation-processing' },
+      );
+    }
+    const previousEmailById = new Map(
+      (previousReleaseEmails?.docs ?? []).map((email) => [email.id, email]),
+    );
+    for (const [index, previousEntry] of freshPreviousProposalEntries.entries()) {
+      if (!previousEntry.exists || previousEntry.get('cancelled') !== true) continue;
+      const { proposalId } = previousProposalEntryKeys[index];
+      const proposal = freshProposals.find((candidate) => candidate.id === proposalId);
+      if (!proposal?.exists) continue;
+      const primary = primarySpeakerId(proposal.data()!);
+      const cancellationRows = scheduleCancellationRecipientIds(proposal).map((uid) =>
+        previousEmailById.get(
+          logId(
+            'schedule_cancelled',
+            proposalId,
+            previousReleaseId!,
+            uid === primary ? undefined : uid,
+          ),
+        ),
+      );
+      if (cancellationRows.length === 0 || cancellationRows.some((row) => !row?.exists)) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Wait for the current schedule cancellation to finish before sharing another preview.',
+          { reason: 'schedule-cancellation-processing' },
+        );
+      }
+      if (cancellationRows.some((row) => row!.get('status') !== 'sent')) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Send the current schedule cancellation before restoring that session.',
+          { reason: 'schedule-cancellation-pending' },
+        );
+      }
+    }
     assertScheduleRevision(Number(freshConfig.get('revision') ?? 0), input.expectedRevision);
     const freshPreviousReleaseId = (cfpSnap.get('sharedScheduleId') ??
       cfpSnap.get('publishedScheduleId')) as string | undefined;
@@ -5231,8 +6033,22 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       entries,
       new Map(freshProposals.map((snap) => [snap.id, snap])),
       freshFormValue,
+      {
+        cfpId,
+        releaseId: releaseRef.id,
+        form: confirmFormFrom(freshConfirmForm),
+        confirmations: new Map(
+          freshPhotoConfirmations.map((snap, index) => [
+            photoConfirmationRefs[index].key,
+            snap,
+          ]),
+        ),
+      },
     );
-    if (freshProjection.fingerprint !== projection.fingerprint) {
+    if (
+      freshProjection.fingerprint !== projection.fingerprint ||
+      freshProjection.speakerPhotoFingerprint !== projection.speakerPhotoFingerprint
+    ) {
       throw new HttpsError(
         'aborted',
         'The schedule content changed while the preview was being shared. Try again.',
@@ -5243,10 +6059,15 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
         freshPreviousRelease?.get('sourceFingerprint') ??
         '',
     );
+    const freshPreviousSpeakerPhotoFingerprint = String(
+      freshPreviousSource?.get('speakerPhotoFingerprint') ?? '',
+    );
     const freshProjectionChanged =
       freshPreviousRelease?.exists !== true ||
       !freshPreviousFingerprint ||
-      freshPreviousFingerprint !== freshProjection.fingerprint;
+      freshPreviousFingerprint !== freshProjection.fingerprint ||
+      !freshPreviousSpeakerPhotoFingerprint ||
+      freshPreviousSpeakerPhotoFingerprint !== freshProjection.speakerPhotoFingerprint;
     if (freshConfig.get('needsAttention') !== true && !freshProjectionChanged) {
       throw new HttpsError('failed-precondition', 'There are no unpublished schedule changes.');
     }
@@ -5270,14 +6091,6 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       days: config.days,
       rooms: config.rooms,
     });
-    countWrite();
-    tx.create(scheduleReleaseSourceRef(cfpId, releaseRef.id), {
-      sourceRevision: current,
-      sourceFingerprint: projection.fingerprint,
-      taxonomyFingerprint: scheduleTaxonomyFingerprint(freshFormValue),
-      sharedBy: byUid,
-      sharedAt: FieldValue.serverTimestamp(),
-    });
     for (const sharedEntry of sharedEntries) {
       const { id, ...stored } = sharedEntry;
       countWrite();
@@ -5289,6 +6102,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       sharedVersion: version,
       sharedRevision: current,
       sharedFingerprint: projection.fingerprint,
+      sharedSpeakerPhotoFingerprint: projection.speakerPhotoFingerprint,
       sharedTaxonomyFingerprint: scheduleTaxonomyFingerprint(freshFormValue),
       needsAttention: false,
       updatedAt: FieldValue.serverTimestamp(),
@@ -5304,16 +6118,28 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
         .filter((entry) => entry.kind === 'proposal')
         .map((entry) => entry.proposalId),
     );
-    for (const entry of proposalEntries) {
-      if (entry.assignedLanguage && includedProposalIds.has(entry.proposalId)) {
+    const freshProposalMap = new Map(freshProposals.map((snap) => [snap.id, snap]));
+    const entryByProposal = new Map(
+      proposalEntries.map((entry) => [entry.proposalId, entry] as const),
+    );
+    for (const proposal of freshProposals) {
+      const entry = entryByProposal.get(proposal.id);
+      const patch: Record<string, unknown> = {};
+      if (entry?.assignedLanguage && includedProposalIds.has(proposal.id)) {
+        patch.assignedLanguage = entry.assignedLanguage;
+      }
+      if (proposal.get('lateSpeakerSchedulePreserved') === true) {
+        patch.lateSpeakerSchedulePreserved = FieldValue.delete();
+        patch.lateSpeakerScheduleBaselineIds = FieldValue.delete();
+      }
+      if (Object.keys(patch).length > 0) {
         countWrite();
-        tx.update(db.doc(`cfps/${cfpId}/proposals/${entry.proposalId}`), {
-          assignedLanguage: entry.assignedLanguage,
+        tx.update(proposal.ref, {
+          ...patch,
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
     }
-    const freshProposalMap = new Map(freshProposals.map((snap) => [snap.id, snap]));
     const freshSpeakerMap = new Map(freshSpeakers.map((snap) => [snap.id, snap]));
     const freshParticipantMap = new Map(
       freshParticipants.map((participant, index) => [
@@ -5322,6 +6148,7 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       ]),
     );
     let speakerNotificationCount = 0;
+    const pendingScheduleCancellations: PendingScheduleCancellation[] = [];
     for (const [index, recipient] of changeRecipients.entries()) {
       if (existingEmails[index]?.exists) continue;
       const { change, uid: speakerId } = recipient;
@@ -5329,7 +6156,11 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       if (change.kind !== 'schedule_cancelled' && proposal?.get('status') !== 'confirmed') {
         continue;
       }
-      if (!proposalSpeakerIds(proposal?.data() ?? {}).includes(speakerId)) continue;
+      const allowedRecipients =
+        change.kind === 'schedule_cancelled'
+          ? scheduleCancellationRecipientIds(proposal)
+          : proposalSpeakerIds(proposal?.data() ?? {});
+      if (!allowedRecipients.includes(speakerId)) continue;
       const speaker = speakerId ? freshSpeakerMap.get(speakerId) : undefined;
       const to = speaker?.get('email') as string | undefined;
       if (!to) continue;
@@ -5366,6 +6197,14 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
         attempts: 0,
         createdAt: FieldValue.serverTimestamp(),
       });
+      if (change.kind === 'schedule_cancelled') {
+        pendingScheduleCancellations.push({
+          proposalId: change.proposalId,
+          entryId: change.entryId,
+          uid: speakerId,
+          primary: recipient.primary,
+        });
+      }
       speakerNotificationCount += 1;
     }
     for (const [index, candidate] of carryCandidates.entries()) {
@@ -5383,12 +6222,16 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
       }
       const sourceData = source.data()!;
       const proposal = freshProposalMap.get(candidate.proposalId);
-      if (!proposalSpeakerIds(proposal?.data() ?? {}).includes(candidate.uid)) continue;
+      const cancellation = sourceData.kind === 'schedule_cancelled';
       if (
-        sourceData.kind !== 'schedule_cancelled' &&
-        proposal?.get('status') !== 'confirmed'
+        sourceData.proposalId !== candidate.proposalId ||
+        (sourceData.recipientUid !== undefined && sourceData.recipientUid !== candidate.uid)
       ) {
         continue;
+      }
+      if (!cancellation) {
+        if (!proposalSpeakerIds(proposal?.data() ?? {}).includes(candidate.uid)) continue;
+        if (proposal?.get('status') !== 'confirmed') continue;
       }
       countWrite();
       tx.create(candidate.targetRef, {
@@ -5402,8 +6245,63 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
         status: sourceStatus,
         createdAt: FieldValue.serverTimestamp(),
       });
+      if (cancellation) {
+        pendingScheduleCancellations.push({
+          proposalId: candidate.proposalId,
+          entryId: candidate.entryId,
+          uid: candidate.uid,
+          primary: candidate.primary,
+        });
+      }
       speakerNotificationCount += 1;
     }
+    for (const candidate of legacyCancellationCarries) {
+      const sourceData = candidate.source.data();
+      const sourceStatus = sourceData.status as EmailStatus;
+      countWrite();
+      tx.create(candidate.targetRef, {
+        ...sourceData,
+        dedupeKey: releaseRef.id,
+        recipientUid: candidate.uid,
+        data: {
+          ...(sourceData.data as Record<string, unknown>),
+          scheduleEntryId: candidate.entryId,
+        },
+        status: sourceStatus,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      pendingScheduleCancellations.push({
+        proposalId: candidate.proposalId,
+        entryId: candidate.entryId,
+        uid: candidate.uid,
+        primary: candidate.primary,
+      });
+      speakerNotificationCount += 1;
+    }
+    const uniquePendingScheduleCancellations = [
+      ...new Map(
+        pendingScheduleCancellations.map((pending) => [
+          `${pending.proposalId}\u0000${pending.entryId}\u0000${pending.uid}`,
+          pending,
+        ]),
+      ).values(),
+    ];
+    countWrite();
+    tx.create(scheduleReleaseSourceRef(cfpId, releaseRef.id), {
+      sourceRevision: current,
+      sourceFingerprint: projection.fingerprint,
+      speakerPhotoFingerprint: projection.speakerPhotoFingerprint,
+      speakerPhotos: projection.speakerPhotos,
+      scheduledProposalEntries: Object.fromEntries(
+        sharedEntries.flatMap((entry) =>
+          entry.kind === 'proposal' ? [[entry.proposalId, entry.id]] : [],
+        ),
+      ),
+      pendingScheduleCancellations: uniquePendingScheduleCancellations,
+      taxonomyFingerprint: scheduleTaxonomyFingerprint(freshFormValue),
+      sharedBy: byUid,
+      sharedAt: FieldValue.serverTimestamp(),
+    });
     return { revision: next, speakerNotificationCount };
   });
   logger.info('schedule preview shared', {
@@ -5544,9 +6442,12 @@ export const getSharedSchedule = onCall(CALLABLE, async (request) => {
           .where('speakerIds', 'array-contains', uid),
       );
       const ownConfirmedSpeakers = new Map(
-        ownProposals.docs
-          .filter((proposal) => proposal.get('status') === 'confirmed')
-          .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
+        ownProposals.docs.flatMap((proposal) => {
+          const releasedSpeakerIds = currentReleasedSpeakerIds(proposal);
+          return releasedSpeakerIds.includes(uid)
+            ? [[proposal.id, releasedSpeakerIds] as const]
+            : [];
+        }),
       );
       if (ownConfirmedSpeakers.size === 0) {
         throw new HttpsError(
@@ -5608,9 +6509,12 @@ export const getSharedSchedule = onCall(CALLABLE, async (request) => {
       : [];
     const proposals = new Map(proposalSnaps.map((proposal) => [proposal.id, proposal]));
     const confirmedSpeakers = new Map(
-      proposalSnaps
-        .filter((proposal) => proposal.exists && proposal.get('status') === 'confirmed')
-        .map((proposal) => [proposal.id, (proposal.get('speakerIds') ?? []) as string[]]),
+      proposalSnaps.flatMap((proposal) => {
+        const releasedSpeakerIds = currentReleasedSpeakerIds(proposal);
+        return releasedSpeakerIds.length > 0
+          ? [[proposal.id, releasedSpeakerIds] as const]
+          : [];
+      }),
     );
     const visibleEntries = sharedScheduleEntriesFor(
       releaseEntries,
@@ -5671,13 +6575,15 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
     }
 
     const releaseRef = db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`);
-    const [release, releaseSource, releaseEntriesSnap, draftSnap, formSnap] = await Promise.all([
-      tx.get(releaseRef),
-      tx.get(scheduleReleaseSourceRef(cfpId, releaseId)),
-      tx.get(releaseRef.collection('entries')),
-      tx.get(scheduleDraft(cfpId)),
-      tx.get(scheduleSubmissionFormRef(cfpId)),
-    ]);
+    const [release, releaseSource, releaseEntriesSnap, draftSnap, formSnap, confirmFormSnap] =
+      await Promise.all([
+        tx.get(releaseRef),
+        tx.get(scheduleReleaseSourceRef(cfpId, releaseId)),
+        tx.get(releaseRef.collection('entries')),
+        tx.get(scheduleDraft(cfpId)),
+        tx.get(scheduleSubmissionFormRef(cfpId)),
+        tx.get(db.doc(`cfps/${cfpId}/config/confirmForm`)),
+      ]);
     if (!release.exists) {
       throw new HttpsError('failed-precondition', 'The shared schedule is unavailable.');
     }
@@ -5705,11 +6611,23 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
           ),
         )
       : [];
+    const photoConfirmationRefs = scheduleConfirmationRefs(cfpId, proposalSnaps);
+    const photoConfirmationSnaps = photoConfirmationRefs.length
+      ? await tx.getAll(...photoConfirmationRefs.map(({ ref }) => ref))
+      : [];
     const projection = sharedProjection(
       config,
       draftEntries,
       new Map(proposalSnaps.map((proposal) => [proposal.id, proposal])),
       form,
+      {
+        cfpId,
+        releaseId,
+        form: confirmFormFrom(confirmFormSnap),
+        confirmations: new Map(
+          photoConfirmationSnaps.map((snap, index) => [photoConfirmationRefs[index].key, snap]),
+        ),
+      },
     );
     const releaseEntries = releaseEntriesSnap.docs.map(
       (entry) => ({ id: entry.id, ...entry.data() }) as PublishedScheduleEntry,
@@ -5722,6 +6640,9 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
     );
     const sourceTaxonomyFingerprint = String(
       releaseSource.get('taxonomyFingerprint') ?? '',
+    );
+    const sourceSpeakerPhotoFingerprint = String(
+      releaseSource.get('speakerPhotoFingerprint') ?? '',
     );
     const currentTaxonomyFingerprint = scheduleTaxonomyFingerprint(form);
     const releaseFingerprint = scheduleProjectionFingerprint(
@@ -5736,6 +6657,13 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
         sourceTaxonomyFingerprint !== currentTaxonomyFingerprint) ||
       (String(configSnap.get('sharedTaxonomyFingerprint') ?? '') &&
         String(configSnap.get('sharedTaxonomyFingerprint')) !== currentTaxonomyFingerprint) ||
+      (Boolean(confirmFormFrom(confirmFormSnap).speakerPhoto) &&
+        !sourceSpeakerPhotoFingerprint) ||
+      (sourceSpeakerPhotoFingerprint &&
+        sourceSpeakerPhotoFingerprint !== projection.speakerPhotoFingerprint) ||
+      (String(configSnap.get('sharedSpeakerPhotoFingerprint') ?? '') &&
+        String(configSnap.get('sharedSpeakerPhotoFingerprint')) !==
+          projection.speakerPhotoFingerprint) ||
       projection.fingerprint !== sourceFingerprint ||
       releaseFingerprint !== sourceFingerprint
     ) {
@@ -5762,6 +6690,165 @@ export const publishSchedule = onCall(CALLABLE, async (request) => {
   });
   logger.info('shared schedule published', { cfpId, byUid, ...result });
   return { ok: true, ...result };
+});
+
+/** Public bytes are derived only from the currently published release member. */
+export const publicSchedulePhoto = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const releaseId = typeof data.releaseId === 'string' ? data.releaseId : '';
+  const entryId = typeof data.entryId === 'string' ? data.entryId : '';
+  const speakerIndex = data.speakerIndex;
+  if (
+    !releaseId ||
+    !entryId ||
+    releaseId.length > 256 ||
+    entryId.length > 256 ||
+    releaseId.includes('/') ||
+    entryId.includes('/') ||
+    typeof speakerIndex !== 'number' ||
+    !Number.isInteger(speakerIndex) ||
+    speakerIndex < 0 ||
+    speakerIndex >= SCHEDULE_LIMITS.customSpeakers
+  ) {
+    throw new HttpsError('invalid-argument', 'A valid published schedule photo is required.');
+  }
+
+  const releaseRef = db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}`);
+  const [cfp, release, entry, source] = await db.getAll(
+    db.doc(`cfps/${cfpId}`),
+    releaseRef,
+    releaseRef.collection('entries').doc(entryId),
+    scheduleReleaseSourceRef(cfpId, releaseId),
+  );
+  const unavailable = () =>
+    new HttpsError('not-found', 'That published speaker photo is unavailable.');
+  if (
+    !cfp.exists ||
+    cfp.get('publishedScheduleId') !== releaseId ||
+    !release.exists ||
+    !entry.exists ||
+    entry.get('kind') !== 'proposal' ||
+    entry.get('cancelled') === true ||
+    !source.exists
+  ) {
+    throw unavailable();
+  }
+
+  const session = entry.get('session');
+  const speakers =
+    session && typeof session === 'object' && !Array.isArray(session)
+      ? (session as Record<string, unknown>).speakers
+      : undefined;
+  const speaker = Array.isArray(speakers) ? speakers[speakerIndex] : undefined;
+  const photoRef =
+    speaker && typeof speaker === 'object' && !Array.isArray(speaker)
+      ? (speaker as Record<string, unknown>).photoRef
+      : undefined;
+  const opaquePhotoRef = typeof photoRef === 'string' ? photoRef : '';
+  if (!/^[A-Za-z0-9_-]{43}$/.test(opaquePhotoRef)) throw unavailable();
+  const storedPhotos = source.get('speakerPhotos');
+  const member =
+    opaquePhotoRef &&
+    storedPhotos &&
+    typeof storedPhotos === 'object' &&
+    !Array.isArray(storedPhotos)
+      ? (storedPhotos as Record<string, unknown>)[opaquePhotoRef]
+      : undefined;
+  if (!member || typeof member !== 'object' || Array.isArray(member)) throw unavailable();
+  const record = member as Partial<ScheduleReleaseSpeakerPhoto>;
+  const proposalId = String(entry.get('proposalId') ?? '');
+  if (
+    record.entryId !== entryId ||
+    record.speakerIndex !== speakerIndex ||
+    record.proposalId !== proposalId ||
+    typeof record.uid !== 'string' ||
+    typeof record.path !== 'string' ||
+    typeof record.sourceGeneration !== 'string' ||
+    record.path !==
+      speakerConfirmedHeadshotPath(
+        cfpId,
+        proposalId,
+        record.uid,
+        SPEAKER_PHOTO_KEY,
+        record.sourceGeneration,
+      )
+  ) {
+    throw unavailable();
+  }
+
+  const bucket = getStorage().bucket();
+  const cachePath = publicSchedulePhotoCachePath(cfpId, releaseId, opaquePhotoRef);
+  const cached = await readStoredHeadshot(bucket, cachePath);
+  if (cached) {
+    if (cached.contentType !== 'image/webp') {
+      throw new HttpsError('unavailable', 'That speaker photo is temporarily unavailable.');
+    }
+    return {
+      ok: true,
+      contentType: 'image/webp' as const,
+      base64: cached.bytes.toString('base64'),
+    };
+  }
+
+  const stored = await readStoredHeadshot(bucket, record.path);
+  if (!stored) throw unavailable();
+  const derivative = await publicSpeakerPhotoDerivative(stored.bytes);
+  const cacheFile = bucket.file(cachePath);
+  let responseBytes = derivative.bytes;
+  try {
+    await cacheFile.save(derivative.bytes, {
+      resumable: false,
+      preconditionOpts: { ifGenerationMatch: 0 },
+      metadata: {
+        contentType: derivative.contentType,
+        cacheControl: 'public, max-age=31536000, immutable',
+      },
+    });
+  } catch (error) {
+    const code = Number((error as { code?: unknown } | null)?.code ?? 0);
+    if (code !== 409 && code !== 412) {
+      logger.error('public schedule photo cache write failed', {
+        cfpId,
+        releaseId,
+        entryId,
+        error: String(error),
+      });
+      throw new HttpsError('unavailable', 'That speaker photo is temporarily unavailable.');
+    }
+    const raced = await readStoredHeadshot(bucket, cachePath);
+    if (!raced || raced.contentType !== 'image/webp') {
+      throw new HttpsError('unavailable', 'That speaker photo is temporarily unavailable.');
+    }
+    responseBytes = raced.bytes;
+  }
+
+  // Deletion marks the CFP first and clears its bounded Storage prefix second.
+  // If this miss began before that fence, do not recreate a cache object after
+  // the clear has already passed this release.
+  const currentCfp = await db.doc(`cfps/${cfpId}`).get();
+  if (
+    !currentCfp.exists ||
+    currentCfp.get('deleting') === true ||
+    currentCfp.get('publishedScheduleId') !== releaseId
+  ) {
+    try {
+      await cacheFile.delete({ ignoreNotFound: true });
+    } catch (error) {
+      logger.warn('stale public schedule photo cache cleanup failed', {
+        cfpId,
+        releaseId,
+        entryId,
+        error: String(error),
+      });
+    }
+    throw unavailable();
+  }
+  return {
+    ok: true,
+    contentType: derivative.contentType,
+    base64: responseBytes.toString('base64'),
+  };
 });
 
 export const unpublishSchedule = onCall(CALLABLE, async (request) => {
@@ -5820,17 +6907,14 @@ export const cancelPublishedSession = onDocumentWritten(
     if (!event.data?.before.exists || !event.data.after.exists) return;
     const beforeStatus = event.data?.before.get('status');
     const afterStatus = event.data?.after.get('status');
-    if (beforeStatus === afterStatus) return;
+    const forceCancellationAdded =
+      event.data.before.get('scheduleCancellationRequired') !== true &&
+      event.data.after.get('scheduleCancellationRequired') === true;
+    if (beforeStatus === afterStatus && !forceCancellationAdded) return;
     const { cfpId, proposalId } = event.params;
     const cfpSnap = await db.doc(`cfps/${cfpId}`).get();
     if (!cfpSnap.exists || cfpSnap.get('archived') === true) return;
-    const releaseIds = [
-      ...new Set(
-        [cfpSnap.get('sharedScheduleId'), cfpSnap.get('publishedScheduleId')].filter(
-          (value): value is string => typeof value === 'string' && Boolean(value),
-        ),
-      ),
-    ];
+    const releaseIds = scheduleReleaseIds(cfpSnap);
     const [draftMatching, ...releaseMatches] = await Promise.all([
       scheduleDraft(cfpId).where('proposalId', '==', proposalId).get(),
       ...releaseIds.map((releaseId) =>
@@ -5843,18 +6927,26 @@ export const cancelPublishedSession = onDocumentWritten(
     const hasReleaseEntry = releaseMatches.some((matching) => !matching.empty);
     if (draftMatching.empty && !hasReleaseEntry) return;
 
-    const cancelled = beforeStatus === 'confirmed' && afterStatus !== 'confirmed';
     const observedReleaseId = scheduleEmailReleaseId(cfpSnap);
     const observedReleaseIndex = releaseIds.indexOf(observedReleaseId);
     const observedEntries =
       observedReleaseIndex >= 0 ? releaseMatches[observedReleaseIndex].docs : [];
-    await db.runTransaction(async (tx) => {
-      const [freshCfp, ...freshObservedEntries] = await tx.getAll(
+    const didCancel = await db.runTransaction(async (tx) => {
+      const [freshCfp, freshProposal, ...freshObservedEntries] = await tx.getAll(
         db.doc(`cfps/${cfpId}`),
+        event.data!.after.ref,
         ...observedEntries.map((entry) => entry.ref),
       );
-      if (!freshCfp.exists || freshCfp.get('archived') === true) return;
-      if (cancelled) {
+      if (!freshCfp.exists || freshCfp.get('archived') === true) return false;
+      if (!proposalEventIsCurrent(event.data!.after, freshProposal)) return false;
+      // These release queries happened before the transaction. A newer share
+      // must keep its cancellation marker for the event that observed it.
+      if (!scheduleCancellationSnapshotIsCurrent(releaseIds, freshCfp)) return false;
+      const freshStatus = String(freshProposal.get('status') ?? '');
+      const cancelNow =
+        freshProposal.get('scheduleCancellationRequired') === true ||
+        (freshStatus !== 'confirmed' && currentReleasedSpeakerIds(freshProposal).length === 0);
+      if (cancelNow) {
         for (const matching of releaseMatches) {
           for (const entry of matching.docs) {
             tx.update(entry.ref, {
@@ -5864,12 +6956,14 @@ export const cancelPublishedSession = onDocumentWritten(
           }
         }
       }
-
-      // A share that commits after this trigger starts already re-reads the
-      // proposal status. Do not let the delayed trigger stale that newer snapshot.
-      if (scheduleEmailReleaseId(freshCfp) !== observedReleaseId) return;
+      if (freshProposal.get('scheduleCancellationRequired') === true) {
+        tx.update(freshProposal.ref, {
+          scheduleCancellationRequired: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
       const expectedEntryIds =
-        afterStatus === 'confirmed' ? draftMatching.docs.map((entry) => entry.id).sort() : [];
+        freshStatus === 'confirmed' ? draftMatching.docs.map((entry) => entry.id).sort() : [];
       const actualEntryIds = freshObservedEntries
         .filter((entry) => entry.exists)
         .map((entry) => entry.id)
@@ -5887,8 +6981,9 @@ export const cancelPublishedSession = onDocumentWritten(
           { merge: true },
         );
       }
+      return cancelNow;
     });
-    if (!cancelled || !hasReleaseEntry) {
+    if (!didCancel || !hasReleaseEntry) {
       logger.info('scheduled proposal status changed', {
         cfpId,
         proposalId,
@@ -5914,11 +7009,30 @@ export const cancelPublishedSession = onDocumentWritten(
     );
     const cancellationTime = String(entry.get('startsAt') ?? '');
     const cancellationTimeZone = String(release.get('timeZone') ?? '');
+    const cancellationReleaseId = entryReleaseId;
     await db.runTransaction(async (tx) => {
-      await assertCfpNotArchived(tx, cfpId);
-      const proposal = event.data?.after.data();
+      const [freshCfp, freshProposal] = await tx.getAll(
+        db.doc(`cfps/${cfpId}`),
+        event.data!.after.ref,
+      );
+      if (
+        !freshCfp.exists ||
+        freshCfp.get('archived') === true ||
+        freshCfp.get('deleting') === true ||
+        scheduleEmailReleaseId(freshCfp) !== cancellationReleaseId ||
+        !proposalEventIsCurrent(event.data!.after, freshProposal)
+      ) {
+        return;
+      }
+      const proposal = event.data!.after.data();
       if (!proposal) return;
-      const contexts = await speakerEmailContexts(tx, cfpId, proposalId, proposal);
+      const contexts = await speakerEmailContexts(
+        tx,
+        cfpId,
+        proposalId,
+        proposal,
+        scheduleCancellationRecipientIds(event.data?.after),
+      );
       const date = calendarDate(String(entry.get('date') ?? ''));
       await queueEmails(
         db,
@@ -5927,7 +7041,7 @@ export const cancelPublishedSession = onDocumentWritten(
         contexts.map((context) => ({
           kind: 'schedule_cancelled' as const,
           proposalId,
-          dedupeKey: preferredReleaseId || entryReleaseId,
+          dedupeKey: cancellationReleaseId,
           recipientUid: context.uid,
           logIdSuffix: context.primary ? undefined : context.uid,
           to: context.to,

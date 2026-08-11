@@ -424,6 +424,28 @@ describe('shared schedule disclosure', () => {
         jobTitle: 'Engineer',
       },
     ]);
+
+    expect(
+      publicScheduleSpeakers(
+        [
+          {
+            uid: 'speaker-one',
+            name: 'Ada Speaker',
+            bio: 'Builds reliable systems.',
+            basedIn: 'Montréal',
+            socials: [],
+            isGde: false,
+          },
+        ],
+        new Map([['speaker-one', 'opaque-release-member']]),
+      ),
+    ).toEqual([
+      {
+        name: 'Ada Speaker',
+        bio: 'Builds reliable systems.',
+        photoRef: 'opaque-release-member',
+      },
+    ]);
   });
 
   it('returns only the days and rooms referenced by a speaker own entries', () => {

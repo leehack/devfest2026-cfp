@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { SpeakerFields } from '../components/SpeakerFields';
+import { SpeakerProfilePhoto } from '../components/SpeakerProfilePhoto';
 import { useI18n } from '../i18n/context';
 import { friendlyError } from '../lib/errors';
 import { emptyForm, fromDocuments, toSubmission, type FormState } from '../lib/formState';
@@ -217,6 +218,7 @@ export function ProfilePage({ user }: { user: User }) {
 
       <form className="profile-editor" onSubmit={save} noValidate>
         <div className="section profile-editor__fields">
+          <SpeakerProfilePhoto disabled={busy} />
           <SpeakerFields form={form} set={set} err={err} disabled={busy} />
         </div>
 

@@ -19,7 +19,12 @@ import {
   inStatusSet,
   type ProposalStatus,
 } from '@shared/enums';
-import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
+import {
+  SPEAKER_PHOTO_KEY,
+  localised,
+  type Answers,
+  type ConfirmField,
+} from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -31,6 +36,8 @@ import { downloadSelectedSpeakersCsv } from './proposalExport';
 import { Result } from './Result';
 import { DECISION_KINDS } from '@shared/emailTemplates';
 import { compareNormalizedScores } from '@shared/aggregate';
+import type { SpeakerSnapshot } from '@shared/types';
+import { reconcileProposalSpeakerSnapshot } from './proposalSnapshots';
 
 const HIGH_DISAGREEMENT = 1;
 const ADMIN_PROPOSAL_STATUSES = ['under_review', 'accepted', 'waitlisted', 'rejected'] as const;
@@ -175,13 +182,21 @@ function SpeakerConfirmations({
   const perSpeaker = Boolean(row.primarySpeakerId) || ids.length > 1;
   if (!perSpeaker) {
     return (
-      <Answered
-        cfpId={cfpId}
-        fields={fields}
-        answers={row.confirmAnswers}
-        proposalId={row.id}
-        title={t.admin.form}
-      />
+      <>
+        {row.speakerPhoto && (
+          <>
+            <h4 className="card__subtitle">{t.profilePhoto.title}</h4>
+            <Headshot cfpId={cfpId} proposalId={row.id} fieldKey={SPEAKER_PHOTO_KEY} />
+          </>
+        )}
+        <Answered
+          cfpId={cfpId}
+          fields={fields}
+          answers={row.confirmAnswers}
+          proposalId={row.id}
+          title={t.admin.form}
+        />
+      </>
     );
   }
 
@@ -210,6 +225,17 @@ function SpeakerConfirmations({
               speakerUid={uid}
               title={t.admin.form}
             />
+            {confirmation?.speakerPhoto && (
+              <div className="speaker-confirmation__photo">
+                <h5>{t.profilePhoto.title}</h5>
+                <Headshot
+                  cfpId={cfpId}
+                  proposalId={row.id}
+                  fieldKey={SPEAKER_PHOTO_KEY}
+                  speakerUid={uid}
+                />
+              </div>
+            )}
           </section>
         );
       })}
@@ -643,6 +669,16 @@ export function Proposals({
     url.searchParams.delete('manageSpeakers');
     history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }, []);
+
+  const onSnapshotRefreshed = useCallback(
+    (speakerUid: string, snapshot: SpeakerSnapshot) => {
+      if (!managedProposalId || activeCfp.current !== cfpId) return;
+      setRows((current) =>
+        reconcileProposalSpeakerSnapshot(current, managedProposalId, speakerUid, snapshot),
+      );
+    },
+    [cfpId, managedProposalId],
+  );
 
   const refresh = useCallback(async (reset = false) => {
     const request = ++loadGeneration.current;
@@ -1275,7 +1311,11 @@ export function Proposals({
                   answers={row.answers}
                   title={t.admin.extraTitle}
                 />
-                <SpeakerConfirmations cfpId={cfpId} row={row} fields={questions} />
+                <SpeakerConfirmations
+                  cfpId={cfpId}
+                  row={row}
+                  fields={questions}
+                />
               </li>
             ))}
           </ul>
@@ -1291,6 +1331,7 @@ export function Proposals({
             scopedRows.find((row) => row.id === managedProposalId)?.title || t.admin.untitled
           }
           readOnly={readOnly}
+          onSnapshotRefreshed={onSnapshotRefreshed}
           onClose={closeSpeakerManagement}
         />
       )}

@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { signOut, type User } from 'firebase/auth';
 
 import type { SpeakerInvitationSummary } from '@shared/coSpeakers';
-import { localised } from '@shared/confirmForm';
-import { speakerSchema } from '@shared/schema';
+import { localised, type ConfirmField } from '@shared/confirmForm';
+import { ATTENDANCE_STATUSES, LIMITS } from '@shared/enums';
+import { attendanceSchema, speakerSchema } from '@shared/schema';
 
 import { auth } from '../firebase';
 import { useI18n } from '../i18n/context';
@@ -11,10 +12,12 @@ import { validationMessage } from '../i18n/validation';
 import {
   emptyForm,
   fromDocuments,
+  toDocuments,
   toSubmission,
   type FormState,
 } from '../lib/formState';
 import { friendlyError } from '../lib/errors';
+import { COC_URL } from '../lib/env';
 import {
   loadCoSpeakerInvitation,
   respondToCoSpeakerInvitation,
@@ -22,6 +25,8 @@ import {
 import { loadProfile, saveProfile } from '../lib/proposals';
 import { href } from '../lib/router';
 import { Link } from './Link';
+import { Checkbox, RadioGroup, TextField } from './fields';
+import { Reveal } from './Reveal';
 import { SpeakerFields } from './SpeakerFields';
 
 function profileFaults(
@@ -35,6 +40,42 @@ function profileFaults(
       `speaker.${issue.path.join('.')}`,
       validationMessage(issue, t),
     ]),
+  );
+}
+
+function invitationFaults(
+  form: FormState,
+  summary: SpeakerInvitationSummary | null,
+  t: ReturnType<typeof useI18n>['t'],
+): Record<string, string> {
+  const faults = profileFaults(form, t);
+  if (summary?.phase !== 'postAcceptance' || !summary.participation) return faults;
+
+  for (const acknowledgement of summary.participation.acknowledgements) {
+    if (form.acks[acknowledgement.key] !== true) {
+      faults[`acks.${acknowledgement.key}`] = t.form.required;
+    }
+  }
+  const attendance = attendanceSchema.safeParse(toDocuments(form).proposalDoc.attendance);
+  if (!attendance.success) {
+    for (const issue of attendance.error.issues) {
+      faults[`attendance.${issue.path.join('.')}`] = validationMessage(issue, t);
+    }
+  }
+  return faults;
+}
+
+function AcknowledgementLabel({ acknowledgement }: { acknowledgement: ConfirmField }) {
+  const { t, locale } = useI18n();
+  const text = localised(acknowledgement.label, locale);
+  if (acknowledgement.key !== 'coc' || !COC_URL) return <>{text}</>;
+  return (
+    <>
+      {text}{' '}
+      <a href={COC_URL} target="_blank" rel="noreferrer">
+        {t.acks.cocLink}
+      </a>
+    </>
   );
 }
 
@@ -72,7 +113,12 @@ function InvitationState({
   const { t } = useI18n();
   const copy =
     summary.state === 'accepted'
-      ? [t.coSpeakers.acceptedTitle, t.coSpeakers.acceptedHelp]
+      ? [
+          t.coSpeakers.acceptedTitle,
+          summary.phase === 'postAcceptance'
+            ? t.coSpeakers.lateAcceptedHelp
+            : t.coSpeakers.acceptedHelp,
+        ]
       : summary.state === 'declined'
         ? [t.coSpeakers.declinedTitle, t.coSpeakers.declinedHelp]
         : summary.state === 'paused'
@@ -159,7 +205,7 @@ export function CoSpeakerInvitation({
   const set = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((previous) => ({ ...previous, [key]: value }));
   }, []);
-  const faults = profileFaults(form, t);
+  const faults = invitationFaults(form, summary, t);
   const err = (path: string) => (showErrors ? faults[path] : undefined);
 
   useEffect(() => {
@@ -179,7 +225,16 @@ export function CoSpeakerInvitation({
     setBusy('accept');
     try {
       await saveProfile(user, form, locale);
-      await respondToCoSpeakerInvitation(cfpId, proposalId, invitationId, 'accept');
+      const proposal = toDocuments(form).proposalDoc;
+      await respondToCoSpeakerInvitation(
+        cfpId,
+        proposalId,
+        invitationId,
+        'accept',
+        summary?.phase === 'postAcceptance'
+          ? { acks: proposal.acks, attendance: proposal.attendance }
+          : undefined,
+      );
       onJoined();
     } catch (error) {
       setActionError(friendlyError(error, t));
@@ -305,7 +360,11 @@ export function CoSpeakerInvitation({
       <header className="co-speaker-invitation__hero">
         <p className="co-speaker-invitation__eyebrow">{t.coSpeakers.invitationEyebrow}</p>
         <h1>{t.coSpeakers.invitationTitle}</h1>
-        <p>{t.coSpeakers.invitationFrom(summary.primaryName)}</p>
+        <p>
+          {summary.phase === 'postAcceptance'
+            ? t.coSpeakers.lateInvitationFrom(summary.primaryName)
+            : t.coSpeakers.invitationFrom(summary.primaryName)}
+        </p>
       </header>
 
       <dl className="co-speaker-invitation__facts">
@@ -360,6 +419,79 @@ export function CoSpeakerInvitation({
         <h2>{t.coSpeakers.profileTitle}</h2>
         <p className="section__help">{t.coSpeakers.profileHelp}</p>
         <SpeakerFields form={form} set={set} err={err} disabled={busy !== null} />
+        {summary.participation && (
+          <section className="co-speaker-invitation__participation">
+            <h2>{t.coSpeakers.participationTitle}</h2>
+            <p className="section__help">{t.coSpeakers.participationHelp}</p>
+            {summary.participation.acknowledgements.map((acknowledgement) => (
+              <Checkbox
+                key={acknowledgement.key}
+                label={<AcknowledgementLabel acknowledgement={acknowledgement} />}
+                checked={form.acks[acknowledgement.key] === true}
+                onChange={(value) =>
+                  set('acks', { ...form.acks, [acknowledgement.key]: value })
+                }
+                error={err(`acks.${acknowledgement.key}`)}
+                disabled={busy !== null}
+              />
+            ))}
+            <RadioGroup
+              label={t.attendance.question}
+              help={t.attendance.help}
+              value={form.attendanceStatus}
+              options={ATTENDANCE_STATUSES.map((value) => ({
+                value,
+                label: t.attendance[value],
+              }))}
+              onChange={(value) => set('attendanceStatus', value)}
+              error={err('attendance.status')}
+              disabled={busy !== null}
+              required
+            />
+            <Reveal
+              when={form.attendanceStatus === 'secured' || form.attendanceStatus === 'pending'}
+              onHide={() => {
+                set('fundingSource', '');
+                set('decisionBy', '');
+              }}
+            >
+              <TextField
+                label={t.attendance.fundingSource}
+                help={t.attendance.fundingSourceHelp}
+                value={form.fundingSource}
+                onChange={(value) => set('fundingSource', value)}
+                maxLength={LIMITS.fundingSourceMax}
+                error={err('attendance.fundingSource')}
+                disabled={busy !== null}
+                required
+              />
+              <Reveal
+                when={form.attendanceStatus === 'pending'}
+                onHide={() => set('decisionBy', '')}
+              >
+                <TextField
+                  label={t.attendance.decisionBy}
+                  help={t.attendance.decisionByHelp}
+                  value={form.decisionBy}
+                  onChange={(value) => set('decisionBy', value)}
+                  type="date"
+                  error={err('attendance.decisionBy')}
+                  disabled={busy !== null}
+                  required
+                />
+              </Reveal>
+            </Reveal>
+            <Checkbox
+              label={t.attendance.needsVisa}
+              checked={form.needsVisa}
+              onChange={(value) => set('needsVisa', value)}
+              disabled={busy !== null}
+            />
+            <Reveal when={form.needsVisa} variant="note">
+              {t.attendance.visaGuidance}
+            </Reveal>
+          </section>
+        )}
         {showErrors && Object.keys(faults).length > 0 && (
           <p className="field__error" role="alert">
             {t.profile.incomplete}
@@ -375,7 +507,11 @@ export function CoSpeakerInvitation({
             {t.coSpeakers.decline}
           </button>
           <button type="submit" className="btn btn--primary" disabled={busy !== null}>
-            {busy === 'accept' ? t.coSpeakers.joining : t.coSpeakers.join}
+            {busy === 'accept'
+              ? t.coSpeakers.joining
+              : summary.phase === 'postAcceptance'
+                ? t.coSpeakers.joinLate
+                : t.coSpeakers.join}
           </button>
         </div>
       </form>

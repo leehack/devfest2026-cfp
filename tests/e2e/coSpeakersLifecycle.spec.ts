@@ -11,6 +11,7 @@ import {
   createAccount,
   readEmailLog,
   readProposalById,
+  readScheduleEntry,
   readSignInLinks,
   readSpeakerConfirmation,
   readSpeakerParticipant,
@@ -18,12 +19,14 @@ import {
   reset,
   seedMember,
   seedProposal,
+  seedReview,
   seedSpeaker,
   seedSpeakerParticipant,
   setCfpWindow,
   setConfirmFormDirect,
   setEmailDeliveryDirect,
   setEmailSendingDirect,
+  setEmailStatusDirect,
   setPublicUrlDirect,
   setSpeakerInvitationRateDirect,
   setSpeakerInvitationExpiryDirect,
@@ -38,6 +41,11 @@ const REVIEWER = {
   sub: 'lifecycle-reviewer',
   email: 'reviewer@example.org',
   name: 'Independent Reviewer',
+};
+const LATE = {
+  sub: 'lifecycle-late',
+  email: 'late@example.org',
+  name: 'Late Co-speaker',
 };
 const ACKS = { noTravelSupport: true, coc: true, recording: true };
 const ATTENDANCE = { status: 'local', needsVisa: false };
@@ -94,6 +102,21 @@ async function submitAndAccept() {
     status: 'accepted',
   });
   return { ...staged, admin };
+}
+
+async function confirmedPair() {
+  const staged = await submitAndAccept();
+  await callJson(staged.lead.idToken, 'respondToDecision', {
+    proposalId: 'linked-talk',
+    response: 'confirm',
+    answers: {},
+  });
+  await callJson(staged.guest.idToken, 'respondToDecision', {
+    proposalId: 'linked-talk',
+    response: 'confirm',
+    answers: {},
+  });
+  return staged;
 }
 
 test.describe('co-speaker lifecycle boundaries', () => {
@@ -510,6 +533,809 @@ test.describe('co-speaker lifecycle boundaries', () => {
     ).resolves.toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
   });
 
+  test('an admin can invite a validated late speaker without changing a confirmed roster until acceptance', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    await setCfpWindow({ closesAt: new Date(Date.now() - 60_000) });
+
+    await expect(
+      callAs(lead.idToken, 'inviteCoSpeaker', {
+        proposalId: 'linked-talk',
+        email: LATE.email,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
+
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    expect(invited.roster).toMatchObject({
+      canInvite: true,
+      invitePhase: 'postAcceptance',
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'invitation',
+          phase: 'postAcceptance',
+          state: 'pending',
+          email: LATE.email,
+        }),
+      ]),
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      status: 'confirmed',
+      speakerIds: [lead.uid, guest.uid],
+    });
+
+    await expect(
+      callAs(late.idToken, 'respondToCoSpeakerInvitation', {
+        proposalId: 'linked-talk',
+        invitationId: invited.invitationId,
+        response: 'accept',
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    const acceptedWithLateSpeaker = await readProposalById('linked-talk');
+    expect(acceptedWithLateSpeaker).toMatchObject({
+      status: 'accepted',
+      speakerIds: [lead.uid, guest.uid, late.uid],
+      lateSpeakerPendingIds: [late.uid],
+      lateSpeakerPendingInvitations: [
+        { uid: late.uid, invitationId: invited.invitationId },
+      ],
+    });
+    expect(acceptedWithLateSpeaker?.lateSpeakerScheduleBaselineIds).toBeUndefined();
+    expect(acceptedWithLateSpeaker?.lateSpeakerSchedulePreserved).toBeUndefined();
+    expect(await readSpeakerConfirmation('linked-talk', lead.uid)).toMatchObject({
+      response: 'confirmed',
+    });
+    expect(await readSpeakerConfirmation('linked-talk', guest.uid)).toMatchObject({
+      response: 'confirmed',
+    });
+    expect(await readSpeakerParticipant('linked-talk', late.uid)).toMatchObject({
+      status: 'active',
+      joinedPhase: 'postAcceptance',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: late.uid,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      status: 'confirmed',
+      speakerIds: [lead.uid, guest.uid],
+      formerSpeakerIds: [late.uid],
+    });
+  });
+
+  test('a late invitation cannot turn an existing reviewer into a speaker', async () => {
+    const { admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    await seedReview('linked-talk', late.uid, 4);
+
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await expect(
+      callAs(late.idToken, 'respondToCoSpeakerInvitation', {
+        proposalId: 'linked-talk',
+        invitationId: invited.invitationId,
+        response: 'accept',
+        acks: ACKS,
+        attendance: ATTENDANCE,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect((await readProposalById('linked-talk'))?.status).toBe('confirmed');
+  });
+
+  test('a committee decision revokes every still-pending late invitation', async () => {
+    const { admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+
+    await callJson(admin.idToken, 'setProposalStatus', {
+      proposalId: 'linked-talk',
+      status: 'under_review',
+    });
+    const summary = await callJson(late.idToken, 'getCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+    });
+    expect(summary.invitation).toMatchObject({ state: 'revoked', canRespond: false });
+    await expect(
+      callAs(late.idToken, 'respondToCoSpeakerInvitation', {
+        proposalId: 'linked-talk',
+        invitationId: invited.invitationId,
+        response: 'accept',
+        acks: ACKS,
+        attendance: ATTENDANCE,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    await expect(
+      callAs(admin.idToken, 'retryCoSpeakerInvitation', {
+        proposalId: 'linked-talk',
+        invitationId: invited.invitationId,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+  });
+
+  test('a confirmed late speaker joins only a newly shared immutable schedule release', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+
+    const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+      expectedRevision: 0,
+      config: {
+        timeZone: 'America/Toronto',
+        revision: 0,
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
+      },
+    });
+    const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: configured.revision,
+      entry: {
+        id: 'linked-talk',
+        kind: 'proposal',
+        proposalId: 'linked-talk',
+        date: '2026-11-14',
+        startsAt: '10:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      },
+    });
+    const first = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: scheduled.revision,
+    });
+    await callJson(admin.idToken, 'publishSchedule', {
+      expectedRevision: first.revision,
+    });
+    expect(await readScheduleEntry(first.releaseId, 'linked-talk')).toMatchObject({
+      session: {
+        speakers: [
+          expect.objectContaining({ name: LEAD.name }),
+          expect.objectContaining({ name: GUEST.name }),
+        ],
+      },
+    });
+
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    expect(await callAs(late.idToken, 'getSharedSchedule', {})).toMatchObject({
+      ok: false,
+      code: 'PERMISSION_DENIED',
+    });
+    expect(await callJson(lead.idToken, 'getSharedSchedule', {})).toMatchObject({
+      entries: [expect.objectContaining({ proposalId: 'linked-talk' })],
+    });
+
+    await callJson(late.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+    expect(await callAs(late.idToken, 'getSharedSchedule', {})).toMatchObject({
+      ok: false,
+      code: 'PERMISSION_DENIED',
+    });
+    const frozenFirstEntry = await readScheduleEntry(first.releaseId, 'linked-talk');
+    expect(frozenFirstEntry).not.toBeNull();
+    expect(frozenFirstEntry!.session.speakers).toHaveLength(2);
+
+    const second = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: first.revision,
+    });
+    expect(await readScheduleEntry(second.releaseId, 'linked-talk')).toMatchObject({
+      session: {
+        speakers: [
+          expect.objectContaining({ name: LEAD.name }),
+          expect.objectContaining({ name: GUEST.name }),
+          expect.objectContaining({ name: LATE.name }),
+        ],
+      },
+    });
+    expect(await callJson(late.idToken, 'getSharedSchedule', {})).toMatchObject({
+      entries: [expect.objectContaining({ proposalId: 'linked-talk' })],
+    });
+    expect(await readProposalById('linked-talk')).not.toMatchObject({
+      lateSpeakerSchedulePreserved: true,
+    });
+    const changedRecipients = (await readEmailLog())
+      .filter(
+        (row) =>
+          row.kind === 'schedule_changed' &&
+          row.proposalId === 'linked-talk' &&
+          row.dedupeKey === second.releaseId,
+      )
+      .map((row) => row.recipientUid)
+      .sort();
+    expect(changedRecipients).toEqual([lead.uid, guest.uid, late.uid].sort());
+  });
+
+  test('a committee reset freezes every released speaker before a late participant is removed', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    await callJson(late.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+
+    const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+      expectedRevision: 0,
+      config: {
+        timeZone: 'America/Toronto',
+        revision: 0,
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
+      },
+    });
+    const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: configured.revision,
+      entry: {
+        id: 'linked-talk',
+        kind: 'proposal',
+        proposalId: 'linked-talk',
+        date: '2026-11-14',
+        startsAt: '10:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      },
+    });
+    const shared = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: scheduled.revision,
+    });
+    await callJson(admin.idToken, 'publishSchedule', {
+      expectedRevision: shared.revision,
+    });
+
+    await callJson(admin.idToken, 'setProposalStatus', {
+      proposalId: 'linked-talk',
+      status: 'under_review',
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      lateSpeakerSchedulePreserved: true,
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid, late.uid],
+    });
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: late.uid,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      speakerIds: [lead.uid, guest.uid],
+      formerSpeakerIds: [late.uid],
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid, late.uid],
+    });
+
+    await expect
+      .poll(async () => (await readScheduleEntry(shared.releaseId, 'linked-talk'))?.cancelled)
+      .toBe(true);
+    await expect
+      .poll(async () =>
+        (await readEmailLog())
+          .filter(
+            (row) =>
+              row.kind === 'schedule_cancelled' &&
+              row.proposalId === 'linked-talk' &&
+              row.dedupeKey === shared.releaseId,
+          )
+          .map((row) => row.recipientUid)
+          .sort(),
+      )
+      .toEqual([lead.uid, guest.uid, late.uid].sort());
+  });
+
+  test('an unplaced decline does not create a frozen schedule roster for a later addition', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+    const declined = await readProposalById('linked-talk');
+    expect(declined).toMatchObject({
+      status: 'accepted',
+      speakerIds: [lead.uid, guest.uid],
+    });
+    expect(declined?.lateSpeakerSchedulePreserved).toBeUndefined();
+    expect(declined?.scheduleCancellationRequired).toBeUndefined();
+
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    const joined = await readProposalById('linked-talk');
+    expect(joined).toMatchObject({
+      status: 'accepted',
+      speakerIds: [lead.uid, guest.uid, late.uid],
+    });
+    expect(joined?.lateSpeakerSchedulePreserved).toBeUndefined();
+    expect(joined?.scheduleCancellationRequired).toBeUndefined();
+  });
+
+  test('an unplaced confirmed session does not preserve a nonexistent release for a late addition', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    const joined = await readProposalById('linked-talk');
+    expect(joined).toMatchObject({
+      status: 'accepted',
+      speakerIds: [lead.uid, guest.uid, late.uid],
+    });
+    expect(joined?.lateSpeakerSchedulePreserved).toBeUndefined();
+    expect(joined?.lateSpeakerScheduleBaselineIds).toBeUndefined();
+
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: guest.uid,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      status: 'accepted',
+      speakerIds: [lead.uid, late.uid],
+    });
+    expect((await readProposalById('linked-talk'))?.scheduleCancellationRequired).toBeUndefined();
+  });
+
+  test('a public placement is still frozen when the newer shared preview omits it', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+      expectedRevision: 0,
+      config: {
+        timeZone: 'America/Toronto',
+        revision: 0,
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
+      },
+    });
+    const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: configured.revision,
+      entry: {
+        id: 'linked-talk',
+        kind: 'proposal',
+        proposalId: 'linked-talk',
+        date: '2026-11-14',
+        startsAt: '10:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      },
+    });
+    const published = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: scheduled.revision,
+    });
+    await callJson(admin.idToken, 'publishSchedule', {
+      expectedRevision: published.revision,
+    });
+    const removed = await callJson(admin.idToken, 'removeScheduleEntry', {
+      expectedRevision: published.revision,
+      entryId: 'linked-talk',
+    });
+    const filler = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: removed.revision,
+      entry: {
+        id: 'afternoon-break',
+        kind: 'custom',
+        customType: 'break',
+        title: { en: 'Afternoon break', fr: 'Pause de l\'apres-midi' },
+        date: '2026-11-14',
+        startsAt: '15:00',
+        durationMinutes: 20,
+        roomId: 'main',
+      },
+    });
+    const omitted = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: filler.revision,
+    });
+    expect(await readScheduleEntry(omitted.releaseId, 'linked-talk')).toBeNull();
+
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      lateSpeakerSchedulePreserved: true,
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid],
+    });
+    await expect
+      .poll(async () => (await readScheduleEntry(published.releaseId, 'linked-talk'))?.cancelled)
+      .toBe(true);
+  });
+
+  test('cancelling a preserved release notifies its frozen roster and never the late addition', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+      expectedRevision: 0,
+      config: {
+        timeZone: 'America/Toronto',
+        revision: 0,
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
+      },
+    });
+    const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: configured.revision,
+      entry: {
+        id: 'linked-talk',
+        kind: 'proposal',
+        proposalId: 'linked-talk',
+        date: '2026-11-14',
+        startsAt: '10:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      },
+    });
+    const shared = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: scheduled.revision,
+    });
+    await callJson(admin.idToken, 'publishSchedule', {
+      expectedRevision: shared.revision,
+    });
+
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      lateSpeakerSchedulePreserved: true,
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid],
+    });
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: guest.uid,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      speakerIds: [lead.uid],
+      formerSpeakerIds: [guest.uid],
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid],
+    });
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      speakerIds: [lead.uid, late.uid],
+      formerSpeakerIds: [guest.uid],
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid],
+    });
+
+    await expect
+      .poll(async () => (await readScheduleEntry(shared.releaseId, 'linked-talk'))?.cancelled)
+      .toBe(true);
+    const cancellationRows = await waitForEmail(
+      (rows) =>
+        rows
+          .filter(
+            (row) =>
+              row.kind === 'schedule_cancelled' &&
+              row.proposalId === 'linked-talk' &&
+              row.dedupeKey === shared.releaseId,
+          )
+          .map((row) => row.recipientUid)
+          .sort()
+          .join(',') === [lead.uid, guest.uid].sort().join(','),
+      'frozen-roster cancellation',
+    );
+    expect(
+      cancellationRows.some(
+        (row) =>
+          row.kind === 'schedule_cancelled' &&
+          row.proposalId === 'linked-talk' &&
+          row.recipientUid === late.uid,
+      ),
+    ).toBe(false);
+
+    for (const row of cancellationRows.filter(
+      (candidate) =>
+        candidate.kind === 'schedule_cancelled' &&
+        candidate.proposalId === 'linked-talk' &&
+        candidate.dedupeKey === shared.releaseId,
+    )) {
+      await setEmailStatusDirect(row.id, 'sent');
+    }
+    await callJson(late.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+    const replacement = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: shared.revision,
+    });
+    expect(await readScheduleEntry(replacement.releaseId, 'linked-talk')).toMatchObject({
+      session: {
+        speakers: [
+          expect.objectContaining({ name: LEAD.name }),
+          expect.objectContaining({ name: LATE.name }),
+        ],
+      },
+    });
+    expect(await readProposalById('linked-talk')).not.toMatchObject({
+      lateSpeakerSchedulePreserved: true,
+    });
+
+    await seedMember(guest.uid, 'reviewer', CFP_ID, GUEST.email);
+    await expect(
+      callAs(guest.idToken, 'saveReview', {
+        proposalId: 'linked-talk',
+        score: 4,
+        conflictOfInterest: false,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
+  });
+
+  test('late acceptance migrates a legacy lead confirmation before reopening the session', async () => {
+    const lead = await createAccount(LEAD);
+    const late = await createAccount(LATE);
+    const admin = await createAccount(ADMIN);
+    await seedSpeaker(lead.uid, { name: LEAD.name, email: LEAD.email });
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    const confirmedAt = new Date(Date.now() - 60_000);
+    const legacyUploads = {
+      headshot: {
+        path: `cfps/${CFP_ID}/workingHeadshots/legacy-talk/headshot/upload-one`,
+        generation: '1',
+        contentType: 'image/jpeg',
+        size: 1024,
+      },
+    };
+    const legacySpeakerPhoto = {
+      path: `cfps/${CFP_ID}/confirmedHeadshots/legacy-talk/` +
+        `${lead.uid}/speakerPhoto/profile-generation`,
+      sourceGeneration: 'profile-generation',
+      contentType: 'image/jpeg',
+      size: 2048,
+    };
+    await seedProposal('legacy-talk', {
+      speakerUid: lead.uid,
+      title: 'A legacy confirmed session',
+      status: 'confirmed',
+      confirmedAt,
+      confirmAnswers: { shirt: 'M', headshot: 'legacy-confirmed-path' },
+      headshotUploads: legacyUploads,
+      speakerPhoto: legacySpeakerPhoto,
+    });
+
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'legacy-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'legacy-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+
+    expect(await readSpeakerConfirmation('legacy-talk', lead.uid)).toMatchObject({
+      response: 'confirmed',
+      answers: { shirt: 'M', headshot: 'legacy-confirmed-path' },
+      headshotUploads: legacyUploads,
+      speakerPhoto: legacySpeakerPhoto,
+      migratedFromLegacy: true,
+    });
+    expect(await readProposalById('legacy-talk')).toMatchObject({
+      status: 'accepted',
+      primarySpeakerId: lead.uid,
+      speakerIds: [lead.uid, late.uid],
+      confirmAnswers: { shirt: 'M', headshot: 'legacy-confirmed-path' },
+      headshotUploads: legacyUploads,
+    });
+  });
+
+  test('removing late and declined speakers retains the released cancellation roster', async () => {
+    const { lead, guest, admin } = await confirmedPair();
+    const late = await createAccount(LATE);
+    await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
+    const configured = await callJson(admin.idToken, 'setScheduleConfig', {
+      expectedRevision: 0,
+      config: {
+        timeZone: 'America/Toronto',
+        revision: 0,
+        days: [{ date: '2026-11-14', startsAt: '09:00', endsAt: '17:00' }],
+        rooms: [{ id: 'main', name: { en: 'Main room', fr: 'Salle principale' } }],
+      },
+    });
+    const scheduled = await callJson(admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: configured.revision,
+      entry: {
+        id: 'linked-talk',
+        kind: 'proposal',
+        proposalId: 'linked-talk',
+        date: '2026-11-14',
+        startsAt: '10:00',
+        durationMinutes: 40,
+        roomId: 'main',
+      },
+    });
+    const shared = await callJson(admin.idToken, 'shareSchedulePreview', {
+      expectedRevision: scheduled.revision,
+    });
+    const invited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: LATE.email,
+    });
+    await callJson(late.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: invited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+
+    const roster = (
+      await callJson(admin.idToken, 'getProposalRoster', { proposalId: 'linked-talk' })
+    ).roster;
+    expect(roster.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ uid: late.uid, confirmationState: 'none', canRemove: true }),
+      ]),
+    );
+
+    await expect
+      .poll(async () => (await readScheduleEntry(shared.releaseId, 'linked-talk'))?.cancelled)
+      .toBe(true);
+    await waitForEmail(
+      (rows) =>
+        rows
+          .filter(
+            (row) =>
+              row.kind === 'schedule_cancelled' &&
+              row.proposalId === 'linked-talk' &&
+              row.dedupeKey === shared.releaseId,
+          )
+          .map((row) => row.recipientUid)
+          .sort()
+          .join(',') === [lead.uid, guest.uid].sort().join(','),
+      'held cancellation roster before restoration',
+    );
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: late.uid,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      status: 'confirmed',
+      speakerIds: [lead.uid, guest.uid],
+      lateSpeakerSchedulePreserved: true,
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid],
+    });
+
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: guest.uid,
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      status: 'confirmed',
+      speakerIds: [lead.uid],
+      formerSpeakerIds: expect.arrayContaining([guest.uid, late.uid]),
+      lateSpeakerSchedulePreserved: true,
+      lateSpeakerScheduleBaselineIds: [lead.uid, guest.uid],
+    });
+    const cancellationRows = await waitForEmail(
+      (rows) =>
+        rows
+          .filter(
+            (row) =>
+              row.kind === 'schedule_cancelled' &&
+              row.proposalId === 'linked-talk' &&
+              row.dedupeKey === shared.releaseId,
+          )
+          .map((row) => row.recipientUid)
+          .sort()
+          .join(',') === [lead.uid, guest.uid].sort().join(','),
+      'retained cancellation roster',
+    );
+    expect(
+      cancellationRows
+        .filter(
+          (row) =>
+            row.kind === 'schedule_cancelled' &&
+            row.proposalId === 'linked-talk' &&
+            row.dedupeKey === shared.releaseId,
+        )
+        .map((row) => row.status),
+    ).toEqual(['held', 'held']);
+    expect(
+      cancellationRows.some(
+        (row) =>
+          row.kind === 'schedule_cancelled' &&
+          row.proposalId === 'linked-talk' &&
+          row.recipientUid === late.uid,
+      ),
+    ).toBe(false);
+  });
+
   test('draft removal leaves no empty review snapshot and the lead can still delete it', async () => {
     const { lead, guest } = await joinedDraft();
     await callJson(lead.idToken, 'removeCoSpeaker', {
@@ -915,7 +1741,11 @@ test.describe('co-speaker lifecycle boundaries', () => {
     const staffNotices = rows.filter(
       (row) => row.kind === 'committee_proposal_submitted',
     );
-    expect(staffNotices).toEqual([
+    const effectiveStaffNotices = staffNotices.filter(
+      (row) =>
+        !(row.status === 'failed' && row.error === 'This notification is superseded.'),
+    );
+    expect(effectiveStaffNotices).toEqual([
       expect.objectContaining({
         id: `committee_proposal_submitted__linked-talk__${reviewer.uid}`,
         recipientUid: reviewer.uid,

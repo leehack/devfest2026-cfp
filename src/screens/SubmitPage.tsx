@@ -62,9 +62,12 @@ import { primarySpeakerIdOf, type ProposalSpeakerRoster } from '@shared/coSpeake
 import { calendarDate } from '@shared/cfp';
 import { scheduleEndTime, type PublishedScheduleEntry } from '@shared/schedule';
 import { HeadshotField } from '../components/HeadshotField';
+import { SpeakerProfilePhoto } from '../components/SpeakerProfilePhoto';
+import { ProfileSnapshotRefresh } from '../components/ProfileSnapshotRefresh';
 import {
   EMPTY_FORM,
   FORM_LIMITS,
+  SPEAKER_PHOTO_KEY,
   localised,
   validateAnswers,
   type AnswerFaults,
@@ -72,6 +75,7 @@ import {
   type Answers,
   type ConfirmField,
   type ConfirmForm,
+  type SpeakerPhotoQuestion,
 } from '@shared/confirmForm';
 
 type Errors = Record<string, string>;
@@ -224,12 +228,16 @@ function AckLabel({ ack }: { ack: ConfirmField }) {
 interface QuestionsProps {
   cfpId: string;
   proposalId: string | null;
+  speakerPhoto?: SpeakerPhotoQuestion;
   fields: ConfirmField[];
   answers: Answers;
   faults: AnswerFaults;
   busy: boolean;
   onAnswer: (key: string, value: AnswerValue) => void;
   onUploadBusyChange?: (key: string, busy: boolean) => void;
+  sessionPhotoGeneration?: string | null;
+  onCurrentPhotoGenerationChange?: (generation: string | null) => void;
+  onUsePhotoForSession?: (generation: string | null) => Promise<boolean>;
 }
 
 /**
@@ -243,12 +251,16 @@ interface QuestionsProps {
 function Questions({
   cfpId,
   proposalId,
+  speakerPhoto,
   fields,
   answers,
   faults,
   busy,
   onAnswer,
   onUploadBusyChange,
+  sessionPhotoGeneration,
+  onCurrentPhotoGenerationChange,
+  onUsePhotoForSession,
 }: QuestionsProps) {
   const { t, locale } = useI18n();
   const message = (key: string) => {
@@ -258,6 +270,18 @@ function Questions({
 
   return (
     <>
+      {speakerPhoto && (
+        <SpeakerProfilePhoto
+          required={speakerPhoto.required}
+          disabled={busy}
+          error={message(SPEAKER_PHOTO_KEY)}
+          onChanged={(generation) => onAnswer(SPEAKER_PHOTO_KEY, generation ?? '')}
+          onCurrentGenerationChange={onCurrentPhotoGenerationChange}
+          onBusyChange={(next) => onUploadBusyChange?.(SPEAKER_PHOTO_KEY, next)}
+          sessionGeneration={sessionPhotoGeneration}
+          onUseForSession={onUsePhotoForSession}
+        />
+      )}
       {fields.map((field) => {
         const label = localised(field.label, locale);
         const help = localised(field.help, locale) || undefined;
@@ -446,7 +470,7 @@ function StatusBanner({
 }: StatusBannerProps) {
   const { t } = useI18n();
   const good = status === 'accepted' || status === 'confirmed';
-  const hasQuestions = questions.fields.length > 0;
+  const hasQuestions = questions.fields.length > 0 || questions.speakerPhoto !== undefined;
   const canConfirm = status !== 'confirmed';
   const canDecline = status !== 'declined';
 
@@ -675,6 +699,7 @@ function ProposalFormPage({
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
   const [answerSaveState, setAnswerSaveState] =
     useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [sessionPhotoGeneration, setSessionPhotoGeneration] = useState<string | null>(null);
   const [uploadingAnswer, setUploadingAnswer] = useState(false);
   /**
    * Faults on *this call's own* questions, kept apart from `answerFaults`.
@@ -701,6 +726,9 @@ function ProposalFormPage({
   const answerDirty = useRef(false);
   const answerRevision = useRef(0);
   const activeAnswerSave = useRef<Promise<boolean> | null>(null);
+  const currentProfilePhotoGeneration = useRef<string | null>(null);
+  const sessionPhotoGenerations = useRef(new Map<string, string | null>());
+  const confirmFormRef = useRef(confirmForm);
   const uploadingFields = useRef(new Set<string>());
   const historyGuard = useRef(false);
   const historyTransition = useRef(false);
@@ -745,6 +773,7 @@ function ProposalFormPage({
   personalLifecycleRef.current = usesPersonalConfirmation;
   personalScopeRef.current = personalScope;
   answersRef.current = answers;
+  confirmFormRef.current = confirmForm;
   tRef.current = t;
   localeRef.current = locale;
   /** The talk itself: what the committee scores. */
@@ -809,6 +838,16 @@ function ProposalFormPage({
         talksRef.current = found;
         setSpeaker(profile);
         speakerRef.current = profile;
+        currentProfilePhotoGeneration.current =
+          typeof profile?.profilePhoto?.generation === 'string'
+            ? profile.profilePhoto.generation
+            : null;
+        sessionPhotoGenerations.current = new Map(
+          found.map((talk) => [
+            talk.id,
+            talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
+          ]),
+        );
         setConfirmForm(questions);
         setShape(asked);
         setPublishedSchedule(schedule);
@@ -836,6 +875,7 @@ function ProposalFormPage({
           setProposalId(open.id);
           proposalIdRef.current = open.id;
           setStatus(open.status);
+          setSessionPhotoGeneration(sessionPhotoGenerations.current.get(open.id) ?? null);
           const loadedAnswers = confirmationAnswersFrom(open);
           setAnswers(loadedAnswers);
           savedAnswersRef.current = loadedAnswers;
@@ -851,6 +891,7 @@ function ProposalFormPage({
           };
           setForm(next);
           setSpeakerEditing(!speakerProfileComplete(next));
+          setSessionPhotoGeneration(null);
           setAnswers({});
           savedAnswersRef.current = {};
           answerDirty.current = false;
@@ -950,12 +991,12 @@ function ProposalFormPage({
    * slot before the speaker presses the explicit confirmation button.
    */
   const saveConfirmationAnswers = useCallback(
-    async (source: SaveSource = 'background'): Promise<boolean> => {
+    async (source: SaveSource = 'background', force = false): Promise<boolean> => {
       if (activeAnswerSave.current) {
         const saved = await activeAnswerSave.current;
         if (!saved) return false;
       }
-      if (!answerDirty.current) return true;
+      if (!answerDirty.current && !force) return true;
       if (
         archived ||
         speakerStatusRef.current !== 'confirmed' ||
@@ -981,6 +1022,11 @@ function ProposalFormPage({
           if (answerRevision.current === savedRevision) {
             answerDirty.current = false;
             savedAnswersRef.current = snapshot;
+            if (confirmFormRef.current.speakerPhoto) {
+              const generation = currentProfilePhotoGeneration.current;
+              sessionPhotoGenerations.current.set(id, generation);
+              if (proposalIdRef.current === id) setSessionPhotoGeneration(generation);
+            }
             setAnswerSaveState('saved');
             if (source !== 'transition' && !dirty.current) collapseHistoryGuard();
           } else {
@@ -1415,6 +1461,13 @@ function ProposalFormPage({
       setProposalId(talk.id);
       proposalIdRef.current = talk.id;
       setStatus(talk.status);
+      if (!sessionPhotoGenerations.current.has(talk.id)) {
+        sessionPhotoGenerations.current.set(
+          talk.id,
+          talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
+        );
+      }
+      setSessionPhotoGeneration(sessionPhotoGenerations.current.get(talk.id) ?? null);
       const loadedAnswers = confirmationAnswersFrom(talk);
       setAnswers(loadedAnswers);
       savedAnswersRef.current = loadedAnswers;
@@ -1423,6 +1476,7 @@ function ProposalFormPage({
       setProposalId(null);
       proposalIdRef.current = null;
       setStatus('draft');
+      setSessionPhotoGeneration(null);
       setAnswers({});
       savedAnswersRef.current = {};
     }
@@ -1637,6 +1691,12 @@ function ProposalFormPage({
         data.response,
         response === 'confirm' ? responseAnswers : savedAnswersRef.current,
       );
+      const nextPhotoGeneration =
+        response === 'confirm' && confirmFormRef.current.speakerPhoto
+          ? currentProfilePhotoGeneration.current
+          : null;
+      sessionPhotoGenerations.current.set(proposalId, nextPhotoGeneration);
+      setSessionPhotoGeneration(nextPhotoGeneration);
       if (response === 'confirm') savedAnswersRef.current = responseAnswers;
       answerDirty.current = false;
       setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
@@ -1959,12 +2019,25 @@ function ProposalFormPage({
           questions={{
             cfpId,
             proposalId,
+            speakerPhoto: confirmForm.speakerPhoto,
             fields: confirmForm.fields,
             answers,
             faults: answerFaults,
             busy: archived || submitting || answerSaveState === 'saving' || uploadingAnswer,
             onAnswer: setConfirmationAnswer,
             onUploadBusyChange: setAnswerUploadBusy,
+            sessionPhotoGeneration:
+              speakerStatus === 'confirmed' ? sessionPhotoGeneration : undefined,
+            onCurrentPhotoGenerationChange: (generation) => {
+              currentProfilePhotoGeneration.current = generation;
+            },
+            onUsePhotoForSession:
+              !archived && speakerStatus === 'confirmed'
+                ? async (generation) => {
+                    if (currentProfilePhotoGeneration.current !== generation) return false;
+                    return saveConfirmationAnswers('manual', true);
+                  }
+                : undefined,
           }}
           asking={asking}
           onAsk={() => setAsking(true)}
@@ -2177,6 +2250,15 @@ function ProposalFormPage({
                   ?.focus();
               });
             }}
+          />
+        )}
+
+        {proposalId && status !== 'draft' && status !== 'withdrawn' && (
+          <ProfileSnapshotRefresh
+            cfpId={cfpId}
+            proposalId={proposalId}
+            disabled={archived || submitting || saveState === 'saving'}
+            beforeRefresh={async () => !dirty.current || persist('transition')}
           />
         )}
       </section>

@@ -13,7 +13,14 @@
  * people at the top of the alphabet would learn their fate first.
  */
 
-import { FieldValue, getFirestore, type Firestore, type Transaction } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  getFirestore,
+  type DocumentReference,
+  type DocumentSnapshot,
+  type Firestore,
+  type Transaction,
+} from 'firebase-admin/firestore';
 import { getAuth, type UserRecord } from 'firebase-admin/auth';
 import { createHash } from 'node:crypto';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
@@ -37,7 +44,11 @@ import {
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
 import { readResendKey } from './secrets';
-import { coSpeakerInvitationStillTrue } from './speakerLifecycle';
+import {
+  coSpeakerInvitationStillTrue,
+  scheduleEmailStillTrue,
+  scheduleReleaseProposalEntryId,
+} from './speakerLifecycle';
 
 /**
  * Neither the key nor the addresses are deploy config: the addresses live in
@@ -219,6 +230,44 @@ export function isRoleInvitationEmail(kind: unknown): kind is EmailKind {
 
 export function isCoSpeakerInvitationEmail(kind: unknown): kind is EmailKind {
   return CO_SPEAKER_INVITATION_KINDS.includes(kind as EmailKind);
+}
+
+export function isScheduleEmail(kind: unknown): kind is EmailKind {
+  return SCHEDULE_EMAIL_KINDS.includes(kind as EmailKind);
+}
+
+async function scheduleEmailIsCurrent(
+  db: Firestore,
+  cfpId: string,
+  row: FirebaseFirestore.DocumentData,
+  cfp: DocumentSnapshot,
+  read: (refs: DocumentReference[]) => Promise<DocumentSnapshot[]>,
+): Promise<boolean> {
+  const releaseId = String(cfp.get('sharedScheduleId') ?? cfp.get('publishedScheduleId') ?? '');
+  const proposalId = String(row.proposalId ?? '');
+  const entryId = String(row.data?.scheduleEntryId ?? '');
+  if (
+    !releaseId ||
+    !/^(?!__)[A-Za-z0-9_-]{1,256}$/.test(releaseId) ||
+    !/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(proposalId) ||
+    !/^(?!__)[A-Za-z0-9_-]{1,160}$/.test(entryId)
+  ) {
+    return false;
+  }
+  const [proposal, entry, source] = await read([
+    db.doc(`cfps/${cfpId}/proposals/${proposalId}`),
+    db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}/entries/${entryId}`),
+    db.doc(`cfps/${cfpId}/scheduleReleases/${releaseId}/internal/source`),
+  ]);
+  return scheduleEmailStillTrue(
+    String(row.kind ?? ''),
+    String(row.dedupeKey ?? ''),
+    releaseId,
+    entry,
+    proposal,
+    String(row.recipientUid ?? ''),
+    scheduleReleaseProposalEntryId(source, proposalId),
+  );
 }
 
 export function staffEmailLanguage(
@@ -553,6 +602,21 @@ export const sendQueuedEmail = onDocumentWritten(
         locale: (snap.get('locale') === 'fr' ? 'fr' : 'en') as EmailLocale,
         bilingual: snap.get('bilingual') === true,
       };
+      if (
+        isScheduleEmail(snap.get('kind')) &&
+        !(await scheduleEmailIsCurrent(db, cfpId, snap.data()!, cfp, (refs) =>
+          tx.getAll(...refs)
+        ))
+      ) {
+        tx.update(ref, {
+          status: 'failed',
+          error: 'This notification is superseded.',
+          sendingClaimId: FieldValue.delete(),
+          sendingStartedAt: FieldValue.delete(),
+          providerAttemptId: FieldValue.delete(),
+        });
+        return null;
+      }
       if (isStaffEmail(snap.get('kind'))) {
         const uid = String(snap.get('recipientUid') ?? '');
         const subjectId = String(snap.get('proposalId') ?? '');
@@ -649,10 +713,11 @@ export const sendQueuedEmail = onDocumentWritten(
           );
           const speakerIds = proposal.get('speakerIds');
           const latestEmail = speaker.get('email');
+          const scheduleNotification = isScheduleEmail(snap.get('kind'));
           if (
             !proposal.exists ||
             !Array.isArray(speakerIds) ||
-            !speakerIds.includes(uid) ||
+            (!scheduleNotification && !speakerIds.includes(uid)) ||
             typeof latestEmail !== 'string' ||
             !latestEmail
           ) {
@@ -712,6 +777,7 @@ export const sendQueuedEmail = onDocumentWritten(
     const updateClaim = async (
       fields?: FirebaseFirestore.UpdateData<FirebaseFirestore.DocumentData>,
       preserveProviderAttempt = false,
+      validateFinalState = false,
     ): Promise<boolean> =>
       db.runTransaction(async (tx) => {
         const current = await tx.get(ref);
@@ -721,6 +787,29 @@ export const sendQueuedEmail = onDocumentWritten(
           current.get('sendingClaimId') !== claimId
         ) {
           return false;
+        }
+        if (validateFinalState) {
+          const latestCfp = await tx.get(db.doc(`cfps/${cfpId}`));
+          const invalidEvent =
+            !latestCfp.exists ||
+            latestCfp.get('deleting') === true ||
+            latestCfp.get('archived') === true;
+          const invalidSchedule =
+            !invalidEvent &&
+            isScheduleEmail(current.get('kind')) &&
+            !(await scheduleEmailIsCurrent(db, cfpId, current.data()!, latestCfp, (refs) =>
+              tx.getAll(...refs)
+            ));
+          if (invalidEvent || invalidSchedule) {
+            tx.update(ref, {
+              status: 'failed',
+              error: 'This notification is superseded.',
+              sendingClaimId: FieldValue.delete(),
+              sendingStartedAt: FieldValue.delete(),
+              providerAttemptId: FieldValue.delete(),
+            });
+            return false;
+          }
         }
         if (fields) {
           const terminal = ['sent', 'failed', 'dry_run'].includes(String(fields.status ?? ''));
@@ -867,10 +956,11 @@ export const sendQueuedEmail = onDocumentWritten(
         ]);
         const speakerIds = proposal.get('speakerIds');
         const latestEmail = speaker.get('email');
+        const scheduleNotification = isScheduleEmail(claimed.kind);
         if (
           !proposal.exists ||
           !Array.isArray(speakerIds) ||
-          !speakerIds.includes(uid) ||
+          (!scheduleNotification && !speakerIds.includes(uid)) ||
           typeof latestEmail !== 'string' ||
           !latestEmail
         ) {
@@ -904,9 +994,21 @@ export const sendQueuedEmail = onDocumentWritten(
       });
       return;
     }
+    if (
+      isScheduleEmail(claimed.kind) &&
+      !(await scheduleEmailIsCurrent(db, cfpId, claimed, finalCfp, (refs) =>
+        db.getAll(...refs)
+      ))
+    ) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded.',
+      });
+      return;
+    }
     // This is the final state check before the provider handoff. An archive
     // racing the HTTP request itself cannot recall a message Resend accepted.
-    if (!(await updateClaim())) return;
+    if (!(await updateClaim(undefined, false, true))) return;
     const outcome = await deliver(
       claimed,
       apiKey,
