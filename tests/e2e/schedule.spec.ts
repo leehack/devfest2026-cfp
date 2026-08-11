@@ -31,7 +31,7 @@ import {
   setScheduleEntryCancelledDirect,
   waitForEmail,
 } from './backend';
-import { at, signInAs, type Identity } from './form';
+import { at, signInAs, waitForAppHydration, type Identity } from './form';
 
 const ADMIN: Identity = {
   sub: 'schedule-admin',
@@ -1877,6 +1877,7 @@ test('unbroken schedule content stays contained for speakers, committee, and pub
 
   await callJson(admin.idToken, 'publishSchedule', { expectedRevision: shared.revision });
   await page.goto(at('/schedule'));
+  await waitForAppHydration(page);
   const agendaLink = page.getByRole('link', { name: longTitle });
   await expectContained(agendaLink.locator('..'));
   await expectNoPageOverflow();

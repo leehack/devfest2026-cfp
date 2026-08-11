@@ -409,7 +409,7 @@ test.describe('email pipeline', () => {
     expect(released.ok).toBe(true);
 
     const sent = await waitForEmail(
-      (rows) => rows.every((r) => r.status !== 'held' && r.status !== 'queued'),
+      (rows) => rows[0]?.status === 'dry_run',
       'the released decision to be processed',
     );
     expect(sent[0].status).toBe('dry_run');
@@ -749,9 +749,18 @@ test.describe('email pipeline', () => {
       .click();
 
     await expect(queue.getByText('1 email queued.')).toBeVisible();
+    await waitForEmail(
+      (rows) => rows[0]?.status === 'dry_run',
+      'the reviewed notification attempt',
+    );
     await expect(page.getByRole('link', { name: /Email, 1 awaiting approval/ })).toHaveCount(0);
     await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
-    await expect(page.locator('.pending-email-notice')).toHaveCount(0);
+    await expect(
+      page.getByRole('heading', { name: '1 speaker notification is waiting to be sent.' }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole('heading', { name: '1 email delivery needs attention.' }),
+    ).toBeVisible();
   });
 
   test('admin navigation keeps failed delivery visible beside a held batch', async ({ page }) => {

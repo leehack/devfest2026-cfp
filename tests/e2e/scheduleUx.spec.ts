@@ -9,7 +9,7 @@ import {
   seedProposal,
   seedSpeaker,
 } from './backend';
-import { at, signInAs, type Identity } from './form';
+import { at, signInAs, waitForAppHydration, type Identity } from './form';
 
 const ADMIN: Identity = {
   sub: 'schedule-ux-admin',
@@ -397,6 +397,7 @@ async function expectAgendaLinkPositionRestored(
 async function openLaterSessionFromDeepInTheAgenda(page: Page): Promise<AgendaPosition> {
   await page.setViewportSize({ width: 390, height: 600 });
   await page.goto(at('/schedule'));
+  await waitForAppHydration(page);
 
   await page.getByRole('combobox', { name: 'Room / track' }).selectOption('blue');
   await page.getByRole('combobox', { name: 'Scheduled language' }).selectOption('en');
@@ -523,18 +524,14 @@ test('server-rendered programme routes keep their CFP data through hydration', a
   });
 
   await page.goto(at('/schedule'));
-  await page.waitForFunction(
-    () => typeof (window as any).signInAsTestSpeaker === 'function',
-  );
+  await waitForAppHydration(page);
   const roomFilter = page.getByRole('combobox', { name: 'Room / track' });
   await roomFilter.selectOption('blue');
   await expect(page.getByRole('link', { name: 'Coffee break' })).toHaveCount(0);
   expect(browserCfpReads).toEqual([]);
 
   await page.goto(at('/schedule/second-session'));
-  await page.waitForFunction(
-    () => typeof (window as any).signInAsTestSpeaker === 'function',
-  );
+  await waitForAppHydration(page);
   await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
   expect(browserCfpReads).toEqual([]);
 });

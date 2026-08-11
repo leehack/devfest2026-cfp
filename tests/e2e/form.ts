@@ -50,10 +50,15 @@ export interface Identity {
   name: string;
 }
 
+/** SSR controls are visible before their React handlers are ready. */
+export async function waitForAppHydration(page: Page) {
+  await page.waitForFunction(() => typeof (window as any).signInAsTestSpeaker === 'function');
+}
+
 /** Anyone but the default test speaker — see the hook in `src/lib/devAuth.ts`. */
 export async function signInAs(page: Page, who: Identity, path = at()) {
   await page.goto(path);
-  await page.waitForFunction(() => typeof (window as any).signInAsTestSpeaker === 'function');
+  await waitForAppHydration(page);
   await page.evaluate((claims) => (window as any).signInAsTestSpeaker(claims), who);
 }
 
