@@ -1410,6 +1410,8 @@ export const en = {
     decisionResetConfirm: (title: string, from: string, to: string) =>
       `Move “${title}” from ${from} to ${to}? This clears every speaker’s confirmation response, logistics answers, and programme photo. Speakers will need to confirm again.`,
     decisionEmailHeld: 'Decision saved. This action does not send an email.',
+    decisionReset: (title: string, to: string) =>
+      `“${title}” moved to ${to} and its speaker responses were cleared. This one cannot be undone.`,
     decisionUndone: (title: string) => `Restored the previous status for “${title}”.`,
     undo: 'Undo',
     untitled: 'Untitled proposal',

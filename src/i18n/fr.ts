@@ -1430,6 +1430,8 @@ export const fr: Dictionary = {
     decisionResetConfirm: (title: string, from: string, to: string) =>
       `Passer « ${title} » de ${from} à ${to} ? Cette action efface la réponse de confirmation, les renseignements logistiques et la photo du programme de chaque conférencier. Les conférenciers devront confirmer de nouveau.`,
     decisionEmailHeld: 'Décision enregistrée. Cette action n’envoie aucun courriel.',
+    decisionReset: (title: string, to: string) =>
+      `« ${title} » est passée à ${to} et ses réponses de conférencier ont été effacées. Cette action est irréversible.`,
     decisionUndone: (title: string) => `Le statut précédent de « ${title} » est rétabli.`,
     undo: 'Annuler',
     untitled: 'Proposition sans titre',

@@ -396,8 +396,11 @@ test.describe('roles', () => {
     });
     await asAdmin(page, 'proposals');
 
+    // Collected rather than asserted inside the handler: a handler that never
+    // runs asserts nothing, so deleting the confirm would leave this green.
+    const prompts: string[] = [];
     page.once('dialog', async (dialog) => {
-      expect(dialog.message()).toContain('clears every speaker’s confirmation response');
+      prompts.push(dialog.message());
       await dialog.accept();
     });
     await page.getByLabel('Status: Confirmed session').selectOption('rejected');
@@ -409,6 +412,13 @@ test.describe('roles', () => {
             ?.status,
       )
       .toBe('rejected');
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('clears every speaker’s confirmation response');
+    // The undo banner belongs to another proposal after this, so the reset needs
+    // a confirmation of its own.
+    await expect(
+      page.getByText('“Confirmed session” moved to Rejected and its speaker responses'),
+    ).toBeVisible();
     await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(0);
   });
 
@@ -435,9 +445,14 @@ test.describe('roles', () => {
     await keepStatus.selectOption('waitlisted');
     await expect.poll(() => persistedStatus('Keep history')).toBe('waitlisted');
 
-    page.once('dialog', (dialog) => dialog.accept());
+    const prompts: string[] = [];
+    page.once('dialog', (dialog) => {
+      prompts.push(dialog.message());
+      return dialog.accept();
+    });
     await resetStatus.selectOption('rejected');
     await expect.poll(() => persistedStatus('Reset history')).toBe('rejected');
+    expect(prompts).toHaveLength(1);
 
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect.poll(() => persistedStatus('Keep history')).toBe('under_review');

@@ -958,6 +958,9 @@ export function Proposals({
         next,
       } : null;
       if (clearsSpeakerResponses) {
+        // The undo banner is another proposal's after this, so it cannot double
+        // as the confirmation for the one just reset. Say so in its own words.
+        setNote(t.admin.decisionReset(row.title || t.admin.untitled, t.enums.status[next]));
         setUndo(invalidateProposalUndoHistory(committedDecisions.current, row.id));
       } else if (decision && !(previous === 'submitted' && next === 'under_review')) {
         committedDecisions.current.set(action, decision);
