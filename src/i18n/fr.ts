@@ -1594,6 +1594,8 @@ export const fr: Dictionary = {
     proposalNoLongerReviewable:
       'Cette proposition a quitté la ronde d’évaluation. Rechargez la liste des propositions.',
     accessRemoved: 'Votre accès au comité n’est plus actif.',
+    ownProposal:
+      'Vous êtes conférencier de cette proposition; ce n’est pas à vous de l’évaluer. Rechargez la liste des propositions pour la retirer de votre file.',
     intakeOpenHelp:
       'Les propositions sont encore ouvertes; de nouveaux éléments peuvent arriver. Actualisez avant de terminer une séance d’évaluation.',
     intakeClosedHelp:
@@ -2096,6 +2098,8 @@ export const fr: Dictionary = {
     reload: 'Recharger',
     talkCapReached:
       'Vous avez atteint la limite de propositions actives. Retirez-en une avant d’en soumettre une autre.',
+    coSpeakerTalkCapReached:
+      'Un co-conférencier de cette proposition a atteint sa limite de propositions actives. Cette personne doit en retirer une, ou vous pouvez la retirer de la proposition et la soumettre sans elle.',
 
     required: 'Ce champ est obligatoire.',
     invalid: 'Veuillez vérifier ce champ.',

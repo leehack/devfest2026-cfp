@@ -1569,6 +1569,8 @@ export const en = {
     proposalNoLongerReviewable:
       'This proposal has left the review round. Reload the review list.',
     accessRemoved: 'Your committee access is no longer active.',
+    ownProposal:
+      'You are a speaker on this proposal, so it is not yours to score. Reload the review list to drop it from your queue.',
     intakeOpenHelp:
       'Proposals are still open, so new work may arrive. Refresh before you finish a review session.',
     intakeClosedHelp:
@@ -2063,6 +2065,8 @@ export const en = {
     reload: 'Reload',
     talkCapReached:
       'You have reached the limit for active proposals. Withdraw one before submitting another.',
+    coSpeakerTalkCapReached:
+      'A co-speaker on this talk has reached their limit for active proposals. They have to withdraw one, or you can remove them from this talk and submit it without them.',
 
     required: 'This one is required.',
     invalid: 'Please check this.',

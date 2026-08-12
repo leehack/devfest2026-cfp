@@ -42,9 +42,14 @@ export function friendlyError(error: unknown, t: Dictionary): string {
     case 'invalid-argument':
       return t.errors.incomplete;
     case 'resource-exhausted':
-      return reasonOf(error) === 'speaker_talk_cap_reached'
-        ? t.errors.talkCapReached
-        : t.errors.generic;
+      switch (reasonOf(error)) {
+        case 'speaker_talk_cap_reached':
+          return t.errors.talkCapReached;
+        case 'co_speaker_talk_cap_reached':
+          return t.errors.coSpeakerTalkCapReached;
+        default:
+          return t.errors.generic;
+      }
     // Firestore Lite reports a fetch failure with no HTTP status as `unknown`.
     case 'unknown':
     case 'unavailable':
@@ -84,7 +89,9 @@ export function reviewError(error: unknown, t: Dictionary): string {
     case 'failed-precondition':
       return t.review.proposalNoLongerReviewable;
     case 'permission-denied':
-      return t.review.accessRemoved;
+      return reasonOf(error) === 'review_own_proposal'
+        ? t.review.ownProposal
+        : t.review.accessRemoved;
     default:
       return friendlyError(error, t);
   }

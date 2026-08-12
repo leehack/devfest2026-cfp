@@ -235,6 +235,17 @@ describe('adminError', () => {
         en,
       ),
     ).toBe(en.errors.talkCapReached);
+    // Only the caller's own cap is theirs to clear, so the two causes must not
+    // share copy that tells them to withdraw a talk.
+    expect(
+      friendlyError(
+        {
+          code: 'functions/resource-exhausted',
+          details: { reason: 'co_speaker_talk_cap_reached' },
+        },
+        en,
+      ),
+    ).toBe(en.errors.coSpeakerTalkCapReached);
   });
 
   it('maps email delivery and recipient races without the last-admin fallback', () => {
@@ -354,6 +365,11 @@ describe('role-specific lifecycle errors', () => {
       en.review.proposalNoLongerReviewable,
     );
     expect(reviewError({ code: 'permission-denied' }, fr)).toBe(fr.review.accessRemoved);
+    // A reviewer invited to co-present keeps their role; saying it was revoked
+    // sends them to an organiser over a conflict the queue can resolve itself.
+    expect(
+      reviewError({ code: 'permission-denied', details: { reason: 'review_own_proposal' } }, en),
+    ).toBe(en.review.ownProposal);
   });
 
   it('maps co-speaker invitation state and reviewer conflicts', () => {

@@ -1729,7 +1729,12 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
         overLimit === 0
           ? `You have already submitted ${LIMITS.maxTalksPerSpeaker} talks.`
           : `A co-speaker has already submitted ${LIMITS.maxTalksPerSpeaker} talks.`,
-        { reason: 'speaker_talk_cap_reached' },
+        // Two causes, two remedies: only the caller's own cap is theirs to
+        // clear, and they cannot see a co-speaker's other talks at all.
+        {
+          reason:
+            overLimit === 0 ? 'speaker_talk_cap_reached' : 'co_speaker_talk_cap_reached',
+        },
       );
     }
 
@@ -3306,7 +3311,11 @@ export const saveReview = onCall(CALLABLE, async (request) => {
       ((proposal.get('speakerIds') ?? []) as string[]).includes(reviewerUid) ||
       ((proposal.get('formerSpeakerIds') ?? []) as string[]).includes(reviewerUid)
     ) {
-      throw new HttpsError('permission-denied', 'You cannot review your own proposal.');
+      // Distinct from a revoked membership: the role is intact, this one talk
+      // is theirs. Telling a reviewer their access ended is a claim they act on.
+      throw new HttpsError('permission-denied', 'You cannot review your own proposal.', {
+        reason: 'review_own_proposal',
+      });
     }
     const current = String(proposal.get('status') ?? '');
     if (!(REVIEW_QUEUE_STATUSES as readonly string[]).includes(current)) {
