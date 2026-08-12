@@ -12,7 +12,12 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Auth, UserRecord } from 'firebase-admin/auth';
-import { FieldValue, type Firestore, type Transaction } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  type DocumentSnapshot,
+  type Firestore,
+  type Transaction,
+} from 'firebase-admin/firestore';
 import { CFP_ROLES, type CfpRole } from '../../shared/cfp';
 
 export class RoleError extends Error {
@@ -23,6 +28,7 @@ export class RoleError extends Error {
       | 'not-found'
       | 'permission-denied',
     message: string,
+    readonly reason?: string,
   ) {
     super(message);
   }
@@ -38,9 +44,8 @@ export function normalizeEmail(raw: unknown): string {
 }
 
 /**
- * `owner` is deliberately not grantable. It is written once, to whoever created
- * the CFP, and moves only through `transferCfp` — otherwise an admin could
- * promote themselves and then archive the thing out from under its owner.
+ * `owner` is deliberately not grantable or transferable by event admins. It is
+ * written by `createCfp`; a lost owner account requires an out-of-band repair.
  */
 export function normalizeRole(raw: unknown): CfpRole {
   const role = String(raw ?? '');
@@ -123,6 +128,9 @@ export async function grant(
 
     const existingGrant = await tx.get(grantRef);
     const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
+    const membersByEmail = await tx.get(
+      db.collection(`cfps/${cfpId}/members`).where('email', '==', email),
+    );
     const claimedUid = existingGrant.get('claimedBy');
     if (claimedUid && typeof claimedUid !== 'string') {
       throw new RoleError('failed-precondition', 'That invitation is not usable.');
@@ -134,10 +142,25 @@ export async function grant(
       );
     }
 
-    // A claimed grant remains linked to its member even if Auth is temporarily
-    // disabled. New unverified or disabled accounts still receive only a
-    // pending invitation, as before.
-    const uid = eligibleUid ?? (claimedUid as string | undefined);
+    // A claimed grant or uniquely matching member remains manageable even if
+    // Auth is temporarily disabled or the account was deleted.
+    const memberUids = new Set(membersByEmail.docs.map((member) => member.id));
+    const externallyResolvedUid = eligibleUid ?? (claimedUid as string | undefined);
+    if (
+      membersByEmail.size > 1 ||
+      (externallyResolvedUid !== undefined &&
+        membersByEmail.size === 1 &&
+        !memberUids.has(externallyResolvedUid))
+    ) {
+      throw new RoleError(
+        'failed-precondition',
+        'That address is linked to more than one committee identity. Revoke the stale entry first.',
+      );
+    }
+    const uid =
+      eligibleUid ??
+      (claimedUid as string | undefined) ??
+      membersByEmail.docs[0]?.id;
     const currentMember = uid
       ? uid === byUid
         ? actor
@@ -146,16 +169,27 @@ export async function grant(
     const storedLocale = [currentMember?.get('locale'), existingGrant.get('locale')].find(
       (value) => value === 'en' || value === 'fr',
     );
-    const currentRole = currentMember?.data()?.role;
-    if (currentRole === 'owner') {
+    const relatedMembers = new Map<string, DocumentSnapshot>(
+      membersByEmail.docs.map((member) => [member.id, member] as const),
+    );
+    if (currentMember) relatedMembers.set(currentMember.id, currentMember);
+    if ([...relatedMembers.values()].some((member) => member.get('role') === 'owner')) {
       throw new RoleError('failed-precondition', "An owner's role cannot be changed.");
     }
-    if (currentRole === 'admin' && role !== 'admin') {
+    if (
+      role !== 'admin' &&
+      [...relatedMembers.values()].some((member) => member.get('role') === 'admin')
+    ) {
       const admins = await tx.get(
         db.collection(`cfps/${cfpId}/members`).where('role', 'in', ['admin', 'owner']),
       );
-      if (admins.size <= 1) {
-        throw new RoleError('failed-precondition', 'That is the only admin left.');
+      const remainingAdmins = admins.docs.filter((member) => !relatedMembers.has(member.id));
+      if (remainingAdmins.length === 0) {
+        throw new RoleError(
+          'failed-precondition',
+          'That is the only admin left.',
+          'event_last_admin',
+        );
       }
     }
 
@@ -250,7 +284,11 @@ export async function revoke(
       );
       const remaining = admins.docs.filter((member) => !targetUids.includes(member.id));
       if (remaining.length === 0) {
-        throw new RoleError('failed-precondition', 'That is the only admin left.');
+        throw new RoleError(
+          'failed-precondition',
+          'That is the only admin left.',
+          'event_last_admin',
+        );
       }
     }
 

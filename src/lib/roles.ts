@@ -12,7 +12,7 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
-import type { ProposalStatus } from '@shared/enums';
+import { STATUS_SETS, type ProposalStatus } from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
@@ -256,6 +256,8 @@ export interface EmailRow {
   /** The latest provider attempt, whether it delivered or not. */
   attemptedAt: number | null;
   error: string;
+  /** Stable code for failures authored by this application; provider prose has none. */
+  errorReason: string;
   /** Retained in storage, but not currently eligible for release. */
   stale?: boolean;
   /** Its sending lease expired, so the bulk retry action can recover it. */
@@ -453,12 +455,7 @@ export interface ProposalRow extends Proposal {
   }>;
 }
 
-/**
- * Every proposal the committee is entitled to see.
- *
- * The `!= 'draft'` is not a display choice — the rules deny the whole query
- * without it, because an unsubmitted draft is not the committee's to read.
- */
+/** Admin-only proposal load for decisions, exports, and organiser operations. */
 export async function loadAllProposals(
   cfpId: string,
   options: { speakerDetails?: boolean } = {},
@@ -533,7 +530,7 @@ export async function loadAllProposals(
 }
 
 export interface ReviewQueue {
-  proposals: ProposalRow[];
+  proposals: ReviewerProposalRow[];
   /**
    * How many were dropped for being the reviewer's own. An empty queue means
    * something different when the answer is "there are none" than when it is
@@ -542,26 +539,39 @@ export interface ReviewQueue {
   own: number;
 }
 
+export type ReviewerProposalRow = Pick<
+  Proposal,
+  | 'speakerSnapshot'
+  | 'title'
+  | 'abstract'
+  | 'pitch'
+  | 'category'
+  | 'format'
+  | 'level'
+  | 'deliveryLanguage'
+  | 'languagePreference'
+  | 'answers'
+  | 'aggregate'
+> & {
+  id: string;
+  status: (typeof STATUS_SETS.reviewQueue)[number];
+  submittedAt?: number;
+};
+
+const reviewQueueCall = httpsCallable<
+  Just,
+  { ok: boolean; proposals: ReviewerProposalRow[]; own: number }
+>(functions, 'reviewQueue');
+
 /**
  * The proposals a reviewer should score: submitted, and not their own.
  *
- * The exclusion is enforced by the rules as well — this only keeps proposals
- * out of a queue where every one of them would fail to save.
+ * The callable filters active and former speakers before returning its public
+ * review projection. Review writes enforce the same conflict independently.
  */
-export async function loadReviewQueue(cfpId: string, uid: string): Promise<ReviewQueue> {
-  const snap = await getDocs(
-    query(
-      collection(db, 'cfps', cfpId, 'proposals'),
-      where('status', 'in', ['submitted', 'under_review']),
-    ),
-  );
-  const all = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Proposal) }));
-  const proposals = all.filter(
-    (p) =>
-      !(p.speakerIds ?? []).includes(uid) &&
-      !((p as Proposal & { formerSpeakerIds?: string[] }).formerSpeakerIds ?? []).includes(uid),
-  );
-  return { proposals, own: all.length - proposals.length };
+export async function loadReviewQueue(cfpId: string): Promise<ReviewQueue> {
+  const { data } = await reviewQueueCall({ cfpId });
+  return { proposals: data.proposals, own: data.own };
 }
 
 /** One-shot, refreshed by the caller after a change — §2 allows no listeners. */

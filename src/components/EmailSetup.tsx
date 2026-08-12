@@ -274,7 +274,7 @@ export function EmailSetup({
                           <td className="mono">{r.name}</td>
                           <td className="mono mono--wrap">
                             {r.value}
-                            {r.priority !== undefined && ` (priority ${r.priority})`}
+                            {r.priority !== undefined && t.admin.emailDnsPriority(r.priority)}
                           </td>
                         </tr>
                       ))}

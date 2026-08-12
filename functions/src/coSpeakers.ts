@@ -44,6 +44,10 @@ const INVITATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const INVITE_RATE_WINDOW_MS = 60 * 60 * 1000;
 const INVITES_PER_SPEAKER_WINDOW = 20;
 const INVITES_PER_RECIPIENT_WINDOW = 5;
+const INVITATION_UNAVAILABLE = { reason: 'co_speaker_invitation_unavailable' } as const;
+const INVITATION_REVIEWER_CONFLICT = {
+  reason: 'co_speaker_invitation_reviewer_conflict',
+} as const;
 
 /** Clears terminal timestamps before the trigger records the next attempt. */
 export function coSpeakerInvitationRetryEmailUpdate() {
@@ -55,6 +59,7 @@ export function coSpeakerInvitationRetryEmailUpdate() {
     sentAt: FieldValue.delete(),
     providerId: FieldValue.delete(),
     error: FieldValue.delete(),
+    errorReason: FieldValue.delete(),
     retryRequestedAt: FieldValue.serverTimestamp(),
   };
 }
@@ -115,45 +120,45 @@ function isOpen(cfp: DocumentSnapshot, now = Date.now()): boolean {
   );
 }
 
-function assertOpen(cfp: DocumentSnapshot): void {
+function assertOpen(cfp: DocumentSnapshot, details?: Record<string, string>): void {
   if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
   if (cfp.get('deleting') === true) {
-    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.', details);
   }
   if (cfp.get('archived') === true) {
-    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.', details);
   }
   if (cfp.get('paused') === true) {
-    throw new HttpsError('failed-precondition', 'The CFP is currently paused.');
+    throw new HttpsError('failed-precondition', 'The CFP is currently paused.', details);
   }
   const opensAt = cfp.get('opensAt');
   const closesAt = cfp.get('closesAt');
   if (!(opensAt instanceof Timestamp) || !(closesAt instanceof Timestamp)) {
-    throw new HttpsError('failed-precondition', 'The CFP submission window is unavailable.');
+    throw new HttpsError('failed-precondition', 'The CFP submission window is unavailable.', details);
   }
   const now = Date.now();
   if (now < opensAt.toMillis()) {
-    throw new HttpsError('failed-precondition', 'The CFP has not opened yet.');
+    throw new HttpsError('failed-precondition', 'The CFP has not opened yet.', details);
   }
   if (now >= closesAt.toMillis()) {
-    throw new HttpsError('deadline-exceeded', 'The CFP has closed.');
+    throw new HttpsError('deadline-exceeded', 'The CFP has closed.', details);
   }
 }
 
-function assertActive(cfp: DocumentSnapshot): void {
+function assertActive(cfp: DocumentSnapshot, details?: Record<string, string>): void {
   if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
   if (cfp.get('deleting') === true) {
-    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
+    throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.', details);
   }
   if (cfp.get('archived') === true) {
-    throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    throw new HttpsError('failed-precondition', 'This call for proposals is archived.', details);
   }
 }
 
-function assertLateInvitationWindow(cfp: DocumentSnapshot): void {
-  assertActive(cfp);
+function assertLateInvitationWindow(cfp: DocumentSnapshot, details?: Record<string, string>): void {
+  assertActive(cfp, details);
   if (cfp.get('paused') === true) {
-    throw new HttpsError('failed-precondition', 'The CFP is currently paused.');
+    throw new HttpsError('failed-precondition', 'The CFP is currently paused.', details);
   }
 }
 
@@ -177,10 +182,14 @@ function roleAllowsManagement(
   );
 }
 
-function assertDraft(proposal: DocumentSnapshot): void {
+function assertDraft(proposal: DocumentSnapshot, details?: Record<string, string>): void {
   if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
   if (proposal.get('status') !== 'draft') {
-    throw new HttpsError('failed-precondition', 'Co-speakers can only be changed while the proposal is a draft.');
+    throw new HttpsError(
+      'failed-precondition',
+      'Co-speakers can only be changed while the proposal is a draft.',
+      details,
+    );
   }
 }
 
@@ -309,29 +318,12 @@ async function rosterFor(
             (proposal.get('status') === 'confirmed' || proposal.get('status') === 'declined')
           ? proposal.get('status')
           : undefined;
-    const participantInvitationId = participant?.get('invitationId');
-    const participantInvitation =
-      typeof participantInvitationId === 'string'
-        ? invitations.docs.find((invitation) => invitation.id === participantInvitationId)
-        : undefined;
-    const removableUnconfirmedLateSpeaker =
+    const removableUnconfirmedSpeaker =
       isAdmin &&
+      proposal.get('status') === 'accepted' &&
       response === undefined &&
-      typeof participantInvitationId === 'string' &&
-      INVITATION_ID.test(participantInvitationId) &&
-      participant?.get('cfpId') === cfpId &&
-      participant.get('proposalId') === proposalId &&
-      participant.get('uid') === uid &&
-      participant.get('role') === 'coSpeaker' &&
-      participant.get('status') === 'active' &&
-      participant.get('joinedPhase') === 'postAcceptance' &&
-      participantInvitation?.exists === true &&
-      invitationPhase(participantInvitation) === 'postAcceptance' &&
-      participantInvitation.get('cfpId') === cfpId &&
-      participantInvitation.get('proposalId') === proposalId &&
-      participantInvitation.get('invitationId') === participantInvitationId &&
-      participantInvitation.get('status') === 'accepted' &&
-      participantInvitation.get('respondedBy') === uid;
+      cfp.get('archived') !== true &&
+      cfp.get('deleting') !== true;
     return {
       kind: 'active',
       state: 'active',
@@ -353,7 +345,7 @@ async function rosterFor(
           isOpen(cfp)) ||
           (managerIdentity &&
             (response === 'declined' ||
-              removableUnconfirmedLateSpeaker) &&
+              removableUnconfirmedSpeaker) &&
             cfp.get('archived') !== true &&
             cfp.get('deleting') !== true)),
       isCurrentUser: uid === identity.uid,
@@ -904,18 +896,30 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
     if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
     const phase = invitationPhase(invitation);
     if (phase === 'draft') {
-      assertOpen(cfp);
-      assertDraft(proposal);
+      assertOpen(cfp, INVITATION_UNAVAILABLE);
+      assertDraft(proposal, INVITATION_UNAVAILABLE);
     } else if (phase === 'postAcceptance') {
-      assertLateInvitationWindow(cfp);
+      assertLateInvitationWindow(cfp, INVITATION_UNAVAILABLE);
       if (!postAcceptanceStatus(proposal)) {
-        throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
+        throw new HttpsError(
+          'failed-precondition',
+          'This invitation is no longer current.',
+          INVITATION_UNAVAILABLE,
+        );
       }
     } else {
-      throw new HttpsError('failed-precondition', 'This invitation is no longer current.');
+      throw new HttpsError(
+        'failed-precondition',
+        'This invitation is no longer current.',
+        INVITATION_UNAVAILABLE,
+      );
     }
     if (invitationHasExpired(invitation)) {
-      throw new HttpsError('deadline-exceeded', 'This invitation has expired.');
+      throw new HttpsError(
+        'deadline-exceeded',
+        'This invitation has expired.',
+        INVITATION_UNAVAILABLE,
+      );
     }
     const currentState = String(invitation.get('status') ?? '');
     const currentSpeakerIds = speakerIdsOf(proposal);
@@ -928,7 +932,11 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
       return;
     }
     if (currentState !== 'pending') {
-      throw new HttpsError('failed-precondition', 'This invitation can no longer be answered.');
+      throw new HttpsError(
+        'failed-precondition',
+        'This invitation can no longer be answered.',
+        INVITATION_UNAVAILABLE,
+      );
     }
     const speakerIds = currentSpeakerIds;
     const primarySpeakerId = primaryOf(proposal);
@@ -976,6 +984,7 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
       throw new HttpsError(
         'failed-precondition',
         'This person already reviewed the proposal and cannot be added as a speaker.',
+        INVITATION_REVIEWER_CONFLICT,
       );
     }
     const proposalData = proposal.data() ?? {};
@@ -1121,6 +1130,13 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
         : {}),
       ...(Object.prototype.hasOwnProperty.call(proposalData, 'attendance')
         ? { attendance: FieldValue.delete() }
+        : {}),
+      ...(legacyConfirmed
+        ? {
+            confirmAnswers: FieldValue.delete(),
+            headshotUploads: FieldValue.delete(),
+            speakerPhoto: FieldValue.delete(),
+          }
         : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -1284,7 +1300,7 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
     if (!canManage(identity, cfpId, proposal, member) && !selfLeavingDraft) {
       throw new HttpsError(
         'permission-denied',
-        'Only the lead speaker can remove another speaker from a draft. After submission, the lead speaker or an event admin can remove only a co-speaker who declined.',
+        'Only the lead speaker can remove another speaker from a draft. After submission, a declined co-speaker may be removed; an event admin may also remove an unconfirmed speaker blocking an accepted session.',
       );
     }
     const speakerIds = speakerIdsOf(proposal);
@@ -1308,14 +1324,19 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
       verifiedLateParticipant &&
       adminManager &&
       targetResponse !== 'confirmed';
+    const removableUnconfirmedSpeaker =
+      currentStatus === 'accepted' &&
+      adminManager &&
+      targetResponse === undefined;
     if (
       currentStatus !== 'draft' &&
       targetResponse !== 'declined' &&
-      !removableUnconfirmedLateSpeaker
+      !removableUnconfirmedLateSpeaker &&
+      !removableUnconfirmedSpeaker
     ) {
       throw new HttpsError(
         'failed-precondition',
-        'After submission, only a declined co-speaker or an unconfirmed late addition can be removed.',
+        'After submission, only a declined co-speaker or an unconfirmed speaker blocking an accepted session can be removed.',
       );
     }
 
@@ -1400,6 +1421,8 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
       },
       { merge: true },
     );
+    const targetConfirmation = confirmationByUid.get(targetUid);
+    if (targetConfirmation?.exists) tx.delete(targetConfirmation.ref);
     cancelPendingProfileUpdateRequest(
       tx,
       profileUpdateRequest,

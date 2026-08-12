@@ -179,7 +179,8 @@ beforeEach(async () => {
  */
 const VERIFIED = { email_verified: true };
 
-const asApplicant = () => env.authenticatedContext(APPLICANT, VERIFIED).firestore();
+const asApplicant = () =>
+  env.authenticatedContext(APPLICANT, { ...VERIFIED, email: 'anna@example.org' }).firestore();
 const asOther = () => env.authenticatedContext(OTHER_APPLICANT, VERIFIED).firestore();
 const asReviewer = () => env.authenticatedContext(REVIEWER, VERIFIED).firestore();
 const asOtherReviewer = () => env.authenticatedContext(OTHER_REVIEWER, VERIFIED).firestore();
@@ -406,6 +407,12 @@ describe('status and aggregate are function-writable only', () => {
   it('denies writing the confirmation answers directly', async () => {
     await assertFails(
       updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { confirmAnswers: { shirt: 'XXL' } }),
+    );
+    await assertFails(
+      addDoc(collection(asApplicant(), `${CFP}/proposals`), {
+        ...draft(APPLICANT),
+        confirmAnswers: { shirt: 'XXL' },
+      }),
     );
   });
 
@@ -823,8 +830,8 @@ describe('unsubmitted drafts are private to their active speaker roster', () => 
     await assertFails(getDocs(collection(asReviewer(), `${CFP}/proposals`)));
   });
 
-  it('allows the filtered listing the committee screens actually use', async () => {
-    await assertSucceeds(
+  it('denies a reviewer even when the raw query excludes drafts', async () => {
+    await assertFails(
       getDocs(query(collection(asReviewer(), `${CFP}/proposals`), where('status', '!=', 'draft'))),
     );
   });
@@ -833,11 +840,12 @@ describe('unsubmitted drafts are private to their active speaker roster', () => 
     await assertSucceeds(getDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`)));
   });
 
-  it('opens it to reviewers the moment it is submitted', async () => {
+  it('keeps the submitted raw document closed to reviewers', async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
       await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-anna`), { status: 'submitted' });
     });
-    await assertSucceeds(getDoc(doc(asReviewer(), `${CFP}/proposals/p-anna`)));
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/proposals/p-anna`)));
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/proposals/p-anna`)));
   });
 
   it('keeps direct scoring closed for a draft or withdrawn proposal', async () => {
@@ -898,19 +906,26 @@ describe('the reviewers collection', () => {
     await assertFails(getDocs(collection(asReviewer(), `${CFP}/members`)));
   });
 
+  it('denies a plain reviewer fetching another member by a known uid', async () => {
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/members`, OTHER_REVIEWER)));
+  });
+
   it('allows an admin to list the committee', async () => {
     await makeAdmin();
     await assertSucceeds(getDocs(collection(asReviewer(), `${CFP}/members`)));
+    await assertSucceeds(getDoc(doc(asReviewer(), `${CFP}/members`, OTHER_REVIEWER)));
   });
 });
 
-/** The review queue and the admin proposals table are both unscoped listings. */
-describe('reviewers read every proposal in their own CFP', () => {
-  it('lists every submitted proposal', async () => {
+describe('raw proposal rows stay behind the callable reviewer projection', () => {
+  it('denies a reviewer while preserving the organiser listing', async () => {
     await submitted('p-anna');
     await submitted('p-bruno');
-    const snap = await getDocs(
-      query(collection(asReviewer(), `${CFP}/proposals`), where('status', '!=', 'draft')),
+    await assertFails(
+      getDocs(query(collection(asReviewer(), `${CFP}/proposals`), where('status', '!=', 'draft'))),
+    );
+    const snap = await assertSucceeds(
+      getDocs(query(collection(asOwner(), `${CFP}/proposals`), where('status', '!=', 'draft'))),
     );
     expect(snap.docs.map((d) => d.id).sort()).toEqual(['p-anna', 'p-bruno']);
   });
@@ -947,7 +962,7 @@ describe('a speaker profile is readable only by its owner', () => {
     await assertFails(getDocs(collection(asReviewer(), 'speakers')));
   });
 
-  it('allows ordinary profile saves but not forged server photo pointers', async () => {
+  it('allows ordinary profile saves and follows a changed verified identity email', async () => {
     const profilePhoto = {
       path: `speakerProfilePhotos/${APPLICANT}/forged`,
       generation: '1',
@@ -960,8 +975,24 @@ describe('a speaker profile is readable only by its owner', () => {
     await assertSucceeds(
       updateDoc(doc(asApplicant(), 'speakers', APPLICANT), { company: 'Example Co' }),
     );
+    const changedIdentity = env
+      .authenticatedContext(APPLICANT, {
+        ...VERIFIED,
+        email: 'anna.new@example.org',
+      })
+      .firestore();
+    await assertSucceeds(
+      updateDoc(doc(changedIdentity, 'speakers', APPLICANT), {
+        email: 'anna.new@example.org',
+      }),
+    );
     await assertFails(
-      updateDoc(doc(asApplicant(), 'speakers', APPLICANT), {
+      updateDoc(doc(changedIdentity, 'speakers', APPLICANT), {
+        email: 'forged@example.org',
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(changedIdentity, 'speakers', APPLICANT), {
         profilePhoto: { ...profilePhoto, generation: '2' },
       }),
     );
@@ -1304,9 +1335,11 @@ describe('nothing crosses between two CFPs', () => {
   });
 
   it('denies an admin of one CFP reading the other’s proposals', async () => {
-    // Dara administers `someone-elses-conf` and merely reviews this one.
+    // Dara administers `someone-elses-conf` and merely reviews this one, so the
+    // raw row here is still available only through the reviewer projection.
     await submitted('p-anna');
-    await assertSucceeds(getDoc(doc(asAdminElsewhere(), `${CFP}/proposals/p-anna`)));
+    await assertFails(getDoc(doc(asAdminElsewhere(), `${CFP}/proposals/p-anna`)));
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/proposals/p-anna`)));
     // ...but Chen, who is only on this one, gets nothing over there.
     await assertFails(getDoc(doc(asReviewer(), `${OTHER_CFP}/proposals/p-far`)));
   });

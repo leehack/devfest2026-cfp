@@ -514,6 +514,12 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
   await expect(languageFilter).toHaveValue('en');
   await expect(page).toHaveTitle('Programme — DevFest Montréal 2026');
 
+  await page.goto(at('/schedule/no-longer-current'));
+  await expect(page.getByText('This session is not in the current programme.')).toBeVisible();
+  await expect(page.getByText('The modern web, without the maze')).toHaveCount(0);
+  await expect(page.getByText('Samira Speaker')).toHaveCount(0);
+  await page.getByRole('link', { name: /Back to the programme/ }).click();
+
   await signInAs(page, SPEAKER, at());
   const speakerSchedule = page.locator('.submission-schedule');
   await expect(speakerSchedule.getByRole('heading', { name: 'Your published session' })).toBeVisible();
@@ -522,6 +528,12 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
   await expect(speakerSchedule).toContainText('English');
   await speakerSchedule.getByRole('link', { name: 'View session details' }).click();
   await expect(page.getByRole('heading', { name: 'The modern web, without the maze' })).toBeVisible();
+  const sessionMain = page.locator('#main-content');
+  await expect(sessionMain).toHaveAttribute(
+    'aria-label',
+    'The modern web, without the maze — DevFest Montréal 2026',
+  );
+  await expect(sessionMain).toBeFocused();
 
   await setProposalStatusDirect('modern-web', 'withdrawn');
   await expect
@@ -883,9 +895,11 @@ test('does not fall back to an obsolete public placement after a speaker is remo
   await page.route('**/getSharedSchedule', (route) => route.abort('failed'));
   await page.reload();
   await expect(
-    page.getByText(
-      'We could not load the current shared placement. Reload this page before relying on an older programme time.',
-    ),
+    page
+      .getByText(
+        'The current programme placement could not be loaded, so no schedule time is shown until you reload.',
+      )
+      .first(),
   ).toBeVisible();
   await expect(page.locator('.submission-schedule')).toHaveCount(0);
   await expect(page.getByText('10:00–10:40')).toHaveCount(0);

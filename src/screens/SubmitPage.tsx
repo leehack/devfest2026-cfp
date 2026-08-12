@@ -161,7 +161,10 @@ function TalkPicker({
     if (currentIsPast) setPastOpen(true);
   }, [currentIsPast]);
 
-  if (talks.length === 0 || (talks.length === 1 && !canAdd && pastTalks.length === 0)) {
+  if (
+    talks.length === 0 ||
+    (currentId !== null && talks.length === 1 && !canAdd && pastTalks.length === 0)
+  ) {
     return null;
   }
 
@@ -212,7 +215,11 @@ function TalkPicker({
           <div className="talks__past-list">{pastTalks.map(renderTab)}</div>
         </details>
       )}
-      {atCap && <span className="talks__limit">{t.form.talkCap(LIMITS.maxTalksPerSpeaker)}</span>}
+      {atCap && (
+        <span className="talks__limit" id="talk-cap-message">
+          {t.form.talkCap(LIMITS.maxTalksPerSpeaker)}
+        </span>
+      )}
     </nav>
   );
 }
@@ -336,6 +343,7 @@ function Questions({
               <Checkbox
                 label={label}
                 help={help}
+                required={field.required}
                 checked={value === true}
                 onChange={(next) => onAnswer(field.key, next)}
                 disabled={busy}
@@ -404,6 +412,10 @@ interface StatusBannerProps {
   onCancelAsk: () => void;
   /** Present once confirmed, so an answer can still be corrected afterwards. */
   onSaveAnswers?: () => void;
+  answerSaveState: 'idle' | 'saving' | 'saved' | 'failed';
+  answerSaveError?: string;
+  waitingOnOtherSpeaker?: boolean;
+  otherSpeakerDeclined?: boolean;
   schedule?: {
     date: string;
     time: string;
@@ -479,6 +491,10 @@ function StatusBanner({
   onAsk,
   onCancelAsk,
   onSaveAnswers,
+  answerSaveState,
+  answerSaveError,
+  waitingOnOtherSpeaker,
+  otherSpeakerDeclined,
   schedule,
   schedulePending,
   scheduleUnavailable,
@@ -493,12 +509,16 @@ function StatusBanner({
     <div className={`panel submission-status${good ? ' panel--good' : ''}`}>
       <h2>{t.enums.status[status]}</h2>
       <p>
-        {status === 'confirmed' && schedule
+        {waitingOnOtherSpeaker
+          ? t.form.nextSteps.confirmedWaitingOnSpeaker.help
+          : otherSpeakerDeclined
+            ? t.form.nextSteps.confirmedSpeakerDeclined.help
+          : status === 'confirmed' && schedule
           ? schedule.public
             ? t.form.scheduledHelp
             : t.form.sharedScheduledHelp
           : status === 'confirmed' && scheduleUnavailable
-            ? t.form.sharedScheduleUnavailable
+            ? t.form.nextSteps.confirmedUnavailable.help
           : status === 'confirmed' && schedulePending
             ? t.form.sharedUnscheduledHelp
             : (t.form.statusHelp[status] ?? t.form.submittedHelp)}
@@ -594,14 +614,25 @@ function StatusBanner({
           <h3 className="card__subtitle">{t.form.answersTitle}</h3>
           <Questions {...questions} />
           {onSaveAnswers && (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={onSaveAnswers}
-            >
-              {t.form.answersSave}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={onSaveAnswers}
+              >
+                {t.form.answersSave}
+              </button>
+              <div className="actions__status" aria-live="polite">
+                {answerSaveState === 'saving' && t.form.saving}
+                {answerSaveState === 'saved' && t.form.confirmationAnswersSaved}
+                {answerSaveState === 'failed' && (
+                  <span className="field__error" role="alert">
+                    {answerSaveError || t.form.confirmationAnswersSaveFailed}
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </>
       )}
@@ -708,12 +739,14 @@ function ProposalFormPage({
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [publishedSchedule, setPublishedSchedule] =
     useState<PublishedScheduleBundle | null>(null);
+  const [publishedScheduleFailed, setPublishedScheduleFailed] = useState(false);
   const [sharedSchedule, setSharedSchedule] = useState<SharedScheduleBundle | null>(null);
   const [sharedScheduleFailed, setSharedScheduleFailed] = useState(false);
   const [answers, setAnswers] = useState<Answers>({});
   const [answerFaults, setAnswerFaults] = useState<AnswerFaults>({});
   const [answerSaveState, setAnswerSaveState] =
     useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [answerSaveError, setAnswerSaveError] = useState('');
   const [sessionPhotoGeneration, setSessionPhotoGeneration] = useState<string | null>(null);
   const [uploadingAnswer, setUploadingAnswer] = useState(false);
   /**
@@ -838,13 +871,15 @@ function ProposalFormPage({
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked, schedule, sharedResult, requestResult] = await Promise.all([
+        const [{ talks: found, speaker: profile }, questions, asked, publishedResult, sharedResult, requestResult] = await Promise.all([
           loadMyProposals(cfpId, user),
           loadConfirmForm(cfpId),
           loadSubmissionForm(cfpId),
           cfp.publishedScheduleId
-            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId).catch(() => null)
-            : Promise.resolve(null),
+            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId)
+                .then((value) => ({ value, failed: false }))
+                .catch(() => ({ value: null, failed: true }))
+            : Promise.resolve({ value: null, failed: false }),
           cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId
             ? loadSharedSchedule(cfpId)
                 .then((value) => ({ value, failed: false }))
@@ -871,7 +906,8 @@ function ProposalFormPage({
         );
         setConfirmForm(questions);
         setShape(asked);
-        setPublishedSchedule(schedule);
+        setPublishedSchedule(publishedResult.value);
+        setPublishedScheduleFailed(publishedResult.failed);
         setSharedSchedule(sharedResult.value);
         setSharedScheduleFailed(sharedResult.failed);
         setProfileRequests(requestResult.requests);
@@ -975,6 +1011,7 @@ function ProposalFormPage({
     answerDirty.current = true;
     answerRevision.current += 1;
     setAnswerSaveState('idle');
+    setAnswerSaveError('');
     setAnswers((previous) => ({ ...previous, [key]: value }));
     const id = proposalIdRef.current;
     if (
@@ -1053,6 +1090,10 @@ function ProposalFormPage({
             }
             setProfileRequestRefresh((value) => value + 1);
             setAnswerSaveState('saved');
+            setAnswerSaveError('');
+            if (source === 'manual') {
+              showToast(tRef.current.form.confirmationAnswersSaved, 'success');
+            }
             if (source !== 'transition' && !dirty.current) collapseHistoryGuard();
           } else {
             setAnswerSaveState('idle');
@@ -1061,7 +1102,7 @@ function ProposalFormPage({
           return true;
         } catch (error) {
           setAnswerSaveState('failed');
-          setBanner(friendlyError(error, tRef.current));
+          setAnswerSaveError(friendlyError(error, tRef.current));
           return false;
         } finally {
           activeAnswerSave.current = null;
@@ -1074,7 +1115,7 @@ function ProposalFormPage({
         ? saveConfirmationAnswers(source)
         : true;
     },
-    [archived, cfpId, collapseHistoryGuard],
+    [archived, cfpId, collapseHistoryGuard, showToast],
   );
 
   useEffect(() => {
@@ -1213,16 +1254,29 @@ function ProposalFormPage({
     return () => clearTimeout(handle);
   }, [form, loading, persist, proposalId, scope]);
 
+  const saveForTransition = useCallback(async (): Promise<boolean> => {
+    if (dirty.current && !(await persist('transition'))) return false;
+    if (!answerDirty.current) return true;
+
+    if (speakerStatusRef.current !== 'confirmed') {
+      if (!window.confirm(tRef.current.form.discardUnsubmittedAnswersConfirm)) return false;
+      setAnswers(savedAnswersRef.current);
+      answersRef.current = savedAnswersRef.current;
+      answerDirty.current = false;
+      setAnswerFaults({});
+      setAnswerSaveState('idle');
+      setAnswerSaveError('');
+      setAsking(false);
+      return true;
+    }
+
+    if (await saveConfirmationAnswers('transition')) return true;
+    showToast(tRef.current.form.unsaved, 'warning');
+    return false;
+  }, [persist, saveConfirmationAnswers, showToast]);
+
   useLayoutEffect(() => {
     const hasPendingChanges = () => dirty.current || answerDirty.current;
-    const saveForTransition = async () => {
-      if (dirty.current && !(await persist('transition'))) return false;
-      if (answerDirty.current && !(await saveConfirmationAnswers('transition'))) {
-        showToast(t.form.unsaved, 'warning');
-        return false;
-      }
-      return true;
-    };
     const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
       if (!hasPendingChanges()) return;
       event.preventDefault();
@@ -1378,7 +1432,7 @@ function ProposalFormPage({
       if (dirty.current) void persist('background');
       if (answerDirty.current) void saveConfirmationAnswers('background');
     };
-  }, [cfpId, persist, saveConfirmationAnswers, showToast, t.form.unsaved, user.uid]);
+  }, [cfpId, persist, saveConfirmationAnswers, saveForTransition, user.uid]);
 
   const set = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
     armHistoryGuard();
@@ -1507,6 +1561,7 @@ function ProposalFormPage({
     }
     answerDirty.current = false;
     setAnswerSaveState('idle');
+    setAnswerSaveError('');
     setAnswerFaults({});
     setAsking(false);
     setShowErrors(false);
@@ -1521,7 +1576,7 @@ function ProposalFormPage({
    */
   async function openTalk(id: string) {
     if (id === proposalId) return;
-    if (dirty.current && !(await persist('transition'))) return;
+    if (!(await saveForTransition())) return;
 
     const talk = talksRef.current.find((candidate) => candidate.id === id);
     if (!talk) return;
@@ -1529,7 +1584,7 @@ function ProposalFormPage({
   }
 
   async function startNewTalk() {
-    if (dirty.current && !(await persist('transition'))) return;
+    if (!(await saveForTransition())) return;
 
     // From the form rather than the loaded profile: right after a first save
     // the loaded copy is a page-load old and would blank the bio just typed.
@@ -1725,6 +1780,7 @@ function ProposalFormPage({
       if (response === 'confirm') savedAnswersRef.current = responseAnswers;
       answerDirty.current = false;
       setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
+      setAnswerSaveError('');
       setSpeakerRosterRefresh((value) => value + 1);
       setProfileRequestRefresh((value) => value + 1);
       setAsking(false);
@@ -1753,6 +1809,7 @@ function ProposalFormPage({
     answerDirty.current = false;
     setAnswerFaults({});
     setAnswerSaveState('idle');
+    setAnswerSaveError('');
     setAsking(false);
   }
 
@@ -1862,6 +1919,26 @@ function ProposalFormPage({
   const hasNewerSharedPreview = Boolean(
     cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId,
   );
+  const currentScheduleFailed = hasNewerSharedPreview
+    ? sharedScheduleFailed
+    : publishedScheduleFailed;
+  const otherSpeakerDeclined = Boolean(
+    usesPersonalConfirmation &&
+      ownResponse === 'confirmed' &&
+      status !== 'confirmed' &&
+      speakerRoster?.items.some(
+        (item) =>
+          item.kind === 'active' &&
+          !item.isCurrentUser &&
+          item.confirmationState === 'declined',
+      ),
+  );
+  const waitingOnOtherSpeaker = Boolean(
+    usesPersonalConfirmation &&
+      ownResponse === 'confirmed' &&
+      status !== 'confirmed' &&
+      !otherSpeakerDeclined,
+  );
   const displayedEntry = lateSpeakerSchedulePending
     ? undefined
     : hasNewerSharedPreview
@@ -1970,9 +2047,13 @@ function ProposalFormPage({
   const lifecycleNext = archived
     ? t.form.nextSteps.archived
     : speakerStatus === 'draft'
-      ? cfp.state === 'open'
-        ? t.form.nextSteps.draft
-        : t.form.nextSteps.draftClosed
+      ? cfp.state === 'paused'
+        ? t.form.nextSteps.draftPaused
+        : cfp.state === 'open'
+          ? isCoSpeaker
+            ? t.form.nextSteps.coSpeakerDraft
+            : t.form.nextSteps.draft
+          : t.form.nextSteps.draftClosed
       : speakerStatus === 'submitted'
         ? scope === 'all'
           ? t.form.nextSteps.submittedEditable
@@ -1982,13 +2063,17 @@ function ProposalFormPage({
           : speakerStatus === 'accepted'
             ? t.form.nextSteps.accepted
             : speakerStatus === 'confirmed'
-              ? lateSpeakerSchedulePending
+              ? otherSpeakerDeclined
+                ? t.form.nextSteps.confirmedSpeakerDeclined
+                : waitingOnOtherSpeaker
+                ? t.form.nextSteps.confirmedWaitingOnSpeaker
+                : lateSpeakerSchedulePending
                 ? t.form.nextSteps.confirmedPending
                 : speakerSchedule?.public
                   ? t.form.nextSteps.confirmedPublic
                   : speakerSchedule
                     ? t.form.nextSteps.confirmedShared
-                    : sharedScheduleFailed
+                    : currentScheduleFailed
                       ? t.form.nextSteps.confirmedUnavailable
                       : hasNewerSharedPreview
                         ? t.form.nextSteps.confirmedPending
@@ -2101,6 +2186,10 @@ function ProposalFormPage({
               ? () => void saveConfirmationAnswers('manual')
               : undefined
           }
+          answerSaveState={answerSaveState}
+          answerSaveError={answerSaveError}
+          waitingOnOtherSpeaker={waitingOnOtherSpeaker}
+          otherSpeakerDeclined={otherSpeakerDeclined}
           schedule={speakerSchedule}
           schedulePending={
             speakerStatus === 'confirmed' &&
@@ -2110,8 +2199,7 @@ function ProposalFormPage({
           scheduleUnavailable={
             speakerStatus === 'confirmed' &&
             !lateSpeakerSchedulePending &&
-            hasNewerSharedPreview &&
-            sharedScheduleFailed
+            currentScheduleFailed
           }
         />
       )}
@@ -2542,13 +2630,19 @@ function ProposalFormPage({
               className="btn btn--primary"
               disabled={
                 talkDisabled ||
+                submittedCount >= LIMITS.maxTalksPerSpeaker ||
                 (proposalId !== null && !speakerRoster) ||
                 Boolean(speakerRoster?.pendingBlocksSubmit)
               }
               aria-describedby={
-                proposalId !== null && speakerRoster === null
-                  ? 'co-speaker-submit-blocked'
-                  : undefined
+                [
+                  submittedCount >= LIMITS.maxTalksPerSpeaker ? 'talk-cap-message' : undefined,
+                  proposalId !== null && speakerRoster === null
+                    ? 'co-speaker-submit-blocked'
+                    : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined
               }
             >
               {submitting ? t.form.submitting : t.form.submit}

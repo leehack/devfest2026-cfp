@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { FORM_LIMITS, IMAGE_TYPES } from '@shared/confirmForm';
 
@@ -27,6 +27,7 @@ export function CustomScheduleSpeakerPhoto({
   onBusyChange,
 }: Props) {
   const { t } = useI18n();
+  const inputId = useId();
   const input = useRef<HTMLInputElement>(null);
   const previewUrl = useRef('');
   const pendingAssetRef = useRef<string | null | undefined>(undefined);
@@ -35,6 +36,8 @@ export function CustomScheduleSpeakerPhoto({
   const [uploading, setUploading] = useState(false);
   const [changed, setChanged] = useState(false);
   const [problem, setProblem] = useState('');
+  const loadFailed = useRef(t.schedule.customSpeakerPhotoLoadFailed);
+  loadFailed.current = t.schedule.customSpeakerPhotoLoadFailed;
 
   const showPreview = useCallback((blob: Blob | null) => {
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
@@ -71,7 +74,7 @@ export function CustomScheduleSpeakerPhoto({
       .catch(() => {
         if (!cancelled) {
           showPreview(null);
-          setProblem(t.schedule.customSpeakerPhotoLoadFailed);
+          setProblem(loadFailed.current);
         }
       })
       .finally(() => {
@@ -80,7 +83,7 @@ export function CustomScheduleSpeakerPhoto({
     return () => {
       cancelled = true;
     };
-  }, [cfpId, photoAssetRef, showPreview, t.schedule.customSpeakerPhotoLoadFailed]);
+  }, [cfpId, photoAssetRef, showPreview]);
 
   useEffect(
     () => () => {
@@ -141,6 +144,7 @@ export function CustomScheduleSpeakerPhoto({
   }
 
   const busy = loading || uploading;
+  const problemId = problem ? `${inputId}-error` : undefined;
   return (
     <section className="schedule-custom-speaker-photo" aria-busy={busy}>
       <div className="schedule-custom-speaker-photo__visual" aria-hidden="true">
@@ -157,25 +161,37 @@ export function CustomScheduleSpeakerPhoto({
         </div>
         <p>{t.schedule.customSpeakerPhotoHelp}</p>
         <div className="schedule-custom-speaker-photo__actions">
-          <label className="btn btn--compact">
+          <button
+            type="button"
+            className="btn btn--compact"
+            disabled={disabled || busy}
+            aria-invalid={Boolean(problem)}
+            aria-describedby={problemId}
+            onClick={() => input.current?.click()}
+          >
             {uploading
               ? t.schedule.customSpeakerPhotoUploading
               : preview
                 ? t.schedule.customSpeakerPhotoReplace
                 : t.schedule.customSpeakerPhotoChoose}
-            <input
-              ref={input}
-              className="visually-hidden"
-              type="file"
-              accept={IMAGE_TYPES.join(',')}
-              disabled={disabled || busy}
-              aria-label={t.schedule.customSpeakerPhotoInput(speakerNumber)}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void choose(file);
-              }}
-            />
-          </label>
+          </button>
+          <input
+            id={inputId}
+            ref={input}
+            className="visually-hidden"
+            type="file"
+            accept={IMAGE_TYPES.join(',')}
+            disabled={disabled || busy}
+            aria-label={t.schedule.customSpeakerPhotoInput(speakerNumber)}
+            aria-invalid={Boolean(problem)}
+            aria-describedby={problemId}
+            aria-errormessage={problemId}
+            tabIndex={-1}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void choose(file);
+            }}
+          />
           {photoAssetRef && (
             <button
               type="button"
@@ -188,7 +204,7 @@ export function CustomScheduleSpeakerPhoto({
           )}
         </div>
         {changed && <p className="field__help" role="status">{t.schedule.customSpeakerPhotoPending}</p>}
-        {problem && <p className="field__error" role="alert">{problem}</p>}
+        {problem && <p className="field__error" id={problemId} role="alert">{problem}</p>}
       </div>
     </section>
   );

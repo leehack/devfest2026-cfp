@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { useFreshHostingOrigin } from '../functions/src/authLinks';
+import {
+  signInEmailDeliveryReady,
+  useFreshHostingOrigin,
+} from '../functions/src/authLinks';
 
 describe('email action link origin', () => {
   const firebaseLink =
@@ -25,5 +28,12 @@ describe('email action link origin', () => {
         false,
       ),
     ).toContain('auth.example.org');
+  });
+
+  it('requires both production delivery credentials before promising a sign-in email', () => {
+    expect(signInEmailDeliveryReady('resend-key', 'CFP <mail@example.org>', false)).toBe(true);
+    expect(signInEmailDeliveryReady('', 'CFP <mail@example.org>', false)).toBe(false);
+    expect(signInEmailDeliveryReady('resend-key', '', false)).toBe(false);
+    expect(signInEmailDeliveryReady('', '', true)).toBe(true);
   });
 });

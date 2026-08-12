@@ -44,6 +44,7 @@ import {
   type TemplateOverrides,
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
+import { inStatusSet } from '../../shared/enums';
 import { readResendKey } from './secrets';
 import { ensureLegacyEmailDomainBinding } from './emailTenancy';
 import {
@@ -446,7 +447,7 @@ export function staffNotificationStillTrue(
 ): boolean {
   if (!subject?.exists) return false;
   if (kind === 'committee_proposal_submitted') {
-    return ['submitted', 'under_review'].includes(String(subject.get('status') ?? ''));
+    return inStatusSet('reviewQueue', String(subject.get('status') ?? ''));
   }
   if (kind === 'committee_schedule_shared') {
     return subject.get('sharedScheduleId') === subjectId;
@@ -708,10 +709,20 @@ export const SEND_QUEUED_EMAIL_TRIGGER_OPTIONS = {
   retry: true,
 } as const;
 
-function supersededEmailUpdate(error = 'This notification is superseded.') {
+type EmailErrorReason =
+  | 'superseded'
+  | 'event_deleted'
+  | 'event_archived'
+  | 'email_domain_unbound';
+
+function supersededEmailUpdate(
+  error = 'This notification is superseded.',
+  errorReason: EmailErrorReason = 'superseded',
+) {
   return {
     status: 'failed' as const,
     error,
+    errorReason,
     attemptedAt: FieldValue.serverTimestamp(),
     sentAt: FieldValue.delete(),
     sendingClaimId: FieldValue.delete(),
@@ -746,6 +757,7 @@ export const sendQueuedEmail = onDocumentWritten(
           ref,
           supersededEmailUpdate(
             'This notification is superseded because the event was deleted.',
+            'event_deleted',
           ),
         );
         return null;
@@ -755,6 +767,7 @@ export const sendQueuedEmail = onDocumentWritten(
           ref,
           supersededEmailUpdate(
             'This notification is superseded because the event is archived.',
+            'event_archived',
           ),
         );
         return null;
@@ -1075,6 +1088,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded because the event was deleted.',
+        errorReason: 'event_deleted',
       });
       return;
     }
@@ -1082,6 +1096,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded because the event is archived.',
+        errorReason: 'event_archived',
       });
       return;
     }
@@ -1092,6 +1107,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded.',
+        errorReason: 'superseded',
       });
       return;
     }
@@ -1116,6 +1132,7 @@ export const sendQueuedEmail = onDocumentWritten(
         await updateClaim({
           status: 'failed',
           error: 'This notification is superseded.',
+          errorReason: 'superseded',
         });
         return;
       }
@@ -1149,6 +1166,7 @@ export const sendQueuedEmail = onDocumentWritten(
         await updateClaim({
           status: 'failed',
           error: 'This notification is superseded.',
+          errorReason: 'superseded',
         });
         return;
       }
@@ -1189,6 +1207,7 @@ export const sendQueuedEmail = onDocumentWritten(
         await updateClaim({
           status: 'failed',
           error: 'This notification is superseded.',
+          errorReason: 'superseded',
         });
         return;
       }
@@ -1225,6 +1244,7 @@ export const sendQueuedEmail = onDocumentWritten(
           await updateClaim({
             status: 'failed',
             error: 'This notification is superseded.',
+            errorReason: 'superseded',
           });
           return;
         }
@@ -1249,6 +1269,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded because the event was deleted.',
+        errorReason: 'event_deleted',
       });
       return;
     }
@@ -1256,6 +1277,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded because the event is archived.',
+        errorReason: 'event_archived',
       });
       return;
     }
@@ -1268,6 +1290,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'This notification is superseded.',
+        errorReason: 'superseded',
       });
       return;
     }
@@ -1283,6 +1306,7 @@ export const sendQueuedEmail = onDocumentWritten(
       await updateClaim({
         status: 'failed',
         error: 'Email delivery is blocked because this sending domain is not assigned to the event.',
+        errorReason: 'email_domain_unbound',
       });
       return;
     }
@@ -1308,6 +1332,7 @@ export const sendQueuedEmail = onDocumentWritten(
         status: outcome.status,
         providerId: outcome.providerId ?? FieldValue.delete(),
         error: outcome.error ?? FieldValue.delete(),
+        errorReason: FieldValue.delete(),
       },
       outcome.ambiguous === true,
     );

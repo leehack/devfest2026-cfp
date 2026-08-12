@@ -22,9 +22,9 @@ import { Checkbox, TextAreaField } from '../components/fields';
 import { formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
-import { friendlyError } from '../lib/errors';
+import { reviewError } from '../lib/errors';
 import { loadSubmissionForm } from '../lib/proposals';
-import { loadCfp, loadReviewQueue, type ProposalRow } from '../lib/roles';
+import { loadCfp, loadReviewQueue, type ReviewerProposalRow } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
 import {
   clearReviewDraft,
@@ -38,6 +38,7 @@ import {
   labelOf,
   type SubmissionForm,
 } from '@shared/submissionForm';
+import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
 import type { Review, SpeakerSnapshot } from '@shared/types';
 
 interface SaveFailure {
@@ -58,7 +59,7 @@ const draftOf = (review?: Review): Draft => ({
 export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const { t, locale } = useI18n();
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
-  const [order, setOrder] = useState<ProposalRow[]>([]);
+  const [order, setOrder] = useState<ReviewerProposalRow[]>([]);
   const [own, setOwn] = useState(0);
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
@@ -94,7 +95,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     setFailures(new Map());
     try {
       const [loaded, cfp, form] = await Promise.all([
-        loadReviewQueue(cfpId, user.uid),
+        loadReviewQueue(cfpId),
         loadCfp(cfpId),
         // The card's chips read their labels off this call's own form — a
         // category this committee invented has no entry in any dictionary.
@@ -151,7 +152,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     } catch (e) {
       if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
       setOrder([]);
-      setError(friendlyError(e, t));
+      setError(reviewError(e, t));
       setLoadedFor(scopeKey);
     } finally {
       if (request === loadGeneration.current && activeScope.current === scopeKey) {
@@ -262,7 +263,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             id,
             title,
             draft,
-            message: friendlyError(e, t),
+            message: reviewError(e, t),
           }),
         );
       } finally {
@@ -282,9 +283,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const scoreAndAdvance = useCallback(
     (score: Score) => {
       if (!current || savingIds.has(current.id)) return;
-      const draft = {
+      const currentDraft = {
         ...draftOf(mine.get(current.id)),
         ...drafts.get(current.id),
+      };
+      if (currentDraft.conflictOfInterest) return;
+      const draft = {
+        ...currentDraft,
         score,
         conflictOfInterest: false,
       };
@@ -682,7 +687,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 interface CardProps {
   cfpId: string;
   shape: SubmissionForm;
-  proposal: ProposalRow;
+  proposal: ReviewerProposalRow;
   draft: Draft;
   existing?: Review;
   reviewsVisible: boolean;
@@ -772,6 +777,8 @@ function ReviewCard({
         </>
       )}
 
+      <SubmissionAnswers fields={shape.fields} answers={proposal.answers} />
+
       {people.map((s, i) => (
         <Speaker key={s.uid || i} speaker={s} />
       ))}
@@ -858,24 +865,61 @@ function ReviewCard({
   );
 }
 
-/**
- * What it takes to actually put this talk on the schedule.
- *
- * The applicant answers all of this and none of it reached the committee, so a
- * reviewer scored a talk without knowing the speaker needs a visa and expects
- * to hear about funding after the programme locks. That is not a tie-breaker
- * between two good talks — it is the difference between a session that happens
- * and a hole in the grid.
- *
- * Two things the applicant sent are deliberately still not here. `acks` are
- * three `z.literal(true)` fields, so every proposal carries the same three
- * values and rendering them says nothing about this one. The speaker's email
- * address is contact detail, not evidence about the talk; the admin screen has
- * it for the people who need to write to them.
- */
-function Logistics({ proposal }: { proposal: ProposalRow }) {
+/** Current organiser-defined questions about the talk, never speaker logistics. */
+function SubmissionAnswers({
+  fields,
+  answers,
+}: {
+  fields: ConfirmField[];
+  answers?: Answers;
+}) {
   const { t, locale } = useI18n();
-  const { attendance } = proposal;
+  if (!answers) return null;
+
+  const rows = fields.flatMap((field) => {
+    if (
+      field.type === 'image' ||
+      !Object.prototype.hasOwnProperty.call(answers, field.key)
+    ) {
+      return [];
+    }
+    const answer = answers[field.key];
+    const value =
+      typeof answer === 'boolean'
+        ? answer
+          ? t.review.answerYes
+          : t.review.answerNo
+        : field.type === 'select'
+          ? localised(
+              field.options?.find((option) => option.value === answer)?.label,
+              locale,
+            ) || answer
+          : answer;
+    return [{ key: field.key, label: localised(field.label, locale), value }];
+  });
+  if (rows.length === 0) return null;
+
+  return (
+    <>
+      <h3 className="card__subtitle">{t.review.submissionAnswers}</h3>
+      <dl className="answers">
+        {rows.map(({ key, label, value }) => (
+          <div key={key}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
+  );
+}
+
+/**
+ * Review-relevant submission context only. Travel, visa, funding, confirmation,
+ * photo and contact details stay between the speaker and organisers.
+ */
+function Logistics({ proposal }: { proposal: ReviewerProposalRow }) {
+  const { t, locale } = useI18n();
   const submitted = toDate(proposal.submittedAt);
 
   // `languagePreference` only exists when the delivery language is `either` —
@@ -884,10 +928,6 @@ function Logistics({ proposal }: { proposal: ProposalRow }) {
     proposal.languagePreference
       ? [t.review.languagePreference, proposal.languagePreference]
       : null,
-    attendance?.status ? [t.review.travel, t.review.attendance[attendance.status]] : null,
-    attendance?.fundingSource ? [t.review.funding, attendance.fundingSource] : null,
-    attendance?.decisionBy ? [t.review.decisionBy, attendance.decisionBy] : null,
-    attendance?.needsVisa ? [t.review.visa, t.review.visaYes] : null,
     submitted ? [t.review.submitted, formatDate(submitted, locale)] : null,
   ].filter((row): row is [string, string] => row !== null);
 
@@ -968,7 +1008,7 @@ function Committee({ cfpId, proposalId }: { cfpId: string; proposalId: string })
     try {
       setRows(await loadReviewsFor(cfpId, proposalId));
     } catch (e) {
-      setError(friendlyError(e, tRef.current));
+      setError(reviewError(e, tRef.current));
       setRows([]);
     }
   }, [cfpId, proposalId]);

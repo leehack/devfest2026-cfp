@@ -253,7 +253,7 @@ export async function saveDraft(
     {
       ...forWrite(speakerDoc),
       // Email comes from the identity provider, never the form — the rules
-      // require it to match the auth token on create and stay put on update.
+      // require it to match the current auth token on every write.
       email: user.email ?? '',
       // Which language to write to them in. Whatever they filled the form in is
       // the best evidence we have, and it beats guessing from the address.

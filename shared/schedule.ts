@@ -385,7 +385,7 @@ export function validateScheduleEntry(
   }
   if (!config.rooms.some((room) => room.id === entry.roomId)) return 'entryRoom';
   if (entry.kind === 'proposal') {
-    return typeof entry.proposalId === 'string' && entry.proposalId.length <= 160
+    return typeof entry.proposalId === 'string' && ENTRY_ID.test(entry.proposalId)
       ? null
       : 'entryId';
   }

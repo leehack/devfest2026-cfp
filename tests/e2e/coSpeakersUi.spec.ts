@@ -165,6 +165,8 @@ test.describe('co-speaker UI', () => {
     await expect(talkHeading).toBeFocused();
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
     await expect(page.getByRole('heading', { name: 'Speakers for this proposal' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Complete your speaker details' })).toBeVisible();
+    await expect(page.getByText('Finish and submit your proposal')).toHaveCount(0);
     await expect(page.getByText('You are a co-speaker on this proposal.')).toBeVisible();
     await expect(field(page, 'Title')).toBeDisabled();
     await expect(page.locator('.co-speaker-roster').getByText(GUEST.name, { exact: true })).toBeVisible();
@@ -390,6 +392,58 @@ test.describe('co-speaker UI', () => {
     await expect(page.getByRole('heading', { name: 'Confirmed' })).toBeVisible();
     await expect(lateRow.getByText('Confirmed', { exact: true })).toBeVisible();
     await expect(lateRow.getByText('Awaiting confirmation', { exact: true })).toHaveCount(0);
+  });
+
+  test('a personally confirmed speaker is told the session is waiting on the other speaker', async ({
+    page,
+  }) => {
+    const { lead } = await submittedPair();
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await callJson(admin.idToken, 'setProposalStatus', {
+      proposalId: 'ui-linked-talk',
+      status: 'accepted',
+    });
+    await callJson(lead.idToken, 'respondToDecision', {
+      proposalId: 'ui-linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+
+    await signInAs(page, LEAD);
+    await expect(page.getByRole('heading', { name: 'Wait for the other speaker' })).toBeVisible();
+    await expect(page.getByText('Wait for the working schedule')).toHaveCount(0);
+  });
+
+  test('a personally confirmed speaker is told when another speaker declined', async ({
+    page,
+  }) => {
+    const { lead, guest } = await submittedPair();
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await callJson(admin.idToken, 'setProposalStatus', {
+      proposalId: 'ui-linked-talk',
+      status: 'accepted',
+    });
+    await callJson(lead.idToken, 'respondToDecision', {
+      proposalId: 'ui-linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'ui-linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+
+    await signInAs(page, LEAD);
+    await expect(
+      page.getByRole('heading', { name: 'Organisers need to review the speaker roster' }),
+    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Wait for the other speaker' })).toHaveCount(
+      0,
+    );
+    await expect(page.getByText('Wait for the working schedule')).toHaveCount(0);
   });
 
   test('an admin can remove an unconfirmed late speaker after a released speaker declines', async ({

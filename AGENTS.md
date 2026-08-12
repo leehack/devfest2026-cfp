@@ -24,8 +24,10 @@ GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email owner@exam
 
 Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
 the platform's own settings, an administrator, and the first global owner. The seeding scripts
-take emulator env vars from their own headers. There is no CFP-owner bootstrap:
-an approved creator is written as owner in the creation transaction. Platform
+take emulator env vars from their own headers. `seed-cfp --owner` requires that
+organiser to already have a verified, enabled Auth account; it never leaves a
+pending owner grant. There is no in-app CFP-owner bootstrap: an approved creator
+is written as owner in the creation transaction. Platform
 owners are different and deliberately bootstrapped out of band; they delegate
 platform admins, and owners or admins delegate creator access.
 
@@ -33,7 +35,7 @@ platform admins, and owners or admins delegate creator access.
 
 ```
 shared/      enums, types, zod schema, email copy, pure parsers — BOTH bundles
-src/         the app: pages/ (submit, admin, review), lib/ (data access), i18n/
+src/         the app: screens/ (submit, admin, review), lib/ (data access), i18n/
 functions/   callables: submit, withdraw, event/platform roles, window,
              aggregates, sessionize, emailQueue — plus email delivery
 scripts/     dev.mjs, seed-cfp.mjs, set-platform.mjs,
@@ -102,9 +104,10 @@ profile is outside it — that document belongs to the account and never freezes
 The rules are the enforcement; `editScope` only decides what to disable.
 
 Each accepted speaker answers with `respondToDecision` — `confirmed` or
-`declined`, from `accepted` only. Roster proposals store the answer, required
-form data and image pointers under `speakerConfirmations/{uid}`; legacy
-single-speaker proposals retain the root fallback. The proposal becomes
+`declined`, from `accepted` only. Proposals that have entered roster mode store
+the answer, required form data and image pointers under
+`speakerConfirmations/{uid}`; a solo proposal that has never entered roster mode
+retains the root fallback. The proposal becomes
 `confirmed` only when every active speaker confirms. A co-speaker decline leaves
 the talk accepted and needing organiser attention; a lead decline declines it.
 An admin may invite a late co-speaker after acceptance. The pending invite changes
@@ -218,10 +221,12 @@ collection — the rule names the two readable documents one at a time.
 - **Status groupings live in `STATUS_SETS` (`shared/enums.ts`).** They had drifted
   across the form, the callables and the admin screen. `firestore.rules` restates
   them because the rules language cannot import — change one, change both.
-- **Reviewers never see a draft.** It belongs to its active speaker roster; an
-  exact pending invitee sees only a callable-projected consent summary. Committee
-  queries must carry `where('status', '!=', 'draft')` or the rules deny the
-  whole listing.
+- **Reviewers never read raw proposal documents.** They receive the active review
+  queue through a callable-owned whitelist projection, which strips legacy
+  confirmation, logistics, photo, contact and lifecycle state and filters active
+  or former speakers out of their own proposals. Drafts are outside that queue.
+  Active speakers and event admins retain the raw reads they need. An exact
+  pending invitee sees only a separate callable-projected consent summary.
 - **`speakerIds` starts as `[uid()]` and is callable-only thereafter.** A verified
   email invitation is still only pending metadata: the exact invited account must
   accept before its uid is added. The first speaker remains `primarySpeakerId`
@@ -235,18 +240,10 @@ collection — the rule names the two readable documents one at a time.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.
-- **`reviewsVisible` is a UI convention, not a boundary — do not treat it as
-  one.** It hides individual scores and notes, and the rules do enforce that. But
-  `aggregate` is a *field on the proposal*, and any reviewer may read any
-  submitted proposal, so `aggregate.avgScore` is available to them at any time.
-  Firestore rules cannot hide a single field. `src/screens/ReviewPage.tsx` honours
-  the intent — it sorts by `stdDev` only once the round is open and never renders
-  the aggregate on the card — so the gap is reachable through devtools, not
-  through the app. Accepted deliberately: reviewers are already trusted with every
-  proposal and this is a committee rather than an adversary. If it ever has to be
-  real, the field has to move to its own document (`proposals/{id}/aggregate/…`,
-  gated on `reviewsVisible || isAdmin`), which means the rules,
-  `recomputeAggregates`, the Proposals dashboard, the review sort, and a backfill.
+- **`reviewsVisible` is a boundary for reviewer aggregates.** Rules deny a plain
+  reviewer the raw proposal document, and the review-queue callable includes the
+  numeric aggregate only after the flag flips. Admins keep direct proposal access;
+  individual review documents remain independently protected for every role.
 - **A review save is a callable transaction, not a browser write.** It writes
   exactly `cfpId`, `score`, `conflictOfInterest`, optional `comment`, and
   `updatedAt`, while atomically moving the first `submitted` review to
@@ -539,6 +536,10 @@ collection — the rule names the two readable documents one at a time.
   destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
+- **Deploy cross-layer authorization changes in compatibility order:** Functions
+  first, App Hosting second, then Firestore indexes/rules and Storage rules. The
+  combined `deploy:backend` command is unsafe when new rules remove a read path
+  that the old client still uses.
 - Project `devfest-mtl-2026-cfp`; Firestore and the Cloud Functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
 - **App Hosting runs in `us-east4`, and there was no choice.** The API offers six

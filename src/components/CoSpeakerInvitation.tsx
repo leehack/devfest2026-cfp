@@ -16,7 +16,11 @@ import {
   toSubmission,
   type FormState,
 } from '../lib/formState';
-import { friendlyError } from '../lib/errors';
+import {
+  coSpeakerInvitationError,
+  friendlyError,
+  isCoSpeakerInvitationUnavailable,
+} from '../lib/errors';
 import { COC_URL } from '../lib/env';
 import {
   loadCoSpeakerInvitation,
@@ -223,9 +227,11 @@ export function CoSpeakerInvitation({
       return;
     }
     setBusy('accept');
+    let responding = false;
     try {
       await saveProfile(user, form, locale);
       const proposal = toDocuments(form).proposalDoc;
+      responding = true;
       await respondToCoSpeakerInvitation(
         cfpId,
         proposalId,
@@ -237,7 +243,12 @@ export function CoSpeakerInvitation({
       );
       onJoined();
     } catch (error) {
-      setActionError(friendlyError(error, t));
+      setActionError(
+        responding ? coSpeakerInvitationError(error, t) : friendlyError(error, t),
+      );
+      if (responding && isCoSpeakerInvitationUnavailable(error)) {
+        setAttempt((value) => value + 1);
+      }
     } finally {
       setBusy(null);
     }
@@ -252,7 +263,10 @@ export function CoSpeakerInvitation({
       focusTransition.current = true;
       setSummary((current) => (current ? { ...current, state: 'declined', canRespond: false } : current));
     } catch (error) {
-      setActionError(friendlyError(error, t));
+      setActionError(coSpeakerInvitationError(error, t));
+      if (isCoSpeakerInvitationUnavailable(error)) {
+        setAttempt((value) => value + 1);
+      }
     } finally {
       setBusy(null);
     }

@@ -3,7 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { SelectField, TextAreaField, TextField } from '../../components/fields';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
-import { emailError, isSpeakerMessageRecipientsChanged } from '../../lib/errors';
+import {
+  emailError,
+  emailHistoryError,
+  isSpeakerMessageRecipientsChanged,
+} from '../../lib/errors';
 import { useLatest } from '../../lib/useLatest';
 import {
   emailQueue,
@@ -739,56 +743,71 @@ export function Email({
               <tbody>
                 {rows
                   .filter((r) => !filter || r.status === filter)
-                  .map((row) => (
-                    <tr key={row.logId}>
-                      <td className="table__wrap" data-label={t.admin.emailTo}>
-                        {row.to}
-                      </td>
-                      <td className="table__wrap" data-label={t.admin.emailKind}>
-                        {t.admin.emailKinds[row.kind] ?? row.kind}
-                        {/* Two messages to the same speaker are otherwise the
-                            same row twice. */}
-                        {row.subject && <span className="muted"> — {row.subject}</span>}
-                      </td>
-                      <td className="table__wrap" data-label={t.admin.emailStatusColumn}>
-                        {row.stale
-                          ? t.admin.emailStaleStatus
-                          : row.recoverable
-                            ? t.admin.emailRecoverableStatus
-                          : (t.admin.emailStatus as Record<string, string>)[row.status] ?? row.status}
-                        {/* The provider's reason: the only thing on screen that
-                            says what to fix. */}
-                        {row.error && <span className="muted"> — {row.error}</span>}
-                      </td>
-                      <td data-label={t.admin.emailSentAt}>
-                        {row.attemptedAt ? formatDate(new Date(row.attemptedAt), locale) : '—'}
-                      </td>
-                      <td data-label={t.admin.emailActions}>
-                        <button
-                          type="button"
-                          className="btn btn--ghost"
-                          aria-describedby={!deliveryReady ? 'email-action-setup-reason' : undefined}
-                          disabled={
-                            busy ||
-                            readOnly ||
-                            !deliveryReady ||
-                            row.stale ||
-                            row.status === 'held' ||
-                            row.status === 'queued' ||
-                            row.status === 'sending'
-                          }
-                          onClick={() =>
-                            setReview({
-                              action: 'resend',
-                              rows: [{ ...row, to: row.currentTo }],
-                            })
-                          }
-                        >
-                          {row.status === 'sent' ? t.admin.emailResend : t.admin.emailRetryOne}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  .map((row) => {
+                    const historyError = emailHistoryError(row.error, row.errorReason, t);
+                    return (
+                      <tr key={row.logId}>
+                        <td className="table__wrap" data-label={t.admin.emailTo}>
+                          {row.to}
+                        </td>
+                        <td className="table__wrap" data-label={t.admin.emailKind}>
+                          {t.admin.emailKinds[row.kind] ?? row.kind}
+                          {/* Two messages to the same speaker are otherwise the
+                              same row twice. */}
+                          {row.subject && <span className="muted"> — {row.subject}</span>}
+                        </td>
+                        <td className="table__wrap" data-label={t.admin.emailStatusColumn}>
+                          {row.stale
+                            ? t.admin.emailStaleStatus
+                            : row.recoverable
+                              ? t.admin.emailRecoverableStatus
+                              : (t.admin.emailStatus as Record<string, string>)[row.status] ??
+                                row.status}
+                          {/* Provider diagnostics stay raw; our own reasons are
+                              translated from their stable code. */}
+                          {historyError && (
+                            <span className="muted">
+                              {' — '}
+                              {historyError}
+                            </span>
+                          )}
+                        </td>
+                        <td data-label={t.admin.emailSentAt}>
+                          {row.attemptedAt
+                            ? formatDate(new Date(row.attemptedAt), locale)
+                            : '—'}
+                        </td>
+                        <td data-label={t.admin.emailActions}>
+                          <button
+                            type="button"
+                            className="btn btn--ghost"
+                            aria-describedby={
+                              !deliveryReady ? 'email-action-setup-reason' : undefined
+                            }
+                            disabled={
+                              busy ||
+                              readOnly ||
+                              !deliveryReady ||
+                              row.stale ||
+                              row.status === 'held' ||
+                              row.status === 'queued' ||
+                              row.status === 'sending'
+                            }
+                            onClick={() =>
+                              setReview({
+                                action: 'resend',
+                                rows: [{ ...row, to: row.currentTo }],
+                              })
+                            }
+                          >
+                            {row.status === 'sent'
+                              ? t.admin.emailResend
+                              : t.admin.emailRetryOne}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>

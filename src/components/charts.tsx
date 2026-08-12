@@ -1,10 +1,11 @@
 import { useId } from 'react';
 
+import { useI18n } from '../i18n/context';
+
 /**
  * Hand-rolled SVG rather than a chart library.
  *
- * Three small charts do not justify 200kB of runtime on a page ten people open,
- * and the CSP on the deployed site blocks anything loaded from a CDN anyway.
+ * Three small charts do not justify 200kB of runtime on a page ten people open.
  * Everything here is one `<svg>` and a scale function.
  *
  * Colours come from the same CSS variables as the rest of the app, so both
@@ -46,6 +47,7 @@ export function BarChart({ data, max }: { data: Slice[]; max?: number }) {
  * hides the difference between four reviewers who agree and two who did not.
  */
 export function ScoreHistogram({ counts }: { counts: number[] }) {
+  const { t } = useI18n();
   const total = counts.reduce((sum, n) => sum + n, 0);
   if (total === 0) return EMPTY;
 
@@ -60,7 +62,7 @@ export function ScoreHistogram({ counts }: { counts: number[] }) {
       className="chart chart--histogram"
       viewBox={`0 0 ${width} ${height + 18}`}
       role="img"
-      aria-label={counts.map((n, i) => `${i + 1}: ${n}`).join(', ')}
+      aria-label={t.admin.chartScoresLabel(counts)}
     >
       {counts.map((n, i) => {
         const barHeight = (n / ceiling) * height;

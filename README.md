@@ -260,11 +260,11 @@ form and photo cannot be bypassed from the proposal table.
 
 **A draft is private to its active speaker roster.** Before accepting, an exact
 invited account sees only the talk summary needed to make an informed choice.
-Reviewers and event admins see a proposal only once it has been submitted —
-someone may have typed something into a pitch and thought better of sending it,
-and the committee has no claim on that. Committee-side queries carry
-`where('status', '!=', 'draft')`; without it the rules deny the listing outright
-rather than quietly filtering.
+Event admins see a proposal only once it has been submitted — someone may have
+typed something into a pitch and thought better of sending it, and the committee
+has no claim on that. Reviewers use a callable-projected queue containing only
+public speaker snapshots and review-relevant proposal fields; their browser
+cannot read raw proposal documents.
 
 **A roster changes only through verified invitations.** A proposal starts with
 one lead speaker. While it is still a draft, the lead may invite up to three
@@ -327,9 +327,12 @@ changes in place.
 **Selection is a callable, for the same reason submission is.** `status` is what
 every other permission keys off, so an applicant who could write it could accept
 themselves. `setProposalStatus` accepts the committee workflow states in
-`STATUS_SETS.decidable`. Undo returns to `under_review`; `submitted` remains the
-speaker-editable state before the first review. It refuses `draft` (not theirs to
-touch) and `withdrawn` (the speaker's call, which outranks the committee's).
+`STATUS_SETS.adminSettable`. Undo returns to `under_review`; `submitted` remains
+the speaker-editable state before the first review. It refuses `draft` (not
+theirs to touch) and `withdrawn` (the speaker's call, which outranks the
+committee's). Moving an `accepted`, personally `confirmed`, or `declined`
+proposal back into the committee workflow is an explicit reset: it clears
+speaker responses and is not presented as undoable.
 
 ## The deployed project
 
@@ -348,10 +351,16 @@ site is not the same thing.
 
 ```bash
 npm run verify                                  # lint, types, build, bundle gates, 3 suites
-npm run deploy:backend                          # callables and both rule sets
-npm run deploy:app                              # the app, from local source; backend must land first
+npm run deploy:functions                        # new callables first
+npm run deploy:app                              # then the app, from local source
+npm run deploy:rules                            # restrictive rules and indexes last
 npm run smoke:production                        # edge headers, public routes and Auth handler
 ```
+
+Keep that order when a release adds a callable and replaces a client-side read
+with it: the old app needs the old rules until the new app is live, while the new
+app needs the callable before it starts using it. `deploy:backend` remains a
+combined convenience command only for changes without that compatibility edge.
 
 The seven public Firebase values reach a cloud build from Secret Manager, named
 `next-public-firebase-*`, wired up in `apphosting.yaml`. Production builds also
@@ -397,7 +406,9 @@ are bearer credentials. Move it with `scripts/set-platform.mjs`.
 Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
 window and organisers are managed from `/admin`. An approved creator's
 `createCfp` flow writes the CFP and its owner in one transaction;
-`scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment.
+`scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment. If
+`--owner` is supplied, that organiser must already have a verified, enabled Auth
+account; the script refuses instead of creating a pending owner grant.
 `scripts/set-platform-admin.mjs` bootstraps global owners or administrators, and
 `scripts/set-platform.mjs` sets the platform-wide public origin.
 

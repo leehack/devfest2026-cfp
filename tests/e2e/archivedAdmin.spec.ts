@@ -51,6 +51,11 @@ test('an archived admin workspace keeps records readable without offering writes
   await expect(page.getByRole('button', { name: 'Bring it back' })).toBeEnabled();
   await expect(page.getByRole('textbox', { name: /^Type devfest-mtl-2026/ })).toBeEnabled();
 
+  await open(page, 'overview');
+  await expect(
+    page.locator('.setup-step', { hasText: 'Confirm the submission window' }),
+  ).toHaveClass(/setup-step--done/);
+
   await open(page, 'committee');
   const pastAdmin = page.locator('.people__row', { hasText: 'past-admin@example.org' });
   await expect(pastAdmin.getByRole('combobox')).toBeDisabled();

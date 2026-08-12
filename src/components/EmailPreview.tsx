@@ -16,6 +16,7 @@ import { SelectField, TextField, TextAreaField, Checkbox } from './fields';
 import { useI18n } from '../i18n/context';
 import { emailError } from '../lib/errors';
 import { sendTestEmail, setEmailTemplate } from '../lib/roles';
+import { useLatest } from '../lib/useLatest';
 import {
   EMAIL_KINDS,
   DECISION_KINDS,
@@ -70,6 +71,7 @@ export function EmailPreview({
   const localeTouched = useRef(false);
   const dirty =
     !readOnly && (draft.subject !== baseline.subject || draft.body !== baseline.body);
+  const dirtyRef = useLatest(dirty);
 
   // A refresh of the queue may carry a new object containing the same templates.
   // It updates a clean editor, but never writes over a sentence in progress.
@@ -91,10 +93,11 @@ export function EmailPreview({
   }, [selection, templates]);
 
   // The app locale settles after mount. Follow it until the organiser makes an
-  // explicit preview-language choice, then preserve that choice.
+  // explicit preview-language choice, then preserve that choice. A header
+  // language switch must not become an unguarded template selection change.
   useEffect(() => {
-    if (!localeTouched.current) setPreviewLocale(locale);
-  }, [locale]);
+    if (!localeTouched.current && !dirtyRef.current) setPreviewLocale(locale);
+  }, [dirtyRef, locale]);
 
   useEffect(() => {
     onDirtyChange?.(dirty);

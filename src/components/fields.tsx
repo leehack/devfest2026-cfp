@@ -23,6 +23,9 @@ function FieldError({ id, message }: { id?: string; message?: string }) {
   );
 }
 
+const describedBy = (...ids: Array<string | undefined>) =>
+  ids.filter(Boolean).join(' ') || undefined;
+
 interface ShellProps extends CommonProps {
   htmlFor?: string;
   children: ReactNode;
@@ -121,7 +124,7 @@ export function TextField({
         min={min}
         aria-invalid={Boolean(error)}
         aria-required={required}
-        aria-describedby={helpId}
+        aria-describedby={describedBy(helpId, errorId)}
         aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -161,7 +164,7 @@ export function TextAreaField({
     meta = t.form.charsRemaining(maxLength - value.length);
   }
   const metaId = meta ? `${id}-meta` : undefined;
-  const describedBy = [helpId, metaId].filter(Boolean).join(' ') || undefined;
+  const descriptionIds = describedBy(helpId, metaId, errorId);
 
   return (
     <Shell
@@ -185,7 +188,7 @@ export function TextAreaField({
         disabled={disabled}
         aria-invalid={Boolean(error)}
         aria-required={required}
-        aria-describedby={describedBy}
+        aria-describedby={descriptionIds}
         aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -240,7 +243,7 @@ export function SelectField<T extends string>({
         disabled={disabled}
         aria-invalid={Boolean(error)}
         aria-required={required}
-        aria-describedby={helpId}
+        aria-describedby={describedBy(helpId, errorId)}
         aria-errormessage={errorId}
         onChange={(e) => onChange(e.target.value as T)}
       >
@@ -277,7 +280,7 @@ export function RadioGroup<T extends string>({
       className={`field fieldset${error ? ' field--error' : ''}`}
       aria-invalid={Boolean(error)}
       aria-required={required}
-      aria-describedby={helpId}
+      aria-describedby={describedBy(helpId, errorId)}
       aria-errormessage={errorId}
     >
       <legend className="field__label">
@@ -300,7 +303,7 @@ export function RadioGroup<T extends string>({
               disabled={disabled}
               aria-invalid={Boolean(error)}
               aria-required={required}
-              aria-describedby={helpId}
+              aria-describedby={describedBy(helpId, errorId)}
               aria-errormessage={errorId}
               onChange={() => onChange(o.value)}
             />
@@ -316,13 +319,13 @@ export function RadioGroup<T extends string>({
   );
 }
 
-interface CheckboxProps extends Omit<CommonProps, 'label' | 'required'> {
+interface CheckboxProps extends Omit<CommonProps, 'label'> {
   label: ReactNode;
   checked: boolean;
   onChange: (v: boolean) => void;
 }
 
-export function Checkbox({ label, checked, onChange, help, error, disabled }: CheckboxProps) {
+export function Checkbox({ label, checked, onChange, help, error, required, disabled }: CheckboxProps) {
   const id = useId();
   const helpId = help ? `${id}-help` : undefined;
   const errorId = error ? `${id}-error` : undefined;
@@ -335,11 +338,15 @@ export function Checkbox({ label, checked, onChange, help, error, disabled }: Ch
           checked={checked}
           disabled={disabled}
           aria-invalid={Boolean(error)}
-          aria-describedby={helpId}
+          aria-required={required}
+          aria-describedby={describedBy(helpId, errorId)}
           aria-errormessage={errorId}
           onChange={(e) => onChange(e.target.checked)}
         />
-        <span>{label}</span>
+        <span>
+          {label}
+          {required !== undefined && <Requirement required={required} />}
+        </span>
       </label>
       {help && (
         <p className="field__help" id={helpId}>

@@ -16,6 +16,7 @@ import {
 import { BarChart, ScoreHistogram, StackedBar } from '../../components/charts';
 import {
   PROPOSAL_STATUSES,
+  STATUS_SETS,
   inStatusSet,
   type ProposalStatus,
 } from '@shared/enums';
@@ -47,9 +48,13 @@ import {
   proposalHasProfileUpdateAttention,
   type ProfileUpdateRequestAttention,
 } from '../../lib/profileUpdateRequestSummary';
+import {
+  invalidateProposalUndoHistory,
+  type UndoDecision,
+} from './proposalDecisionUndo';
 
 const HIGH_DISAGREEMENT = 1;
-const ADMIN_PROPOSAL_STATUSES = ['under_review', 'accepted', 'waitlisted', 'rejected'] as const;
+const ADMIN_PROPOSAL_STATUSES = STATUS_SETS.adminSettable;
 
 /**
  * One headshot, fetched only when an organiser asks for it.
@@ -586,16 +591,6 @@ function ProfileUpdateQueue({
   );
 }
 
-interface UndoDecision {
-  action: number;
-  proposalId: string;
-  title: string;
-  from: ProposalStatus;
-  /** A decision returns to committee review, never to the editable submitted state. */
-  previous: ProposalStatus;
-  next: ProposalStatus;
-}
-
 function ReviewCoverage({
   coverage,
   loading,
@@ -915,6 +910,20 @@ export function Proposals({
     if (readOnly) return;
     const previous = row.status;
     if (previous === next || pending.has(row.id)) return;
+    const clearsSpeakerResponses =
+      previous === 'accepted' || inStatusSet('speakerResponse', previous);
+    if (
+      clearsSpeakerResponses &&
+      !window.confirm(
+        t.admin.decisionResetConfirm(
+          row.title || t.admin.untitled,
+          t.enums.status[previous],
+          t.enums.status[next],
+        ),
+      )
+    ) {
+      return;
+    }
     const scope = cfpId;
     const action = ++decisionSequence.current;
 
@@ -934,15 +943,23 @@ export function Proposals({
     try {
       await setProposalStatus({ cfpId, proposalId: row.id, status: next });
       if (activeCfp.current !== scope) return;
-      const decision = {
+      const undoTarget =
+        previous === 'submitted'
+          ? ('under_review' as const)
+          : !clearsSpeakerResponses && inStatusSet('adminSettable', previous)
+            ? previous
+            : null;
+      const decision: UndoDecision | null = undoTarget ? {
         action,
         proposalId: row.id,
         title: row.title || t.admin.untitled,
         from: previous,
-        previous: previous === 'submitted' ? 'under_review' as const : previous,
+        previous: undoTarget,
         next,
-      };
-      if (!(previous === 'submitted' && next === 'under_review')) {
+      } : null;
+      if (clearsSpeakerResponses) {
+        setUndo(invalidateProposalUndoHistory(committedDecisions.current, row.id));
+      } else if (decision && !(previous === 'submitted' && next === 'under_review')) {
         committedDecisions.current.set(action, decision);
         const latest = Math.max(...committedDecisions.current.keys());
         setUndo(committedDecisions.current.get(latest) ?? null);

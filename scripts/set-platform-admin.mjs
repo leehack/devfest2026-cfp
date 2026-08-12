@@ -104,20 +104,19 @@ if (remove) {
       const matchingIds = new Set(matchingMembers.map((doc) => doc.id));
       const otherActive = members.docs.filter((doc) => !matchingIds.has(doc.id));
       const removesPending = pending.docs.some((doc) => doc.id === email);
-      const touchesRole = matchingMembers.length > 0 || removesPending;
       const otherUsable = otherActive.filter((doc) => usableUids.has(doc.id));
       const usableOwners = owners.docs.filter((doc) => usableUids.has(doc.id));
 
       if (
         role === 'owner' &&
-        touchesRole &&
+        matchingMembers.length > 0 &&
         otherUsable.length === 0
       ) {
         throw new Error('LAST_PLATFORM_OWNER');
       }
       if (
         role === 'admin' &&
-        touchesRole &&
+        matchingMembers.length > 0 &&
         usableOwners.length === 0 &&
         otherUsable.length === 0
       ) {

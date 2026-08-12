@@ -15,3 +15,12 @@ export function useFreshHostingOrigin(
   url.hostname = `${projectId}.web.app`;
   return url.toString();
 }
+
+/** The Auth emulator exposes its out-of-band links; production needs a real sender. */
+export function signInEmailDeliveryReady(
+  apiKey: string,
+  sender: string | undefined,
+  emulator: boolean,
+): boolean {
+  return emulator || Boolean(apiKey.trim() && sender?.trim());
+}

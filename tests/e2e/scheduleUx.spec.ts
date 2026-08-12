@@ -407,6 +407,12 @@ async function openLaterSessionFromDeepInTheAgenda(page: Page): Promise<AgendaPo
   await link.click();
   await expect(page).toHaveURL(at('/schedule/second-session'));
   await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  const main = page.locator('#main-content');
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Later session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
   return position;
 }
 
@@ -697,6 +703,31 @@ test('a directly opened session falls back to a normal programme link', async ({
   await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
 });
 
+test('in-app session navigation focuses a landmark named for each session', async ({ page }) => {
+  await seedPublicAgenda();
+  await page.goto(at('/schedule'));
+  await waitForAppHydration(page);
+
+  await page.getByRole('link', { name: 'Opening session', exact: true }).click();
+  const main = page.locator('#main-content');
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Opening session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
+
+  await page.evaluate((path) => {
+    window.history.pushState(null, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, at('/schedule/second-session'));
+  await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Later session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
+});
+
 test('custom programme item speakers are optional, repeatable, removable, and public in order', async ({
   page,
 }) => {
@@ -834,6 +865,16 @@ test('an admin uploads, reopens, and removes a custom programme speaker photo', 
   await expect(
     speaker.getByText('Choose a photo at least 800 pixels on both sides.'),
   ).toBeVisible();
+  const photoError = speaker.getByText('Choose a photo at least 800 pixels on both sides.');
+  const photoErrorId = await photoError.getAttribute('id');
+  expect(photoErrorId).toBeTruthy();
+  await expect(input).toHaveAttribute('tabindex', '-1');
+  await expect(input).toHaveAttribute('aria-describedby', photoErrorId!);
+  await expect(input).toHaveAttribute('aria-errormessage', photoErrorId!);
+  await expect(speaker.getByRole('button', { name: 'Choose photo' })).toHaveAttribute(
+    'aria-describedby',
+    photoErrorId!,
+  );
 
   let releaseUpload = () => {};
   let markUploadStarted = () => {};
@@ -1408,7 +1449,7 @@ test('sharing and publishing have separate review steps and stale-version guidan
   const offline = page.getByRole('alertdialog', {
     name: 'Take the public programme offline?',
   });
-  await expect(offline).toContainText('The private draft, shared preview, and release history stay intact.');
+  await expect(offline).toContainText('The private draft, shared preview, and version history stay intact.');
   await offline.getByRole('button', { name: 'Cancel' }).first().click();
   await expect(offline).toHaveCount(0);
 });

@@ -49,6 +49,21 @@ describe('schedule validation', () => {
     expect(validateScheduleEntry(entry('talk-one', 'blue', '09:00'), config)).toBeNull();
   });
 
+  it('rejects proposal ids that cannot be one Firestore document segment', () => {
+    expect(validateScheduleEntry(entry('talk-one', 'blue', '09:00', ''), config)).toBe(
+      'entryId',
+    );
+    expect(
+      validateScheduleEntry(
+        entry('talk-one', 'blue', '09:00', 'talk/speakerConfirmations/person'),
+        config,
+      ),
+    ).toBe('entryId');
+    expect(
+      validateScheduleEntry(entry('talk-one', 'blue', '09:00', '__reserved'), config),
+    ).toBe('entryId');
+  });
+
   it('rejects invalid windows and entries outside the day', () => {
     expect(validateScheduleConfig({ ...config, timeZone: 'Montreal-ish' })).toBe('timeZone');
     expect(

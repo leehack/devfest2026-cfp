@@ -231,7 +231,7 @@ export async function setReviewsVisible(visible: boolean, cfpId = CFP_ID) {
  */
 export async function inviteRole(
   email: string,
-  role: 'reviewer' | 'admin' | 'owner',
+  role: 'reviewer' | 'admin',
   cfpId = CFP_ID,
 ) {
   await patch(`cfps/${cfpId}/roleGrants/${email}`, {
@@ -417,6 +417,26 @@ export async function callAs(
   });
   const body = await response.json().catch(() => ({}));
   return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
+}
+
+/** A direct callable failure including its stable, client-visible details payload. */
+export async function callWithErrorDetails(
+  idToken: string,
+  name: string,
+  data: unknown,
+): Promise<{ ok: boolean; code: string; details?: Record<string, unknown> }> {
+  const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ data: withCfp(data) }),
+  });
+  const body = await response.json().catch(() => ({}));
+  const details = body?.error?.details;
+  return {
+    ok: response.ok,
+    code: body?.error?.status ?? String(response.status),
+    ...(details && typeof details === 'object' ? { details } : {}),
+  };
 }
 
 /**
@@ -852,6 +872,8 @@ export async function seedEmailLog(
     reviewedTo,
     subject,
     body,
+    error,
+    errorReason,
     attemptedAt,
     sentAt,
     createdAt,
@@ -868,6 +890,8 @@ export async function seedEmailLog(
     reviewedTo?: string;
     subject?: string;
     body?: string;
+    error?: string;
+    errorReason?: string;
     attemptedAt?: Date;
     sentAt?: Date;
     createdAt?: Date;
@@ -883,6 +907,8 @@ export async function seedEmailLog(
     ...(recipientUid ? { recipientUid: { stringValue: recipientUid } } : {}),
     ...(subject ? { subject: { stringValue: subject } } : {}),
     ...(body ? { body: { stringValue: body } } : {}),
+    ...(error ? { error: { stringValue: error } } : {}),
+    ...(errorReason ? { errorReason: { stringValue: errorReason } } : {}),
     locale: { stringValue: 'en' },
     attempts: { integerValue: String(attempts) },
     ...(attemptedAt ? { attemptedAt: { timestampValue: attemptedAt.toISOString() } } : {}),

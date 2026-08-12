@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.test.json && tsc -p functions/tsconfig.json --noEmit",
     "emulators": "npx firebase emulators:start --only auth,firestore,functions,storage --project demo-devfest-cfp",
     "deploy:app": "npx firebase deploy --only apphosting --project devfest-mtl-2026-cfp",
+    "deploy:functions": "npx firebase deploy --only functions --project devfest-mtl-2026-cfp",
     "deploy:backend": "npx firebase deploy --only functions,firestore,storage --project devfest-mtl-2026-cfp",
     "deploy:rules": "npx firebase deploy --only firestore:rules,firestore:indexes,storage --project devfest-mtl-2026-cfp",
     "test": "vitest run --project unit",

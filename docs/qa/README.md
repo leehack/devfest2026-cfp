@@ -16,6 +16,9 @@ does not describe one seed run.
   23-flow automation and screenshot evidence selection for release smoke runs.
 - [`voiceover-baseline.md`](voiceover-baseline.md) records the native Safari and
   VoiceOver announcements that browser automation cannot substitute for.
+- [`inspection-2026-08-11.md`](inspection-2026-08-11.md) preserves the dated
+  code/UX findings, resolution ledger, follow-up findings, and exact-tree
+  verification evidence for the QA follow-up.
 
 Use it when planning a broad regression pass, adding a feature that crosses
 roles, or preparing a screenshot-backed release report. Start with the run

@@ -50,6 +50,30 @@ describe('schedule calendar export', () => {
     expect(ics).toContain('SUMMARY:Shipping\\; safely');
     expect(ics).toContain('LOCATION:Blue\\, Room');
     expect(ics).toContain('DESCRIPTION:Line one\\nLine two');
+    expect(ics).toContain('BEGIN:VTIMEZONE');
+    expect(ics).toContain('TZID:America/Toronto');
+    expect(ics).toContain('BEGIN:DAYLIGHT');
+    expect(ics).toContain('TZOFFSETFROM:-0500');
+    expect(ics).toContain('TZOFFSETTO:-0400');
+    expect(ics.indexOf('END:VTIMEZONE')).toBeLessThan(ics.indexOf('BEGIN:VEVENT'));
+  });
+
+  it('defines a fixed-offset event zone without inventing daylight changes', () => {
+    const fixed = scheduleIcs(
+      'event',
+      'Event',
+      { ...schedule, timeZone: 'Asia/Kolkata' },
+      [entry],
+      'en',
+      'https://x',
+    );
+
+    expect(fixed).toContain('BEGIN:VTIMEZONE');
+    expect(fixed).toContain('TZID:Asia/Kolkata');
+    expect(fixed).toContain('BEGIN:STANDARD');
+    expect(fixed).toContain('TZOFFSETFROM:+0530');
+    expect(fixed).toContain('TZOFFSETTO:+0530');
+    expect(fixed).not.toContain('BEGIN:DAYLIGHT');
   });
 
   it('marks a cancelled published session', () => {

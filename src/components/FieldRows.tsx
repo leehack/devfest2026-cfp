@@ -23,12 +23,18 @@ import { FIELD_TYPES, FORM_LIMITS, type ConfirmField, type FieldType } from '@sh
 const toLines = (field: ConfirmField) =>
   (field.options ?? []).map((option) => option.value).join('\n');
 
-const fromLines = (text: string) =>
+export const optionsFromLines = (text: string) =>
   text
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
     .map((value) => ({ value, label: { en: value } }));
+
+export const normaliseOptionLines = (options: ConfirmField['options']) =>
+  (options ?? [])
+    .map((option) => {
+      const value = option.value.trim();
+      return { value, label: { ...option.label, en: value } };
+    })
+    .filter((option) => option.value.length > 0);
 
 export interface FieldRowsProps {
   fields: ConfirmField[];
@@ -266,7 +272,7 @@ export function FieldRows({
               required
               help={t.admin.formOptionsHelp}
               value={toLines(field)}
-              onChange={(text) => patch(index, { options: fromLines(text) })}
+              onChange={(text) => patch(index, { options: optionsFromLines(text) })}
               rows={4}
               disabled={busy}
             />

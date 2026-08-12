@@ -126,6 +126,7 @@ export function SchedulePage({
   accessReady,
   entryId,
   initialBundle,
+  onPageLabelChange,
 }: {
   cfpId: string;
   cfpName: string;
@@ -135,6 +136,7 @@ export function SchedulePage({
   accessReady: boolean;
   entryId: string | null;
   initialBundle?: PublishedScheduleBundle | null;
+  onPageLabelChange?: (entryId: string, label: string) => void;
 }) {
   const { t, locale } = useI18n();
   const previewReleaseId =
@@ -371,12 +373,14 @@ export function SchedulePage({
   }, [bundle, cfpId, entryId, filterStorageKey, loaded, restoredFilterKey, settledReleaseId, visibleReleaseId]);
 
   useEffect(() => {
-    if (!entryId) return;
+    if (!entryId || !loaded) return;
     const entry = bundle?.entries.find((candidate) => candidate.id === entryId);
-    document.title = entry
+    const label = entry
       ? sessionDocumentTitle(publicEntryTitle(entry, locale), cfpName)
       : `${t.schedule.title} — ${cfpName}`;
-  }, [bundle, cfpName, entryId, locale, t.schedule.title]);
+    document.title = label;
+    onPageLabelChange?.(entryId, label);
+  }, [bundle, cfpName, entryId, loaded, locale, onPageLabelChange, t.schedule.title]);
 
   if (!accessReady || !loaded) return <p className="muted">{t.app.loading}</p>;
   if (failed) {
@@ -401,7 +405,7 @@ export function SchedulePage({
         preview={preview}
       />
     ) : (
-      <section className="schedule-empty"><p>{t.errors.notFound}</p><Link className="btn" to={href({ route: 'schedule', cfpId })}>{t.schedule.back}</Link></section>
+      <section className="schedule-empty"><p>{t.schedule.sessionNotFound}</p><Link className="btn" to={href({ route: 'schedule', cfpId })}>{t.schedule.back}</Link></section>
     );
   }
   return (

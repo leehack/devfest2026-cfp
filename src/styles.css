@@ -385,7 +385,7 @@
 .schedule-resize-inspector__summary { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s-2); align-items: baseline; }
 .schedule-resize-inspector__summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .schedule-resize-inspector__summary time { color: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.schedule-resize-inspector__value { flex: none; padding: .2rem .5rem; border-radius: var(--r-full); background: var(--g-blue); color: white; font-size: var(--text-xs); font-variant-numeric: tabular-nums; font-weight: 800; white-space: nowrap; }
+.schedule-resize-inspector__value { flex: none; padding: .2rem .5rem; border-radius: var(--r-full); background: var(--accent); color: var(--accent-fg); font-size: var(--text-xs); font-variant-numeric: tabular-nums; font-weight: 800; white-space: nowrap; }
 .schedule-resize-inspector__control small { color: var(--muted); font-size: .68rem; line-height: 1.25; }
 .schedule-resize-inspector__action .btn { width: 100%; min-height: 2.75rem; justify-content: center; }
 .schedule-resize-inspector__facts { grid-column: 1 / -1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-2); margin: 0; padding: 0; }
@@ -3634,7 +3634,7 @@ button.deck-queue__item:hover {
 
 .email-attention-card--active .email-attention-card__count {
   border-color: color-mix(in srgb, var(--g-red) 55%, var(--line));
-  color: var(--g-red);
+  color: var(--error);
 }
 
 .table__scroll--focusable:focus-visible {
@@ -5945,13 +5945,13 @@ body:has(.consent) .editorbar {
 }
 
 .pending-email-notice--attention .pending-email-notice__eyebrow {
-  color: var(--g-red);
+  color: var(--error);
 }
 
 .subnav__badge--attention {
   border-color: color-mix(in srgb, var(--g-red) 55%, var(--line));
   background: color-mix(in srgb, var(--g-red) 16%, var(--surface));
-  color: var(--g-red);
+  color: var(--error);
 }
 
 .pending-email-notice__count,

@@ -21,7 +21,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions';
 
-import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES } from '../../shared/enums';
+import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES, STATUS_SETS } from '../../shared/enums';
 import { speakerSchema, submissionSchema } from '../../shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -124,6 +124,7 @@ import {
   findMigratedSpeakerUploadedHeadshots,
   findSpeakerUploadedHeadshots,
   findUploadedHeadshots,
+  freezeHeadshot,
   freezeLegacyHeadshotAnswer,
   freezeLegacyHeadshots,
   freezeSpeakerUploadedHeadshots,
@@ -188,7 +189,8 @@ import {
   ResendError,
   verifyDomain,
 } from './domains';
-import { useFreshHostingOrigin } from './authLinks';
+import { signInEmailDeliveryReady, useFreshHostingOrigin } from './authLinks';
+import { reviewerProposalProjection } from './reviewerProjection';
 export {
   getCoSpeakerInvitation,
   getProposalRoster,
@@ -506,7 +508,7 @@ async function requireScheduleAdmin(
   return uid;
 }
 
-/** Archiving, deleting and changing who owns a CFP are the owner's alone. */
+/** Archive and deletion are reserved to the event owner. */
 async function requireOwner(
   request: { auth?: { uid: string } },
   cfpId: string,
@@ -521,7 +523,13 @@ async function requireOwner(
 
 /** RoleError carries the code the caller should see; anything else is ours. */
 function asHttpsError(error: unknown): HttpsError {
-  if (error instanceof RoleError) return new HttpsError(error.code, error.message);
+  if (error instanceof RoleError) {
+    return new HttpsError(
+      error.code,
+      error.message,
+      error.reason ? { reason: error.reason } : undefined,
+    );
+  }
   logger.error('unexpected role failure', { error: String(error) });
   return new HttpsError('internal', 'Could not complete that change.');
 }
@@ -1398,6 +1406,7 @@ async function advanceEmailQueue(
           sentAt: FieldValue.delete(),
           providerId: FieldValue.delete(),
           error: FieldValue.delete(),
+          errorReason: FieldValue.delete(),
         });
         advanced += 1;
       }
@@ -1720,6 +1729,7 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
         overLimit === 0
           ? `You have already submitted ${LIMITS.maxTalksPerSpeaker} talks.`
           : `A co-speaker has already submitted ${LIMITS.maxTalksPerSpeaker} talks.`,
+        { reason: 'speaker_talk_cap_reached' },
       );
     }
 
@@ -2869,26 +2879,141 @@ export const headshotImage = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) 
     // dedicated frozen pointer, let the legacy answer branch below handle it.
   }
   if (perSpeakerLifecycle) {
-    const confirmation = await speakerConfirmationRef(
+    const confirmationRef = speakerConfirmationRef(
       db,
       cfpId,
       proposalId,
       targetUid,
-    ).get();
+    );
+    const confirmation = await confirmationRef.get();
     const answers = confirmation.get('answers');
     const path =
       answers && typeof answers === 'object' && !Array.isArray(answers)
         ? (answers as Record<string, unknown>)[key]
         : undefined;
-    if (typeof path === 'string' && isSpeakerConfirmedHeadshotPath(path, cfpId, proposalId, targetUid, key)) {
+    if (
+      typeof path === 'string' &&
+      isSpeakerConfirmedHeadshotPath(path, cfpId, proposalId, targetUid, key)
+    ) {
       const image = await readHeadshotBytes(path);
       return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
     }
-    if (confirmation.get('migratedFromLegacy') !== true || targetUid !== primarySpeakerId(proposalData)) {
+    const exactMigratedConfirmation =
+      confirmation.exists &&
+      confirmation.get('cfpId') === cfpId &&
+      confirmation.get('proposalId') === proposalId &&
+      confirmation.get('uid') === targetUid &&
+      confirmation.get('migratedFromLegacy') === true &&
+      targetUid === primarySpeakerId(proposalData);
+    if (!exactMigratedConfirmation || typeof path !== 'string') {
       throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
     }
-    // The legacy root remains authoritative until the primary speaker next
-    // confirms, including its existing one-time live-path upgrade below.
+    if (isConfirmedHeadshotPath(path, cfpId, proposalId, key)) {
+      const image = await readHeadshotBytes(path);
+      return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
+    }
+
+    const livePath = headshotPath(cfpId, targetUid, key);
+    if (path !== livePath) {
+      throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+    }
+    const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
+    const leaseId = await acquireCfpMutation(
+      cfpId,
+      'legacy-headshot-read',
+      async (tx) => assertMutationActor(await tx.get(memberRef), 'admin'),
+      { allowArchived: true },
+    );
+    let imagePath = path;
+    try {
+      const currentConfirmation = await confirmationRef.get();
+      const currentAnswers = currentConfirmation.get('answers');
+      const currentPath =
+        currentAnswers && typeof currentAnswers === 'object' && !Array.isArray(currentAnswers)
+          ? (currentAnswers as Record<string, unknown>)[key]
+          : undefined;
+      let frozenPath: string | undefined;
+      if (
+        typeof currentPath === 'string' &&
+        isConfirmedHeadshotPath(currentPath, cfpId, proposalId, key)
+      ) {
+        imagePath = currentPath;
+      } else if (currentPath === livePath) {
+        const upload = await readStoredHeadshot(getStorage().bucket(), livePath);
+        if (!upload) {
+          throw new HttpsError(
+            'failed-precondition',
+            'A confirmed photo is missing. Restore it before viewing this answer.',
+          );
+        }
+        frozenPath = await freezeHeadshot(
+          getStorage().bucket(),
+          cfpId,
+          proposalId,
+          key,
+          upload,
+        );
+      } else {
+        throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+      }
+
+      await finishCfpMutation(
+        cfpId,
+        leaseId,
+        async (tx) => {
+          const [member, currentProposal, currentConfirmation] = await tx.getAll(
+            memberRef,
+            proposalRef,
+            confirmationRef,
+          );
+          assertMutationActor(member, 'admin');
+          if (
+            !currentProposal.exists ||
+            !currentConfirmation.exists ||
+            primarySpeakerId(currentProposal.data()!) !== targetUid ||
+            !proposalSpeakerIds(currentProposal.data()!).includes(targetUid) ||
+            currentConfirmation.get('cfpId') !== cfpId ||
+            currentConfirmation.get('proposalId') !== proposalId ||
+            currentConfirmation.get('uid') !== targetUid ||
+            currentConfirmation.get('migratedFromLegacy') !== true
+          ) {
+            throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+          }
+          const latestAnswers = currentConfirmation.get('answers');
+          const latestPath =
+            latestAnswers && typeof latestAnswers === 'object' && !Array.isArray(latestAnswers)
+              ? (latestAnswers as Record<string, unknown>)[key]
+              : undefined;
+          if (
+            typeof latestPath === 'string' &&
+            isConfirmedHeadshotPath(latestPath, cfpId, proposalId, key)
+          ) {
+            imagePath = latestPath;
+            return;
+          }
+          if (latestPath !== livePath || !frozenPath) {
+            throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+          }
+          imagePath = frozenPath;
+          tx.update(confirmationRef, {
+            answers: {
+              ...(latestAnswers as Record<string, unknown>),
+              [key]: frozenPath,
+            },
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        },
+        { allowArchived: true },
+      );
+      if (!isConfirmedHeadshotPath(imagePath, cfpId, proposalId, key)) {
+        throw new HttpsError('not-found', 'No confirmed headshot for that proposal.');
+      }
+    } catch (error) {
+      await releaseCfpMutationQuietly(cfpId, leaseId);
+      throw error;
+    }
+    const image = await readHeadshotBytes(imagePath);
+    return { ok: true, dataUrl: `data:${image.contentType};base64,${image.base64}` };
   }
 
   const answers = proposal.get('confirmAnswers');
@@ -3081,7 +3206,7 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
   return { ok: true, form };
 });
 
-const REVIEW_QUEUE_STATUSES = ['submitted', 'under_review'] as const;
+const REVIEW_QUEUE_STATUSES = STATUS_SETS.reviewQueue;
 const AGGREGATE_REVISION_FIELD = '_aggregateRevision';
 const AGGREGATE_CHUNK = 400;
 
@@ -3093,6 +3218,50 @@ const aggregateScorable = (status: unknown): boolean =>
   (PROPOSAL_STATUSES as readonly string[]).includes(status) &&
   status !== 'draft' &&
   status !== 'withdrawn';
+
+export const reviewQueue = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const reviewerUid = requireVerifiedUid(request, 'load the review queue');
+  const [cfp, member, submissionForm] = await db.getAll(
+    db.doc(`cfps/${cfpId}`),
+    db.doc(`cfps/${cfpId}/members/${reviewerUid}`),
+    db.doc(`cfps/${cfpId}/config/submissionForm`),
+  );
+  if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
+  if (!staffMemberIsActive(member.data(), cfpId, reviewerUid)) {
+    throw new HttpsError('permission-denied', 'Only an active reviewer can load this queue.');
+  }
+  const submissionFields = normaliseSubmissionForm(
+    mergeSubmissionForm(submissionForm.exists ? submissionForm.data() : undefined),
+  ).fields;
+
+  const snapshots = await db
+    .collection(`cfps/${cfpId}/proposals`)
+    .where('status', 'in', [...REVIEW_QUEUE_STATUSES])
+    .get();
+  const own = snapshots.docs.filter((proposal) => {
+    const data = proposal.data();
+    return [
+      ...(Array.isArray(data.speakerIds) ? data.speakerIds : []),
+      ...(Array.isArray(data.formerSpeakerIds) ? data.formerSpeakerIds : []),
+    ].includes(reviewerUid);
+  });
+  const conflictedIds = new Set(own.map((proposal) => proposal.id));
+  return {
+    ok: true,
+    own: own.length,
+    proposals: snapshots.docs
+      .filter((proposal) => !conflictedIds.has(proposal.id))
+      .map((proposal) =>
+        reviewerProposalProjection(
+          proposal.id,
+          proposal.data(),
+          cfp.get('reviewsVisible') === true,
+          submissionFields,
+        ),
+      ),
+  };
+});
 
 export const saveReview = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -4175,12 +4344,7 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
  * Undo returns to `under_review`. `submitted` is the speaker-editable state
  * before the first review and is never a committee target.
  */
-const ADMIN_PROPOSAL_STATUSES = [
-  'under_review',
-  'accepted',
-  'waitlisted',
-  'rejected',
-] as const;
+const ADMIN_PROPOSAL_STATUSES = STATUS_SETS.adminSettable;
 
 export const setProposalStatus = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -4382,7 +4546,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
    */
   if (action === 'resend') {
     const logId = String(data.logId ?? '');
-    if (!logId) throw new HttpsError('invalid-argument', 'logId is required.');
+    if (!logId || logId.includes('/')) {
+      throw new HttpsError('invalid-argument', 'A valid logId is required.');
+    }
     const reviewedTo = data.reviewedTo;
     if (
       typeof reviewedTo !== 'string' ||
@@ -4620,6 +4786,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
         sentAt: FieldValue.delete(),
         providerId: FieldValue.delete(),
         error: FieldValue.delete(),
+        errorReason: FieldValue.delete(),
       });
       return current;
     });
@@ -4678,7 +4845,6 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     recipients: currentState.recipients,
   };
   const staleIds = new Set(pendingState.stale.map((doc) => doc.id));
-  const historyStaleIds = new Set(currentState.stale.map((doc) => doc.id));
   const recoverableSendingIds = new Set(
     expiredSending.filter((doc) => !staleIds.has(doc.id)).map((doc) => doc.id),
   );
@@ -4715,13 +4881,14 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
         // Timestamp does not survive the callable's JSON.
         attemptedAt: attemptedAt || null,
         sentAt: status === 'sent' ? sentAt || null : null,
-        // The provider's reason, not ours — shown as-is to an admin, who is the
-        // one person who can act on "domain is not verified".
+        // Provider diagnostics stay raw; application-authored reasons carry a
+        // stable code so the client can translate them.
         error: (d.get('error') as string) ?? '',
+        errorReason: (d.get('errorReason') as string) ?? '',
         recoverable: recoverableSendingIds.has(d.id),
         // The database row remains held so restoring the decision can release it.
         // This flag lets the log describe its effective state truthfully.
-        stale: historyStaleIds.has(d.id),
+        stale: staleIds.has(d.id),
         sortAt:
           attemptedAt ||
           at(d, 'sendingStartedAt') ||
@@ -4986,6 +5153,14 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   ) {
     throw new HttpsError('not-found', 'That speaker invitation is no longer active.');
   }
+  const emulatedDelivery = process.env.FUNCTIONS_EMULATOR === 'true';
+  if (!signInEmailDeliveryReady(apiKey, settings.from, emulatedDelivery)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Sign-in email delivery is not configured.',
+      { reason: 'sign_in_email_not_configured' },
+    );
+  }
   const event = (cfpSnap?.get('name') as string) || platform.name;
 
   const generatedLink = await getAuth().generateSignInWithEmailLink(email, {
@@ -5011,7 +5186,7 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   const link = useFreshHostingOrigin(
     generatedLink,
     process.env.GCLOUD_PROJECT,
-    Boolean(process.env.FUNCTIONS_EMULATOR),
+    emulatedDelivery,
   );
 
   // Configuration failures above must not spend somebody's request allowance.
@@ -5029,6 +5204,13 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   // Firestore has.
   logger.info('sign-in link sent', { status: outcome.status, error: outcome.error });
 
+  if (outcome.status === 'dry_run' && !emulatedDelivery) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Sign-in email delivery is not configured.',
+      { reason: 'sign_in_email_not_configured' },
+    );
+  }
   if (outcome.status === 'failed') {
     throw new HttpsError('unavailable', 'Could not send the link. Please try again.');
   }
@@ -5473,6 +5655,7 @@ async function migrateLegacyEmailDomainBinding(
   throw new HttpsError(
     'failed-precondition',
     'This existing Resend domain cannot be assigned automatically. Ask a platform administrator to resolve it.',
+    { reason: 'email_domain_unavailable' },
   );
 }
 
@@ -5512,6 +5695,7 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
         throw new HttpsError(
           'failed-precondition',
           'The stored sending domain no longer matches Resend.',
+          { reason: 'email_domain_mismatch' },
         );
       }
       await migrateLegacyEmailDomainBinding(cfpId, domain);
@@ -5565,6 +5749,7 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
             throw new HttpsError(
               'failed-precondition',
               'This existing Resend domain cannot be assigned automatically. Ask a platform administrator to resolve it.',
+              { reason: 'email_domain_unavailable' },
             );
           }
 
@@ -5619,6 +5804,7 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
           throw new HttpsError(
             'failed-precondition',
             'The stored sending domain no longer matches Resend.',
+            { reason: 'email_domain_mismatch' },
           );
         }
         await migrateLegacyEmailDomainBinding(cfpId, current);

@@ -41,6 +41,10 @@ export function friendlyError(error: unknown, t: Dictionary): string {
       return t.errors.notFound;
     case 'invalid-argument':
       return t.errors.incomplete;
+    case 'resource-exhausted':
+      return reasonOf(error) === 'speaker_talk_cap_reached'
+        ? t.errors.talkCapReached
+        : t.errors.generic;
     // Firestore Lite reports a fetch failure with no HTTP status as `unknown`.
     case 'unknown':
     case 'unavailable':
@@ -52,13 +56,13 @@ export function friendlyError(error: unknown, t: Dictionary): string {
 }
 
 /**
- * Admin actions reuse codes that mean something else to an applicant:
- * `failed-precondition` here is the last-admin guard, not a closed window.
+ * Admin actions reuse codes that mean something else to an applicant. A
+ * failed precondition is normally a stale workspace rather than a closed CFP.
  */
 export function adminError(error: unknown, t: Dictionary): string {
   switch (codeOf(error)) {
     case 'failed-precondition':
-      return t.admin.lastAdmin;
+      return t.admin.actionInvalid;
     case 'invalid-argument':
       return t.admin.badInput;
     case 'permission-denied':
@@ -66,6 +70,44 @@ export function adminError(error: unknown, t: Dictionary): string {
     default:
       return friendlyError(error, t);
   }
+}
+
+/** Role mutations are the one admin path where the last-admin guard applies. */
+export function roleAdminError(error: unknown, t: Dictionary): string {
+  return codeOf(error) === 'failed-precondition' && reasonOf(error) === 'event_last_admin'
+    ? t.admin.lastAdmin
+    : adminError(error, t);
+}
+
+export function reviewError(error: unknown, t: Dictionary): string {
+  switch (codeOf(error)) {
+    case 'failed-precondition':
+      return t.review.proposalNoLongerReviewable;
+    case 'permission-denied':
+      return t.review.accessRemoved;
+    default:
+      return friendlyError(error, t);
+  }
+}
+
+export function isCoSpeakerInvitationUnavailable(error: unknown): boolean {
+  return (
+    codeOf(error) === 'deadline-exceeded' ||
+    reasonOf(error) === 'co_speaker_invitation_unavailable'
+  );
+}
+
+export function coSpeakerInvitationError(error: unknown, t: Dictionary): string {
+  if (isCoSpeakerInvitationUnavailable(error)) {
+    return t.coSpeakers.invitationNoLongerAvailable;
+  }
+  if (codeOf(error) === 'failed-precondition') {
+    return reasonOf(error) === 'co_speaker_invitation_reviewer_conflict'
+      ? t.coSpeakers.invitationReviewerConflict
+      : t.coSpeakers.invitationNoLongerAvailable;
+  }
+  if (codeOf(error) === 'permission-denied') return t.nav.forbidden;
+  return friendlyError(error, t);
 }
 
 export function isSpeakerMessageRecipientsChanged(error: unknown): boolean {
@@ -98,6 +140,14 @@ export function emailError(error: unknown, t: Dictionary): string {
     default:
       return friendlyError(error, t);
   }
+}
+
+export function emailHistoryError(
+  error: string,
+  errorReason: string,
+  t: Dictionary,
+): string {
+  return errorReason ? t.admin.emailErrorReasons[errorReason] ?? error : error;
 }
 
 export function scheduleError(error: unknown, t: Dictionary): string {
@@ -158,9 +208,17 @@ export function platformAdminError(error: unknown, t: Dictionary): string {
  * there wrong. `functions/src/domains.ts` throws `failed-precondition` instead.
  */
 export function resendError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'failed-precondition') {
+    switch (reasonOf(error)) {
+      case 'email_domain_unavailable':
+        return t.admin.emailErrors.domainUnavailable;
+      case 'email_domain_mismatch':
+        return t.admin.emailErrors.domainMismatch;
+      default:
+        return t.admin.emailErrors.badKey;
+    }
+  }
   switch (codeOf(error)) {
-    case 'failed-precondition':
-      return t.admin.emailErrors.badKey;
     case 'not-found':
       return t.admin.emailErrors.noDomain;
     case 'invalid-argument':

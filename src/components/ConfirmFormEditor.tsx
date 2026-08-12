@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-import { FieldRows } from './FieldRows';
+import { FieldRows, normaliseOptionLines } from './FieldRows';
 import { Checkbox } from './fields';
 import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
@@ -31,8 +31,20 @@ import {
 export function withKeys(fields: ConfirmField[]): ConfirmField[] {
   const keyed: ConfirmField[] = [];
   for (const field of fields) {
+    const prepared =
+      field.type === 'select'
+        ? {
+            ...field,
+            options: normaliseOptionLines(field.options),
+          }
+        : field;
     keyed.push(
-      field.key ? field : { ...field, key: keyFromLabel(field.label.en, keyed.map((f) => f.key)) },
+      prepared.key
+        ? prepared
+        : {
+            ...prepared,
+            key: keyFromLabel(prepared.label.en, keyed.map((candidate) => candidate.key)),
+          },
     );
   }
   return keyed;

@@ -108,7 +108,21 @@ test('a submission can update the optional profile photo without sending it to r
   await expect(photo.getByText('Optional', { exact: true })).toBeVisible();
   await expect(photo.getByText(/not sent with CFP proposals or shown to reviewers/)).toBeVisible();
 
-  await photo.getByLabel('Choose speaker profile photo').setInputFiles({
+  const fileInput = photo.getByLabel('Choose speaker profile photo');
+  await expect(fileInput).toHaveAttribute('tabindex', '-1');
+  await fileInput.setInputFiles({
+    name: 'not-an-image.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('not an image'),
+  });
+  const errorId = await fileInput.getAttribute('aria-errormessage');
+  expect(errorId).toBeTruthy();
+  await expect(fileInput).toHaveAttribute('aria-describedby', errorId!);
+  const chooseButton = photo.getByRole('button', { name: 'Choose a photo' });
+  await expect(chooseButton).toHaveAttribute('aria-describedby', errorId!);
+  await expect(page.locator(`[id="${errorId}"]`)).toBeVisible();
+
+  await fileInput.setInputFiles({
     name: 'speaker.png',
     mimeType: 'image/png',
     buffer: original,

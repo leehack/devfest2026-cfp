@@ -3,8 +3,8 @@
  *
  * The app has a create form and it is the ordinary route. This exists for the
  * two cases the form cannot serve: seeding a local emulator on every `npm start`,
- * and standing a CFP up in production for someone who is not the person running
- * the command.
+ * and standing a CFP up in production for an existing verified organiser who
+ * is not the person running the command.
  *
  * Emulator:
  *   FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
@@ -29,7 +29,7 @@ const id = arg('id');
 const name = arg('name') ?? id;
 const opens = arg('opens');
 const closes = arg('closes');
-const owner = arg('owner');
+const owner = String(arg('owner') ?? '').trim().toLowerCase();
 const visibility = arg('visibility') ?? 'public';
 
 if (!id || !opens || !closes) {
@@ -40,6 +40,10 @@ if (!id || !opens || !closes) {
 }
 if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id)) {
   console.error('The id must be lower case letters, digits and single hyphens.');
+  process.exit(1);
+}
+if (owner && !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(owner)) {
+  console.error('The owner must be a usable email address.');
   process.exit(1);
 }
 
@@ -101,17 +105,19 @@ if (closesAt <= opensAt) {
 initializeApp();
 const db = getFirestore();
 
-/**
- * The owner's uid, if they have an account. Absent is fine and common — a CFP
- * stood up before its organiser has ever signed in gets a pending `roleGrants`
- * entry instead, which `claimRole` turns into a membership on their first visit.
- */
 let ownerUid;
 if (owner) {
   try {
-    ownerUid = (await getAuth().getUserByEmail(owner)).uid;
-  } catch {
-    ownerUid = undefined;
+    const user = await getAuth().getUserByEmail(owner);
+    if (!user.emailVerified || user.disabled) {
+      console.error('The owner must already have a verified, enabled account.');
+      process.exit(1);
+    }
+    ownerUid = user.uid;
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') throw error;
+    console.error('The owner must sign in and verify their account before this script is run.');
+    process.exit(1);
   }
 }
 
@@ -135,37 +141,21 @@ await db.doc(`cfps/${id}`).set(
 );
 
 if (owner) {
-  if (ownerUid) {
-    await db.doc(`cfps/${id}/members/${ownerUid}`).set(
-      {
-        cfpId: id,
-        uid: ownerUid,
-        role: 'owner',
-        email: owner,
-        createdAt: FieldValue.serverTimestamp(),
-        grantedBy: 'script',
-      },
-      { merge: true },
-    );
-  } else {
-    // `owner` is not grantable through the callable, deliberately. Writing the
-    // grant here is the one place it can be handed to somebody who has never
-    // signed in, and it is the same shape `claimRole` reads.
-    await db.doc(`cfps/${id}/roleGrants/${owner}`).set(
-      {
-        cfpId: id,
-        email: owner,
-        role: 'owner',
-        createdAt: FieldValue.serverTimestamp(),
-        createdBy: 'script',
-      },
-      { merge: true },
-    );
-  }
+  await db.doc(`cfps/${id}/members/${ownerUid}`).set(
+    {
+      cfpId: id,
+      uid: ownerUid,
+      role: 'owner',
+      email: owner,
+      createdAt: FieldValue.serverTimestamp(),
+      grantedBy: 'script',
+    },
+    { merge: true },
+  );
 }
 
 console.log(
   `cfps/${id} written — open ${opensAt.toISOString()} to ${closesAt.toISOString()}` +
-    (owner ? `, owner ${owner}${ownerUid ? '' : ' (pending first sign-in)'}` : ''),
+    (owner ? `, owner ${owner}` : ''),
 );
 process.exit(0);

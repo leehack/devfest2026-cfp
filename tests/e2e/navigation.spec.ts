@@ -59,6 +59,10 @@ test.describe('navigation by persona', () => {
       `/c/${CFP_ID}`,
     );
     await expect(page.locator('#main-content')).toBeFocused();
+    await expect(page.locator('#main-content')).toHaveAttribute(
+      'aria-label',
+      'My proposals — DevFest Montréal 2026 — Call for Proposals',
+    );
   });
 
   test('header sign-in on an event keeps the speaker inside that event', async ({ page }) => {

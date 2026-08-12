@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   CFP_ID,
   callAs,
+  callWithErrorDetails,
   clearProposals,
   createAccount,
   createAccountWithoutEmail,
@@ -173,6 +174,74 @@ test.describe('roles', () => {
     expect(await readMember(reviewer.uid)).toBeNull();
   });
 
+  test('role changes resolve a disabled member by stored email without bypassing owner protection', async () => {
+    const admin = await createAccount(ADMIN);
+    const reviewer = await createAccount(REVIEWER);
+    const ownerIdentity = {
+      sub: 'disabled-owner-sub',
+      email: 'disabled-owner@example.org',
+      name: 'Disabled Owner',
+    };
+    const owner = await createAccount(ownerIdentity);
+    await Promise.all([
+      seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
+      seedMember(reviewer.uid, 'reviewer', CFP_ID, REVIEWER.email),
+      seedMember(owner.uid, 'owner', CFP_ID, ownerIdentity.email),
+    ]);
+    await Promise.all([disableAccount(reviewer.uid), disableAccount(owner.uid)]);
+
+    expect(
+      await callAs(admin.idToken, 'grantRole', {
+        email: REVIEWER.email,
+        role: 'admin',
+      }),
+    ).toMatchObject({ ok: true });
+    expect(await readMember(reviewer.uid)).toMatchObject({ role: 'admin' });
+
+    expect(
+      await callAs(admin.idToken, 'grantRole', {
+        email: ownerIdentity.email,
+        role: 'reviewer',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await readMember(owner.uid)).toMatchObject({ role: 'owner' });
+  });
+
+  test('a disabled last admin cannot demote their stored membership', async () => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await disableAccount(admin.uid);
+
+    expect(
+      await callWithErrorDetails(admin.idToken, 'grantRole', {
+        email: ADMIN.email,
+        role: 'reviewer',
+      }),
+    ).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+      details: { reason: 'event_last_admin' },
+    });
+    expect(await readMember(admin.uid)).toMatchObject({ role: 'admin' });
+  });
+
+  test('a recreated identity cannot use a stale same-email admin to bypass the last-admin guard', async () => {
+    const admin = await createAccount(ADMIN);
+    await Promise.all([
+      seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
+      seedMember('deleted-old-admin', 'admin', CFP_ID, ADMIN.email),
+    ]);
+
+    expect(
+      await callWithErrorDetails(admin.idToken, 'grantRole', {
+        email: ADMIN.email,
+        role: 'reviewer',
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await readMember(admin.uid)).toMatchObject({ role: 'admin' });
+    expect(await readMember('deleted-old-admin')).toMatchObject({ role: 'admin' });
+  });
+
   test('a token without a verified email cannot retrieve an existing event role', async () => {
     const account = await createAccountWithoutEmail({ sub: 'addressless', name: 'No Address' });
     await seedMember(account.uid, 'reviewer', CFP_ID, 'legacy@example.org');
@@ -297,6 +366,7 @@ test.describe('roles', () => {
     // and on another device too.
     await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
     await page.reload();
+    page.once('dialog', (dialog) => dialog.accept());
     await status().selectOption('under_review');
     await expect
       .poll(
@@ -312,6 +382,67 @@ test.describe('roles', () => {
         status: 'submitted',
       }),
     ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+  });
+
+  test('resetting a speaker response is explicit and does not offer impossible Undo', async ({
+    page,
+  }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedProposal('p-confirmed-reset', {
+      speakerUid: speaker.uid,
+      title: 'Confirmed session',
+      status: 'confirmed',
+      confirmAnswers: { shirt: 'L' },
+    });
+    await asAdmin(page, 'proposals');
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('clears every speaker’s confirmation response');
+      await dialog.accept();
+    });
+    await page.getByLabel('Status: Confirmed session').selectOption('rejected');
+
+    await expect
+      .poll(
+        async () =>
+          (await readProposals()).find((proposal) => proposal.title === 'Confirmed session')
+            ?.status,
+      )
+      .toBe('rejected');
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(0);
+  });
+
+  test('a destructive reset invalidates only that proposal\'s older Undo history', async ({
+    page,
+  }) => {
+    const speaker = await createAccount(SPEAKER);
+    await seedSubmittedProposal('p-reset-history', {
+      speakerUid: speaker.uid,
+      title: 'Reset history',
+    });
+    await seedSubmittedProposal('p-keep-history', {
+      speakerUid: speaker.uid,
+      title: 'Keep history',
+    });
+    await asAdmin(page, 'proposals');
+
+    const resetStatus = page.getByLabel('Status: Reset history');
+    const keepStatus = page.getByLabel('Status: Keep history');
+    const persistedStatus = async (title: string) =>
+      (await readProposals()).find((proposal) => proposal.title === title)?.status;
+    await resetStatus.selectOption('accepted');
+    await expect.poll(() => persistedStatus('Reset history')).toBe('accepted');
+    await keepStatus.selectOption('waitlisted');
+    await expect.poll(() => persistedStatus('Keep history')).toBe('waitlisted');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await resetStatus.selectOption('rejected');
+    await expect.poll(() => persistedStatus('Reset history')).toBe('rejected');
+
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect.poll(() => persistedStatus('Keep history')).toBe('under_review');
+    await expect(resetStatus).toHaveValue('rejected');
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toHaveCount(0);
   });
 
   test('withdrawn talks are hidden by default and never keep a score', async ({ page }) => {
@@ -472,7 +603,9 @@ test.describe('roles', () => {
     ).toMatchObject({ ok: true });
   });
 
-  test('a fourth submitted talk is refused by the server', async () => {
+  test('a fourth submitted talk is refused by the server and explained in the form', async ({
+    page,
+  }) => {
     const speaker = await createAccount(SPEAKER);
     await seedSpeaker(speaker.uid, { name: SPEAKER.name, email: SPEAKER.email });
     for (let i = 0; i < LIMITS.maxTalksPerSpeaker; i++) {
@@ -485,11 +618,22 @@ test.describe('roles', () => {
     });
 
     expect(
-      await callAs(speaker.idToken, 'submitProposal', { proposalId: 'p-extra' }),
-    ).toMatchObject({ ok: false, code: 'RESOURCE_EXHAUSTED' });
+      await callWithErrorDetails(speaker.idToken, 'submitProposal', {
+        proposalId: 'p-extra',
+      }),
+    ).toMatchObject({
+      ok: false,
+      code: 'RESOURCE_EXHAUSTED',
+      details: { reason: 'speaker_talk_cap_reached' },
+    });
 
     // Drafts themselves are uncapped — only what reaches the committee is.
     expect((await readProposals()).filter((p) => p.status === 'draft')).toHaveLength(1);
+
+    await signInAs(page, SPEAKER, `${at()}?proposal=p-extra`);
+    const submit = page.getByRole('button', { name: 'Submit proposal' });
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveAttribute('aria-describedby', /talk-cap-message/);
   });
 
   test('a speaker can still see and edit a submitted talk, then loses the content', async ({

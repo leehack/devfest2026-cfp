@@ -9,6 +9,7 @@ import {
   seedMember,
   seedProposal,
   seedReview,
+  setSubmissionFormDirect,
   setProposalStatusDirect,
 } from './backend';
 
@@ -102,6 +103,106 @@ test.describe('review backend operations', () => {
     });
 
     expect(await callAs(first.idToken, 'reviewCoverage', {})).toMatchObject({
+      ok: false,
+      code: 'PERMISSION_DENIED',
+    });
+  });
+
+  test('returns a complete review deck projection without legacy private speaker state', async () => {
+    const [reviewer, speaker] = await Promise.all([
+      createAccount(FIRST),
+      createAccount(SPEAKER),
+    ]);
+    await seedMember(reviewer.uid, 'reviewer', undefined, FIRST.email);
+    await setSubmissionFormDirect({
+      fields: [
+        {
+          key: 'reviewerContext',
+          type: 'textarea',
+          required: false,
+          label: { en: 'Reviewer context', fr: 'Contexte pour le comité' },
+        },
+        {
+          key: 'demoMode',
+          type: 'select',
+          required: false,
+          label: { en: 'Demo format', fr: 'Format de la démo' },
+          options: [{ value: 'live', label: { en: 'Live demo', fr: 'Démo en direct' } }],
+        },
+      ],
+    });
+    await Promise.all([
+      seedProposal('projected', {
+        speakerUid: speaker.uid,
+        title: 'Projected proposal',
+        status: 'submitted',
+        submittedAt: 1_786_464_000_123,
+        speaker: {
+          name: 'Public Speaker',
+          email: 'private-speaker@example.org',
+          dietaryNeeds: 'Private dietary detail',
+        },
+        attendance: { status: 'pending', needsVisa: true },
+        confirmAnswers: { dietaryNeeds: 'Severe allergy' },
+        headshotUploads: { portrait: { path: 'private-working-photo' } },
+        speakerPhoto: { path: 'private-confirmed-photo' },
+        answers: {
+          reviewerContext: '  The live coding is the core of the session.  ',
+          demoMode: 'live',
+          privateTravelNote: 'Never expose this applicant note',
+        },
+      }),
+      seedProposal('reviewer-own', {
+        speakerUid: reviewer.uid,
+        title: 'Reviewer conflict',
+        status: 'under_review',
+      }),
+      seedProposal('already-decided', {
+        speakerUid: speaker.uid,
+        title: 'Not in the active deck',
+        status: 'accepted',
+      }),
+    ]);
+
+    const queue = await callJson(reviewer.idToken, 'reviewQueue', {});
+    expect(queue).toMatchObject({
+      ok: true,
+      own: 1,
+      proposals: [
+        expect.objectContaining({
+          id: 'projected',
+          title: 'Projected proposal',
+          submittedAt: expect.any(Number),
+          speakerSnapshot: [expect.objectContaining({ name: 'Public Speaker' })],
+          answers: {
+            reviewerContext: 'The live coding is the core of the session.',
+            demoMode: 'live',
+          },
+        }),
+      ],
+    });
+    expect(queue.proposals.map((proposal: { id: string }) => proposal.id)).toEqual(['projected']);
+    for (const field of [
+      'acks',
+      'attendance',
+      'confirmAnswers',
+      'headshotUploads',
+      'speakerPhoto',
+    ]) {
+      expect(queue.proposals[0]).not.toHaveProperty(field);
+    }
+    for (const privateValue of [
+      'private-speaker@example.org',
+      'Private dietary detail',
+      'Severe allergy',
+      'private-working-photo',
+      'private-confirmed-photo',
+      'Never expose this applicant note',
+    ]) {
+      expect(JSON.stringify(queue)).not.toContain(privateValue);
+    }
+
+    expect(await callAs(speaker.idToken, 'reviewQueue', {})).toMatchObject({
       ok: false,
       code: 'PERMISSION_DENIED',
     });

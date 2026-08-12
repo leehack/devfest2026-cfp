@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { FORM_LIMITS, IMAGE_TYPES } from '@shared/confirmForm';
 
@@ -34,6 +34,7 @@ export function SpeakerProfilePhoto({
   onUseForSession,
 }: Props) {
   const { t } = useI18n();
+  const inputId = useId();
   const input = useRef<HTMLInputElement>(null);
   const sessionStatus = useRef<HTMLDivElement>(null);
   const previewUrl = useRef('');
@@ -52,6 +53,9 @@ export function SpeakerProfilePhoto({
   loadFailed.current = t.profilePhoto.loadFailed;
   onBusyChangeRef.current = onBusyChange;
   onCurrentGenerationChangeRef.current = onCurrentGenerationChange;
+
+  const message = problem || error;
+  const errorId = message ? `${inputId}-error` : undefined;
 
   const showPreview = useCallback((blob: Blob | null) => {
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
@@ -197,7 +201,6 @@ export function SpeakerProfilePhoto({
     }
   }
 
-  const message = problem || error;
   const sessionOutdated = Boolean(
     onUseForSession && generationKnown && generation !== sessionGeneration,
   );
@@ -234,6 +237,9 @@ export function SpeakerProfilePhoto({
             type="button"
             className="btn"
             disabled={disabled || busy || adopting || loading}
+            aria-invalid={Boolean(message)}
+            aria-describedby={errorId}
+            aria-errormessage={errorId}
             onClick={() => input.current?.click()}
           >
             {busy
@@ -264,6 +270,9 @@ export function SpeakerProfilePhoto({
         accept={IMAGE_TYPES.join(',')}
         aria-label={t.profilePhoto.chooseLabel}
         aria-invalid={Boolean(message)}
+        aria-describedby={errorId}
+        aria-errormessage={errorId}
+        tabIndex={-1}
         disabled={disabled || busy || loading}
         onChange={(event) => {
           const file = event.target.files?.[0];
@@ -328,7 +337,7 @@ export function SpeakerProfilePhoto({
         </div>
       )}
       {message && (
-        <p className="field__error" role="alert">
+        <p className="field__error" id={errorId} role="alert">
           {message}
         </p>
       )}

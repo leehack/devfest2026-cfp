@@ -19,6 +19,7 @@ import {
   seedProposal,
   seedSpeaker,
   seedSubmittedProposal,
+  setSubmissionFormDirect,
 } from './backend';
 import { alerts, at, signInAs, type Identity } from './form';
 
@@ -95,6 +96,80 @@ test.describe('the review deck', () => {
     // back to the start without noticing.
     await page.keyboard.press('ArrowLeft');
     await expect(heading(page, TITLES[0])).toBeVisible();
+  });
+
+  test('renders the reviewer projection without legacy confirmation or travel details', async ({
+    page,
+  }) => {
+    await reset();
+    const reviewer = await createAccount(REVIEWER);
+    const speaker = await createAccount(SPEAKER);
+    await seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email);
+    await setSubmissionFormDirect({
+      fields: [
+        {
+          key: 'reviewerContext',
+          type: 'textarea',
+          required: false,
+          label: { en: 'Reviewer context', fr: 'Contexte pour le comité' },
+        },
+        {
+          key: 'demoMode',
+          type: 'select',
+          required: false,
+          label: { en: 'Demo format', fr: 'Format de la démo' },
+          options: [{ value: 'live', label: { en: 'Live demo', fr: 'Démo en direct' } }],
+        },
+      ],
+    });
+    await seedProposal('private-legacy-details', {
+      speakerUid: speaker.uid,
+      title: 'A safe projected review',
+      status: 'submitted',
+      speaker: {
+        name: 'Public Speaker',
+        bio: 'This public biography reaches the review card.',
+        email: 'private-speaker@example.org',
+        dietaryNeeds: 'Private dietary detail',
+      },
+      attendance: { status: 'pending', needsVisa: true },
+      confirmAnswers: { dietaryNeeds: 'Severe allergy' },
+      headshotUploads: { portrait: { path: 'private-working-photo' } },
+      speakerPhoto: { path: 'private-confirmed-photo' },
+      answers: {
+        reviewerContext: '  The live coding is the core of the session.  ',
+        demoMode: 'live',
+        privateTravelNote: 'Never expose this applicant note',
+      },
+    });
+
+    await signInAs(page, REVIEWER, at('/review'));
+    await expect(heading(page, 'A safe projected review')).toBeVisible();
+    await expect(page.getByText('This public biography reaches the review card.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Additional talk details' })).toBeVisible();
+    await expect(page.getByText('Reviewer context')).toBeVisible();
+    await expect(page.getByText('The live coding is the core of the session.')).toBeVisible();
+    await expect(page.getByText('Live demo')).toBeVisible();
+    await expect(page.getByText('Needs a visa or eTA to enter Canada')).toHaveCount(0);
+    for (const privateValue of [
+      'private-speaker@example.org',
+      'Private dietary detail',
+      'Severe allergy',
+      'private-working-photo',
+      'private-confirmed-photo',
+      'Never expose this applicant note',
+    ]) {
+      await expect(page.getByText(privateValue, { exact: false })).toHaveCount(0);
+    }
+
+    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await expect(
+      page.getByRole('heading', {
+        name: 'Renseignements supplémentaires sur la conférence',
+      }),
+    ).toBeVisible();
+    await expect(page.getByText('Contexte pour le comité')).toBeVisible();
+    await expect(page.getByText('Démo en direct')).toBeVisible();
   });
 
   test('a number scores the talk on screen and advances', async ({ page }) => {
@@ -260,6 +335,13 @@ test.describe('the review deck', () => {
     for (const name of ['1 — Pass', '2 — Maybe', '3 — Yes', '4 — Strong yes']) {
       await expect(page.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
     }
+
+    await page.keyboard.press('3');
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    expect((await readReviews('deck-0'))[0]).toMatchObject({
+      conflictOfInterest: true,
+      score: 1,
+    });
   });
 
   test('the shortcut list can be opened from the keyboard', async ({ page }) => {
@@ -323,12 +405,10 @@ test.describe('the review deck', () => {
     await expect(page.getByText('Every proposal in this view has a response.')).toBeVisible();
   });
 
-  /*
-   * The applicant answers all of this and none of it used to reach the card, so
-   * a talk could be scored without anyone seeing that its speaker needs a visa
-   * and expects to hear about funding after the programme locks.
-   */
-  test('the card shows what it takes to put the talk on the schedule', async ({ page }) => {
+  /* Travel, visa and funding answers belong to the speaker and organisers.
+   * Reviewers receive only the public speaker snapshot and review-relevant
+   * proposal fields through the projected review queue. */
+  test('the card keeps private travel logistics out of the review deck', async ({ page }) => {
     await reset();
     await createAccount(REVIEWER);
     const speaker = await createAccount(SPEAKER);
@@ -351,11 +431,11 @@ test.describe('the review deck', () => {
     await signInAs(page, REVIEWER, at('/review'));
     await expect(heading(page, 'Coming a long way')).toBeVisible();
 
-    await expect(page.getByText('Expected but not confirmed')).toBeVisible();
-    await expect(page.getByText('Applying to the GDE programme.')).toBeVisible();
-    await expect(page.getByText('2026-10-01')).toBeVisible();
-    await expect(page.getByText(/Needs a visa or eTA/)).toBeVisible();
     await expect(page.getByText('French if the room is up for it.')).toBeVisible();
+    await expect(page.getByText('Expected but not confirmed')).toHaveCount(0);
+    await expect(page.getByText('Applying to the GDE programme.')).toHaveCount(0);
+    await expect(page.getByText('2026-10-01')).toHaveCount(0);
+    await expect(page.getByText(/Needs a visa or eTA/)).toHaveCount(0);
   });
 
   /*
