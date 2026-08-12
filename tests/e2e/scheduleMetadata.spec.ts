@@ -627,6 +627,51 @@ test('the public agenda and detail expose frozen taxonomy and full speaker detai
   await expect(frenchCustom.getByText('Bilingue', { exact: true })).toBeVisible();
 });
 
+/**
+ * A lazily imported route has no chunk to hydrate with, so React drops the
+ * server-rendered agenda for the Suspense fallback until one arrives — a blink
+ * of "Loading…" over content the reader could already see.
+ */
+test('the server-rendered agenda is never blanked while the client takes over', async ({
+  page,
+}) => {
+  await seedMetadataSchedule({ publish: true });
+  await page.addInitScript(() => {
+    const seen = { rendered: false, blanked: false };
+    (window as unknown as { agenda: typeof seen }).agenda = seen;
+    const sample = () => {
+      if (document.querySelector('article')) seen.rendered = true;
+      else if (seen.rendered) seen.blanked = true;
+    };
+    const start = () => {
+      sample();
+      new MutationObserver(sample).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    };
+    if (document.documentElement) start();
+    else document.addEventListener('DOMContentLoaded', start);
+  });
+
+  await page.goto(at('/schedule'));
+  await expect(page.getByRole('link', { name: TALK_TITLE })).toBeVisible();
+  // The stored filters are written by an effect, so their arrival is the page
+  // saying the client render owns the agenda now.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Object.keys(window.sessionStorage).some((key) =>
+          key.startsWith('cfp.schedule.filters:'),
+        ),
+      ),
+    )
+    .toBe(true);
+  expect(
+    await page.evaluate(() => (window as unknown as { agenda: { blanked: boolean } }).agenda),
+  ).toMatchObject({ rendered: true, blanked: false });
+});
+
 test('long scheduling facts stay contained at a 320 pixel viewport', async ({ page }) => {
   const longCategory = `Category-${'C'.repeat(72)}`;
   const longCategoryFr = `Catégorie-${'F'.repeat(70)}`;

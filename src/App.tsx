@@ -19,7 +19,11 @@ import {
   EventNavigation,
   headerTitle,
 } from './components/AppNavigation';
+// Both have server-rendered segments under `app/c`, so neither can be lazy:
+// React has no chunk to hydrate with and drops the server HTML for the Suspense
+// fallback until one arrives.
 import { CfpPage } from './screens/CfpPage';
+import { SchedulePage } from './screens/SchedulePage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { usePlatformAccess, useRole } from './lib/roles';
 import { navigate, usePlace, type Place } from './lib/router';
@@ -59,9 +63,6 @@ const AdminPage = lazy(() =>
 );
 const ReviewPage = lazy(() =>
   import('./screens/ReviewPage').then(({ ReviewPage }) => ({ default: ReviewPage })),
-);
-const SchedulePage = lazy(() =>
-  import('./screens/SchedulePage').then(({ SchedulePage }) => ({ default: SchedulePage })),
 );
 const HomePage = lazy(() =>
   import('./screens/HomePage').then(({ HomePage }) => ({ default: HomePage })),
