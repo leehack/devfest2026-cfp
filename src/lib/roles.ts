@@ -551,6 +551,7 @@ export type ReviewerProposalRow = Pick<
   | 'deliveryLanguage'
   | 'languagePreference'
   | 'answers'
+  | 'attendance'
   | 'aggregate'
 > & {
   id: string;

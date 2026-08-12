@@ -91,12 +91,14 @@ describe('reviewer proposal projection', () => {
       ['id', ...REVIEWER_PROPOSAL_FIELDS].sort(),
     );
     expect(projected).not.toHaveProperty('aggregate');
-    expect(projected).not.toHaveProperty('attendance');
     expect(projected).not.toHaveProperty('speakerIds');
     expect(projected).not.toHaveProperty('formerSpeakerIds');
     expect(projected).not.toHaveProperty('confirmAnswers');
     expect(projected).not.toHaveProperty('headshotUploads');
     expect(projected).not.toHaveProperty('speakerPhoto');
+    // Submitted logistics the committee schedules against, unlike the
+    // post-acceptance answers on the line above it.
+    expect(projected.attendance).toEqual({ status: 'pending', needsVisa: true });
     expect(projected.answers).toEqual({
       reviewerContext: 'The live coding is the core of the session.',
       demoMode: 'live',

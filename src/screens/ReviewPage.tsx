@@ -915,11 +915,23 @@ function SubmissionAnswers({
 }
 
 /**
- * Review-relevant submission context only. Travel, visa, funding, confirmation,
- * photo and contact details stay between the speaker and organisers.
+ * What it takes to actually put this talk on the schedule.
+ *
+ * The applicant answers all of this and none of it reached the committee, so a
+ * reviewer scored a talk without knowing the speaker needs a visa and expects
+ * to hear about funding after the programme locks. That is not a tie-breaker
+ * between two good talks — it is the difference between a session that happens
+ * and a hole in the grid.
+ *
+ * Confirmation answers are a different thing and stay out: they are collected
+ * after acceptance, hold dietary and accessibility detail, and belong to the
+ * speaker and the organisers. So do `acks` — three `z.literal(true)` fields
+ * that say nothing about this proposal — and the speaker's email, which is
+ * contact detail rather than evidence about the talk.
  */
 function Logistics({ proposal }: { proposal: ReviewerProposalRow }) {
   const { t, locale } = useI18n();
+  const { attendance } = proposal;
   const submitted = toDate(proposal.submittedAt);
 
   // `languagePreference` only exists when the delivery language is `either` —
@@ -928,6 +940,10 @@ function Logistics({ proposal }: { proposal: ReviewerProposalRow }) {
     proposal.languagePreference
       ? [t.review.languagePreference, proposal.languagePreference]
       : null,
+    attendance?.status ? [t.review.travel, t.review.attendance[attendance.status]] : null,
+    attendance?.fundingSource ? [t.review.funding, attendance.fundingSource] : null,
+    attendance?.decisionBy ? [t.review.decisionBy, attendance.decisionBy] : null,
+    attendance?.needsVisa ? [t.review.visa, t.review.visaYes] : null,
     submitted ? [t.review.submitted, formatDate(submitted, locale)] : null,
   ].filter((row): row is [string, string] => row !== null);
 

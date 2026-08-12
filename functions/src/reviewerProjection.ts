@@ -18,6 +18,11 @@ export const REVIEWER_PROPOSAL_FIELDS = [
   'deliveryLanguage',
   'languagePreference',
   'answers',
+  // Submission-time logistics, not a confirmation answer: the committee has
+  // always had this, and scoring a talk without knowing the speaker needs a
+  // visa is how a session becomes a hole in the grid. `confirmAnswers`, which
+  // is answered after acceptance and is presenter-private, stays out.
+  'attendance',
   'status',
   'submittedAt',
 ] as const;

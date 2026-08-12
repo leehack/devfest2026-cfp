@@ -182,15 +182,12 @@ test.describe('review backend operations', () => {
       ],
     });
     expect(queue.proposals.map((proposal: { id: string }) => proposal.id)).toEqual(['projected']);
-    for (const field of [
-      'acks',
-      'attendance',
-      'confirmAnswers',
-      'headshotUploads',
-      'speakerPhoto',
-    ]) {
+    for (const field of ['acks', 'confirmAnswers', 'headshotUploads', 'speakerPhoto']) {
       expect(queue.proposals[0]).not.toHaveProperty(field);
     }
+    // Submitted logistics, not a confirmation answer: the committee schedules
+    // against it. Only the post-acceptance answers above are withheld.
+    expect(queue.proposals[0]).toHaveProperty('attendance');
     for (const privateValue of [
       'private-speaker@example.org',
       'Private dietary detail',

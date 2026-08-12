@@ -98,7 +98,7 @@ test.describe('the review deck', () => {
     await expect(heading(page, TITLES[0])).toBeVisible();
   });
 
-  test('renders the reviewer projection without legacy confirmation or travel details', async ({
+  test('renders the reviewer projection without legacy confirmation details', async ({
     page,
   }) => {
     await reset();
@@ -150,7 +150,9 @@ test.describe('the review deck', () => {
     await expect(page.getByText('Reviewer context')).toBeVisible();
     await expect(page.getByText('The live coding is the core of the session.')).toBeVisible();
     await expect(page.getByText('Live demo')).toBeVisible();
-    await expect(page.getByText('Needs a visa or eTA to enter Canada')).toHaveCount(0);
+    // Submitted logistics stay: the committee schedules against them. What the
+    // projection withholds is the post-acceptance confirmation payload below.
+    await expect(page.getByText('Needs a visa or eTA to enter Canada')).toBeVisible();
     for (const privateValue of [
       'private-speaker@example.org',
       'Private dietary detail',
@@ -408,7 +410,7 @@ test.describe('the review deck', () => {
   /* Travel, visa and funding answers belong to the speaker and organisers.
    * Reviewers receive only the public speaker snapshot and review-relevant
    * proposal fields through the projected review queue. */
-  test('the card keeps private travel logistics out of the review deck', async ({ page }) => {
+  test('the card shows what it takes to put the talk on the schedule', async ({ page }) => {
     await reset();
     await createAccount(REVIEWER);
     const speaker = await createAccount(SPEAKER);
@@ -431,11 +433,11 @@ test.describe('the review deck', () => {
     await signInAs(page, REVIEWER, at('/review'));
     await expect(heading(page, 'Coming a long way')).toBeVisible();
 
+    await expect(page.getByText('Expected but not confirmed')).toBeVisible();
+    await expect(page.getByText('Applying to the GDE programme.')).toBeVisible();
+    await expect(page.getByText('2026-10-01')).toBeVisible();
+    await expect(page.getByText(/Needs a visa or eTA/)).toBeVisible();
     await expect(page.getByText('French if the room is up for it.')).toBeVisible();
-    await expect(page.getByText('Expected but not confirmed')).toHaveCount(0);
-    await expect(page.getByText('Applying to the GDE programme.')).toHaveCount(0);
-    await expect(page.getByText('2026-10-01')).toHaveCount(0);
-    await expect(page.getByText(/Needs a visa or eTA/)).toHaveCount(0);
   });
 
   /*
