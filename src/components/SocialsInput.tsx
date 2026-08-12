@@ -30,40 +30,44 @@ export function SocialsInput({ value, onChange, disabled }: SocialsInputProps) {
       </span>
       <p className="field__help">{t.speaker.socialsHelp}</p>
 
-      {value.map((social, i) => (
-        <div className="socials__row" key={i}>
-          <select
-            className="field__input field__input--select socials__platform"
-            value={social.platform}
-            disabled={disabled}
-            aria-label={t.speaker.platform}
-            onChange={(e) => update(i, { platform: e.target.value as SocialPlatform })}
-          >
-            {SOCIAL_PLATFORMS.map((p) => (
-              <option key={p} value={p}>
-                {t.enums.socialPlatform[p]}
-              </option>
-            ))}
-          </select>
-          <input
-            className="field__input socials__handle"
-            value={social.handle}
-            maxLength={LIMITS.handleMax}
-            disabled={disabled}
-            aria-label={t.speaker.handle}
-            placeholder={t.speaker.handle}
-            onChange={(e) => update(i, { handle: e.target.value })}
-          />
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={disabled}
-            onClick={() => remove(i)}
-          >
-            {t.speaker.removeSocial}
-          </button>
-        </div>
-      ))}
+      {value.map((social, i) => {
+        const rowName = `${t.enums.socialPlatform[social.platform]} ${i + 1}`;
+        return (
+          <div className="socials__row" key={i} role="group" aria-label={rowName}>
+            <select
+              className="field__input field__input--select socials__platform"
+              value={social.platform}
+              disabled={disabled}
+              aria-label={`${t.speaker.platform} — ${rowName}`}
+              onChange={(e) => update(i, { platform: e.target.value as SocialPlatform })}
+            >
+              {SOCIAL_PLATFORMS.map((p) => (
+                <option key={p} value={p}>
+                  {t.enums.socialPlatform[p]}
+                </option>
+              ))}
+            </select>
+            <input
+              className="field__input socials__handle"
+              value={social.handle}
+              maxLength={LIMITS.handleMax}
+              disabled={disabled}
+              aria-label={`${t.speaker.handle} — ${rowName}`}
+              placeholder={t.speaker.handle}
+              onChange={(e) => update(i, { handle: e.target.value })}
+            />
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={disabled}
+              aria-label={`${t.speaker.removeSocial} — ${rowName}`}
+              onClick={() => remove(i)}
+            >
+              {t.speaker.removeSocial}
+            </button>
+          </div>
+        );
+      })}
 
       {value.length < LIMITS.maxSocials && (
         <button type="button" className="btn btn--ghost" disabled={disabled} onClick={add}>

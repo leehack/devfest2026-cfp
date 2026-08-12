@@ -9,6 +9,8 @@ import {
   seedMember,
   seedProposal,
   seedReview,
+  seedSpeakerParticipant,
+  setSubmissionFormDirect,
   setProposalStatusDirect,
 } from './backend';
 
@@ -105,6 +107,246 @@ test.describe('review backend operations', () => {
       ok: false,
       code: 'PERMISSION_DENIED',
     });
+  });
+
+  test('returns a complete review deck projection without legacy private speaker state', async () => {
+    const [reviewer, speaker] = await Promise.all([
+      createAccount(FIRST),
+      createAccount(SPEAKER),
+    ]);
+    await seedMember(reviewer.uid, 'reviewer', undefined, FIRST.email);
+    await setSubmissionFormDirect({
+      fields: [
+        {
+          key: 'reviewerContext',
+          type: 'textarea',
+          required: false,
+          label: { en: 'Reviewer context', fr: 'Contexte pour le comité' },
+        },
+        {
+          key: 'demoMode',
+          type: 'select',
+          required: false,
+          label: { en: 'Demo format', fr: 'Format de la démo' },
+          options: [{ value: 'live', label: { en: 'Live demo', fr: 'Démo en direct' } }],
+        },
+        {
+          key: 'organiserOnly',
+          type: 'textarea',
+          required: false,
+          reviewerVisible: false,
+          label: { en: 'Organiser-only context' },
+        },
+      ],
+    });
+    await Promise.all([
+      seedProposal('projected', {
+        speakerUid: speaker.uid,
+        title: 'Projected proposal',
+        status: 'submitted',
+        submittedAt: 1_786_464_000_123,
+        speaker: {
+          name: 'Public Speaker',
+          email: 'private-speaker@example.org',
+          dietaryNeeds: 'Private dietary detail',
+        },
+        attendance: {
+          status: 'pending',
+          fundingSource: 'Employer request',
+          decisionBy: '2026-10-01',
+          needsVisa: true,
+          privateArrivalInstructions: 'Private itinerary',
+        },
+        confirmAnswers: { dietaryNeeds: 'Severe allergy' },
+        headshotUploads: { portrait: { path: 'private-working-photo' } },
+        speakerPhoto: { path: 'private-confirmed-photo' },
+        answers: {
+          reviewerContext: '  The live coding is the core of the session.  ',
+          demoMode: 'live',
+          organiserOnly: 'The committee must not receive this answer',
+          privateTravelNote: 'Never expose this applicant note',
+        },
+      }),
+      seedProposal('reviewer-own', {
+        speakerUid: reviewer.uid,
+        title: 'Reviewer conflict',
+        status: 'under_review',
+      }),
+      seedProposal('already-decided', {
+        speakerUid: speaker.uid,
+        title: 'Not in the active deck',
+        status: 'accepted',
+      }),
+    ]);
+
+    const queue = await callJson(reviewer.idToken, 'reviewQueue', {});
+    expect(queue).toMatchObject({
+      ok: true,
+      own: 1,
+      proposals: [
+        expect.objectContaining({
+          id: 'projected',
+          title: 'Projected proposal',
+          submittedAt: expect.any(Number),
+          speakerSnapshot: [expect.objectContaining({ name: 'Public Speaker' })],
+          answers: {
+            reviewerContext: 'The live coding is the core of the session.',
+            demoMode: 'live',
+          },
+          speakerTravel: [
+            {
+              uid: speaker.uid,
+              name: 'Public Speaker',
+              status: 'pending',
+              fundingSource: 'Employer request',
+              decisionBy: '2026-10-01',
+              needsVisa: true,
+            },
+          ],
+        }),
+      ],
+    });
+    expect(queue.proposals.map((proposal: { id: string }) => proposal.id)).toEqual(['projected']);
+    for (const field of [
+      'acks',
+      'attendance',
+      'confirmAnswers',
+      'headshotUploads',
+      'speakerPhoto',
+    ]) {
+      expect(queue.proposals[0]).not.toHaveProperty(field);
+    }
+    for (const privateValue of [
+      'private-speaker@example.org',
+      'Private dietary detail',
+      'Severe allergy',
+      'private-working-photo',
+      'private-confirmed-photo',
+      'Never expose this applicant note',
+      'The committee must not receive this answer',
+      'Private itinerary',
+    ]) {
+      expect(JSON.stringify(queue)).not.toContain(privateValue);
+    }
+
+    expect(await callAs(speaker.idToken, 'reviewQueue', {})).toMatchObject({
+      ok: false,
+      code: 'PERMISSION_DENIED',
+    });
+  });
+
+  test('projects only safe active-speaker travel for a roster proposal', async () => {
+    const [reviewer, lead] = await Promise.all([
+      createAccount(FIRST),
+      createAccount(SPEAKER),
+    ]);
+    await seedMember(reviewer.uid, 'reviewer', undefined, FIRST.email);
+
+    const coSpeakerUid = 'roster-co-speaker';
+    const inactiveUid = 'roster-inactive-speaker';
+    const formerUid = 'roster-former-speaker';
+    await seedProposal('roster-travel', {
+      speakerUid: lead.uid,
+      title: 'Roster travel projection',
+      status: 'submitted',
+      speakerIds: [coSpeakerUid, inactiveUid, lead.uid],
+      primarySpeakerId: lead.uid,
+      formerSpeakerIds: [formerUid],
+      speakerSnapshot: [
+        {
+          uid: lead.uid,
+          name: 'Lead Speaker',
+          bio: 'x'.repeat(120),
+          basedIn: 'Montréal, QC',
+          socials: [],
+          isGde: false,
+        },
+        {
+          uid: coSpeakerUid,
+          name: 'Co-speaker',
+          bio: 'y'.repeat(120),
+          basedIn: 'Toronto, ON',
+          socials: [],
+          isGde: false,
+        },
+        {
+          uid: inactiveUid,
+          name: 'Inactive Speaker',
+          bio: 'z'.repeat(120),
+          basedIn: 'Ottawa, ON',
+          socials: [],
+          isGde: false,
+        },
+      ],
+      attendance: {
+        status: 'secured',
+        fundingSource: 'Stale root funding',
+        needsVisa: false,
+      },
+    });
+    await Promise.all([
+      seedSpeakerParticipant('roster-travel', coSpeakerUid, {
+        role: 'coSpeaker',
+        attendance: {
+          status: 'pending',
+          fundingSource: 'Community grant',
+          decisionBy: '2026-10-01',
+          needsVisa: true,
+          privateArrivalInstructions: 'Co-speaker private itinerary',
+        },
+      }),
+      seedSpeakerParticipant('roster-travel', inactiveUid, {
+        role: 'coSpeaker',
+        status: 'inactive',
+        attendance: { status: 'local', needsVisa: false },
+      }),
+      seedSpeakerParticipant('roster-travel', lead.uid, {
+        role: 'primary',
+        attendance: {
+          status: 'secured',
+          fundingSource: 'Employer budget',
+          needsVisa: false,
+          dietaryNeeds: 'Lead private dietary detail',
+        },
+      }),
+      seedSpeakerParticipant('roster-travel', formerUid, {
+        role: 'coSpeaker',
+        attendance: { status: 'local', needsVisa: false },
+      }),
+    ]);
+
+    const queue = await callJson(reviewer.idToken, 'reviewQueue', {});
+    expect(queue.proposals).toHaveLength(1);
+    expect(queue.proposals[0]).toMatchObject({
+      id: 'roster-travel',
+      speakerTravel: [
+        {
+          uid: coSpeakerUid,
+          name: 'Co-speaker',
+          status: 'pending',
+          fundingSource: 'Community grant',
+          decisionBy: '2026-10-01',
+          needsVisa: true,
+        },
+        {
+          uid: lead.uid,
+          name: 'Lead Speaker',
+          status: 'secured',
+          fundingSource: 'Employer budget',
+          needsVisa: false,
+        },
+      ],
+    });
+    expect(queue.proposals[0]).not.toHaveProperty('attendance');
+    for (const privateValue of [
+      'Stale root funding',
+      'Inactive Speaker',
+      formerUid,
+      'Co-speaker private itinerary',
+      'Lead private dietary detail',
+    ]) {
+      expect(JSON.stringify(queue.proposals[0].speakerTravel)).not.toContain(privateValue);
+    }
   });
 
   test('refreshes and removes derived aggregates as reviewability changes', async () => {

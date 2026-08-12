@@ -45,7 +45,7 @@ import {
   setSubmissionFormDirect,
   storeObjectDirect,
 } from './backend';
-import { at, signInAs, alerts } from './form';
+import { at, signInAs } from './form';
 
 const OTHER = 'someone-elses-conf';
 
@@ -250,7 +250,12 @@ test.describe('the front door', () => {
     await page.getByRole('textbox', { name: /^Address/ }).fill(CFP_ID);
     await page.getByRole('button', { name: 'Create it' }).click();
 
-    await expect(alerts(page)).toContainText('That address is taken.');
+    await expect(page.getByText('That address is taken. Try another.')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: /^Address/ })).toBeFocused();
+    await expect(page.getByRole('textbox', { name: /^Address/ })).toHaveAttribute(
+      'aria-invalid',
+      'true',
+    );
   });
 });
 

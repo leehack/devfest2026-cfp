@@ -273,6 +273,34 @@ test.describe('the confirmation questions', () => {
     expect(await statusOf('p-q')).toBe('accepted');
   });
 
+  test('switching talks asks before discarding an unsubmitted confirmation answer', async ({
+    page,
+  }) => {
+    const speaker = await accepted();
+    await seedProposal('p-other', {
+      speakerUid: speaker.uid,
+      title: 'Another talk',
+      status: 'submitted',
+    });
+    await setConfirmFormDirect([SHIRT]);
+
+    await signInAs(page, SPEAKER, `${at()}?proposal=p-q`);
+    await page.getByRole('button', { name: 'Yes, I can present' }).click();
+    await page.getByLabel(/T-shirt size/).selectOption('L');
+
+    const otherTalk = page.getByRole('button', {
+      name: 'Another talk Submitted',
+      exact: true,
+    });
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await otherTalk.click();
+    await expect(page.getByLabel(/T-shirt size/)).toHaveValue('L');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await otherTalk.click();
+    await expect(page.getByRole('heading', { name: 'Submitted', exact: true })).toBeVisible();
+  });
+
   test('declining never asks them', async ({ page }) => {
     await accepted();
     await setConfirmFormDirect([SHIRT]);
@@ -313,6 +341,7 @@ test.describe('the confirmation questions', () => {
     // A size picked in a hurry should not be final.
     await page.getByLabel(/T-shirt size/).selectOption('L');
     await page.getByRole('button', { name: 'Save details' }).click();
+    await expect(page.locator('.toast--success')).toContainText('Confirmation details saved.');
     await expect.poll(async () => (await readProposalById('p-q'))?.confirmAnswers?.shirt).toBe('L');
   });
 
@@ -607,7 +636,21 @@ test.describe('a headshot question', () => {
 
     await signInAs(page, SPEAKER);
     await page.getByRole('button', { name: 'Yes, I can present' }).click();
-    await page.getByLabel('A photo of you').setInputFiles(FIXTURE);
+    const input = page.getByLabel('A photo of you');
+    await expect(input).toHaveAttribute('tabindex', '-1');
+    await input.setInputFiles({
+      name: 'not-an-image.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('not an image'),
+    });
+    const errorId = await input.getAttribute('aria-errormessage');
+    expect(errorId).toBeTruthy();
+    const headshot = input.locator('..');
+    const describedBy = await headshot
+      .getByRole('button', { name: 'Choose a photo' })
+      .getAttribute('aria-describedby');
+    expect(describedBy?.split(/\s+/)).toContain(errorId);
+    await input.setInputFiles(FIXTURE);
     await expect(page.getByRole('button', { name: 'Choose a different photo' })).toBeVisible();
 
     // The proposal pointer, not an in-memory File, is the durable uploaded

@@ -10,15 +10,21 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  attendanceInputFor,
+  attendanceNeedsVisa,
+  attendanceWriteFor,
   DEFAULT_SUBMISSION_FORM,
+  NEW_CFP_SUBMISSION_FORM,
   labelOf,
   mergeSubmissionForm,
   normaliseSubmissionForm,
   optionValues,
+  rawSubmissionAttendanceFault,
+  reviewerAttendanceEnabled,
   validateSubmissionForm,
   type SubmissionForm,
 } from '@shared/submissionForm';
-import { submissionSchema } from '@shared/schema';
+import { attendanceSchemaFor, submissionSchema } from '@shared/schema';
 import { LIMITS } from '@shared/enums';
 
 const clone = (): SubmissionForm => JSON.parse(JSON.stringify(DEFAULT_SUBMISSION_FORM));
@@ -46,6 +52,39 @@ describe('mergeSubmissionForm', () => {
 
   it('defaults `fields` to empty rather than to anything', () => {
     expect(mergeSubmissionForm({}).fields).toEqual([]);
+  });
+
+  it('keeps legacy calls on the original Montréal attendance defaults', () => {
+    const merged = mergeSubmissionForm(undefined);
+    expect(merged.attendance.enabled).toBe(true);
+    expect(merged.attendance.needsVisa.enabled).toBe(true);
+    expect(merged.attendance.title.en).toContain('Montréal');
+  });
+
+  it('defaults omitted nested attendance switches to the legacy enabled policy', () => {
+    const merged = mergeSubmissionForm({ attendance: { enabled: false } });
+    expect(merged.attendance.enabled).toBe(false);
+    expect(merged.attendance.statusReviewerVisible).toBe(true);
+    expect(merged.attendance.fundingSource.enabled).toBe(true);
+    expect(merged.attendance.fundingSource.reviewerVisible).toBe(true);
+  });
+
+  it('does not reintroduce legacy optional copy into an explicit generic config', () => {
+    const merged = mergeSubmissionForm(NEW_CFP_SUBMISSION_FORM);
+    expect(merged.attendance.gdeGuidance).toBeUndefined();
+    expect(JSON.stringify(merged.attendance)).not.toMatch(/Montréal|Montreal|Canada|GDE/);
+    expect(mergeSubmissionForm(normaliseSubmissionForm(merged))).toEqual(
+      normaliseSubmissionForm(merged),
+    );
+  });
+});
+
+describe('new CFP defaults', () => {
+  it('start with generic logistics disabled and no Montréal travel consent', () => {
+    expect(NEW_CFP_SUBMISSION_FORM.attendance.enabled).toBe(false);
+    expect(NEW_CFP_SUBMISSION_FORM.acks.map((ack) => ack.key)).not.toContain('noTravelSupport');
+    const serialized = JSON.stringify(NEW_CFP_SUBMISSION_FORM);
+    expect(serialized).not.toMatch(/Montréal|Montreal|Canada|GDE/);
   });
 });
 
@@ -83,6 +122,25 @@ describe('normaliseSubmissionForm', () => {
     form.category = [{ value: ' web ', label: { en: ' Web ', fr: '   ' } }];
     const [option] = normaliseSubmissionForm(form).category;
     expect(option).toEqual({ value: 'web', label: { en: 'Web' } });
+  });
+
+  it('keeps reviewer visibility explicit while defaulting legacy questions to visible', () => {
+    const form = clone();
+    form.fields = [
+      { key: 'legacy', type: 'text', label: { en: 'Legacy' }, required: false },
+      {
+        key: 'privateNote',
+        type: 'textarea',
+        label: { en: 'Private note' },
+        required: false,
+        reviewerVisible: false,
+      },
+    ];
+
+    expect(normaliseSubmissionForm(form).fields.map((field) => field.reviewerVisible)).toEqual([
+      true,
+      false,
+    ]);
   });
 });
 
@@ -148,6 +206,145 @@ describe('validateSubmissionForm', () => {
     form.fields = [{ key: 'headshot', type: 'image', label: { en: 'Photo' }, required: false }];
     expect(validateSubmissionForm(form)).toEqual({ problem: 'noImages', key: 'headshot' });
   });
+
+  it('refuses a non-boolean reviewer visibility value', () => {
+    const form = clone();
+    form.fields = [
+      {
+        key: 'context',
+        type: 'text',
+        label: { en: 'Context' },
+        required: false,
+        reviewerVisible: 'sometimes',
+      } as unknown as SubmissionForm['fields'][number],
+    ];
+    expect(validateSubmissionForm(form)).toEqual({
+      problem: 'badReviewerVisibility',
+      key: 'context',
+    });
+  });
+
+  it('requires every fixed attendance status exactly once', () => {
+    const form = clone();
+    form.attendance.statuses = [
+      form.attendance.statuses[0],
+      form.attendance.statuses[0],
+      form.attendance.statuses[2],
+    ];
+    expect(validateSubmissionForm(form)).toEqual({
+      problem: 'unknownAttendanceStatus',
+      key: 'attendance.statuses',
+    });
+  });
+
+  it('allows optional GDE guidance to be absent', () => {
+    const form = clone();
+    delete form.attendance.gdeGuidance;
+    expect(validateSubmissionForm(form)).toBeNull();
+  });
+
+  it('rejects raw non-boolean attendance switches before normalisation', () => {
+    expect(
+      rawSubmissionAttendanceFault({
+        attendance: { needsVisa: { enabled: 'sometimes' } },
+      }),
+    ).toEqual({
+      problem: 'badAttendanceConfig',
+      key: 'attendance.needsVisa.enabled',
+    });
+  });
+});
+
+describe('configured attendance', () => {
+  it('omits the section entirely when disabled', () => {
+    const form = clone();
+    form.attendance.enabled = false;
+    expect(attendanceInputFor(form, { status: 'pending', needsVisa: true })).toBeUndefined();
+    expect(attendanceSchemaFor(form).safeParse(undefined).success).toBe(true);
+    const parsed = attendanceSchemaFor(form).safeParse({ status: 'pending', needsVisa: true });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toBeUndefined();
+  });
+
+  it('strips disabled and non-applicable properties before validation or storage', () => {
+    const form = clone();
+    form.attendance.needsVisa.enabled = false;
+    expect(
+      attendanceInputFor(form, {
+        status: 'local',
+        fundingSource: 'stale funding',
+        decisionBy: '2026-10-01',
+        needsVisa: true,
+        privateNote: 'never store',
+      }),
+    ).toEqual({ status: 'local' });
+
+    form.attendance.fundingSource.enabled = false;
+    form.attendance.decisionBy.enabled = false;
+    const parsed = attendanceSchemaFor(form).safeParse({
+      status: 'pending',
+      fundingSource: 'stale funding',
+      decisionBy: 'not a date',
+      needsVisa: true,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toEqual({ status: 'pending' });
+  });
+
+  it('clears configured non-applicable fields but preserves disabled field history', () => {
+    const form = clone();
+    expect(
+      attendanceWriteFor(form, {
+        status: 'local',
+        fundingSource: 'stale funding',
+        decisionBy: '2026-10-01',
+        needsVisa: false,
+      }),
+    ).toEqual({
+      status: 'local',
+      fundingSource: '',
+      decisionBy: '',
+      needsVisa: false,
+    });
+
+    form.attendance.fundingSource.enabled = false;
+    form.attendance.decisionBy.enabled = false;
+    expect(
+      attendanceWriteFor(form, {
+        status: 'local',
+        fundingSource: 'historical funding',
+        decisionBy: '2026-10-01',
+        needsVisa: false,
+      }),
+    ).toEqual({ status: 'local', needsVisa: false });
+
+    form.attendance.enabled = false;
+    expect(attendanceWriteFor(form, { status: 'local', needsVisa: false })).toBeUndefined();
+  });
+
+  it('skips reviewer travel reads when no configured property is visible', () => {
+    const form = clone();
+    form.attendance.statusReviewerVisible = false;
+    form.attendance.fundingSource.reviewerVisible = false;
+    form.attendance.decisionBy.reviewerVisible = false;
+    form.attendance.needsVisa.reviewerVisible = false;
+    expect(reviewerAttendanceEnabled(form)).toBe(false);
+    form.attendance.needsVisa.reviewerVisible = true;
+    expect(reviewerAttendanceEnabled(form)).toBe(true);
+    form.attendance.enabled = false;
+    expect(reviewerAttendanceEnabled(form)).toBe(false);
+  });
+
+  it('gates visa email copy on both the section and visa field', () => {
+    const form = clone();
+    const attendance = { status: 'pending', needsVisa: true };
+    expect(attendanceNeedsVisa(form, attendance)).toBe(true);
+    form.attendance.needsVisa.enabled = false;
+    expect(attendanceNeedsVisa(form, attendance)).toBe(false);
+    form.attendance.needsVisa.enabled = true;
+    form.attendance.enabled = false;
+    expect(attendanceNeedsVisa(form, attendance)).toBe(false);
+  });
 });
 
 describe('submissionSchema against a configured form', () => {
@@ -204,5 +401,11 @@ describe('submissionSchema against a configured form', () => {
     expect(
       submissionSchema(form).safeParse({ proposal, speaker, acks: {}, attendance }).success,
     ).toBe(true);
+  });
+
+  it('accepts an omitted attendance payload when this event disables travel questions', () => {
+    const form = clone();
+    form.attendance.enabled = false;
+    expect(submissionSchema(form).safeParse({ proposal, speaker, acks }).success).toBe(true);
   });
 });

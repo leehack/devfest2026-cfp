@@ -19,7 +19,11 @@ import {
   EventNavigation,
   headerTitle,
 } from './components/AppNavigation';
+// Both have server-rendered segments under `app/c`, so neither can be lazy:
+// React has no chunk to hydrate with and drops the server HTML for the Suspense
+// fallback until one arrives.
 import { CfpPage } from './screens/CfpPage';
+import { SchedulePage } from './screens/SchedulePage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { usePlatformAccess, useRole } from './lib/roles';
 import { navigate, usePlace, type Place } from './lib/router';
@@ -59,9 +63,6 @@ const AdminPage = lazy(() =>
 );
 const ReviewPage = lazy(() =>
   import('./screens/ReviewPage').then(({ ReviewPage }) => ({ default: ReviewPage })),
-);
-const SchedulePage = lazy(() =>
-  import('./screens/SchedulePage').then(({ SchedulePage }) => ({ default: SchedulePage })),
 );
 const HomePage = lazy(() =>
   import('./screens/HomePage').then(({ HomePage }) => ({ default: HomePage })),
@@ -137,6 +138,38 @@ export function App({
 
   const t = dictionaries[locale];
   const visibleCfp = loadedCfpId === cfpId ? cfp : null;
+  const pageLabel = documentTitle(place, visibleCfp?.name ?? null, t);
+  const [sessionPageLabel, setSessionPageLabel] = useState<{
+    cfpId: string;
+    entryId: string;
+    label: string;
+  } | null>(null);
+  const accessiblePageLabel =
+    place.route === 'session' &&
+    sessionPageLabel?.cfpId === cfpId &&
+    sessionPageLabel.entryId === place.entryId
+      ? sessionPageLabel.label
+      : pageLabel;
+  // A session heading only ever arrives from SchedulePage. When the route ends
+  // in the error or not-found panel instead, none is coming, and waiting for one
+  // would leave focus on the link that disappeared with the previous screen.
+  const routeAnnouncementReady =
+    place.route !== 'session' ||
+    (cfpReady && loadedCfpId === cfpId && (cfpError || !cfp)) ||
+    (sessionPageLabel?.cfpId === cfpId && sessionPageLabel.entryId === place.entryId);
+  const handleSessionPageLabelChange = useCallback(
+    (entryId: string, label: string) => {
+      if (!cfpId) return;
+      setSessionPageLabel((current) =>
+        current?.cfpId === cfpId &&
+        current.entryId === entryId &&
+        current.label === label
+          ? current
+          : { cfpId, entryId, label },
+      );
+    },
+    [cfpId],
+  );
   const signedOutProtectedRoute = !user && (route === 'review' || route === 'admin');
 
   const [localeSettled, setLocaleSettled] = useState(false);
@@ -174,8 +207,8 @@ export function App({
     // The session screen owns its loaded entry title. Leaving its server title
     // alone also keeps a direct request and an in-app navigation identical.
     if (place.route === 'session') return;
-    document.title = documentTitle(place, visibleCfp?.name ?? null, t);
-  }, [place, t, visibleCfp?.name]);
+    document.title = pageLabel;
+  }, [pageLabel, place.route]);
 
   /*
    * Starts the SDK for somebody who agreed on an earlier visit. A no-op for
@@ -222,6 +255,7 @@ export function App({
   // on a link that disappeared with the previous screen.
   useEffect(() => {
     if (focusedPlace.current === placeKey) return;
+    if (!routeAnnouncementReady) return;
     focusedPlace.current = placeKey;
     const scheduleReturn = agendaReturnContext(AGENDA_RETURN_STATE);
     if (route === 'schedule' && scheduleReturn?.cfpId === cfpId) {
@@ -246,7 +280,15 @@ export function App({
       }
       document.getElementById('main-content')?.focus();
     });
-  }, [cfpId, placeKey, role, route, visibleCfp?.publishedScheduleId, visibleCfp?.sharedScheduleId]);
+  }, [
+    cfpId,
+    placeKey,
+    role,
+    route,
+    routeAnnouncementReady,
+    visibleCfp?.publishedScheduleId,
+    visibleCfp?.sharedScheduleId,
+  ]);
 
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);
@@ -436,6 +478,7 @@ export function App({
           <main
             className={`main${route === 'new' || route === 'cfp' || route === 'me' ? ' main--narrow' : ''}`}
             id="main-content"
+            aria-label={accessiblePageLabel}
             tabIndex={-1}
           >
             {!cfpReady || (!authReady && !['cfp', 'schedule', 'session'].includes(route)) ? (
@@ -460,6 +503,7 @@ export function App({
                   retryCfp={retryCfp}
                   refreshCfp={refreshCfp}
                   initialSchedule={initialSchedule}
+                  onSessionPageLabelChange={handleSessionPageLabelChange}
                 />
               </Suspense>
             )}
@@ -509,6 +553,7 @@ interface RoutedProps {
   retryCfp: () => void;
   refreshCfp: () => Promise<void>;
   initialSchedule?: { releaseId: string; value: PublishedScheduleBundle | null };
+  onSessionPageLabelChange: (entryId: string, label: string) => void;
 }
 
 /**
@@ -533,6 +578,7 @@ function Routed({
   retryCfp,
   refreshCfp,
   initialSchedule,
+  onSessionPageLabelChange,
 }: RoutedProps) {
   const { t } = useI18n();
   const { route, cfpId, tab } = place;
@@ -596,11 +642,16 @@ function Routed({
     if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
     if (!platformStatus?.isPlatformAdmin) {
       return (
-        <div className="panel">
+        <div className="panel platform-access-gate">
           <p>{t.nav.forbidden}</p>
-          <button type="button" className="btn btn--primary" onClick={() => navigate('home')}>
-            {t.platform.back}
-          </button>
+          <div className="platform-access-gate__actions">
+            <button type="button" className="btn btn--primary" onClick={retryPlatform}>
+              {t.platformAdmin.checkAgain}
+            </button>
+            <button type="button" className="btn" onClick={() => navigate('home')}>
+              {t.platform.back}
+            </button>
+          </div>
         </div>
       );
     }
@@ -675,6 +726,7 @@ function Routed({
             !newerSharedPreview || (authReady && (!user || roleReady))
           )}
           entryId={place.entryId ?? null}
+          onPageLabelChange={onSessionPageLabelChange}
           initialBundle={
             initialSchedule && initialSchedule.releaseId === cfp.publishedScheduleId
               ? initialSchedule.value
@@ -940,6 +992,9 @@ export function SignIn({
           ? t.app.linkTooMany
           : error?.code === 'functions/invalid-argument'
             ? t.app.linkBadEmail
+            : error?.code === 'functions/failed-precondition' &&
+                error?.details?.reason === 'sign_in_email_not_configured'
+              ? t.app.linkUnavailable
             : t.app.linkFailed,
       );
     } finally {

@@ -7,7 +7,7 @@
  * against the address field, which is where the fix is.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { useI18n } from '../i18n/context';
@@ -42,8 +42,10 @@ export function NewCfpPage({ user }: { user: User }) {
   const [closesAt, setClosesAt] = useState(localInput(inWeeks(6)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [addressError, setAddressError] = useState('');
   const [origin, setOrigin] = useState('');
   const [timeZone, setTimeZone] = useState('');
+  const addressField = useRef<HTMLDivElement>(null);
 
   const cfpId = idTouched ? id : idFromName(name);
   const publicPath = cfpId ? `/c/${cfpId}` : '/c/your-event';
@@ -61,9 +63,16 @@ export function NewCfpPage({ user }: { user: User }) {
   async function create() {
     if (busy) return;
     setError('');
+    setAddressError('');
     const fault = validateCfp({ id: cfpId, name, visibility });
     if (fault) {
-      setError(t.platform.errors[fault] ?? t.errors.generic);
+      const message = t.platform.errors[fault] ?? t.errors.generic;
+      if (fault === 'idFormat' || fault === 'idLength') {
+        setAddressError(message);
+        requestAnimationFrame(() => addressField.current?.querySelector('input')?.focus());
+      } else {
+        setError(message);
+      }
       return;
     }
     if (new Date(closesAt) <= new Date(opensAt)) {
@@ -83,17 +92,20 @@ export function NewCfpPage({ user }: { user: User }) {
       navigate('admin', { cfpId, tab: 'overview' });
     } catch (err: any) {
       const code = String(err?.code ?? '');
-      setError(
-        code === 'functions/already-exists'
-          ? t.platform.errors.taken
-          : code === 'functions/resource-exhausted'
+      if (code === 'functions/already-exists') {
+        setAddressError(t.platform.errors.taken);
+        requestAnimationFrame(() => addressField.current?.querySelector('input')?.focus());
+      } else {
+        setError(
+          code === 'functions/resource-exhausted'
             ? t.platform.errors.limit
             : code === 'functions/failed-precondition'
               ? t.platform.errors.unverified
               : code === 'functions/permission-denied'
                 ? t.platformAdmin.accessRequiredHelp
                 : t.errors.generic,
-      );
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -130,24 +142,31 @@ export function NewCfpPage({ user }: { user: User }) {
             label={t.platform.nameLabel}
             help={t.platform.nameHelp}
             value={name}
-            onChange={setName}
+            onChange={(value) => {
+              setName(value);
+              if (!idTouched) setAddressError('');
+            }}
             required
             maxLength={CFP_LIMITS.nameMax}
             disabled={busy}
           />
 
-          <TextField
-            label={t.platform.addressLabel}
-            help={t.platform.addressHelp}
-            value={cfpId}
-            onChange={(value) => {
-              setIdTouched(true);
-              setId(value);
-            }}
-            required
-            maxLength={CFP_LIMITS.idMax}
-            disabled={busy}
-          />
+          <div ref={addressField}>
+            <TextField
+              label={t.platform.addressLabel}
+              help={t.platform.addressHelp}
+              error={addressError}
+              value={cfpId}
+              onChange={(value) => {
+                setIdTouched(true);
+                setId(value);
+                setAddressError('');
+              }}
+              required
+              maxLength={CFP_LIMITS.idMax}
+              disabled={busy}
+            />
+          </div>
 
           <div className="url-preview">
             <div className="url-preview__label-row">

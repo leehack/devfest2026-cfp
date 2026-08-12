@@ -1,38 +1,5 @@
 {
-  "indexes": [
-    {
-      "collectionGroup": "proposals",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "category", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "proposals",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "aggregate.normalizedScore", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "proposals",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "deliveryLanguage", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "proposals",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "speakerIds", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "updatedAt", "order": "DESCENDING" }
-      ]
-    }
-  ],
+  "indexes": [],
   "fieldOverrides": [
     {
       "collectionGroup": "members",

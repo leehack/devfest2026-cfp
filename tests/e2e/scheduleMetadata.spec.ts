@@ -195,12 +195,23 @@ function schedulingFacts(page: Page) {
   return page.locator('dl.schedule-resize-inspector__facts[aria-label="Scheduling facts"]');
 }
 
+/**
+ * The public agenda arrives server-rendered, is replaced by the loading
+ * paragraph while the client takes over, then rebuilt. A single measurement can
+ * land in that gap and read a null box off an unmounted node, so poll until one
+ * settled layout answers.
+ */
 async function expectWithinViewport(locator: Locator, viewportWidth: number) {
   await expect(locator).toBeVisible();
-  const box = await locator.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth);
+  await expect
+    .poll(async () => {
+      const box = await locator.boundingBox();
+      if (!box) return 'not laid out';
+      if (box.x < 0) return `starts at ${box.x}`;
+      if (box.x + box.width > viewportWidth) return `ends at ${box.x + box.width}`;
+      return 'within the viewport';
+    })
+    .toBe('within the viewport');
 }
 
 async function expectContained(locator: Locator, viewportWidth: number) {
@@ -614,6 +625,51 @@ test('the public agenda and detail expose frozen taxonomy and full speaker detai
   });
   await expect(frenchCustom.getByLabel('Type d’élément: Activité sociale')).toBeVisible();
   await expect(frenchCustom.getByText('Bilingue', { exact: true })).toBeVisible();
+});
+
+/**
+ * A lazily imported route has no chunk to hydrate with, so React drops the
+ * server-rendered agenda for the Suspense fallback until one arrives — a blink
+ * of "Loading…" over content the reader could already see.
+ */
+test('the server-rendered agenda is never blanked while the client takes over', async ({
+  page,
+}) => {
+  await seedMetadataSchedule({ publish: true });
+  await page.addInitScript(() => {
+    const seen = { rendered: false, blanked: false };
+    (window as unknown as { agenda: typeof seen }).agenda = seen;
+    const sample = () => {
+      if (document.querySelector('article')) seen.rendered = true;
+      else if (seen.rendered) seen.blanked = true;
+    };
+    const start = () => {
+      sample();
+      new MutationObserver(sample).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    };
+    if (document.documentElement) start();
+    else document.addEventListener('DOMContentLoaded', start);
+  });
+
+  await page.goto(at('/schedule'));
+  await expect(page.getByRole('link', { name: TALK_TITLE })).toBeVisible();
+  // The stored filters are written by an effect, so their arrival is the page
+  // saying the client render owns the agenda now.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Object.keys(window.sessionStorage).some((key) =>
+          key.startsWith('cfp.schedule.filters:'),
+        ),
+      ),
+    )
+    .toBe(true);
+  expect(
+    await page.evaluate(() => (window as unknown as { agenda: { blanked: boolean } }).agenda),
+  ).toMatchObject({ rendered: true, blanked: false });
 });
 
 test('long scheduling facts stay contained at a 320 pixel viewport', async ({ page }) => {

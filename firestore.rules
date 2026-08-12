@@ -80,9 +80,9 @@ service cloud.firestore {
       return get(memberPath(cfpId)).data.role;
     }
 
-    // `owner` outranks `admin` everywhere admin is enough. The distinction only
-    // matters for archiving, deleting and changing who owns the thing, and
-    // those all go through callables rather than through these rules.
+    // `owner` outranks `admin` everywhere admin is enough. The distinction here
+    // matters for archive and deletion callables; a lost owner is repaired out
+    // of band rather than through these rules.
     function isAdmin(cfpId) {
       return isReviewer(cfpId) && roleOn(cfpId) in ['admin', 'owner'];
     }
@@ -123,7 +123,7 @@ service cloud.firestore {
       // A member reads their own document to know they hold a role; seeing the
       // whole committee is an admin matter.
       match /members/{memberUid} {
-        allow get: if signedIn() && (memberUid == uid() || isReviewer(cfpId));
+        allow get: if signedIn() && (memberUid == uid() || isAdmin(cfpId));
         allow list: if isAdmin(cfpId);
         allow write: if false;
       }
@@ -214,11 +214,12 @@ service cloud.firestore {
         //
         // A draft was never handed to anybody. Someone may have typed "I am
         // burning out and want to talk about it" into a pitch and thought better
-        // of sending it — the committee has no claim on that, so reviewers see a
-        // proposal only once its author submitted it. Committee-side queries
-        // must therefore carry `where('status', '!=', 'draft')`.
+        // of sending it — the committee has no claim on that. Reviewers receive
+        // submitted work through a callable-owned whitelist projection. Raw rows
+        // can also hold legacy confirmation and logistics fields, so only the
+        // active speakers and organisers may read the document itself.
         allow get, list: if isSpeakerOn(resource.data)
-          || (isReviewer(cfpId) && resource.data.status != 'draft');
+          || (isAdmin(cfpId) && resource.data.status != 'draft');
 
         // A client may create only its own one-speaker draft. The invitation
         // callable is the sole path that adds a consenting co-speaker later;
@@ -237,7 +238,8 @@ service cloud.firestore {
           && !request.resource.data.keys().hasAny([
                'aggregate', 'submittedAt', 'confirmDeadline',
                'confirmedAt', 'assignedLanguage', 'speakerSnapshot',
-               'headshotUploads', 'speakerPhoto', 'formerSpeakerIds', 'formerSpeakerSnapshot',
+               'confirmAnswers', 'headshotUploads', 'speakerPhoto',
+               'formerSpeakerIds', 'formerSpeakerSnapshot',
                'lateSpeakerPendingIds', 'lateSpeakerPendingInvitations',
                'lateSpeakerScheduleBaselineIds', 'lateSpeakerSchedulePreserved',
                'scheduleCancellationRequired'
@@ -454,7 +456,7 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && !request.resource.data.keys().hasAny(['profilePhoto']);
       allow update: if ownProfile()
-        && request.resource.data.email == resource.data.email
+        && request.resource.data.email == request.auth.token.email
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['profilePhoto']);
       allow delete: if false;
     }

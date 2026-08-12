@@ -21,3 +21,21 @@ describe('link-shaped actions', () => {
     expect(ghost).toMatch(/background\s*:\s*transparent/);
   });
 });
+
+describe('status contrast tokens', () => {
+  it('uses theme-tested foreground pairs for schedule duration and email attention text', () => {
+    const duration = css.match(/\.schedule-resize-inspector__value\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(duration).toMatch(/background\s*:\s*var\(--accent\)/);
+    expect(duration).toMatch(/color\s*:\s*var\(--accent-fg\)/);
+
+    for (const selector of [
+      '.email-attention-card--active .email-attention-card__count',
+      '.pending-email-notice--attention .pending-email-notice__eyebrow',
+      '.subnav__badge--attention',
+    ]) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const declaration = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
+      expect(declaration).toMatch(/color\s*:\s*var\(--error\)/);
+    }
+  });
+});

@@ -5,12 +5,18 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
-  check:
+  validate:
+    name: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -20,7 +26,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             functions/package-lock.json
-      # The emulators need a JVM, for both the rules tests and the e2e stack.
+      # The rules tests need a JVM.
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -64,10 +70,33 @@ jobs:
       # worse than a red one.
       - run: npm run test:rules
 
+  e2e:
+    name: e2e (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      # Each shard owns one complete emulator stack on its runner.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - run: npm ci
+      - run: npm ci --prefix functions
       - run: npx playwright install --with-deps chromium
 
-      # Started once, here, rather than by Playwright: the two runs below share
-      # it, and a second `npm start` cannot claim ports the first still holds.
       - name: Start the emulated stack
         run: |
           npm start > /tmp/stack.log 2>&1 &
@@ -77,28 +106,88 @@ jobs:
           done
           echo "stack never came up"; cat /tmp/stack.log; exit 1
 
-      - run: npm run test:e2e
+      - name: Run shard ${{ matrix.shard }}/4
+        run: npx playwright test --shard=${{ matrix.shard }}/4
         env:
           E2E_SKIP_NETWORK: '1'
 
-      # Fetches a third-party site, so it is kept out of the blocking path: a
-      # Sessionize outage must not stop a merge. A markup change still shows up
-      # here, which is the point of the test.
-      - name: e2e against sessionize.com
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p test-results
+          if [ -f /tmp/stack.log ]; then cp /tmp/stack.log test-results/stack.log; fi
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
         continue-on-error: true
+        with:
+          name: e2e-shard-${{ matrix.shard }}-results
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # This live third-party probe is useful but must not gate a merge.
+  sessionize:
+    name: sessionize (nonblocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - run: npm ci
+      - run: npm ci --prefix functions
+      - run: npx playwright install --with-deps chromium
+
+      - name: Start the emulated stack
+        run: |
+          npm start > /tmp/stack.log 2>&1 &
+          for _ in $(seq 1 120); do
+            curl -sf http://localhost:5173 >/dev/null && exit 0
+            sleep 2
+          done
+          echo "stack never came up"; cat /tmp/stack.log; exit 1
+
+      - name: Test live Sessionize integration
         run: npx playwright test tests/e2e/sessionize.spec.ts
 
-      # `|| true`, because this runs on any failure — including one that happened
-      # long before the stack was started, when the file does not exist. Without
-      # it the diagnostic step fails too, and the log ends on a missing-file error
-      # rather than on the thing that actually broke.
-      - name: Stack log
+      - name: Collect failure diagnostics
         if: failure()
-        run: cat /tmp/stack.log || true
+        run: |
+          mkdir -p test-results
+          if [ -f /tmp/stack.log ]; then cp /tmp/stack.log test-results/stack.log; fi
 
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: playwright-report
-          path: playwright-report/
+          name: sessionize-failure
+          path: test-results/
+          if-no-files-found: warn
           retention-days: 7
+
+  # Keep the existing required status name stable while the work runs in parallel.
+  check:
+    name: check
+    if: ${{ always() }}
+    needs: [validate, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Confirm required jobs passed
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          test "$VALIDATE_RESULT" = success
+          test "$E2E_RESULT" = success

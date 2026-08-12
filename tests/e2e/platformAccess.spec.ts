@@ -85,6 +85,7 @@ test.describe('platform creator access', () => {
 
     await page.goto('/platform');
     await expect(page.getByText('That page is not available to your account.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Check access again' })).toBeVisible();
 
     await page.goto('/new');
     const admin = await createAccount(ADMIN);

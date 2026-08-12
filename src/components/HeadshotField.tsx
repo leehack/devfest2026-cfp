@@ -6,7 +6,7 @@
  * the browser never receives a bucket URL or creates a download token.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { uploadHeadshot, workingHeadshotImage } from '../lib/proposals';
 import { useI18n } from '../i18n/context';
@@ -41,6 +41,8 @@ export function HeadshotField({
   onBusyChange,
 }: Props) {
   const { t } = useI18n();
+  const inputId = useId();
+  const helpId = help ? `${inputId}-help` : undefined;
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState('');
@@ -138,6 +140,8 @@ export function HeadshotField({
   }
 
   const message = problem || error;
+  const errorId = message ? `${inputId}-error` : undefined;
+  const descriptionIds = [helpId, errorId].filter(Boolean).join(' ') || undefined;
 
   return (
     <div className={`field${message ? ' field--error' : ''}`}>
@@ -145,7 +149,7 @@ export function HeadshotField({
         {label}
         <span className="field__requirement">{required ? t.form.required : t.form.optional}</span>
       </span>
-      {help && <p className="field__help">{help}</p>}
+      {help && <p className="field__help" id={helpId}>{help}</p>}
 
       <div className="headshot">
         {preview ? (
@@ -158,6 +162,9 @@ export function HeadshotField({
             type="button"
             className="btn"
             disabled={disabled || busy}
+            aria-invalid={Boolean(message)}
+            aria-describedby={descriptionIds}
+            aria-errormessage={errorId}
             onClick={() => input.current?.click()}
           >
             {busy
@@ -177,6 +184,9 @@ export function HeadshotField({
         accept={IMAGE_TYPES.join(',')}
         aria-label={label}
         aria-invalid={Boolean(message)}
+        aria-describedby={descriptionIds}
+        aria-errormessage={errorId}
+        tabIndex={-1}
         disabled={disabled || busy}
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -185,7 +195,7 @@ export function HeadshotField({
       />
 
       {message && (
-        <p className="field__error" role="alert">
+        <p className="field__error" id={errorId} role="alert">
           {message}
         </p>
       )}

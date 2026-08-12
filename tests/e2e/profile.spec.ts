@@ -70,6 +70,18 @@ test.describe('the speaker profile', () => {
     await expect(field(page, 'Company')).toHaveValue('Acme');
   });
 
+  test('gives each repeated social-link control a distinct accessible name', async ({ page }) => {
+    await signInAs(page, SPEAKER, '/me');
+
+    await page.getByRole('button', { name: 'Add a link' }).click();
+    await page.getByRole('button', { name: 'Add a link' }).click();
+
+    await expect(page.getByRole('group', { name: 'Website 1' })).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Website 2' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove — Website 1' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove — Website 2' })).toBeVisible();
+  });
+
   test('refuses to save a half-filled profile, and says which half', async ({ page }) => {
     await signInAs(page, SPEAKER, '/me');
 

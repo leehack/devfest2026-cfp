@@ -7,6 +7,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { DEFAULT_SUBMISSION_FORM } from '@shared/submissionForm';
 
 import {
   createAccount,
@@ -18,12 +19,19 @@ import {
   seedMember,
   seedProposal,
   seedSpeaker,
+  seedSpeakerParticipant,
   seedSubmittedProposal,
+  setSubmissionFormDirect,
 } from './backend';
 import { alerts, at, signInAs, type Identity } from './form';
 
 const REVIEWER: Identity = { sub: 'deck-reviewer', email: 'rey@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'deck-speaker', email: 'sam@example.org', name: 'Sam' };
+const CO_SPEAKER: Identity = {
+  sub: 'deck-co-speaker',
+  email: 'morgan@example.org',
+  name: 'Morgan',
+};
 
 const TITLES = ['Alpha on caching', 'Beta on queues', 'Gamma on tracing'];
 
@@ -95,6 +103,173 @@ test.describe('the review deck', () => {
     // back to the start without noticing.
     await page.keyboard.press('ArrowLeft');
     await expect(heading(page, TITLES[0])).toBeVisible();
+  });
+
+  test('renders safe solo travel without legacy confirmation or contact details', async ({
+    page,
+  }) => {
+    await reset();
+    const reviewer = await createAccount(REVIEWER);
+    const speaker = await createAccount(SPEAKER);
+    await seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email);
+    await setSubmissionFormDirect({
+      fields: [
+        {
+          key: 'reviewerContext',
+          type: 'textarea',
+          required: false,
+          label: { en: 'Reviewer context', fr: 'Contexte pour le comité' },
+        },
+        {
+          key: 'demoMode',
+          type: 'select',
+          required: false,
+          label: { en: 'Demo format', fr: 'Format de la démo' },
+          options: [{ value: 'live', label: { en: 'Live demo', fr: 'Démo en direct' } }],
+        },
+      ],
+    });
+    await seedProposal('private-legacy-details', {
+      speakerUid: speaker.uid,
+      title: 'A safe projected review',
+      status: 'submitted',
+      speaker: {
+        name: 'Public Speaker',
+        bio: 'This public biography reaches the review card.',
+        email: 'private-speaker@example.org',
+        dietaryNeeds: 'Private dietary detail',
+      },
+      attendance: {
+        status: 'pending',
+        fundingSource: 'GDE programme application',
+        decisionBy: '2026-10-01',
+        needsVisa: true,
+        privateArrivalInstructions: 'Private hotel details',
+      },
+      confirmAnswers: { dietaryNeeds: 'Severe allergy' },
+      headshotUploads: { portrait: { path: 'private-working-photo' } },
+      speakerPhoto: { path: 'private-confirmed-photo' },
+      answers: {
+        reviewerContext: '  The live coding is the core of the session.  ',
+        demoMode: 'live',
+        privateTravelNote: 'Never expose this applicant note',
+      },
+    });
+
+    await signInAs(page, REVIEWER, at('/review'));
+    await expect(heading(page, 'A safe projected review')).toBeVisible();
+    await expect(page.getByText('This public biography reaches the review card.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Additional talk details' })).toBeVisible();
+    await expect(page.getByText('Reviewer context')).toBeVisible();
+    await expect(page.getByText('The live coding is the core of the session.')).toBeVisible();
+    await expect(page.getByText('Live demo')).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'Getting to Montréal — Public Speaker' }),
+    ).toBeVisible();
+    await expect(page.getByText("I expect to arrange it but it isn't confirmed yet")).toBeVisible();
+    await expect(page.getByText('GDE programme application')).toBeVisible();
+    await expect(page.getByText('2026-10-01')).toBeVisible();
+    await expect(page.getByText('I will need a visa or eTA to enter Canada')).toBeVisible();
+    for (const privateValue of [
+      'private-speaker@example.org',
+      'Private dietary detail',
+      'Private hotel details',
+      'Severe allergy',
+      'private-working-photo',
+      'private-confirmed-photo',
+      'Never expose this applicant note',
+    ]) {
+      await expect(page.getByText(privateValue, { exact: false })).toHaveCount(0);
+    }
+
+    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await expect(
+      page.getByRole('heading', {
+        name: 'Renseignements supplémentaires sur la conférence',
+      }),
+    ).toBeVisible();
+    await expect(page.getByText('Contexte pour le comité')).toBeVisible();
+    await expect(page.getByText('Démo en direct')).toBeVisible();
+  });
+
+  test('uses event travel labels and omits reviewer-hidden follow-ups', async ({ page }) => {
+    await reset();
+    const reviewer = await createAccount(REVIEWER);
+    const speaker = await createAccount(SPEAKER);
+    await seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email);
+    await setSubmissionFormDirect({
+      attendance: {
+        ...DEFAULT_SUBMISSION_FORM.attendance,
+        title: { en: 'Arrival planning' },
+        statuses: DEFAULT_SUBMISSION_FORM.attendance.statuses.map((status) => ({
+          ...status,
+          label: status.value === 'pending' ? { en: 'Awaiting travel approval' } : status.label,
+        })),
+        fundingSource: {
+          ...DEFAULT_SUBMISSION_FORM.attendance.fundingSource,
+          reviewerVisible: false,
+        },
+        decisionBy: {
+          ...DEFAULT_SUBMISSION_FORM.attendance.decisionBy,
+          label: { en: 'Approval date' },
+        },
+        needsVisa: {
+          ...DEFAULT_SUBMISSION_FORM.attendance.needsVisa,
+          label: { en: 'Entry paperwork required' },
+        },
+      },
+    });
+    await seedProposal('configured-review-travel', {
+      speakerUid: speaker.uid,
+      title: 'Configured travel review',
+      status: 'submitted',
+      speaker: { name: 'Travelling Speaker', bio: 'x'.repeat(120) },
+      attendance: {
+        status: 'pending',
+        fundingSource: 'Private sponsor detail',
+        decisionBy: '2026-10-01',
+        needsVisa: true,
+      },
+    });
+
+    await signInAs(page, REVIEWER, at('/review'));
+    await expect(heading(page, 'Getting here')).toBeVisible();
+    await expect(heading(page, 'Submission details')).toHaveCount(0);
+    const travel = page.getByRole('region', { name: 'Arrival planning — Travelling Speaker' });
+    await expect(travel.getByText('Awaiting travel approval')).toBeVisible();
+    await expect(travel.getByText('Approval date')).toBeVisible();
+    await expect(travel.getByText('Entry paperwork required')).toBeVisible();
+    await expect(page.getByText('Private sponsor detail')).toHaveCount(0);
+  });
+
+  test('uses a neutral metadata heading when attendance is disabled', async ({ page }) => {
+    await reset();
+    const reviewer = await createAccount(REVIEWER);
+    const speaker = await createAccount(SPEAKER);
+    await seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email);
+    await setSubmissionFormDirect({
+      attendance: { ...DEFAULT_SUBMISSION_FORM.attendance, enabled: false },
+    });
+    await seedProposal('review-without-travel', {
+      speakerUid: speaker.uid,
+      title: 'Submission metadata without travel',
+      status: 'submitted',
+      deliveryLanguage: 'either',
+      languagePreference: 'French preferred',
+      submittedAt: 1_786_464_000_123,
+    });
+
+    await signInAs(page, REVIEWER, at('/review'));
+    await expect(heading(page, 'Submission details')).toBeVisible();
+    await expect(heading(page, 'Getting here')).toHaveCount(0);
+    await expect(page.getByText('French preferred')).toBeVisible();
+    await expect(page.getByText('Submitted')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await expect(heading(page, 'Détails de la soumission')).toBeVisible();
+    await expect(heading(page, 'Venir sur place')).toHaveCount(0);
+    await expect(page.getByText('Préférence de langue')).toBeVisible();
+    await expect(page.getByText('Soumise')).toBeVisible();
   });
 
   test('a number scores the talk on screen and advances', async ({ page }) => {
@@ -260,6 +435,13 @@ test.describe('the review deck', () => {
     for (const name of ['1 — Pass', '2 — Maybe', '3 — Yes', '4 — Strong yes']) {
       await expect(page.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
     }
+
+    await page.keyboard.press('3');
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    expect((await readReviews('deck-0'))[0]).toMatchObject({
+      conflictOfInterest: true,
+      score: 1,
+    });
   });
 
   test('the shortcut list can be opened from the keyboard', async ({ page }) => {
@@ -323,39 +505,120 @@ test.describe('the review deck', () => {
     await expect(page.getByText('Every proposal in this view has a response.')).toBeVisible();
   });
 
-  /*
-   * The applicant answers all of this and none of it used to reach the card, so
-   * a talk could be scored without anyone seeing that its speaker needs a visa
-   * and expects to hear about funding after the programme locks.
-   */
-  test('the card shows what it takes to put the talk on the schedule', async ({ page }) => {
+  test('the card keeps each active speaker’s projected travel details separate', async ({
+    page,
+  }) => {
     await reset();
-    await createAccount(REVIEWER);
-    const speaker = await createAccount(SPEAKER);
-    await seedSpeaker(speaker.uid, { name: 'Sam', email: SPEAKER.email });
-    await inviteRole(REVIEWER.email, 'reviewer');
+    const [reviewer, speaker, coSpeaker] = await Promise.all([
+      createAccount(REVIEWER),
+      createAccount(SPEAKER),
+      createAccount(CO_SPEAKER),
+    ]);
+    await seedMember(reviewer.uid, 'reviewer', undefined, REVIEWER.email);
     await seedProposal('deck-far', {
       speakerUid: speaker.uid,
       title: 'Coming a long way',
       status: 'submitted',
       deliveryLanguage: 'either',
       languagePreference: 'French if the room is up for it.',
+      speakerIds: [speaker.uid, coSpeaker.uid],
+      primarySpeakerId: speaker.uid,
+      speakerSnapshot: [
+        {
+          uid: speaker.uid,
+          name: 'Sam Lead',
+          bio: 'x'.repeat(120),
+          basedIn: 'Québec, QC',
+          socials: [],
+          isGde: false,
+          email: 'sam-private@example.org',
+        },
+        {
+          uid: coSpeaker.uid,
+          name: 'Morgan Co-speaker',
+          bio: 'y'.repeat(120),
+          basedIn: 'Toronto, ON',
+          socials: [],
+          isGde: false,
+          email: 'morgan-private@example.org',
+        },
+      ],
+      // Roster-mode proposals use participant rows; this legacy root value
+      // must not be mixed into either speaker's projected itinerary.
       attendance: {
-        status: 'pending',
-        fundingSource: 'Applying to the GDE programme.',
-        decisionBy: '2026-10-01',
-        needsVisa: true,
+        status: 'secured',
+        fundingSource: 'Stale root funding',
+        needsVisa: false,
       },
+      confirmAnswers: { dietaryNeeds: 'Private dietary detail' },
     });
+    await Promise.all([
+      seedSpeakerParticipant('deck-far', speaker.uid, {
+        role: 'primary',
+        attendance: {
+          status: 'pending',
+          fundingSource: 'Applying to the GDE programme.',
+          decisionBy: '2026-10-01',
+          needsVisa: true,
+          privateArrivalInstructions: 'Sam lands at 14:00',
+        },
+      }),
+      seedSpeakerParticipant('deck-far', coSpeaker.uid, {
+        role: 'coSpeaker',
+        attendance: {
+          status: 'secured',
+          fundingSource: 'Employer conference budget',
+          needsVisa: false,
+          privateArrivalInstructions: 'Morgan lands at 15:00',
+        },
+      }),
+    ]);
 
     await signInAs(page, REVIEWER, at('/review'));
     await expect(heading(page, 'Coming a long way')).toBeVisible();
 
-    await expect(page.getByText('Expected but not confirmed')).toBeVisible();
-    await expect(page.getByText('Applying to the GDE programme.')).toBeVisible();
-    await expect(page.getByText('2026-10-01')).toBeVisible();
-    await expect(page.getByText(/Needs a visa or eTA/)).toBeVisible();
+    const samTravel = page.getByRole('region', { name: 'Getting to Montréal — Sam Lead' });
+    await expect(
+      samTravel.getByText("I expect to arrange it but it isn't confirmed yet"),
+    ).toBeVisible();
+    await expect(samTravel.getByText('Applying to the GDE programme.')).toBeVisible();
+    await expect(samTravel.getByText('2026-10-01')).toBeVisible();
+    await expect(samTravel.getByText('I will need a visa or eTA to enter Canada')).toBeVisible();
+
+    const morganTravel = page.getByRole('region', {
+      name: 'Getting to Montréal — Morgan Co-speaker',
+    });
+    await expect(
+      morganTravel.getByText(
+        'My travel and accommodation are already covered (employer, GDE program, or self-funded)',
+      ),
+    ).toBeVisible();
+    await expect(morganTravel.getByText('Employer conference budget')).toBeVisible();
+    await expect(
+      morganTravel.getByText('I will need a visa or eTA to enter Canada'),
+    ).toBeVisible();
+
+    for (const privateValue of [
+      'sam-private@example.org',
+      'morgan-private@example.org',
+      'Private dietary detail',
+      'Stale root funding',
+      'Sam lands at 14:00',
+      'Morgan lands at 15:00',
+    ]) {
+      await expect(page.getByText(privateValue, { exact: false })).toHaveCount(0);
+    }
     await expect(page.getByText('French if the room is up for it.')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await expect(
+      page.getByRole('region', { name: 'Venir à Montréal — Sam Lead' }),
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole('region', { name: 'Venir à Montréal — Morgan Co-speaker' })
+        .getByText("J'aurai besoin d'un visa ou d'une AVE pour entrer au Canada"),
+    ).toBeVisible();
   });
 
   /*

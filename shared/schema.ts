@@ -8,7 +8,12 @@ import { z } from 'zod';
 import { ATTENDANCE_STATUSES, LIMITS, SOCIAL_PLATFORMS } from './enums';
 import { parseSessionizeUrl } from './sessionize';
 import type { FieldOption } from './confirmForm';
-import { DEFAULT_SUBMISSION_FORM, type SubmissionForm } from './submissionForm';
+import {
+  attendanceInputFor,
+  DEFAULT_SUBMISSION_FORM,
+  type SubmissionAttendanceConfig,
+  type SubmissionForm,
+} from './submissionForm';
 
 const trimmed = (max: number) => z.string().trim().max(max);
 
@@ -100,6 +105,67 @@ export const attendanceSchema = z
     }
   });
 
+/** The event's attendance rules, without requiring or retaining disabled data. */
+export function attendanceSchemaFor(
+  form: SubmissionForm | SubmissionAttendanceConfig = DEFAULT_SUBMISSION_FORM,
+) {
+  const config = 'attendance' in form ? form.attendance : form;
+  if (!config.enabled) {
+    return z.preprocess(() => undefined, z.undefined().optional());
+  }
+  return z.preprocess(
+    (value) => attendanceInputFor(form, value),
+    z
+      .object({
+        status: z.enum(ATTENDANCE_STATUSES),
+        ...(config.fundingSource.enabled
+          ? { fundingSource: trimmed(LIMITS.fundingSourceMax).optional() }
+          : {}),
+        ...(config.decisionBy.enabled ? { decisionBy: z.string().optional() } : {}),
+        ...(config.needsVisa.enabled ? { needsVisa: z.boolean() } : {}),
+      })
+      .superRefine((val, ctx) => {
+        const needsFunding = val.status === 'secured' || val.status === 'pending';
+        const fundingSource =
+          'fundingSource' in val && typeof val.fundingSource === 'string'
+            ? val.fundingSource
+            : undefined;
+        const decisionBy =
+          'decisionBy' in val && typeof val.decisionBy === 'string'
+            ? val.decisionBy
+            : undefined;
+        if (config.fundingSource.enabled && needsFunding && !fundingSource?.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['fundingSource'],
+            params: { key: 'fundingSourceRequired' },
+            message: 'Tell us where the funding is coming from.',
+          });
+        }
+        if (
+          config.decisionBy.enabled &&
+          val.status === 'pending' &&
+          !decisionBy
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['decisionBy'],
+            params: { key: 'decisionByRequired' },
+            message: 'When do you expect to know?',
+          });
+        }
+        if (decisionBy && !/^\d{4}-\d{2}-\d{2}$/.test(decisionBy)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['decisionBy'],
+            params: { key: 'dateFormat' },
+            message: 'Use the date picker.',
+          });
+        }
+      }),
+  );
+}
+
 /**
  * One of the four choice fields, checked against whatever this call offers.
  *
@@ -178,7 +244,7 @@ export function submissionSchema(form: SubmissionForm = DEFAULT_SUBMISSION_FORM)
     proposal: proposalCoreSchema(form),
     speaker: speakerSchema,
     acks: acksSchemaFor(form),
-    attendance: attendanceSchema,
+    attendance: attendanceSchemaFor(form),
   });
 }
 
@@ -195,5 +261,5 @@ export interface SubmissionInput {
   };
   speaker: z.input<typeof speakerSchema>;
   acks: Record<string, boolean>;
-  attendance: z.input<typeof attendanceSchema>;
+  attendance?: z.input<typeof attendanceSchema>;
 }

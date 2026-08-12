@@ -19,20 +19,28 @@ import { Checkbox, SelectField, TextAreaField, TextField } from './fields';
 import { useI18n } from '../i18n/context';
 import { FIELD_TYPES, FORM_LIMITS, type ConfirmField, type FieldType } from '@shared/confirmForm';
 
+type EditableField = ConfirmField & { reviewerVisible?: boolean };
+
 /** One option per line. The line is the stored value and its own label. */
 const toLines = (field: ConfirmField) =>
   (field.options ?? []).map((option) => option.value).join('\n');
 
-const fromLines = (text: string) =>
+export const optionsFromLines = (text: string) =>
   text
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
     .map((value) => ({ value, label: { en: value } }));
 
+export const normaliseOptionLines = (options: ConfirmField['options']) =>
+  (options ?? [])
+    .map((option) => {
+      const value = option.value.trim();
+      return { value, label: { ...option.label, en: value } };
+    })
+    .filter((option) => option.value.length > 0);
+
 export interface FieldRowsProps {
-  fields: ConfirmField[];
-  onChange: (fields: ConfirmField[]) => void;
+  fields: EditableField[];
+  onChange: (fields: EditableField[]) => void;
   busy: boolean;
   /**
    * Which answer types this list offers. Defaults to all of them; the
@@ -45,6 +53,11 @@ export interface FieldRowsProps {
    * would be offering to turn an agreement into a question.
    */
   consent?: boolean;
+  /** Submission questions can choose whether their answer enters the review DTO. */
+  reviewerVisibility?: {
+    label: string;
+    help: string;
+  };
   max?: number;
   /** Wording, so consents do not call themselves questions. */
   labels: {
@@ -63,12 +76,13 @@ export function FieldRows({
   busy,
   types = FIELD_TYPES,
   consent = false,
+  reviewerVisibility,
   max = FORM_LIMITS.fields,
   labels,
 }: FieldRowsProps) {
   const { t } = useI18n();
 
-  const patch = (index: number, part: Partial<ConfirmField>) =>
+  const patch = (index: number, part: Partial<EditableField>) =>
     onChange(fields.map((field, i) => (i === index ? { ...field, ...part } : field)));
 
   function add() {
@@ -76,7 +90,13 @@ export function FieldRows({
       ...fields,
       consent
         ? { key: '', type: 'checkbox', label: { en: '' }, required: true }
-        : { key: '', type: types[0] ?? 'text', label: { en: '' }, required: false },
+        : {
+            key: '',
+            type: types[0] ?? 'text',
+            label: { en: '' },
+            required: false,
+            ...(reviewerVisibility ? { reviewerVisible: true } : {}),
+          },
     ]);
   }
 
@@ -257,6 +277,16 @@ export function FieldRows({
                   />
                 </div>
               </div>
+
+              {reviewerVisibility && (
+                <Checkbox
+                  label={reviewerVisibility.label}
+                  help={reviewerVisibility.help}
+                  checked={field.reviewerVisible !== false}
+                  onChange={(reviewerVisible) => patch(index, { reviewerVisible })}
+                  disabled={busy}
+                />
+              )}
             </>
           )}
 
@@ -266,7 +296,7 @@ export function FieldRows({
               required
               help={t.admin.formOptionsHelp}
               value={toLines(field)}
-              onChange={(text) => patch(index, { options: fromLines(text) })}
+              onChange={(text) => patch(index, { options: optionsFromLines(text) })}
               rows={4}
               disabled={busy}
             />

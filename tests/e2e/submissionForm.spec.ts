@@ -8,6 +8,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { DEFAULT_SUBMISSION_FORM } from '@shared/submissionForm';
 
 import {
   CFP_ID,
@@ -26,6 +27,34 @@ import { at, check, field, fillRequired, select, signInAs, waitForSave, type Ide
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 const ADMIN: Identity = { sub: 'admin-sub', email: 'ada@example.org', name: 'Ada' };
 const REVIEWER: Identity = { sub: 'rev-sub', email: 'rev@example.org', name: 'Robin' };
+
+const CUSTOM_ATTENDANCE = {
+  ...DEFAULT_SUBMISSION_FORM.attendance,
+  title: { en: 'Getting to Halifax', fr: 'Venir à Halifax' },
+  question: { en: 'What is your Halifax travel plan?' },
+  statuses: DEFAULT_SUBMISSION_FORM.attendance.statuses.map((status) => ({
+    ...status,
+    label:
+      status.value === 'pending'
+        ? { en: 'Waiting on a travel decision' }
+        : status.label,
+  })),
+  fundingSource: {
+    ...DEFAULT_SUBMISSION_FORM.attendance.fundingSource,
+    enabled: false,
+  },
+  decisionBy: {
+    ...DEFAULT_SUBMISSION_FORM.attendance.decisionBy,
+    label: { en: 'When will the travel decision arrive?' },
+  },
+  needsVisa: {
+    ...DEFAULT_SUBMISSION_FORM.attendance.needsVisa,
+    enabled: false,
+  },
+  gdeGuidance: {
+    en: 'Ask the event travel desk about the event-specific expert programme.',
+  },
+};
 
 /** Nothing like DevFest's: different codes, one language, one consent. */
 const OWN_FORM = {
@@ -89,6 +118,40 @@ test.describe('a call that asks its own questions', () => {
     await expect(page.getByText('travel and accommodation are not covered')).toHaveCount(0);
 
     await expect(field(page, 'Link to the code')).toBeVisible();
+  });
+
+  test('renders event-owned travel copy and independently enabled follow-ups', async ({ page }) => {
+    await setSubmissionFormDirect({ attendance: CUSTOM_ATTENDANCE });
+    await createAccount(SPEAKER);
+    await signInAs(page, SPEAKER);
+
+    await expect(page.getByRole('heading', { name: 'Getting to Halifax' })).toBeVisible();
+    await page.getByRole('radio', { name: 'Waiting on a travel decision' }).check();
+    await expect(field(page, 'Where is the funding coming from?')).toHaveCount(0);
+    await expect(field(page, 'When will the travel decision arrive?')).toBeVisible();
+    await expect(
+      page.getByRole('checkbox', { name: 'I will need a visa or eTA to enter Canada' }),
+    ).toHaveCount(0);
+
+    await check(page, 'Google Developer Expert').check();
+    await expect(
+      page.getByText('Ask the event travel desk about the event-specific expert programme.'),
+    ).toBeVisible();
+  });
+
+  test('an event can omit travel without leaving an empty section or progress link', async ({
+    page,
+  }) => {
+    await setSubmissionFormDirect({
+      attendance: { ...CUSTOM_ATTENDANCE, enabled: false },
+    });
+    await createAccount(SPEAKER);
+    await signInAs(page, SPEAKER);
+
+    await expect(page.getByRole('heading', { name: 'Getting to Halifax' })).toHaveCount(0);
+    await expect(page.locator('a[href="#submission-attendance"]')).toHaveCount(0);
+    await check(page, 'Google Developer Expert').check();
+    await expect(page.getByText(/GDEs should contact their GDE program manager/)).toHaveCount(0);
   });
 
   test('a whole submission goes through against that form', async ({ page }) => {
@@ -211,6 +274,38 @@ test.describe('the admin editor', () => {
     await expect(select(page, 'Category')).toContainText('Building apps');
   });
 
+  test('an admin configures the event travel module and its reviewer exposure', async ({ page }) => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await signInAs(page, ADMIN, at('/admin/submission'));
+
+    const travel = page.getByRole('group', { name: 'Travel and attendance' });
+    await expect(
+      travel.getByRole('checkbox', { name: 'Ask speakers for travel information' }),
+    ).toBeChecked();
+    await travel
+      .getByRole('textbox', { name: 'Section heading · English' })
+      .fill('Getting to Halifax');
+
+    const funding = travel.getByRole('region', { name: 'Funding source' });
+    await expect(
+      funding.getByRole('checkbox', { name: 'Show this answer to reviewers' }),
+    ).toBeChecked();
+    await funding.getByRole('checkbox', { name: 'Ask this follow-up' }).uncheck();
+    await expect(
+      funding.getByRole('checkbox', { name: 'Show this answer to reviewers' }),
+    ).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Save the form' }).click();
+    await expect(page.getByText('Submission form saved.')).toBeVisible();
+    await page.reload();
+    await expect(
+      page
+        .getByRole('group', { name: 'Travel and attendance' })
+        .getByRole('textbox', { name: 'Section heading · English' }),
+    ).toHaveValue('Getting to Halifax');
+  });
+
   test('an empty list is refused before it reaches the callable', async ({ page }) => {
     const admin = await createAccount(ADMIN);
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
@@ -225,6 +320,29 @@ test.describe('the admin editor', () => {
 
     await page.getByRole('button', { name: 'Save the form' }).click();
     await expect(page.locator('.editorbar__error')).toContainText('Formats has no choices');
+  });
+
+  test('an admin can keep a custom answer out of the review queue', async ({ page }) => {
+    await setSubmissionFormDirect(OWN_FORM);
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    await signInAs(page, ADMIN, at('/admin/submission'));
+
+    const question = page.getByRole('group', { name: 'Link to the code', exact: true });
+    const visibility = question.getByRole('checkbox', {
+      name: 'Show this answer to reviewers',
+    });
+    await expect(visibility).toBeChecked();
+    await visibility.uncheck();
+    await page.getByRole('button', { name: 'Save the form' }).click();
+    await expect(page.getByText('Submission form saved.')).toBeVisible();
+
+    await page.reload();
+    await expect(
+      page
+        .getByRole('group', { name: 'Link to the code', exact: true })
+        .getByRole('checkbox', { name: 'Show this answer to reviewers' }),
+    ).not.toBeChecked();
   });
 
   test('changing admin tabs does not discard an unsaved form edit', async ({ page }) => {

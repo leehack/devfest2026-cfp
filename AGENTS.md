@@ -8,12 +8,17 @@ Conventions and hard-won facts for this repo. `SPEC.md` is the product spec;
 ```bash
 npm start            # the whole local stack: emulators, seeded config, next dev on 5173
 npm run verify       # lint, build, unit, rules, e2e — what CI runs
+npm run test:e2e:changed  # browser tests affected by uncommitted changes
+npm run test:e2e:failed   # failures recorded by the previous browser run
 ```
 
 Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules`
 (vitest `rules` project, needs the Firestore emulator), and `npm run test:e2e`
 (Playwright against the `npm start` stack). Both emulator suites go through
 `scripts/with-java.mjs`, which finds a Homebrew JVM — macOS has none on PATH.
+CI splits Playwright across four isolated runners, each with its own stack, while
+keeping `workers: 1` inside every shard because each test resets shared emulator
+state. The live Sessionize probe runs separately and does not gate a merge.
 
 ```bash
 node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
@@ -24,8 +29,10 @@ GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email owner@exam
 
 Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
 the platform's own settings, an administrator, and the first global owner. The seeding scripts
-take emulator env vars from their own headers. There is no CFP-owner bootstrap:
-an approved creator is written as owner in the creation transaction. Platform
+take emulator env vars from their own headers. `seed-cfp --owner` requires that
+organiser to already have a verified, enabled Auth account; it never leaves a
+pending owner grant. There is no in-app CFP-owner bootstrap: an approved creator
+is written as owner in the creation transaction. Platform
 owners are different and deliberately bootstrapped out of band; they delegate
 platform admins, and owners or admins delegate creator access.
 
@@ -33,7 +40,7 @@ platform admins, and owners or admins delegate creator access.
 
 ```
 shared/      enums, types, zod schema, email copy, pure parsers — BOTH bundles
-src/         the app: pages/ (submit, admin, review), lib/ (data access), i18n/
+src/         the app: screens/ (submit, admin, review), lib/ (data access), i18n/
 functions/   callables: submit, withdraw, event/platform roles, window,
              aggregates, sessionize, emailQueue — plus email delivery
 scripts/     dev.mjs, seed-cfp.mjs, set-platform.mjs,
@@ -94,17 +101,21 @@ get whichever the server guessed.
 
 A speaker may hold several talks (`LIMITS.maxTalksPerSpeaker`), switched by the
 picker on the form. Only the talk half is cleared between them — the speaker
-profile and the travel answers carry over (`clearTalk` in `src/lib/formState.ts`).
+profile and, when the CFP collects them, the travel answers carry over
+(`clearTalk` in `src/lib/formState.ts`).
 
 `src/lib/lifecycle.ts` decides what a speaker may still change: everything until
-the committee starts reading, then travel answers only, then nothing. The speaker
-profile is outside it — that document belongs to the account and never freezes.
-The rules are the enforcement; `editScope` only decides what to disable.
+the committee starts reading, then configured travel answers only, then nothing.
+When attendance is disabled, the logistics scope has no attendance UI or write.
+The speaker profile is outside it — that document belongs to the account and
+never freezes. The rules are the enforcement; `editScope` only decides what to
+disable.
 
 Each accepted speaker answers with `respondToDecision` — `confirmed` or
-`declined`, from `accepted` only. Roster proposals store the answer, required
-form data and image pointers under `speakerConfirmations/{uid}`; legacy
-single-speaker proposals retain the root fallback. The proposal becomes
+`declined`, from `accepted` only. Proposals that have entered roster mode store
+the answer, required form data and image pointers under
+`speakerConfirmations/{uid}`; a solo proposal that has never entered roster mode
+retains the root fallback. The proposal becomes
 `confirmed` only when every active speaker confirms. A co-speaker decline leaves
 the talk accepted and needing organiser attention; a lead decline declines it.
 An admin may invite a late co-speaker after acceptance. The pending invite changes
@@ -218,35 +229,43 @@ collection — the rule names the two readable documents one at a time.
 - **Status groupings live in `STATUS_SETS` (`shared/enums.ts`).** They had drifted
   across the form, the callables and the admin screen. `firestore.rules` restates
   them because the rules language cannot import — change one, change both.
-- **Reviewers never see a draft.** It belongs to its active speaker roster; an
-  exact pending invitee sees only a callable-projected consent summary. Committee
-  queries must carry `where('status', '!=', 'draft')` or the rules deny the
-  whole listing.
+- **Reviewers never read raw proposal documents.** They receive the active review
+  queue through a callable-owned whitelist projection. When this CFP enables
+  attendance, the only travel data in that projection is the configured,
+  reviewer-visible subset for each speaker on the current active roster:
+  `status`, `fundingSource`, `decisionBy` and `needsVisa`. Each subfield has its
+  own collection and reviewer-visibility switch; disabled values never enter the
+  DTO. A disabled attendance section produces no travel projection at all.
+  Read active `speakerParticipants` rows first and use root `attendance` only as
+  the legacy solo fallback; never copy an attendance map verbatim. The projection
+  still strips acknowledgements, contact and photo data, lifecycle state, and all
+  post-acceptance confirmation answers, including dietary and accessibility
+  needs. Core proposal fields are always reviewable. For organiser-defined
+  submission questions, `reviewerVisible: false` excludes that answer; an absent
+  flag is the legacy-compatible visible default. Acknowledgements never enter the
+  review payload. It filters active or former speakers out of their own
+  proposals. Drafts are outside that queue. Active speakers and event admins
+  retain the raw reads they need. An exact pending invitee sees only a separate
+  callable-projected consent summary. The queue is a one-shot read, so attendance
+  is current as of its most recent load or refresh rather than updated live.
 - **`speakerIds` starts as `[uid()]` and is callable-only thereafter.** A verified
   email invitation is still only pending metadata: the exact invited account must
   accept before its uid is added. The first speaker remains `primarySpeakerId`
   and owns talk edits. Removed participants stay in `formerSpeakerIds` and remain
   conflicted from reviews permanently.
 - **Late invitations do not mutate a confirmed roster until acceptance.** Only an
-  event admin may create one, and the invitee must supply their own acknowledgements
-  and attendance before joining. A marker preserves only the roster in the prior
-  immutable schedule release; it is cleared by a successful re-share, not merely
-  by the new speaker confirming.
+  event admin may create one, and the invitee must supply their own configured
+  acknowledgements and attendance before joining. Attendance is neither rendered
+  nor required when the current submission form disables it. A marker preserves
+  only the roster in the prior immutable schedule release; it is cleared by a
+  successful re-share, not merely by the new speaker confirming.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.
-- **`reviewsVisible` is a UI convention, not a boundary — do not treat it as
-  one.** It hides individual scores and notes, and the rules do enforce that. But
-  `aggregate` is a *field on the proposal*, and any reviewer may read any
-  submitted proposal, so `aggregate.avgScore` is available to them at any time.
-  Firestore rules cannot hide a single field. `src/screens/ReviewPage.tsx` honours
-  the intent — it sorts by `stdDev` only once the round is open and never renders
-  the aggregate on the card — so the gap is reachable through devtools, not
-  through the app. Accepted deliberately: reviewers are already trusted with every
-  proposal and this is a committee rather than an adversary. If it ever has to be
-  real, the field has to move to its own document (`proposals/{id}/aggregate/…`,
-  gated on `reviewsVisible || isAdmin`), which means the rules,
-  `recomputeAggregates`, the Proposals dashboard, the review sort, and a backfill.
+- **`reviewsVisible` is a boundary for reviewer aggregates.** Rules deny a plain
+  reviewer the raw proposal document, and the review-queue callable includes the
+  numeric aggregate only after the flag flips. Admins keep direct proposal access;
+  individual review documents remain independently protected for every role.
 - **A review save is a callable transaction, not a browser write.** It writes
   exactly `cfpId`, `score`, `conflictOfInterest`, optional `comment`, and
   `updatedAt`, while atomically moving the first `submitted` review to
@@ -392,18 +411,32 @@ collection — the rule names the two readable documents one at a time.
   Pass `cfpId: null` to mean no CFP.
 - **Both forms are data.** `config/confirmForm` is what a speaker is asked once
   they accept, readable signed in; `config/submissionForm` is what the call
-  itself asks — its categories, formats, levels, languages, consents and any
-  questions of its own — readable by anyone, because that is the substance of
-  the call's public page. Everything else under `config` stays shut, and the
-  rule names each readable document rather than opening the collection.
-  Both are written only by their callable. The browser's copy of either is a
-  convenience; `validateAnswers` and `submissionSchema(shape)` inside the
-  callable are what count.
-- **An absent `submissionForm` is a working one.** Every CFP created before the
-  form was configurable has no document, and `mergeSubmissionForm` reads that as
-  today's DevFest values, key by key. `createCfp` seeds the document anyway, so
-  a later change to the defaults cannot move the taxonomy under proposals
-  already submitted.
+  itself asks — its categories, formats, levels, languages, consents, optional
+  attendance module and any questions of its own — readable by anyone, because
+  that is the substance of the call's public page. Attendance owns bilingual
+  section/status/subfield copy, per-subfield collection and reviewer visibility,
+  and optional event-scoped GDE guidance. Everything else under `config` stays
+  shut, and the rule names each readable document rather than opening the
+  collection. Both are written only by their callable. The browser's copy of
+  either is a convenience; `validateAnswers` and `submissionSchema(shape)`
+  inside the callable are what count.
+- **An absent `submissionForm` is a working legacy one.** Every CFP created before
+  the form was configurable has no document, and `mergeSubmissionForm` reads that
+  as the DevFest Montréal compatibility form, including enabled attendance and
+  its travel-support acknowledgement. `createCfp` instead seeds
+  `NEW_CFP_SUBMISSION_FORM`: generic calls start with attendance disabled and no
+  travel-support acknowledgement, so they never inherit Montréal or
+  Canada-specific questions. Saving resolves the complete form explicitly, so a
+  later default change cannot move the taxonomy under submitted proposals.
+- **Attendance configuration changes collection and projection, not history.**
+  The organiser owns its bilingual copy and optional GDE guidance, but the
+  stored codes `local`, `secured` and `pending` never move. Funding source,
+  decision date and visa support may each be disabled or hidden from reviewers.
+  `attendanceSchemaFor` ignores disabled values, the late-invitation path uses
+  the same current shape, and the review callable projects only enabled and
+  reviewer-visible keys. Turning the module off never silently purges historical
+  answers. Visa email guidance is conditional on both the question being enabled
+  and the stored answer being true.
 - **`deliveryLanguage`'s values are not the organiser's to change.** `either` is
   what `languagePreference` exists for and what the scheduling dashboard counts,
   so a call picks which of the four to offer and what to call them — not what
@@ -539,6 +572,10 @@ collection — the rule names the two readable documents one at a time.
   destructure or `process.env[name]` silently becomes `undefined` in a browser.
 - **Use `npx firebase`.** The globally installed CLI is 12.x and cannot run
   `emulators:exec` or the `nodejs22` runtime.
+- **Deploy cross-layer authorization changes in compatibility order:** Functions
+  first, App Hosting second, then Firestore indexes/rules and Storage rules. The
+  combined `deploy:backend` command is unsafe when new rules remove a read path
+  that the old client still uses.
 - Project `devfest-mtl-2026-cfp`; Firestore and the Cloud Functions both in
   `northamerica-northeast1`. Deploying functions needs the Blaze plan.
 - **App Hosting runs in `us-east4`, and there was no choice.** The API offers six

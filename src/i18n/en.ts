@@ -37,6 +37,8 @@ export const en = {
       'That link did not work. It may have been used already or expired — ask for a new one below.',
     linkTooMany: 'That is a lot of links in a short time. Please try again in an hour.',
     linkBadEmail: 'That does not look like an email address.',
+    linkUnavailable:
+      'This event cannot send sign-in email yet. Use Google sign-in or contact the organisers.',
     signOut: 'Sign out',
     loading: 'Loading…',
   },
@@ -624,6 +626,14 @@ export const en = {
         title: 'Finish and submit your proposal',
         help: 'Your draft is private. Complete the required sections, then submit it before the deadline.',
       },
+      draftPaused: {
+        title: 'Submissions are temporarily paused',
+        help: 'Your draft is kept safely and will be editable again when organisers reopen the call.',
+      },
+      coSpeakerDraft: {
+        title: 'Complete your speaker details',
+        help: 'Finish your own profile and participation details. The lead speaker will submit the proposal when every speaker is ready.',
+      },
       draftClosed: {
         title: 'This draft was not submitted',
         help: 'The proposal window is closed. Keep the draft for your records or delete it if you no longer need it.',
@@ -640,6 +650,10 @@ export const en = {
         title: 'The committee is reviewing it',
         help: 'The talk content is locked for a fair review. You can still keep your profile and travel details current.',
       },
+      underReviewNoAttendance: {
+        title: 'The committee is reviewing it',
+        help: 'The talk content is locked for a fair review. Your speaker profile remains yours to update.',
+      },
       accepted: {
         title: 'Confirm whether you can present',
         help: 'Answer the invitation here and complete every required speaker detail before organisers schedule the session.',
@@ -654,7 +668,7 @@ export const en = {
       },
       confirmedUnavailable: {
         title: 'Reload before relying on a schedule time',
-        help: 'The current shared placement could not be loaded, so an older public time is deliberately not shown.',
+        help: 'The current programme placement could not be loaded, so no schedule time is shown until you reload.',
       },
       confirmedPending: {
         title: 'Wait for an updated placement',
@@ -663,6 +677,14 @@ export const en = {
       confirmedWaiting: {
         title: 'Wait for the working schedule',
         help: 'Your attendance is confirmed. Your own placement will appear here after organisers share a confirmed preview.',
+      },
+      confirmedWaitingOnSpeaker: {
+        title: 'Wait for the other speaker',
+        help: 'Your response is recorded. The session will be confirmed after every active speaker responds.',
+      },
+      confirmedSpeakerDeclined: {
+        title: 'Organisers need to review the speaker roster',
+        help: 'Your response is recorded, but another active speaker declined. Organisers will contact you about the next step.',
       },
       waitlisted: {
         title: 'Keep an eye on your email',
@@ -701,8 +723,6 @@ export const en = {
       'You are confirmed and organisers have shared your current placement with you.',
     sharedUnscheduledHelp:
       'You are confirmed, but the current shared preview does not assign this session a time yet. Organisers will share another update when that changes.',
-    sharedScheduleUnavailable:
-      'We could not load the current shared placement. Reload this page before relying on an older programme time.',
     scheduleDetails: 'Your published session',
     sharedScheduleDetails: 'Your working schedule',
     sharedScheduleHelp:
@@ -716,6 +736,11 @@ export const en = {
       // "while it is being judged" — by the time a talk is confirmed, it is not.
       logistics:
         'The talk itself is locked now. Your profile and your travel answers are still editable.',
+      none: 'This one is closed. Your profile is still yours to edit.',
+    } as Record<string, string>,
+    editHelpNoAttendance: {
+      all: 'You can still edit anything this event asks for until the deadline.',
+      logistics: 'The talk itself is locked now. Your speaker profile remains yours to update.',
       none: 'This one is closed. Your profile is still yours to edit.',
     } as Record<string, string>,
     pastTalksCount: (count: number) => `Past talks (${count})`,
@@ -736,6 +761,10 @@ export const en = {
     answersTitle: 'Your details',
     answersSave: 'Save details',
     answersIncomplete: 'Please check the highlighted questions.',
+    confirmationAnswersSaved: 'Confirmation details saved.',
+    confirmationAnswersSaveFailed: 'Could not save your confirmation details. Please try again.',
+    discardUnsubmittedAnswersConfirm:
+      'These confirmation answers have not been submitted. Discard them and continue?',
     imageChoose: 'Choose a photo',
     imageReplace: 'Choose a different photo',
     imageUploading: 'Uploading…',
@@ -959,6 +988,8 @@ export const en = {
     noPeople: 'Nobody holds a role yet.',
     isYou: 'you',
     lastAdmin: 'That is the only admin left — give someone else the role first.',
+    actionInvalid:
+      'This action no longer applies. Reload the workspace and review the current state.',
     emailDeliveryNotReady:
       'Delivery setup is no longer ready. Check the API key, domain, and sender before trying again.',
     emailActionInvalid:
@@ -1080,6 +1111,7 @@ export const en = {
     emailDnsType: 'Type',
     emailDnsName: 'Name',
     emailDnsValue: 'Value',
+    emailDnsPriority: (priority: number) => ` (priority ${priority})`,
     emailStepSender: 'Sender',
     emailPreview: 'Preview',
     emailPreviewLocale: 'Language',
@@ -1131,7 +1163,18 @@ export const en = {
       noDomain: 'Resend has no such domain. It may have been removed there.',
       rejected: 'Resend refused that request. Check the domain name.',
       unreachable: 'Could not reach Resend. Try again shortly.',
+      domainUnavailable:
+        'This sending domain is already assigned or cannot be adopted by this event. Ask a platform administrator to resolve it.',
+      domainMismatch:
+        'The stored sending domain no longer matches Resend. Ask a platform administrator to repair the event domain binding.',
     },
+    emailErrorReasons: {
+      superseded: 'This notification is superseded.',
+      event_deleted: 'This notification is superseded because the event was deleted.',
+      event_archived: 'This notification is superseded because the event is archived.',
+      email_domain_unbound:
+        'Email delivery is blocked because this sending domain is not assigned to the event.',
+    } as Record<string, string>,
     emailQueue: 'Queue',
     emailDecisionQueue: 'Held speaker notifications',
     emailHelp:
@@ -1337,6 +1380,12 @@ export const en = {
     metricDisagreement: 'High disagreement',
     chartDecisions: 'Decisions',
     chartScores: 'Average score',
+    chartScoresLabel: (counts: number[]) =>
+      counts
+        .map((count, index) =>
+          `Score ${index + 1}: ${count} ${count === 1 ? 'review' : 'reviews'}`,
+        )
+        .join(', '),
     chartCategories: 'Categories',
     chartLanguages: 'Languages',
     undecided: 'Undecided',
@@ -1367,7 +1416,11 @@ export const en = {
     savingDecision: 'Saving…',
     decisionChanged: (title: string, from: string, to: string) =>
       `“${title}” moved from ${from} to ${to}.`,
+    decisionResetConfirm: (title: string, from: string, to: string) =>
+      `Move “${title}” from ${from} to ${to}? This clears every speaker’s confirmation response, logistics answers, and programme photo. Speakers will need to confirm again.`,
     decisionEmailHeld: 'Decision saved. This action does not send an email.',
+    decisionReset: (title: string, to: string) =>
+      `“${title}” moved to ${to} and its speaker responses were cleared. This one cannot be undone.`,
     decisionUndone: (title: string) => `Restored the previous status for “${title}”.`,
     undo: 'Undo',
     untitled: 'Untitled proposal',
@@ -1379,7 +1432,7 @@ export const en = {
       'Each accepted speaker answers these questions separately. Use them for per-person details such as T-shirt size or dietary needs; mark any field required when the event needs it. A speaker added later must complete their own confirmation before the session is confirmed again.',
     speakerPhotoTitle: 'Speaker photo for the programme',
     speakerPhotoHelp:
-      'Every accepted speaker can review their reusable profile photo here. It is optional unless you require it below. Confirmation freezes the exact approved version for this event, and a published programme keeps that version until you share and publish a new release.',
+      'Every accepted speaker can review their reusable profile photo here. It is optional unless you require it below. Confirmation freezes the exact approved version for this event, and a published programme keeps that version until you share and publish a new version.',
     speakerPhotoRequired: 'Require every speaker to have a profile photo before confirming',
     formEmpty: 'No custom questions yet. Speakers still review their programme photo and confirm.',
     formUntitled: 'New question',
@@ -1426,6 +1479,37 @@ export const en = {
     submission: 'The submission form',
     submissionHelp:
       'What speakers are asked when they propose a talk. Labels can be reworded at any time; a choice already used by a proposal keeps its stored code, so removing it is how you retire it.',
+    attendanceTitle: 'Travel and attendance',
+    attendanceEditorHelp:
+      'This section is event-specific. Keep the fixed answer meanings so scheduling and validation continue to work, and adapt the wording to where this event is held.',
+    attendanceEnabled: 'Ask speakers for travel information',
+    attendanceEnabledHelp:
+      'Turn this off for an online event or any call that does not need travel planning. Existing answers are kept but speakers are no longer asked.',
+    attendanceStatusTitle: 'Attendance status answers',
+    attendanceFields: {
+      fundingSource: 'Funding source',
+      decisionBy: 'Decision date',
+      needsVisa: 'Visa or entry requirements',
+    },
+    attendanceFieldEnabled: 'Ask this follow-up',
+    attendanceReviewerVisible: 'Show this answer to reviewers',
+    attendanceReviewerVisibleHelp:
+      'Turn this off when the selection committee does not need this logistical detail. Organisers still retain the answer.',
+    attendanceCopy: {
+      title: 'Section heading',
+      question: 'Attendance question',
+      help: 'Question help',
+      local: 'No-travel answer',
+      secured: 'Travel-covered answer',
+      pending: 'Travel-pending answer',
+      fundingSource: 'Funding question',
+      fundingSourceHelp: 'Funding help',
+      decisionBy: 'Decision-date question',
+      decisionByHelp: 'Decision-date help',
+      needsVisa: 'Visa or entry-requirement question',
+      needsVisaHelp: 'Visa guidance',
+      gdeGuidance: 'Optional guidance for Google Developer Experts',
+    },
     submissionSave: 'Save the form',
     submissionSaved: 'Submission form saved.',
     taxonomy: {
@@ -1468,6 +1552,9 @@ export const en = {
     extraTitle: 'Your own questions',
     extraHelp:
       'Anything else you want to ask about the talk. Photos are not offered here — most of these speakers will be turned down, and their picture is not something to be holding. Ask for it on the confirmation form instead.',
+    extraReviewerVisible: 'Show this answer to reviewers',
+    extraReviewerVisibleHelp:
+      'Turn this off for information the selection committee does not need. Organisers can still see the stored answer.',
     extraEmpty: 'No extra questions.',
     extraAdd: 'Add a question',
     submissionErrors: {
@@ -1478,6 +1565,11 @@ export const en = {
       emptyLabel: 'Every choice under {key} needs an English label.',
       unknownLanguage: 'That is not one of the four languages the schedule understands.',
       ackNotRequired: '“{key}” has to be a tick box that must be ticked.',
+      badReviewerVisibility: '“{key}” has an invalid reviewer visibility setting.',
+      badAttendanceConfig: 'The travel section has an invalid setting under “{key}”.',
+      unknownAttendanceStatus:
+        'The travel answers must keep the three attendance meanings the platform understands.',
+      tooLong: 'The wording under “{key}” is too long.',
       noImages:
         '“{key}” asks for a photo. Ask for that on the confirmation form, once the speaker is in.',
     } as Record<string, string>,
@@ -1524,6 +1616,11 @@ export const en = {
     conflicts: 'Conflicts',
     remaining: 'Remaining',
     refresh: 'Refresh proposals',
+    proposalNoLongerReviewable:
+      'This proposal has left the review round. Reload the review list.',
+    accessRemoved: 'Your committee access is no longer active.',
+    ownProposal:
+      'You are a speaker on this proposal, so it is not yours to score. Reload the review list to drop it from your queue.',
     intakeOpenHelp:
       'Proposals are still open, so new work may arrive. Refresh before you finish a review session.',
     intakeClosedHelp:
@@ -1566,9 +1663,15 @@ export const en = {
     shortcutScore: 'Score, and move to the next one',
     shortcutMove: 'Back and forward without scoring',
     shortcutHelp: 'Show or hide this',
+    submissionAnswers: 'Additional talk details',
+    answerYes: 'Yes',
+    answerNo: 'No',
+    submissionDetails: 'Submission details',
     logistics: 'Getting here',
     languagePreference: 'Language preference',
     travel: 'Travel',
+    travelFor: (name: string) => `Travel — ${name}`,
+    speakerFallback: (number: number) => `Speaker ${number}`,
     attendance: {
       local: 'Based in Montréal',
       secured: 'Covered — employer, GDE programme or self-funded',
@@ -1578,6 +1681,7 @@ export const en = {
     decisionBy: 'Knows by',
     visa: 'Visa',
     visaYes: 'Needs a visa or eTA to enter Canada',
+    visaNo: 'Does not need a visa or eTA to enter Canada',
     submitted: 'Submitted',
     conflict: 'I have a conflict of interest',
     conflictHelp: 'Excluded from the totals, including your own calibration.',
@@ -1609,6 +1713,10 @@ export const en = {
     saveDetails: 'Save my details',
     loading: 'Loading speakers…',
     loadFailed: 'We could not load the speaker roster.',
+    invitationNoLongerAvailable:
+      'This invitation can no longer be completed. Reload to see its current status.',
+    invitationReviewerConflict:
+      'You already reviewed this proposal, so you cannot join it as a speaker.',
     retry: 'Try again',
     refresh: 'Refresh speakers',
     refreshing: 'Refreshing…',
@@ -1704,6 +1812,10 @@ export const en = {
     participationTitle: 'Your participation details',
     participationHelp:
       'Because this session was already accepted, complete the event acknowledgements and travel details before joining. You will confirm the session and answer its confirmation questions next.',
+    participationHelpAcks:
+      'Because this session was already accepted, complete the event acknowledgements before joining. You will confirm the session and answer its confirmation questions next.',
+    participationHelpTravel:
+      'Because this session was already accepted, complete the event travel details before joining. You will confirm the session and answer its confirmation questions next.',
     join: 'Save profile and join',
     joinLate: 'Save details and join',
     joining: 'Joining…',
@@ -1734,6 +1846,12 @@ export const en = {
         'The lead speaker owns the talk. You can still update your profile, participation acknowledgements, and travel details.',
       logistics:
         'The lead speaker owns the talk. You can still update your profile and travel details.',
+      none:
+        'The lead speaker owns the talk. Your profile remains editable from your account; participation details are now locked.',
+    } as Record<string, string>,
+    personalEditHelpNoAttendance: {
+      all: 'The lead speaker owns the talk. You can still update your profile and participation acknowledgements.',
+      logistics: 'The lead speaker owns the talk. Your speaker profile remains yours to update.',
       none:
         'The lead speaker owns the talk. Your profile remains editable from your account; participation details are now locked.',
     } as Record<string, string>,
@@ -1807,7 +1925,7 @@ export const en = {
     takeOfflineHelp:
       'This immediately removes the programme from public view. Links to sessions will stop showing programme content.',
     takeOfflineKept:
-      'The private draft, shared preview, and release history stay intact. You can publish again later.',
+      'The private draft, shared preview, and version history stay intact. You can publish again later.',
     takeOfflineConfirm: 'Take public programme offline',
     unpublishedSuccess: 'The public programme is offline. The shared preview and history were kept.',
     publishOpenTitle: 'Proposals are still open',
@@ -1957,6 +2075,7 @@ export const en = {
     cancelled: 'Cancelled',
     cancelledHelp: 'This session is no longer taking place. The programme will be updated soon.',
     noPublished: 'The programme has not been published yet.',
+    sessionNotFound: 'This session is not in the current programme.',
     noMatches: 'No programme items match these filters.',
     sessionsAt: (time: string) => `Sessions starting at ${time}`,
     stale: 'Someone changed the schedule in another tab. Reload before continuing.',
@@ -2002,11 +2121,16 @@ export const en = {
     notFound: 'We could not find that proposal.',
     incomplete: 'Some answers are missing or invalid. Please check the form.',
     unavailable: 'That service is unavailable right now. Please try again shortly.',
+    pageUnavailableTitle: 'This page is temporarily unavailable',
     notOpen: 'The call for proposals is not open right now.',
     readOnlyNow:
       'This can no longer be edited — the call may have closed, or your proposal is already submitted. Reload to see where things stand.',
     crashed: 'Something broke on this page. Reload and your draft will still be here.',
     reload: 'Reload',
+    talkCapReached:
+      'You have reached the limit for active proposals. Withdraw one before submitting another.',
+    coSpeakerTalkCapReached:
+      'A co-speaker on this talk has reached their limit for active proposals. They have to withdraw one, or you can remove them from this talk and submit it without them.',
 
     required: 'This one is required.',
     invalid: 'Please check this.',

@@ -34,6 +34,8 @@ export const fr: Dictionary = {
       'Ce lien n’a pas fonctionné. Il a peut-être déjà servi ou expiré — demandez-en un nouveau ci-dessous.',
     linkTooMany: 'Cela fait beaucoup de liens en peu de temps. Veuillez réessayer dans une heure.',
     linkBadEmail: 'Cela ne ressemble pas à une adresse courriel.',
+    linkUnavailable:
+      'Cet événement ne peut pas encore envoyer de courriel de connexion. Utilisez Google ou communiquez avec l’équipe organisatrice.',
     signOut: 'Déconnexion',
     loading: 'Chargement…',
   },
@@ -625,6 +627,14 @@ export const fr: Dictionary = {
         title: 'Terminez et soumettez votre proposition',
         help: 'Votre brouillon est privé. Remplissez les sections obligatoires, puis soumettez-le avant l’échéance.',
       },
+      draftPaused: {
+        title: 'Les soumissions sont temporairement suspendues',
+        help: 'Votre brouillon est conservé en sécurité et redeviendra modifiable lorsque l’équipe rouvrira l’appel.',
+      },
+      coSpeakerDraft: {
+        title: 'Complétez vos renseignements de conférencier',
+        help: 'Terminez votre profil et vos renseignements de participation. Le conférencier principal soumettra la proposition lorsque chaque personne sera prête.',
+      },
       draftClosed: {
         title: 'Ce brouillon n’a pas été soumis',
         help: 'La période est fermée. Gardez le brouillon pour vos dossiers ou supprimez-le si vous n’en avez plus besoin.',
@@ -641,6 +651,10 @@ export const fr: Dictionary = {
         title: 'Le comité l’évalue',
         help: 'Le contenu est verrouillé pour une évaluation équitable. Votre profil et vos détails de voyage restent modifiables.',
       },
+      underReviewNoAttendance: {
+        title: 'Le comité l’évalue',
+        help: 'Le contenu est verrouillé pour une évaluation équitable. Votre profil de conférencier reste modifiable.',
+      },
       accepted: {
         title: 'Confirmez si vous pouvez présenter',
         help: 'Répondez à l’invitation ici et remplissez chaque détail obligatoire avant la planification de la séance.',
@@ -655,7 +669,7 @@ export const fr: Dictionary = {
       },
       confirmedUnavailable: {
         title: 'Rechargez avant de vous fier à une heure',
-        help: 'Impossible de charger la plage partagée actuelle; une ancienne heure publique n’est donc pas affichée.',
+        help: 'Impossible de charger la plage actuelle du programme; aucune heure n’est affichée avant le rechargement.',
       },
       confirmedPending: {
         title: 'Attendez une nouvelle plage',
@@ -664,6 +678,14 @@ export const fr: Dictionary = {
       confirmedWaiting: {
         title: 'Attendez l’horaire de travail',
         help: 'Votre présence est confirmée. Votre plage paraîtra ici après le partage d’un aperçu confirmé.',
+      },
+      confirmedWaitingOnSpeaker: {
+        title: 'Attendez la réponse de l’autre conférencier',
+        help: 'Votre réponse est enregistrée. La séance sera confirmée lorsque chaque conférencier actif aura répondu.',
+      },
+      confirmedSpeakerDeclined: {
+        title: 'L’équipe doit vérifier la liste des conférenciers',
+        help: 'Votre réponse est enregistrée, mais un autre conférencier actif a décliné. L’équipe communiquera avec vous pour la suite.',
       },
       waitlisted: {
         title: 'Surveillez vos courriels',
@@ -703,8 +725,6 @@ export const fr: Dictionary = {
       'Votre présence est confirmée et l’équipe vous a communiqué votre plage actuelle.',
     sharedUnscheduledHelp:
       'Votre présence est confirmée, mais l’aperçu partagé actuel n’attribue pas encore d’heure à cette séance. L’équipe communiquera une nouvelle mise à jour lorsque cela changera.',
-    sharedScheduleUnavailable:
-      'Impossible de charger la plage partagée actuelle. Rechargez cette page avant de vous fier à une ancienne heure du programme.',
     scheduleDetails: 'Votre séance publiée',
     sharedScheduleDetails: 'Votre horaire de travail',
     sharedScheduleHelp:
@@ -715,6 +735,12 @@ export const fr: Dictionary = {
       all: 'Vous pouvez encore tout modifier ici jusqu’à la date limite.',
       logistics:
         'La conférence elle-même est maintenant verrouillée. Votre profil et vos réponses de voyage restent modifiables.',
+      none: 'Celle-ci est close. Votre profil vous appartient toujours.',
+    } as Record<string, string>,
+    editHelpNoAttendance: {
+      all: 'Vous pouvez encore modifier tout ce que cet événement demande jusqu’à l’échéance.',
+      logistics:
+        'La conférence elle-même est maintenant verrouillée. Votre profil de conférencier reste modifiable.',
       none: 'Celle-ci est close. Votre profil vous appartient toujours.',
     } as Record<string, string>,
     pastTalksCount: (count: number) => `Propositions passées (${count})`,
@@ -735,6 +761,11 @@ export const fr: Dictionary = {
     answersTitle: 'Vos informations',
     answersSave: 'Enregistrer',
     answersIncomplete: 'Veuillez vérifier les questions signalées.',
+    confirmationAnswersSaved: 'Renseignements de confirmation enregistrés.',
+    confirmationAnswersSaveFailed:
+      'Impossible d’enregistrer vos renseignements de confirmation. Veuillez réessayer.',
+    discardUnsubmittedAnswersConfirm:
+      'Ces réponses de confirmation n’ont pas été soumises. Les abandonner et continuer ?',
     imageChoose: 'Choisir une photo',
     imageReplace: 'Choisir une autre photo',
     imageUploading: 'Téléversement…',
@@ -960,6 +991,8 @@ export const fr: Dictionary = {
     noPeople: 'Personne ne détient de rôle pour l’instant.',
     isYou: 'vous',
     lastAdmin: 'C’est le seul administrateur restant — accordez d’abord le rôle à quelqu’un d’autre.',
+    actionInvalid:
+      'Cette action ne s’applique plus. Rechargez l’espace de travail et vérifiez l’état actuel.',
     emailDeliveryNotReady:
       'La configuration de la livraison n’est plus prête. Vérifiez la clé API, le domaine et l’expéditeur avant de réessayer.',
     emailActionInvalid:
@@ -1087,6 +1120,7 @@ export const fr: Dictionary = {
     emailDnsType: 'Type',
     emailDnsName: 'Nom',
     emailDnsValue: 'Valeur',
+    emailDnsPriority: (priority: number) => ` (priorité ${priority})`,
     emailStepSender: 'Expéditeur',
     emailPreview: 'Aperçu',
     emailPreviewLocale: 'Langue',
@@ -1141,7 +1175,18 @@ export const fr: Dictionary = {
       noDomain: 'Resend ne connaît pas ce domaine. Il a peut-être été supprimé là-bas.',
       rejected: 'Resend a refusé la demande. Vérifiez le nom de domaine.',
       unreachable: 'Impossible de joindre Resend. Réessayez dans un instant.',
+      domainUnavailable:
+        'Ce domaine d’expédition est déjà attribué ou ne peut pas être adopté par cet événement. Demandez à un administrateur de la plateforme de résoudre le problème.',
+      domainMismatch:
+        'Le domaine d’expédition enregistré ne correspond plus à Resend. Demandez à un administrateur de la plateforme de réparer l’attribution du domaine.',
     },
+    emailErrorReasons: {
+      superseded: 'Cette notification a été remplacée.',
+      event_deleted: 'Cette notification a été remplacée parce que l’événement a été supprimé.',
+      event_archived: 'Cette notification a été remplacée parce que l’événement est archivé.',
+      email_domain_unbound:
+        'L’envoi est bloqué parce que ce domaine d’expédition n’est pas attribué à l’événement.',
+    } as Record<string, string>,
     emailQueue: 'File d’attente',
     emailDecisionQueue: 'Notifications aux conférenciers retenues',
     emailHelp:
@@ -1355,6 +1400,12 @@ export const fr: Dictionary = {
     metricDisagreement: 'Fort désaccord',
     chartDecisions: 'Décisions',
     chartScores: 'Note moyenne',
+    chartScoresLabel: (counts: number[]) =>
+      counts
+        .map((count, index) =>
+          `Note ${index + 1} : ${count} ${count === 1 ? 'évaluation' : 'évaluations'}`,
+        )
+        .join(', '),
     chartCategories: 'Catégories',
     chartLanguages: 'Langues',
     undecided: 'Indécises',
@@ -1386,7 +1437,11 @@ export const fr: Dictionary = {
     savingDecision: 'Enregistrement…',
     decisionChanged: (title: string, from: string, to: string) =>
       `« ${title} » est passée de ${from} à ${to}.`,
+    decisionResetConfirm: (title: string, from: string, to: string) =>
+      `Passer « ${title} » de ${from} à ${to} ? Cette action efface la réponse de confirmation, les renseignements logistiques et la photo du programme de chaque conférencier. Les conférenciers devront confirmer de nouveau.`,
     decisionEmailHeld: 'Décision enregistrée. Cette action n’envoie aucun courriel.',
+    decisionReset: (title: string, to: string) =>
+      `« ${title} » est passée à ${to} et ses réponses de conférencier ont été effacées. Cette action est irréversible.`,
     decisionUndone: (title: string) => `Le statut précédent de « ${title} » est rétabli.`,
     undo: 'Annuler',
     untitled: 'Proposition sans titre',
@@ -1446,6 +1501,37 @@ export const fr: Dictionary = {
     submission: 'Le formulaire de proposition',
     submissionHelp:
       'Ce qu’on demande aux conférenciers et conférencières au moment de proposer. Les libellés se reformulent en tout temps ; un choix déjà utilisé par une proposition conserve son code, alors le retirer est la façon de le mettre hors service.',
+    attendanceTitle: 'Déplacement et présence',
+    attendanceEditorHelp:
+      'Cette section est propre à chaque événement. Conservez le sens fixe des réponses pour que l’horaire et la validation continuent de fonctionner, puis adaptez le texte au lieu de l’événement.',
+    attendanceEnabled: 'Demander les renseignements de déplacement',
+    attendanceEnabledHelp:
+      'Désactivez cette option pour un événement en ligne ou un appel qui ne nécessite aucune planification de déplacement. Les réponses existantes sont conservées, mais ne sont plus demandées.',
+    attendanceStatusTitle: 'Réponses sur le statut de présence',
+    attendanceFields: {
+      fundingSource: 'Source de financement',
+      decisionBy: 'Date de décision',
+      needsVisa: 'Visa ou conditions d’entrée',
+    },
+    attendanceFieldEnabled: 'Poser cette question complémentaire',
+    attendanceReviewerVisible: 'Montrer cette réponse au comité de sélection',
+    attendanceReviewerVisibleHelp:
+      'Désactivez cette option lorsque le comité n’a pas besoin de ce détail logistique. Les organisateurs conservent la réponse.',
+    attendanceCopy: {
+      title: 'Titre de la section',
+      question: 'Question sur la présence',
+      help: 'Aide de la question',
+      local: 'Réponse sans déplacement',
+      secured: 'Réponse déplacement couvert',
+      pending: 'Réponse déplacement à confirmer',
+      fundingSource: 'Question sur le financement',
+      fundingSourceHelp: 'Aide sur le financement',
+      decisionBy: 'Question sur la date de décision',
+      decisionByHelp: 'Aide sur la date de décision',
+      needsVisa: 'Question sur le visa ou les conditions d’entrée',
+      needsVisaHelp: 'Conseils sur le visa',
+      gdeGuidance: 'Conseils facultatifs pour les Google Developer Experts',
+    },
     submissionSave: 'Enregistrer le formulaire',
     submissionSaved: 'Formulaire de proposition enregistré.',
     taxonomy: {
@@ -1490,6 +1576,9 @@ export const fr: Dictionary = {
     extraTitle: 'Vos propres questions',
     extraHelp:
       'Tout ce que vous voulez demander d’autre sur la conférence. Les photos ne sont pas offertes ici : la plupart de ces personnes seront refusées, et leur photo n’est pas quelque chose à conserver. Demandez-la plutôt sur le formulaire de confirmation.',
+    extraReviewerVisible: 'Montrer cette réponse au comité de sélection',
+    extraReviewerVisibleHelp:
+      'Désactivez cette option pour les renseignements dont le comité n’a pas besoin. Les organisateurs peuvent toujours voir la réponse enregistrée.',
     extraEmpty: 'Aucune question supplémentaire.',
     extraAdd: 'Ajouter une question',
     submissionErrors: {
@@ -1502,6 +1591,13 @@ export const fr: Dictionary = {
       emptyLabel: 'Chaque choix sous {key} a besoin d’un libellé anglais.',
       unknownLanguage: 'Ce n’est pas une des quatre langues que l’horaire comprend.',
       ackNotRequired: '« {key} » doit être une case à cocher obligatoire.',
+      badReviewerVisibility:
+        '« {key} » a un paramètre de visibilité invalide pour le comité.',
+      badAttendanceConfig:
+        'La section de déplacement contient un paramètre invalide sous « {key} ».',
+      unknownAttendanceStatus:
+        'Les réponses de déplacement doivent conserver les trois significations comprises par la plateforme.',
+      tooLong: 'Le texte sous « {key} » est trop long.',
       noImages:
         '« {key} » demande une photo. Demandez-la sur le formulaire de confirmation, une fois la personne retenue.',
     } as Record<string, string>,
@@ -1548,6 +1644,11 @@ export const fr: Dictionary = {
     conflicts: 'Conflits',
     remaining: 'Restantes',
     refresh: 'Actualiser les propositions',
+    proposalNoLongerReviewable:
+      'Cette proposition a quitté la ronde d’évaluation. Rechargez la liste des propositions.',
+    accessRemoved: 'Votre accès au comité n’est plus actif.',
+    ownProposal:
+      'Vous êtes conférencier de cette proposition; ce n’est pas à vous de l’évaluer. Rechargez la liste des propositions pour la retirer de votre file.',
     intakeOpenHelp:
       'Les propositions sont encore ouvertes; de nouveaux éléments peuvent arriver. Actualisez avant de terminer une séance d’évaluation.',
     intakeClosedHelp:
@@ -1591,9 +1692,15 @@ export const fr: Dictionary = {
     shortcutScore: 'Noter, puis passer à la suivante',
     shortcutMove: 'Reculer et avancer sans noter',
     shortcutHelp: 'Afficher ou masquer ceci',
+    submissionAnswers: 'Renseignements supplémentaires sur la conférence',
+    answerYes: 'Oui',
+    answerNo: 'Non',
+    submissionDetails: 'Détails de la soumission',
     logistics: 'Venir sur place',
     languagePreference: 'Préférence de langue',
     travel: 'Déplacement',
+    travelFor: (name: string) => `Déplacement — ${name}`,
+    speakerFallback: (number: number) => `Conférencier ${number}`,
     attendance: {
       local: 'Réside dans la région de Montréal',
       secured: 'Couvert — employeur, programme GDE ou autofinancé',
@@ -1603,6 +1710,7 @@ export const fr: Dictionary = {
     decisionBy: 'Saura d’ici',
     visa: 'Visa',
     visaYes: 'A besoin d’un visa ou d’une AVE pour entrer au Canada',
+    visaNo: 'N’a pas besoin d’un visa ou d’une AVE pour entrer au Canada',
     submitted: 'Soumise',
     conflict: 'J’ai un conflit d’intérêts',
     conflictHelp: 'Exclue des totaux, y compris de votre propre calibrage.',
@@ -1635,6 +1743,10 @@ export const fr: Dictionary = {
     saveDetails: 'Enregistrer mes renseignements',
     loading: 'Chargement des conférenciers…',
     loadFailed: 'Impossible de charger la liste des conférenciers.',
+    invitationNoLongerAvailable:
+      'Cette invitation ne peut plus être complétée. Rechargez pour voir son état actuel.',
+    invitationReviewerConflict:
+      'Vous avez déjà évalué cette proposition; vous ne pouvez donc pas la rejoindre comme conférencier.',
     retry: 'Réessayer',
     refresh: 'Actualiser les conférenciers',
     refreshing: 'Actualisation…',
@@ -1733,6 +1845,10 @@ export const fr: Dictionary = {
     participationTitle: 'Vos renseignements de participation',
     participationHelp:
       'Puisque cette conférence est déjà retenue, complétez les attestations de l’événement et vos renseignements de déplacement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
+    participationHelpAcks:
+      'Puisque cette conférence est déjà retenue, complétez les attestations de l’événement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
+    participationHelpTravel:
+      'Puisque cette conférence est déjà retenue, complétez vos renseignements de déplacement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
     join: 'Enregistrer le profil et accepter',
     joinLate: 'Enregistrer les renseignements et accepter',
     joining: 'Acceptation…',
@@ -1764,6 +1880,14 @@ export const fr: Dictionary = {
         'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil, vos attestations de participation et vos détails de voyage.',
       logistics:
         'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil et vos détails de voyage.',
+      none:
+        'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
+    } as Record<string, string>,
+    personalEditHelpNoAttendance: {
+      all:
+        'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil et vos attestations de participation.',
+      logistics:
+        'Le conférencier principal gère la conférence. Votre profil de conférencier reste modifiable.',
       none:
         'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
     } as Record<string, string>,
@@ -1989,6 +2113,7 @@ export const fr: Dictionary = {
     cancelled: 'Annulée',
     cancelledHelp: 'Cette séance n’aura plus lieu. Le programme sera bientôt mis à jour.',
     noPublished: 'Le programme n’est pas encore publié.',
+    sessionNotFound: 'Cette séance ne figure pas dans le programme actuel.',
     noMatches: 'Aucun élément ne correspond à ces filtres.',
     sessionsAt: (time: string) => `Séances commençant à ${time}`,
     stale: 'Quelqu’un a modifié l’horaire dans un autre onglet. Rechargez avant de continuer.',
@@ -2034,11 +2159,16 @@ export const fr: Dictionary = {
     notFound: 'Cette proposition est introuvable.',
     incomplete: 'Des réponses sont manquantes ou invalides. Veuillez vérifier le formulaire.',
     unavailable: 'Ce service est indisponible pour le moment. Veuillez réessayer sous peu.',
+    pageUnavailableTitle: 'Cette page est temporairement indisponible',
     notOpen: 'L’appel à conférences n’est pas ouvert en ce moment.',
     readOnlyNow:
       'Ce formulaire ne peut plus être modifié — l’appel est peut-être terminé, ou votre proposition a déjà été soumise. Rechargez la page pour voir l’état actuel.',
     crashed: 'Un problème est survenu sur cette page. Rechargez — votre brouillon est conservé.',
     reload: 'Recharger',
+    talkCapReached:
+      'Vous avez atteint la limite de propositions actives. Retirez-en une avant d’en soumettre une autre.',
+    coSpeakerTalkCapReached:
+      'Un co-conférencier de cette proposition a atteint sa limite de propositions actives. Cette personne doit en retirer une, ou vous pouvez la retirer de la proposition et la soumettre sans elle.',
 
     required: 'Ce champ est obligatoire.',
     invalid: 'Veuillez vérifier ce champ.',

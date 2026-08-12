@@ -3,8 +3,8 @@
  *
  * The app has a create form and it is the ordinary route. This exists for the
  * two cases the form cannot serve: seeding a local emulator on every `npm start`,
- * and standing a CFP up in production for someone who is not the person running
- * the command.
+ * and standing a CFP up in production for an existing verified organiser who
+ * is not the person running the command.
  *
  * Emulator:
  *   FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
@@ -29,7 +29,7 @@ const id = arg('id');
 const name = arg('name') ?? id;
 const opens = arg('opens');
 const closes = arg('closes');
-const owner = arg('owner');
+const owner = String(arg('owner') ?? '').trim().toLowerCase();
 const visibility = arg('visibility') ?? 'public';
 
 if (!id || !opens || !closes) {
@@ -40,6 +40,10 @@ if (!id || !opens || !closes) {
 }
 if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id)) {
   console.error('The id must be lower case letters, digits and single hyphens.');
+  process.exit(1);
+}
+if (owner && !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(owner)) {
+  console.error('The owner must be a usable email address.');
   process.exit(1);
 }
 
@@ -101,17 +105,143 @@ if (closesAt <= opensAt) {
 initializeApp();
 const db = getFirestore();
 
-/**
- * The owner's uid, if they have an account. Absent is fine and common — a CFP
- * stood up before its organiser has ever signed in gets a pending `roleGrants`
- * entry instead, which `claimRole` turns into a membership on their first visit.
- */
+const genericSubmissionForm = {
+  category: [
+    { value: 'app_dev', label: { en: 'App Dev', fr: 'Développement d’applications' } },
+    { value: 'ai_ml', label: { en: 'AI & ML', fr: 'IA et apprentissage automatique' } },
+    { value: 'cloud', label: { en: 'Cloud', fr: 'Infonuagique' } },
+    { value: 'web', label: { en: 'Web', fr: 'Web' } },
+    { value: 'ui_ux', label: { en: 'UI & UX', fr: 'Interface et expérience utilisateur' } },
+    {
+      value: 'soft_skills_career',
+      label: { en: 'Soft Skills & Career', fr: 'Compétences humaines et carrière' },
+    },
+    { value: 'other', label: { en: 'Other', fr: 'Autre' } },
+  ],
+  format: [
+    { value: 'session_40', label: { en: 'Session — 40 minutes', fr: 'Session — 40 minutes' } },
+    {
+      value: 'lightning_15',
+      label: { en: 'Lightning talk — 15 minutes', fr: 'Conférence éclair — 15 minutes' },
+    },
+    { value: 'workshop_90', label: { en: 'Workshop — 90 minutes', fr: 'Atelier — 90 minutes' } },
+  ],
+  level: [
+    { value: 'beginner', label: { en: 'Beginner', fr: 'Débutant' } },
+    { value: 'intermediate', label: { en: 'Intermediate', fr: 'Intermédiaire' } },
+    { value: 'advanced', label: { en: 'Advanced', fr: 'Avancé' } },
+    { value: 'all', label: { en: 'All levels', fr: 'Tous les niveaux' } },
+  ],
+  deliveryLanguage: [
+    { value: 'en', label: { en: 'English', fr: 'Anglais' } },
+    { value: 'fr', label: { en: 'French', fr: 'Français' } },
+    {
+      value: 'either',
+      label: { en: 'Either — you choose', fr: 'L’une ou l’autre — à vous de choisir' },
+    },
+    {
+      value: 'bilingual',
+      label: {
+        en: 'Bilingual — I switch between both during the talk',
+        fr: 'Bilingue — j’alterne entre les deux pendant la conférence',
+      },
+    },
+  ],
+  acks: [
+    {
+      key: 'coc',
+      type: 'checkbox',
+      required: true,
+      label: {
+        en: 'I have read and agree to the Code of Conduct.',
+        fr: 'J’ai lu et j’accepte le code de conduite.',
+      },
+    },
+    {
+      key: 'recording',
+      type: 'checkbox',
+      required: true,
+      label: {
+        en: 'I consent to my talk being recorded and published.',
+        fr: 'Je consens à ce que ma conférence soit enregistrée et publiée.',
+      },
+    },
+  ],
+  fields: [],
+  attendance: {
+    enabled: false,
+    title: { en: 'Travel and attendance', fr: 'Déplacements et présence' },
+    question: {
+      en: 'If your talk is accepted, what are your attendance plans?',
+      fr: 'Si votre conférence est retenue, quels sont vos plans de présence ?',
+    },
+    help: {
+      en: 'This helps the organisers plan the programme and speaker support.',
+      fr: "Cela aide l'équipe organisatrice à planifier le programme et le soutien aux conférenciers.",
+    },
+    statusReviewerVisible: true,
+    statuses: [
+      { value: 'local', label: { en: 'No travel required', fr: 'Aucun déplacement requis' } },
+      {
+        value: 'secured',
+        label: {
+          en: 'My travel and accommodation are arranged',
+          fr: 'Mes déplacements et mon hébergement sont organisés',
+        },
+      },
+      {
+        value: 'pending',
+        label: {
+          en: 'My travel arrangements are not confirmed yet',
+          fr: 'Mes déplacements ne sont pas encore confirmés',
+        },
+      },
+    ],
+    fundingSource: {
+      enabled: true,
+      reviewerVisible: true,
+      label: {
+        en: 'How will your travel be funded?',
+        fr: 'Comment vos déplacements seront-ils financés ?',
+      },
+      help: { en: 'A short description is enough.', fr: 'Une brève description suffit.' },
+    },
+    decisionBy: {
+      enabled: true,
+      reviewerVisible: true,
+      label: {
+        en: 'When do you expect your plans to be confirmed?',
+        fr: 'Quand pensez-vous que vos plans seront confirmés ?',
+      },
+    },
+    needsVisa: {
+      enabled: true,
+      reviewerVisible: true,
+      label: {
+        en: 'I will need entry documentation support',
+        fr: "J'aurai besoin d'aide pour les documents d'entrée",
+      },
+      help: {
+        en: 'The organisers can follow up about available documentation.',
+        fr: "L'équipe organisatrice pourra vous informer des documents disponibles.",
+      },
+    },
+  },
+};
+
 let ownerUid;
 if (owner) {
   try {
-    ownerUid = (await getAuth().getUserByEmail(owner)).uid;
-  } catch {
-    ownerUid = undefined;
+    const user = await getAuth().getUserByEmail(owner);
+    if (!user.emailVerified || user.disabled) {
+      console.error('The owner must already have a verified, enabled account.');
+      process.exit(1);
+    }
+    ownerUid = user.uid;
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') throw error;
+    console.error('The owner must sign in and verify their account before this script is run.');
+    process.exit(1);
   }
 }
 
@@ -134,38 +264,30 @@ await db.doc(`cfps/${id}`).set(
   { merge: true },
 );
 
+// Preserve an organiser's form on rerun. A brand-new seeded event starts with
+// event-neutral logistics disabled, matching in-app CFP creation.
+const submissionFormRef = db.doc(`cfps/${id}/config/submissionForm`);
+await db.runTransaction(async (tx) => {
+  const current = await tx.get(submissionFormRef);
+  if (!current.exists) tx.create(submissionFormRef, genericSubmissionForm);
+});
+
 if (owner) {
-  if (ownerUid) {
-    await db.doc(`cfps/${id}/members/${ownerUid}`).set(
-      {
-        cfpId: id,
-        uid: ownerUid,
-        role: 'owner',
-        email: owner,
-        createdAt: FieldValue.serverTimestamp(),
-        grantedBy: 'script',
-      },
-      { merge: true },
-    );
-  } else {
-    // `owner` is not grantable through the callable, deliberately. Writing the
-    // grant here is the one place it can be handed to somebody who has never
-    // signed in, and it is the same shape `claimRole` reads.
-    await db.doc(`cfps/${id}/roleGrants/${owner}`).set(
-      {
-        cfpId: id,
-        email: owner,
-        role: 'owner',
-        createdAt: FieldValue.serverTimestamp(),
-        createdBy: 'script',
-      },
-      { merge: true },
-    );
-  }
+  await db.doc(`cfps/${id}/members/${ownerUid}`).set(
+    {
+      cfpId: id,
+      uid: ownerUid,
+      role: 'owner',
+      email: owner,
+      createdAt: FieldValue.serverTimestamp(),
+      grantedBy: 'script',
+    },
+    { merge: true },
+  );
 }
 
 console.log(
   `cfps/${id} written — open ${opensAt.toISOString()} to ${closesAt.toISOString()}` +
-    (owner ? `, owner ${owner}${ownerUid ? '' : ' (pending first sign-in)'}` : ''),
+    (owner ? `, owner ${owner}` : ''),
 );
 process.exit(0);

@@ -88,6 +88,12 @@ Anything not needed to evaluate the proposal is collected *after* acceptance. Th
 | `languagePreference` | string | Conditional: only when `deliveryLanguage = either` |
 | `level` | enum | Beginner · Intermediate · Advanced · All levels |
 
+Organisers may add custom questions about the talk. Their answers are shown to
+reviewers by default, preserving existing forms, but each question has an
+explicit reviewer-visibility switch for information intended only for event
+organisers. Core proposal fields remain reviewable; acknowledgements never enter
+the reviewer payload.
+
 **Speaker**
 
 | Field | Type | Notes |
@@ -101,13 +107,18 @@ Anything not needed to evaluate the proposal is collected *after* acceptance. Th
 | `pastTalks` | string | Optional links to recordings. Reference material, not a filter against new speakers |
 | `profilePhoto` | private server pointer | Optional reusable account photo, editable from the profile page or the proposal's account-profile section; never part of the committee snapshot |
 
-**Acknowledgements — all required checkboxes**
+**Acknowledgements — every configured checkbox is required**
+
+The DevFest Montréal compatibility form asks for:
 
 - `ackNoTravelSupport` — "I understand that travel and accommodation are not covered by the event."
 - `ackCoC` — Code of Conduct
 - `ackRecording` — consent to be recorded and published
 
-**Attendance** (see §5) follows immediately after these checkboxes. The question only reads naturally once the no-travel-support statement is on screen.
+New generic CFPs omit `ackNoTravelSupport`; organisers own the acknowledgement
+list. **Attendance** is also optional per CFP (see §5). In the DevFest template
+it follows these checkboxes because the question reads naturally once the
+no-travel-support statement is on screen.
 
 ### Collected after acceptance
 
@@ -129,10 +140,11 @@ remain visible until the session is included in a new shared schedule release.
 
 ### Conditional fields
 
-Three places where the form reveals fields dynamically. Build these as one shared component:
+Three places where the DevFest form reveals fields dynamically. Build these as
+one shared component:
 
-1. `isGde = true` → show the GDE travel guidance (§5)
-2. `attendance.status = secured | pending` → show funding source / decision date
+1. attendance enabled and `isGde = true` → show this CFP's optional GDE guidance (§5)
+2. attendance and the corresponding subfield enabled, with `status = secured | pending` → show funding source / decision date
 3. `deliveryLanguage = either` → show language preference
 
 ---
@@ -190,7 +202,27 @@ Sessions submitted as `either` must display a **resolved** language once assigne
 
 ## 5. Attendance and travel
 
-The event does not fund travel. We still need to know whether an accepted speaker will actually be on stage.
+> **Amended 12 August 2026.** Attendance is an optional, per-CFP part of the
+> submission form. The organiser owns its bilingual section title, question,
+> help, status labels, funding-source copy, decision-date copy, visa copy and
+> optional GDE guidance. Funding source, decision date and visa support can each
+> be collected or omitted. Status and every enabled subfield have independent
+> reviewer-visibility switches, enforced by the review callable rather than only
+> by the screen.
+>
+> The stored status codes remain `local`, `secured` and `pending`; their meaning
+> drives validation, dashboards and exports, so an organiser relabels them rather
+> than inventing new codes. A missing attendance configuration keeps the legacy
+> DevFest Montréal behaviour. Newly created generic CFPs are explicitly seeded
+> with attendance disabled and without the travel-support acknowledgement.
+> Disabling collection does not silently purge historical answers, but disabled
+> values are not newly validated or projected to reviewers. Late co-speaker
+> invitations use the same current form. Acceptance email visa guidance appears
+> only when the visa question is enabled and the speaker answered yes.
+
+The remainder of this section records the enabled DevFest Montréal template.
+This event does not fund travel, and it needs to know whether an accepted speaker
+will actually be on stage.
 
 ### Ask in a way that produces a real answer
 
@@ -277,7 +309,8 @@ proposals/{proposalId}
   title, abstract, pitch
   category, format, level
   deliveryLanguage, languagePreference          // slideLanguage removed, see §4
-  acks, attendance                        // legacy single-speaker fallback only
+  acks, attendance?                       // legacy solo fallback; attendance exists only when
+                                          // configured, and reviewers never receive acks
   status                                  // draft | submitted | under_review |
                                           // accepted | confirmed | declined |
                                           // waitlisted | rejected | withdrawn
@@ -301,7 +334,9 @@ proposals/{proposalId}/speakerInvitations/{invitationId}
 proposals/{proposalId}/speakerParticipants/{uid}
   role                                    // primary | coSpeaker
   status                                  // active | inactive
-  acks, attendance                        // presenter-private; admins after submission
+  acks                                    // presenter-private; admins after submission
+  attendance?                             // only when configured; direct read remains private
+                                          // and reviewer projection follows per-field visibility
   invitationId?, joinedPhase?, joinedAt, removedAt?
 
 proposals/{proposalId}/speakerConfirmations/{uid}
@@ -405,7 +440,20 @@ A card-based interface: reviewers move through proposals quickly, one at a time.
 
 Everything about the proposal, plus speaker identity, company, GDE status, and location. **No blind review** — the committee wants speaker context.
 
-What it deliberately **excludes**: `attendance` and everything about travel funding. Scoring is about the talk. Feasibility is handled at selection, not by reviewers.
+> **Amended 12 August 2026.** Travel feasibility is decision-relevant during
+> review when the CFP enables it. For every speaker on the current active
+> roster, the card may show only the enabled, reviewer-visible subset of
+> `status`, `fundingSource`, `decisionBy`, and `needsVisa`. Multi-speaker
+> proposals read that subset from each active `speakerParticipants/{uid}` row;
+> a legacy solo proposal may use the root `attendance` fallback. In both cases
+> the callable constructs the subset field by field and never copies an
+> attendance object verbatim.
+
+This does **not** expose acknowledgements, contact details, profile or programme
+photos, lifecycle/confirmation state, or post-acceptance confirmation answers
+such as dietary and accessibility needs. Reviewer data is a one-shot projection,
+not a live subscription: it is current when the review queue is loaded or
+refreshed.
 
 ### Other interactions
 
@@ -442,7 +490,7 @@ private schedule → shared preview → public programme
    ↳ bounded late intake → review → decision → confirmation → republish
 ```
 
-At the committee stage, the dashboard needs to show — alongside scores — the counts that drive balance decisions: proposals per category, per delivery language, count of `either`, and the `attendance.status` distribution among likely accepts.
+At the committee stage, the dashboard needs to show — alongside scores — the counts that drive balance decisions: proposals per category, per delivery language, count of `either`, and, when the CFP collects it, the `attendance.status` distribution among likely accepts.
 
 The first review and the `submitted` → `under_review` transition are one server
 transaction. A reviewer must never be told that a score was saved while the
@@ -518,7 +566,7 @@ owner must reactivate the event before taking that historical programme offline.
 
 ## 10. Build order
 
-1. **Submission form + Firestore write + security rules.** Conditional fields (GDE guidance, funding source, language preference) are the fiddly part.
+1. **Submission form + Firestore write + security rules.** Conditional fields (event-scoped GDE guidance, configured attendance details, language preference) are the fiddly part.
 2. **Review interface.** Prototype exists; needs auth, real data binding, and per-reviewer assignment.
 3. **Aggregation function.** z-score normalisation, std dev, conflict exclusion.
 4. **Selection dashboard.** Sorted by disagreement, with balance counters.

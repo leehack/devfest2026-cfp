@@ -40,13 +40,16 @@ for (const { name, code } of chunks) {
  *
  * Turbopack emits the module as its own chunk because a dynamic `import()` is
  * discovered statically, so the file existing is not the thing to assert on. What
- * must hold is that nothing *calls* it: the guard at its one call site is written
- * as a literal `process.env` comparison precisely so the bundler folds it away.
- * If that call reappears in executing client code, the guard stopped working.
+ * must hold is that nothing *calls* it: the guards at both call sites are written
+ * as literal `process.env` comparisons precisely so the bundler folds them away.
+ * If either call reappears in executing client code, its guard stopped working.
  */
 for (const { name, code } of chunks) {
   if (/installTestSignIn\s*\(\s*\)/.test(code)) {
     problems.push(`${name} still calls installTestSignIn() — the emulator guard did not fold`);
+  }
+  if (/signInAsTestSpeaker\s*\(\s*\)/.test(code)) {
+    problems.push(`${name} still calls signInAsTestSpeaker() — the emulator guard did not fold`);
   }
 }
 

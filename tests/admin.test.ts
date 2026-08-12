@@ -14,11 +14,16 @@ import {
 } from '../src/lib/dates';
 import {
   adminError,
+  coSpeakerInvitationError,
   emailError,
+  emailHistoryError,
   friendlyError,
+  isCoSpeakerInvitationUnavailable,
   isSpeakerMessageRecipientsChanged,
   platformAdminError,
   resendError,
+  reviewError,
+  roleAdminError,
   scheduleError,
 } from '../src/lib/errors';
 import {
@@ -196,8 +201,20 @@ describe('the published-programme lifecycle', () => {
 describe('adminError', () => {
   const failed = (code: string) => ({ code });
 
-  it('reads failed-precondition as the last-admin guard, not a closed window', () => {
-    expect(adminError(failed('functions/failed-precondition'), en)).toBe(en.admin.lastAdmin);
+  it('keeps generic admin races separate from the role-specific last-admin guard', () => {
+    expect(adminError(failed('functions/failed-precondition'), en)).toBe(en.admin.actionInvalid);
+    expect(roleAdminError(failed('functions/failed-precondition'), en)).toBe(
+      en.admin.actionInvalid,
+    );
+    expect(
+      roleAdminError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'event_last_admin' },
+        },
+        en,
+      ),
+    ).toBe(en.admin.lastAdmin);
     // The applicant-facing mapper says the opposite thing for the same code.
     expect(friendlyError(failed('functions/failed-precondition'), en)).toBe(en.errors.notOpen);
   });
@@ -208,6 +225,27 @@ describe('adminError', () => {
     expect(adminError(failed('unavailable'), en)).toBe(en.errors.unavailable);
     expect(friendlyError(failed('unknown'), en)).toBe(en.errors.unavailable);
     expect(adminError(new Error('boom'), en)).toBe(en.errors.generic);
+    expect(friendlyError(failed('resource-exhausted'), en)).toBe(en.errors.generic);
+    expect(
+      friendlyError(
+        {
+          code: 'functions/resource-exhausted',
+          details: { reason: 'speaker_talk_cap_reached' },
+        },
+        en,
+      ),
+    ).toBe(en.errors.talkCapReached);
+    // Only the caller's own cap is theirs to clear, so the two causes must not
+    // share copy that tells them to withdraw a talk.
+    expect(
+      friendlyError(
+        {
+          code: 'functions/resource-exhausted',
+          details: { reason: 'co_speaker_talk_cap_reached' },
+        },
+        en,
+      ),
+    ).toBe(en.errors.coSpeakerTalkCapReached);
   });
 
   it('maps email delivery and recipient races without the last-admin fallback', () => {
@@ -241,12 +279,36 @@ describe('adminError', () => {
   });
 
   it('speaks the reader’s language', () => {
-    expect(adminError(failed('functions/failed-precondition'), fr)).toBe(fr.admin.lastAdmin);
+    expect(adminError(failed('functions/failed-precondition'), fr)).toBe(fr.admin.actionInvalid);
+    expect(
+      roleAdminError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'event_last_admin' },
+        },
+        fr,
+      ),
+    ).toBe(fr.admin.lastAdmin);
   });
 
   it('never leaks the raw message', () => {
     const raw = 'PERMISSION_DENIED: evaluation error at L157:24';
     expect(adminError({ code: 'permission-denied', message: raw }, en)).not.toContain('L157');
+  });
+});
+
+describe('email history errors', () => {
+  it('translates application reasons and preserves provider diagnostics', () => {
+    expect(
+      emailHistoryError(
+        'This notification is superseded because the event is archived.',
+        'event_archived',
+        fr,
+      ),
+    ).toBe(fr.admin.emailErrorReasons.event_archived);
+    expect(emailHistoryError('422: domain is not verified', '', fr)).toBe(
+      '422: domain is not verified',
+    );
   });
 });
 
@@ -273,6 +335,81 @@ describe('resendError', () => {
     expect(resendError(failed('invalid-argument'), en)).toBe(en.admin.emailErrors.rejected);
     expect(resendError(failed('unavailable'), en)).toBe(en.admin.emailErrors.unreachable);
     expect(resendError(failed('permission-denied'), en)).toBe(en.nav.forbidden);
+  });
+
+  it('distinguishes domain assignment problems from a bad provider key', () => {
+    expect(
+      resendError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'email_domain_unavailable' },
+        },
+        en,
+      ),
+    ).toBe(en.admin.emailErrors.domainUnavailable);
+    expect(
+      resendError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'email_domain_mismatch' },
+        },
+        fr,
+      ),
+    ).toBe(fr.admin.emailErrors.domainMismatch);
+  });
+});
+
+describe('role-specific lifecycle errors', () => {
+  it('maps review races and access loss without exposing server prose', () => {
+    expect(reviewError({ code: 'functions/failed-precondition' }, en)).toBe(
+      en.review.proposalNoLongerReviewable,
+    );
+    expect(reviewError({ code: 'permission-denied' }, fr)).toBe(fr.review.accessRemoved);
+    // A reviewer invited to co-present keeps their role; saying it was revoked
+    // sends them to an organiser over a conflict the queue can resolve itself.
+    expect(
+      reviewError({ code: 'permission-denied', details: { reason: 'review_own_proposal' } }, en),
+    ).toBe(en.review.ownProposal);
+  });
+
+  it('maps co-speaker invitation state and reviewer conflicts', () => {
+    expect(
+      isCoSpeakerInvitationUnavailable({
+        code: 'functions/failed-precondition',
+        details: { reason: 'co_speaker_invitation_unavailable' },
+      }),
+    ).toBe(true);
+    expect(
+      isCoSpeakerInvitationUnavailable({ code: 'functions/deadline-exceeded' }),
+    ).toBe(true);
+    expect(
+      isCoSpeakerInvitationUnavailable({
+        code: 'functions/failed-precondition',
+        details: { reason: 'co_speaker_invitation_reviewer_conflict' },
+      }),
+    ).toBe(false);
+    expect(
+      coSpeakerInvitationError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'co_speaker_invitation_reviewer_conflict' },
+        },
+        en,
+      ),
+    ).toBe(en.coSpeakers.invitationReviewerConflict);
+    expect(
+      coSpeakerInvitationError(
+        {
+          code: 'functions/failed-precondition',
+          details: { reason: 'co_speaker_invitation_unavailable' },
+        },
+        fr,
+      ),
+    ).toBe(fr.coSpeakers.invitationNoLongerAvailable);
+    expect(
+      coSpeakerInvitationError({ code: 'functions/deadline-exceeded' }, en),
+    ).toBe(en.coSpeakers.invitationNoLongerAvailable);
+    expect(coSpeakerInvitationError({ code: 'permission-denied' }, en)).toBe(en.nav.forbidden);
   });
 });
 

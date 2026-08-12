@@ -3,7 +3,7 @@ import type { User } from 'firebase/auth';
 
 import { SelectField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
-import { adminError } from '../../lib/errors';
+import { adminError, roleAdminError } from '../../lib/errors';
 import { grantRole, loadCommittee, revokeRole, type Person } from '../../lib/roles';
 import { useLatest } from '../../lib/useLatest';
 import { GRANTABLE_ROLES, type GrantableRole } from '@shared/cfp';
@@ -141,7 +141,7 @@ export function Committee({
       setEmail('');
       await refresh(false);
     } catch (e) {
-      if (activeCfp.current === scope) setError(adminError(e, tRef.current));
+      if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }
@@ -168,7 +168,7 @@ export function Committee({
           : tRef.current.admin.invited(data.email),
       );
     } catch (e) {
-      if (activeCfp.current === scope) setError(adminError(e, tRef.current));
+      if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {
       // Refresh either way: on failure this is what puts the select back to the
       // role the server actually still holds.
@@ -192,7 +192,7 @@ export function Committee({
       setNote(tRef.current.admin.revoked(target));
       await refresh(false);
     } catch (e) {
-      if (activeCfp.current === scope) setError(adminError(e, tRef.current));
+      if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }

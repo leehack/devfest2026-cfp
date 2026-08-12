@@ -35,6 +35,10 @@ test('speaker submits two talks, reviewer scores them, admin selects one', async
 
   // A second talk reuses the speaker profile rather than asking for it again.
   await page.getByRole('button', { name: '+ Another talk' }).click();
+  await expect(
+    page.getByRole('button', { name: `${FIRST} Submitted`, exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText('New talk', { exact: true })).toBeVisible();
   await expect(field(page, 'Title')).toHaveValue('');
   await expect(field(page, 'Bio')).toHaveValue(COMPLETE.bio);
 

@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import {
+  CFP_ID,
   callJson,
   createAccount,
   reset,
@@ -407,6 +408,12 @@ async function openLaterSessionFromDeepInTheAgenda(page: Page): Promise<AgendaPo
   await link.click();
   await expect(page).toHaveURL(at('/schedule/second-session'));
   await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  const main = page.locator('#main-content');
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Later session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
   return position;
 }
 
@@ -697,6 +704,100 @@ test('a directly opened session falls back to a normal programme link', async ({
   await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
 });
 
+test('a CFP-less route waits for the session label before moving focus', async ({ page }) => {
+  await seedPublicAgenda();
+  await page.goto('/');
+  await waitForAppHydration(page);
+  await expect(page.getByRole('link', { name: 'DevFest Montréal 2026' })).toBeVisible();
+
+  let releaseLookup!: () => void;
+  const lookupHeld = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  let markLookupStarted!: () => void;
+  const lookupStarted = new Promise<void>((resolve) => {
+    markLookupStarted = resolve;
+  });
+  let holdingLookup = true;
+  await page.route('http://127.0.0.1:8080/**', async (route) => {
+    const request = route.request();
+    const requestData = `${request.url()}\n${request.postData() ?? ''}`;
+    if (holdingLookup && requestData.includes(`/documents/cfps/${CFP_ID}`)) {
+      holdingLookup = false;
+      markLookupStarted();
+      await lookupHeld;
+    }
+    await route.continue();
+  });
+
+  const main = page.locator('#main-content');
+  await page.locator('.skip-link').focus();
+  try {
+    await page.evaluate((path) => {
+      const focusLabels: string[] = [];
+      const content = document.getElementById('main-content');
+      (window as typeof window & { __routeFocusLabels?: string[] }).__routeFocusLabels =
+        focusLabels;
+      content?.addEventListener('focus', () => {
+        focusLabels.push(content.getAttribute('aria-label') ?? '');
+      });
+      window.history.pushState(null, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, at('/schedule/second-session'));
+    await lookupStarted;
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    );
+
+    await expect(main).not.toBeFocused();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as typeof window & { __routeFocusLabels?: string[] }).__routeFocusLabels,
+      ),
+    ).toEqual([]);
+  } finally {
+    releaseLookup();
+  }
+
+  await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Later session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
+  expect(
+    await page.evaluate(
+      () => (window as typeof window & { __routeFocusLabels?: string[] }).__routeFocusLabels,
+    ),
+  ).toEqual(['Later session — DevFest Montréal 2026']);
+});
+
+test('in-app session navigation focuses a landmark named for each session', async ({ page }) => {
+  await seedPublicAgenda();
+  await page.goto(at('/schedule'));
+  await waitForAppHydration(page);
+
+  await page.getByRole('link', { name: 'Opening session', exact: true }).click();
+  const main = page.locator('#main-content');
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Opening session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
+
+  await page.evaluate((path) => {
+    window.history.pushState(null, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, at('/schedule/second-session'));
+  await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Later session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
+});
+
 test('custom programme item speakers are optional, repeatable, removable, and public in order', async ({
   page,
 }) => {
@@ -732,6 +833,7 @@ test('custom programme item speakers are optional, repeatable, removable, and pu
     }),
   ).toBeVisible();
   await speakers.getByRole('button', { name: 'Add speaker' }).click();
+  await expect(speakers.getByRole('group', { name: /^Speaker / })).toHaveCount(2);
 
   let speakerOne = speakers.getByRole('group', { name: 'Speaker 1' });
   let speakerTwo = speakers.getByRole('group', { name: 'Speaker 2' });
@@ -834,6 +936,16 @@ test('an admin uploads, reopens, and removes a custom programme speaker photo', 
   await expect(
     speaker.getByText('Choose a photo at least 800 pixels on both sides.'),
   ).toBeVisible();
+  const photoError = speaker.getByText('Choose a photo at least 800 pixels on both sides.');
+  const photoErrorId = await photoError.getAttribute('id');
+  expect(photoErrorId).toBeTruthy();
+  await expect(input).toHaveAttribute('tabindex', '-1');
+  await expect(input).toHaveAttribute('aria-describedby', photoErrorId!);
+  await expect(input).toHaveAttribute('aria-errormessage', photoErrorId!);
+  await expect(speaker.getByRole('button', { name: 'Choose photo' })).toHaveAttribute(
+    'aria-describedby',
+    photoErrorId!,
+  );
 
   let releaseUpload = () => {};
   let markUploadStarted = () => {};
@@ -1408,7 +1520,7 @@ test('sharing and publishing have separate review steps and stale-version guidan
   const offline = page.getByRole('alertdialog', {
     name: 'Take the public programme offline?',
   });
-  await expect(offline).toContainText('The private draft, shared preview, and release history stay intact.');
+  await expect(offline).toContainText('The private draft, shared preview, and version history stay intact.');
   await offline.getByRole('button', { name: 'Cancel' }).first().click();
   await expect(offline).toHaveCount(0);
 });

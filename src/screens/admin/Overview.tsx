@@ -26,6 +26,7 @@ import type { ConfirmForm } from '@shared/confirmForm';
 import type { EmailDeliveryProblem, EmailDeliveryReadiness } from '@shared/emailSettings';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp } from '@shared/types';
+import { inStatusSet } from '@shared/enums';
 
 interface EmailReadiness {
   delivery: EmailDeliveryReadiness | null;
@@ -220,7 +221,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
   const { cfp, proposals, committee, submission, confirmation, email, schedule } = current;
   const opens = toDate(cfp.opensAt);
   const closes = toDate(cfp.closesAt);
-  const windowValid = Boolean(opens && closes && closes.getTime() > opens.getTime() && !cfp.archived);
+  const windowValid = Boolean(opens && closes && closes.getTime() > opens.getTime());
   const detailsReady = Boolean(
     cfp.description?.en?.trim() &&
       (cfp.eventStartDate ?? cfp.eventDate) &&
@@ -317,7 +318,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
     (proposal) => proposal.status !== 'draft' && proposal.status !== 'withdrawn',
   );
   const undecided = live.filter((proposal) =>
-    ['submitted', 'under_review'].includes(proposal.status),
+    inStatusSet('reviewQueue', proposal.status),
   );
   const needsFirstReview = undecided.filter(
     (proposal) => (proposal.aggregate?.reviewCount ?? 0) === 0,

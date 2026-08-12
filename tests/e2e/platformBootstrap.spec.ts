@@ -130,6 +130,26 @@ test.describe('platform owner bootstrap', () => {
     });
   });
 
+  test('a mistyped pending owner grant can be removed before any owner is active', async () => {
+    const mistyped = {
+      sub: 'mistyped-platform-owner',
+      email: 'mistyped-platform-owner@example.org',
+      name: 'Mistyped Owner',
+    };
+    expect((await bootstrap(mistyped.email, { role: 'owner' })).stdout).toContain(
+      `Platform owner pending verified sign-in: ${mistyped.email}`,
+    );
+    expect(
+      (await bootstrap(mistyped.email, { role: 'owner', remove: true })).stdout,
+    ).toContain(`Platform owner removed: ${mistyped.email}`);
+
+    const account = await createAccount(mistyped);
+    expect(await callJson(account.idToken, 'platformAccess', {})).toMatchObject({
+      role: null,
+      isPlatformOwner: false,
+    });
+  });
+
   test('a pending owner cannot replace the last active owner during removal', async () => {
     const first = await createAccount(FIRST);
     expect((await bootstrap(FIRST.email, { role: 'owner' })).stdout).toContain(

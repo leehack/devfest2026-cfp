@@ -61,6 +61,7 @@ describe('field accessibility', () => {
           checked: false,
           onChange: () => {},
           error: 'Check this if it applies.',
+          required: true,
         }),
       ),
     );
@@ -68,6 +69,8 @@ describe('field accessibility', () => {
     expect(markup).not.toContain('role="alert"');
     expect(markup).toContain('aria-invalid="true"');
     expect(markup).toContain('aria-required="true"');
+    expect(markup).toMatch(/type="checkbox"[^>]+aria-required="true"/);
+    expect(markup).toMatch(/Conflict of interest.*field__requirement[^>]*>Required</);
 
     const referencedIds = [
       ...Array.from(markup.matchAll(/aria-describedby="([^"]+)"/g), (match) =>
@@ -80,5 +83,14 @@ describe('field accessibility', () => {
     for (const id of referencedIds) {
       expect(markup).toContain(`id="${id}"`);
     }
+
+    const errorIds = Array.from(
+      markup.matchAll(/aria-errormessage="([^"]+)"/g),
+      (match) => match[1],
+    );
+    for (const id of errorIds) {
+      expect(markup).toMatch(new RegExp(`aria-describedby="[^"]*${id}[^"]*"`));
+    }
   });
+
 });

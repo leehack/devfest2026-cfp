@@ -6,6 +6,7 @@ import {
   CFP_ID,
   callAs,
   callJson,
+  callWithErrorDetails,
   callPublic,
   clearSignInAllowance,
   createAccount,
@@ -506,12 +507,16 @@ test.describe('co-speaker lifecycle boundaries', () => {
     });
     expect(summary.invitation).toMatchObject({ state: 'expired', canRespond: false });
     await expect(
-      callAs(guest.idToken, 'respondToCoSpeakerInvitation', {
+      callWithErrorDetails(guest.idToken, 'respondToCoSpeakerInvitation', {
         proposalId: 'linked-talk',
         invitationId,
         response: 'accept',
       }),
-    ).resolves.toMatchObject({ ok: false });
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'DEADLINE_EXCEEDED',
+      details: { reason: 'co_speaker_invitation_unavailable' },
+    });
   });
 
   test('event admins cannot alter a draft roster without the lead speaker', async () => {
@@ -543,6 +548,89 @@ test.describe('co-speaker lifecycle boundaries', () => {
         uid: guest.uid,
       }),
     ).resolves.toMatchObject({ ok: false, code: 'PERMISSION_DENIED' });
+  });
+
+  test('an admin can remove a silent draft-phase co-speaker blocking an accepted session', async () => {
+    const { lead, guest, admin } = await submitAndAccept();
+    await callJson(lead.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'confirm',
+      answers: {},
+    });
+    expect(await readProposalById('linked-talk')).toMatchObject({ status: 'accepted' });
+    expect(
+      (await callJson(admin.idToken, 'getProposalRoster', { proposalId: 'linked-talk' }))
+        .roster.items,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ uid: guest.uid, confirmationState: 'none', canRemove: true }),
+      ]),
+    );
+
+    await expect(
+      callAs(lead.idToken, 'removeCoSpeaker', {
+        proposalId: 'linked-talk',
+        uid: guest.uid,
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: guest.uid,
+    });
+
+    expect(await readProposalById('linked-talk')).toMatchObject({
+      status: 'confirmed',
+      speakerIds: [lead.uid],
+      formerSpeakerIds: [guest.uid],
+    });
+    expect(await readSpeakerParticipant('linked-talk', guest.uid)).toMatchObject({
+      status: 'inactive',
+      removedBy: admin.uid,
+    });
+  });
+
+  test('removal clears a declined confirmation before that speaker is invited again', async () => {
+    const { guest, admin } = await submitAndAccept();
+    await callJson(guest.idToken, 'respondToDecision', {
+      proposalId: 'linked-talk',
+      response: 'decline',
+      answers: {},
+    });
+    expect(await readSpeakerConfirmation('linked-talk', guest.uid)).toMatchObject({
+      response: 'declined',
+    });
+
+    await callJson(admin.idToken, 'removeCoSpeaker', {
+      proposalId: 'linked-talk',
+      uid: guest.uid,
+    });
+    expect(await readSpeakerConfirmation('linked-talk', guest.uid)).toBeNull();
+
+    const reinvited = await callJson(admin.idToken, 'inviteCoSpeaker', {
+      proposalId: 'linked-talk',
+      email: GUEST.email,
+    });
+    await callJson(guest.idToken, 'respondToCoSpeakerInvitation', {
+      proposalId: 'linked-talk',
+      invitationId: reinvited.invitationId,
+      response: 'accept',
+      acks: ACKS,
+      attendance: ATTENDANCE,
+    });
+
+    expect(await readSpeakerConfirmation('linked-talk', guest.uid)).toBeNull();
+    const roster = (
+      await callJson(admin.idToken, 'getProposalRoster', { proposalId: 'linked-talk' })
+    ).roster;
+    expect(roster.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          uid: guest.uid,
+          confirmationState: 'none',
+          canRemove: true,
+        }),
+      ]),
+    );
   });
 
   test('a co-speaker decline cancels only their request while a lead decline cancels the roster', async () => {
@@ -1227,6 +1315,13 @@ test.describe('co-speaker lifecycle boundaries', () => {
       response: 'confirm',
       answers: {},
     });
+    // Removing the declined speaker raises `scheduleCancellationRequired` a
+    // second time, after the decline's own pass has already cancelled the entry
+    // and queued its emails — so neither wait above covers it. Sharing while
+    // that pass is in flight is refused with `schedule-cancellation-processing`.
+    await expect
+      .poll(async () => (await readProposalById('linked-talk'))?.scheduleCancellationRequired)
+      .toBeUndefined();
     const replacement = await callJson(admin.idToken, 'shareSchedulePreview', {
       expectedRevision: shared.revision,
     });
@@ -1256,18 +1351,46 @@ test.describe('co-speaker lifecycle boundaries', () => {
     const lead = await createAccount(LEAD);
     const late = await createAccount(LATE);
     const admin = await createAccount(ADMIN);
+    const photoQuestion = {
+      key: 'headshot',
+      type: 'image',
+      label: { en: 'Speaker headshot', fr: 'Photo du conférencier' },
+      required: true,
+    };
+    const shirtQuestion = {
+      key: 'shirt',
+      type: 'text',
+      label: { en: 'Shirt size', fr: 'Taille du chandail' },
+      required: true,
+    };
+    const base64 = readFileSync('tests/fixtures/headshot.png').toString('base64');
     await seedSpeaker(lead.uid, { name: LEAD.name, email: LEAD.email });
     await seedSpeaker(late.uid, { name: LATE.name, email: LATE.email });
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
-    const confirmedAt = new Date(Date.now() - 60_000);
-    const legacyUploads = {
-      headshot: {
-        path: `cfps/${CFP_ID}/workingHeadshots/legacy-talk/headshot/upload-one`,
-        generation: '1',
-        contentType: 'image/jpeg',
-        size: 1024,
-      },
-    };
+    await setConfirmFormDirect([photoQuestion, shirtQuestion]);
+    await seedProposal('legacy-talk', {
+      speakerUid: lead.uid,
+      title: 'A legacy confirmed session',
+      status: 'accepted',
+    });
+    await callJson(lead.idToken, 'uploadHeadshot', {
+      proposalId: 'legacy-talk',
+      key: 'headshot',
+      contentType: 'image/png',
+      base64,
+    });
+    await callJson(lead.idToken, 'respondToDecision', {
+      proposalId: 'legacy-talk',
+      response: 'confirm',
+      answers: { shirt: 'M' },
+    });
+    const legacyBefore = await readProposalById('legacy-talk');
+    const legacyAnswers = legacyBefore?.confirmAnswers;
+    const legacyUploads = legacyBefore?.headshotUploads;
+    expect(legacyAnswers).toMatchObject({
+      shirt: 'M',
+      headshot: expect.stringContaining(`cfps/${CFP_ID}/confirmedHeadshots/legacy-talk/`),
+    });
     const legacySpeakerPhoto = {
       path: `cfps/${CFP_ID}/confirmedHeadshots/legacy-talk/` +
         `${lead.uid}/speakerPhoto/profile-generation`,
@@ -1279,9 +1402,6 @@ test.describe('co-speaker lifecycle boundaries', () => {
       speakerUid: lead.uid,
       title: 'A legacy confirmed session',
       status: 'confirmed',
-      confirmedAt,
-      confirmAnswers: { shirt: 'M', headshot: 'legacy-confirmed-path' },
-      headshotUploads: legacyUploads,
       speakerPhoto: legacySpeakerPhoto,
     });
 
@@ -1299,18 +1419,30 @@ test.describe('co-speaker lifecycle boundaries', () => {
 
     expect(await readSpeakerConfirmation('legacy-talk', lead.uid)).toMatchObject({
       response: 'confirmed',
-      answers: { shirt: 'M', headshot: 'legacy-confirmed-path' },
+      answers: legacyAnswers,
       headshotUploads: legacyUploads,
       speakerPhoto: legacySpeakerPhoto,
       migratedFromLegacy: true,
     });
-    expect(await readProposalById('legacy-talk')).toMatchObject({
+    const migrated = await readProposalById('legacy-talk');
+    expect(migrated).toMatchObject({
       status: 'accepted',
       primarySpeakerId: lead.uid,
       speakerIds: [lead.uid, late.uid],
-      confirmAnswers: { shirt: 'M', headshot: 'legacy-confirmed-path' },
-      headshotUploads: legacyUploads,
     });
+    expect(migrated?.confirmAnswers).toBeUndefined();
+    expect(migrated?.headshotUploads).toBeUndefined();
+    expect(migrated?.speakerPhoto).toBeUndefined();
+    expect(migrated?.acks).toBeUndefined();
+    expect(migrated?.attendance).toBeUndefined();
+
+    await expect(
+      callJson(admin.idToken, 'headshotImage', {
+        proposalId: 'legacy-talk',
+        speakerUid: lead.uid,
+        key: 'headshot',
+      }),
+    ).resolves.toEqual({ ok: true, dataUrl: `data:image/png;base64,${base64}` });
   });
 
   test('removing late and declined speakers retains the released cancellation roster', async () => {
@@ -1663,10 +1795,9 @@ test.describe('co-speaker lifecycle boundaries', () => {
     await expect(
       callAs(lead.idToken, 'submitProposal', { proposalId: 'linked-talk' }),
     ).resolves.toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
-    expect(await readSpeakerParticipant('linked-talk', guest.uid)).toMatchObject({
-      acks: {},
-      attendance: {},
-    });
+    const incompleteGuest = await readSpeakerParticipant('linked-talk', guest.uid);
+    expect(incompleteGuest).toMatchObject({ acks: {} });
+    expect(incompleteGuest).not.toHaveProperty('attendance');
 
     await completeGuestDetails(guest.uid);
     await callJson(lead.idToken, 'submitProposal', { proposalId: 'linked-talk' });

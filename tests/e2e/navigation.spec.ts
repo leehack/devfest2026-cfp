@@ -10,7 +10,7 @@ import {
   seedMember,
   seedProposal,
 } from './backend';
-import { at, signInAs, type Identity } from './form';
+import { at, signInAs, waitForAppHydration, type Identity } from './form';
 
 const ADMIN: Identity = { sub: 'nav-admin', email: 'nav-admin@example.org', name: 'Ada Admin' };
 const REVIEWER: Identity = {
@@ -58,6 +58,29 @@ test.describe('navigation by persona', () => {
       'href',
       `/c/${CFP_ID}`,
     );
+    await expect(page.locator('#main-content')).toBeFocused();
+    await expect(page.locator('#main-content')).toHaveAttribute(
+      'aria-label',
+      'My proposals — DevFest Montréal 2026 — Call for Proposals',
+    );
+  });
+
+  test('a session link to a missing event still moves focus into the panel', async ({ page }) => {
+    await page.goto(at(''));
+    await waitForAppHydration(page);
+    await expect(page.locator('#main-content')).not.toBeFocused();
+
+    // What `router.navigate` itself does: pushState fires no event of its own.
+    // A session route is the one place focus waits for a heading that only the
+    // schedule can supply, and this panel renders instead of the schedule.
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/c/no-such-event/schedule/no-such-entry');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await expect(
+      page.getByText('There is no call for proposals at this address.'),
+    ).toBeVisible();
     await expect(page.locator('#main-content')).toBeFocused();
   });
 

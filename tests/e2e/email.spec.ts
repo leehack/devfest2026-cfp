@@ -159,6 +159,17 @@ test.describe('email pipeline', () => {
     expect((await readEmailLog())[0]).toMatchObject({ status: 'held', attempts: 0 });
   });
 
+  test('resend rejects a slash-bearing log id before resolving a document path', async () => {
+    const { chair } = await stage();
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'resend',
+        logId: 'a/b',
+        reviewedTo: speaker.email,
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+  });
+
   test('a queued acceptance is superseded if the decision is undone before claim', async () => {
     const { chair } = await stage();
     await callJson(chair.idToken, 'setProposalStatus', {
@@ -180,6 +191,7 @@ test.describe('email pipeline', () => {
       status: 'failed',
       attempts: 0,
       error: 'This notification is superseded.',
+      errorReason: 'superseded',
     });
     expect(rows[0].attemptedAt).toBeTruthy();
     expect(rows[0]).not.toHaveProperty('sentAt');
@@ -341,6 +353,7 @@ test.describe('email pipeline', () => {
     await expect(review.locator('tbody tr')).toHaveCount(100);
     await review.getByRole('button', { name: 'Queue 100 notifications' }).click();
 
+    await expect(review).toBeHidden({ timeout: 15_000 });
     await expect(queue.getByText('100 emails queued.')).toBeVisible();
     await expect(queue.locator('.email-queue-card__count strong')).toHaveText('1');
     await expect(queue.locator('.table--held tbody tr')).toHaveCount(1);
@@ -1021,6 +1034,24 @@ test.describe('email pipeline', () => {
     await expect(page).toHaveURL(new RegExp('/admin/committee$'));
   });
 
+  test('switching the interface language does not discard unsaved email wording', async ({
+    page,
+  }) => {
+    await stage();
+    await signInAs(page, admin, at('/admin/email'));
+
+    await page.getByLabel('Edit the wording').check();
+    const subject = page.locator('.email-editor .editor input').first();
+    const body = page.locator('.email-editor .editor textarea').first();
+    await subject.fill('A bilingual-safe draft for {event}');
+    await body.fill('This sentence must survive the interface language switch.');
+
+    await page.getByRole('button', { name: 'Français' }).click();
+    await expect(subject).toHaveValue('A bilingual-safe draft for {event}');
+    await expect(body).toHaveValue('This sentence must survive the interface language switch.');
+    await expect(page.locator('.email-editor').getByLabel('Langue')).toHaveValue('en');
+  });
+
   test('a late email refresh does not overwrite wording being typed', async ({ page }) => {
     await stage();
 
@@ -1169,6 +1200,35 @@ test.describe('email pipeline', () => {
       sentAt: null,
     });
     expect(rows[0].attemptedAt).toEqual(expect.any(Number));
+  });
+
+  test('a delivered row keeps its sent outcome after the underlying decision changes', async () => {
+    const { chair } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await waitForEmail((rows) => rows[0]?.status === 'held', 'the held acceptance');
+    const sentAt = new Date('2026-08-11T12:00:00Z');
+    await seedEmailLog('accepted__talk-1', {
+      status: 'sent',
+      kind: 'accepted',
+      proposalId: 'talk-1',
+      to: speaker.email,
+      sentAt,
+    });
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'under_review',
+    });
+
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview.rows.find((row: { logId: string }) => row.logId === 'accepted__talk-1'))
+      .toMatchObject({
+        status: 'sent',
+        stale: false,
+        sentAt: sentAt.getTime(),
+      });
   });
 
   test('history sorts by the truthful attempt time with a legacy sent fallback', async () => {

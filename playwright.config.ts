@@ -7,24 +7,30 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e',
+  testIgnore: process.env.E2E_SKIP_NETWORK ? '**/sessionize.spec.ts' : undefined,
   // Not tsconfig.json: Next owns that and sets jsx: preserve.
   tsconfig: './tsconfig.test.json',
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
+  reporter: process.env.CI
+    ? [
+        ['github'],
+        ['json', { outputFile: 'test-results/results.json' }],
+      ]
+    : 'list',
   use: {
     baseURL: 'http://localhost:5173',
     locale: 'en-CA',
-    trace: 'retain-on-failure',
+    trace: process.env.CI ? 'on-first-retry' : 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: devices['Desktop Chrome'] }],
   webServer: {
     command: 'npm start',
     url: 'http://localhost:5173',
     reuseExistingServer: true,
-    // Cold start builds functions and boots three emulators.
+    // Cold start builds functions and boots four emulators.
     timeout: 180_000,
     stdout: 'pipe',
   },

@@ -169,6 +169,23 @@ test.describe('the submission window', () => {
     await expect(page.getByText(/paused/)).toBeVisible();
   });
 
+  test('a paused draft is kept for reopening instead of described as closed', async ({ page }) => {
+    await reset({ paused: true });
+    const speaker = await createAccount(SPEAKER);
+    await seedSpeaker(speaker.uid, { name: SPEAKER.name, email: SPEAKER.email });
+    await seedProposal('paused-draft', {
+      speakerUid: speaker.uid,
+      title: 'A paused draft',
+      status: 'draft',
+    });
+
+    await signInAs(page, SPEAKER);
+    await expect(
+      page.getByRole('heading', { name: 'Submissions are temporarily paused' }),
+    ).toBeVisible();
+    await expect(page.getByText('This draft was not submitted')).toHaveCount(0);
+  });
+
   test('open shows the deadline before asking anyone to sign in', async ({ page }) => {
     await reset();
     await page.goto(at());
