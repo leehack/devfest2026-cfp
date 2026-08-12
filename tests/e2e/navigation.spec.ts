@@ -65,6 +65,24 @@ test.describe('navigation by persona', () => {
     );
   });
 
+  test('a session link to a missing event still moves focus into the panel', async ({ page }) => {
+    await page.goto(at(''));
+    await expect(page.locator('#main-content')).not.toBeFocused();
+
+    // What `router.navigate` itself does: pushState fires no event of its own.
+    // A session route is the one place focus waits for a heading that only the
+    // schedule can supply, and this panel renders instead of the schedule.
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/c/no-such-event/schedule/no-such-entry');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await expect(
+      page.getByText('There is no call for proposals at this address.'),
+    ).toBeVisible();
+    await expect(page.locator('#main-content')).toBeFocused();
+  });
+
   test('header sign-in on an event keeps the speaker inside that event', async ({ page }) => {
     await page.goto(at(''));
     await page

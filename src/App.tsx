@@ -149,8 +149,12 @@ export function App({
     sessionPageLabel.entryId === place.entryId
       ? sessionPageLabel.label
       : pageLabel;
+  // A session heading only ever arrives from SchedulePage. When the route ends
+  // in the error or not-found panel instead, none is coming, and waiting for one
+  // would leave focus on the link that disappeared with the previous screen.
   const routeAnnouncementReady =
     place.route !== 'session' ||
+    (cfpReady && (cfpError || !cfp)) ||
     (sessionPageLabel?.cfpId === cfpId && sessionPageLabel.entryId === place.entryId);
   const handleSessionPageLabelChange = useCallback(
     (entryId: string, label: string) => {
