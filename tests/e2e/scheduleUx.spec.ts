@@ -763,6 +763,7 @@ test('custom programme item speakers are optional, repeatable, removable, and pu
     }),
   ).toBeVisible();
   await speakers.getByRole('button', { name: 'Add speaker' }).click();
+  await expect(speakers.getByRole('group', { name: /^Speaker / })).toHaveCount(2);
 
   let speakerOne = speakers.getByRole('group', { name: 'Speaker 1' });
   let speakerTwo = speakers.getByRole('group', { name: 'Speaker 2' });
