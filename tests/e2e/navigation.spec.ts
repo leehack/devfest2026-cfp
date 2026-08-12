@@ -10,7 +10,7 @@ import {
   seedMember,
   seedProposal,
 } from './backend';
-import { at, signInAs, type Identity } from './form';
+import { at, signInAs, waitForAppHydration, type Identity } from './form';
 
 const ADMIN: Identity = { sub: 'nav-admin', email: 'nav-admin@example.org', name: 'Ada Admin' };
 const REVIEWER: Identity = {
@@ -67,6 +67,7 @@ test.describe('navigation by persona', () => {
 
   test('a session link to a missing event still moves focus into the panel', async ({ page }) => {
     await page.goto(at(''));
+    await waitForAppHydration(page);
     await expect(page.locator('#main-content')).not.toBeFocused();
 
     // What `router.navigate` itself does: pushState fires no event of its own.

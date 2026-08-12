@@ -1795,10 +1795,9 @@ test.describe('co-speaker lifecycle boundaries', () => {
     await expect(
       callAs(lead.idToken, 'submitProposal', { proposalId: 'linked-talk' }),
     ).resolves.toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
-    expect(await readSpeakerParticipant('linked-talk', guest.uid)).toMatchObject({
-      acks: {},
-      attendance: {},
-    });
+    const incompleteGuest = await readSpeakerParticipant('linked-talk', guest.uid);
+    expect(incompleteGuest).toMatchObject({ acks: {} });
+    expect(incompleteGuest).not.toHaveProperty('attendance');
 
     await completeGuestDetails(guest.uid);
     await callJson(lead.idToken, 'submitProposal', { proposalId: 'linked-talk' });
