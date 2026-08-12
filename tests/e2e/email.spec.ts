@@ -353,6 +353,7 @@ test.describe('email pipeline', () => {
     await expect(review.locator('tbody tr')).toHaveCount(100);
     await review.getByRole('button', { name: 'Queue 100 notifications' }).click();
 
+    await expect(review).toBeHidden({ timeout: 15_000 });
     await expect(queue.getByText('100 emails queued.')).toBeVisible();
     await expect(queue.locator('.email-queue-card__count strong')).toHaveText('1');
     await expect(queue.locator('.table--held tbody tr')).toHaveCount(1);
