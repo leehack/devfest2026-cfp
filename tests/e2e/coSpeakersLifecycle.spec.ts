@@ -1315,6 +1315,13 @@ test.describe('co-speaker lifecycle boundaries', () => {
       response: 'confirm',
       answers: {},
     });
+    // Removing the declined speaker raises `scheduleCancellationRequired` a
+    // second time, after the decline's own pass has already cancelled the entry
+    // and queued its emails — so neither wait above covers it. Sharing while
+    // that pass is in flight is refused with `schedule-cancellation-processing`.
+    await expect
+      .poll(async () => (await readProposalById('linked-talk'))?.scheduleCancellationRequired)
+      .toBeUndefined();
     const replacement = await callJson(admin.idToken, 'shareSchedulePreview', {
       expectedRevision: shared.revision,
     });

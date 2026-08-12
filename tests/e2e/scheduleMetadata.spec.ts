@@ -195,12 +195,23 @@ function schedulingFacts(page: Page) {
   return page.locator('dl.schedule-resize-inspector__facts[aria-label="Scheduling facts"]');
 }
 
+/**
+ * The public agenda arrives server-rendered, is replaced by the loading
+ * paragraph while the client takes over, then rebuilt. A single measurement can
+ * land in that gap and read a null box off an unmounted node, so poll until one
+ * settled layout answers.
+ */
 async function expectWithinViewport(locator: Locator, viewportWidth: number) {
   await expect(locator).toBeVisible();
-  const box = await locator.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth);
+  await expect
+    .poll(async () => {
+      const box = await locator.boundingBox();
+      if (!box) return 'not laid out';
+      if (box.x < 0) return `starts at ${box.x}`;
+      if (box.x + box.width > viewportWidth) return `ends at ${box.x + box.width}`;
+      return 'within the viewport';
+    })
+    .toBe('within the viewport');
 }
 
 async function expectContained(locator: Locator, viewportWidth: number) {
