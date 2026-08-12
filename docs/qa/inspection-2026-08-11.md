@@ -8,6 +8,32 @@ focused regressions and exact-tree checks for behavioural changes, or direct con
 documentation validation for rollout-only findings. Behavioural findings are never closed from
 source inspection alone.
 
+> **Product decision — 12 August 2026.** Organisers confirmed that submission-time
+> travel feasibility belongs in review when the CFP chooses to expose it. The
+> intended projection may include, per active speaker, only the enabled,
+> reviewer-visible subset of attendance `status`, `fundingSource`, `decisionBy`,
+> and `needsVisa`, using the root attendance value solely for the legacy solo fallback.
+> This does not reopen the M2 leak: raw proposal/participant documents,
+> acknowledgements, contact and photo data, lifecycle state, and private
+> confirmation answers such as dietary and accessibility needs remain excluded.
+> Core proposal fields remain visible to reviewers. Each organiser-defined
+> submission question now has an explicit visibility switch; legacy questions
+> default to visible, while `reviewerVisible: false` is enforced in the callable
+> projection. Acknowledgements remain excluded regardless of form wording.
+> Attendance itself is now optional and per CFP. Missing legacy configuration
+> retains the DevFest Montréal section and visibility, while newly created generic
+> CFPs explicitly start with attendance disabled and omit the travel-support
+> acknowledgement. Organisers own the bilingual section, status and subfield
+> copy; funding source, decision date and visa support each have independent
+> collection and reviewer-visibility switches, with optional event-scoped GDE
+> guidance. The stored status codes stay fixed. Disabling the module stops new
+> validation and projection without silently purging historical answers; late
+> co-speaker invitations follow the same form, and visa email guidance requires
+> both an enabled question and a true answer.
+> The historical M2 finding below is preserved unchanged. The amended projection
+> passed exact-tree unit and static checks plus focused live browser verification;
+> its emulator-backed regressions are part of the current PR's exact-head CI gate.
+
 | ID | Status | Disposition | Verification evidence |
 |---|---|---|---|
 | H1 | verified | sign-in delivery now reports provider/setup failure truthfully | auth-link unit tests; sign-in-link browser suite |
@@ -17,7 +43,7 @@ source inspection alone.
 | H5 | verified | select-option editing preserves the initiating keystroke | field-row unit tests; form editor browser coverage |
 | H6 | verified | locale changes preserve unsaved email wording | email browser suite |
 | M1 | verified | role changes enforce owner/last-admin and duplicate-identity guards | roles and platform bootstrap browser suites |
-| M2 | verified | reviewers use a server-whitelisted projection with no private confirmation or logistics data | reviewer-projection unit tests; 149 rules tests; review backend/deck browser suites |
+| M2 | verified | reviewers use a server-whitelisted projection that excludes private confirmation data, honours per-question and per-attendance-field reviewer visibility, and exposes only the enabled attendance subset per active speaker | projection, form-normalisation and confirmation-form isolation unit coverage; 149 rules tests; focused submission and review browser suites |
 | M3 | verified | talk switching confirms before discarding unsaved confirmation answers | confirmation browser suite |
 | M4 | verified | same-origin navigation offers an explicit discard path for unsaved confirmation answers | confirmation and navigation browser suites |
 | M5 | verified | starting another talk keeps the talk picker and prior proposal reachable | draft browser suite |
@@ -63,11 +89,14 @@ source inspection alone.
 | L24 | verified | release/version terminology is aligned between languages | bilingual email/schedule browser coverage |
 | L25 | verified | score histogram exposes a localized, meaningful accessible name | chart accessibility unit tests |
 
-Final exact-tree gate: `npm run lint`, `npm run typecheck`, Functions build, production build,
-bundle guard, 564 unit tests, 149 Firestore/Storage rules tests, 442 Playwright browser tests,
-and `git diff --check` all pass. Browser tests ran against rebuilt Functions after a clean
-emulator restart. The pre-QA Auth, Firestore and Storage export was restored byte-for-byte
-after the destructive suite.
+The original QA-remediation exact-tree gate passed `npm run lint`, `npm run typecheck`,
+Functions build, production build, the bundle guard, 564 unit tests, 149 Firestore/Storage
+rules tests, 442 Playwright browser tests, and `git diff --check`. Browser tests ran against
+rebuilt Functions after a clean emulator restart, and the pre-QA Auth, Firestore and Storage
+export was restored byte-for-byte afterwards. The 12 August attendance/configuration follow-up
+passes lint, typecheck, both builds, the bundle guard, 585 unit tests, workflow validation,
+diff check, and focused EN/FR live-browser verification; its full rules and four-shard browser
+result is recorded by the current PR's exact-head CI.
 
 ## Verification follow-up findings
 
@@ -89,6 +118,7 @@ original IDs does not erase that evidence.
 | V10 | verified | Cross-layer authorization changes have an explicit Functions → app → rules/indexes deployment sequence, avoiding an old-client/new-rules compatibility gap. | package scripts and deployment documentation review |
 | V11 | verified | The schedule route is server-rendered but was imported lazily, so React had no chunk to hydrate with and replaced the published agenda with the Suspense fallback — a blink of "Loading…" over programme content the reader could already see. | schedule metadata browser suite; production build and bundle check |
 | V12 | open | `shareSchedulePreview` refuses with `schedule-cancellation-processing` while an asynchronous cancellation pass finishes. The copy asks the organiser to wait and share again, but no surface reports when the refusal clears; the flag it turns on is never read by the client. | refusal reproduced against the emulated stack; co-speaker lifecycle browser suite waits on that flag |
+| V13 | verified | Review cards use a neutral submission-details heading when no reviewer-visible attendance renders; location-specific travel headings appear only with projected travel rows. | reviewer-travel unit tests; live EN/FR browser verification with attendance disabled; deck browser regression coverage |
 
 
 Inspection baseline: commit `cc448d4`, then a clean worktree identical to `origin/main`. Ten inspectors swept the

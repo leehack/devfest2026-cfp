@@ -24,9 +24,12 @@ import { logger } from 'firebase-functions';
 import { inStatusSet, LIMITS, PROPOSAL_STATUSES, SCORES, STATUS_SETS } from '../../shared/enums';
 import { speakerSchema, submissionSchema } from '../../shared/schema';
 import {
-  DEFAULT_SUBMISSION_FORM,
+  attendanceNeedsVisa,
+  NEW_CFP_SUBMISSION_FORM,
   mergeSubmissionForm,
   normaliseSubmissionForm,
+  rawSubmissionAttendanceFault,
+  reviewerAttendanceEnabled,
   validateSubmissionForm,
   type SubmissionForm,
 } from '../../shared/submissionForm';
@@ -190,7 +193,11 @@ import {
   verifyDomain,
 } from './domains';
 import { signInEmailDeliveryReady, useFreshHostingOrigin } from './authLinks';
-import { reviewerProposalProjection } from './reviewerProjection';
+import {
+  reviewerProposalProjection,
+  reviewerTravelParticipantIds,
+  type ReviewerParticipantSource,
+} from './reviewerProjection';
 export {
   getCoSpeakerInvitation,
   getProposalRoster,
@@ -1450,14 +1457,20 @@ async function speakerEmailContexts(
   const primary = primarySpeakerId(proposal);
   const perSpeakerLifecycle = usesPerSpeakerLifecycle(proposal);
   const profileRefs = speakerIds.map((uid) => db.doc(`speakers/${uid}`));
+  const submissionFormRef = db.doc(`cfps/${cfpId}/config/submissionForm`);
   const participantRefs = perSpeakerLifecycle
     ? speakerIds.map((uid) =>
         speakerParticipantRef(db, cfpId, proposalId, uid),
       )
     : [];
-  const snapshots = await tx.getAll(...profileRefs, ...participantRefs);
+  const snapshots = await tx.getAll(...profileRefs, ...participantRefs, submissionFormRef);
   const profiles = snapshots.slice(0, profileRefs.length);
-  const participants = snapshots.slice(profileRefs.length);
+  const participants = snapshots.slice(
+    profileRefs.length,
+    profileRefs.length + participantRefs.length,
+  );
+  const formSnapshot = snapshots[profileRefs.length + participantRefs.length];
+  const form = mergeSubmissionForm(formSnapshot.exists ? formSnapshot.data() : undefined);
   return profiles.flatMap((snapshot, index) => {
     const speaker = snapshot.data();
     const participant = participants[index]?.data();
@@ -1472,9 +1485,14 @@ async function speakerEmailContexts(
       data: {
         speakerName: (speaker.name as string) || to,
         title: (proposal.title as string) ?? '',
-        needsVisa: perSpeakerLifecycle
-          ? participant?.attendance?.needsVisa === true
-          : isPrimary && proposal.attendance?.needsVisa === true,
+        needsVisa: attendanceNeedsVisa(
+          form,
+          perSpeakerLifecycle
+            ? participant?.attendance
+            : isPrimary
+              ? proposal.attendance
+              : undefined,
+        ),
       },
     }];
   });
@@ -1762,7 +1780,7 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
       if (!coSpeaker.success) {
         throw new HttpsError(
           'failed-precondition',
-          'Every co-speaker must complete their acknowledgements and attendance details before submission.',
+          'Every co-speaker must complete their required participation details before submission.',
           {
             speakerUid: speakerId,
             issues: coSpeaker.error.issues.map((issue) => ({
@@ -3162,9 +3180,26 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'change the submission form');
 
-  const form = normaliseSubmissionForm(
-    mergeSubmissionForm((request.data ?? {}) as Record<string, unknown>),
+  const rawAttendanceFault = rawSubmissionAttendanceFault(request.data);
+  if (rawAttendanceFault) {
+    throw new HttpsError(
+      'invalid-argument',
+      rawAttendanceFault.key
+        ? `${rawAttendanceFault.problem} on "${rawAttendanceFault.key}"`
+        : rawAttendanceFault.problem,
+      rawAttendanceFault,
+    );
+  }
+  const requestedForm = mergeSubmissionForm((request.data ?? {}) as Record<string, unknown>);
+  const badVisibility = requestedForm.fields.find(
+    (field) =>
+      field.reviewerVisible !== undefined && typeof field.reviewerVisible !== 'boolean',
   );
+  if (badVisibility) {
+    const fault = { problem: 'badReviewerVisibility', key: badVisibility.key } as const;
+    throw new HttpsError('invalid-argument', `${fault.problem} on "${fault.key}"`, fault);
+  }
+  const form = normaliseSubmissionForm(requestedForm);
 
   const shapeFault = validateSubmissionForm(form);
   if (shapeFault) {
@@ -3212,6 +3247,7 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
 });
 
 const REVIEW_QUEUE_STATUSES = STATUS_SETS.reviewQueue;
+const REVIEW_TRAVEL_READ_CHUNK = 100;
 const AGGREGATE_REVISION_FIELD = '_aggregateRevision';
 const AGGREGATE_CHUNK = 400;
 
@@ -3236,9 +3272,10 @@ export const reviewQueue = onCall(CALLABLE, async (request) => {
   if (!staffMemberIsActive(member.data(), cfpId, reviewerUid)) {
     throw new HttpsError('permission-denied', 'Only an active reviewer can load this queue.');
   }
-  const submissionFields = normaliseSubmissionForm(
+  const resolvedSubmissionForm = normaliseSubmissionForm(
     mergeSubmissionForm(submissionForm.exists ? submissionForm.data() : undefined),
-  ).fields;
+  );
+  const submissionFields = resolvedSubmissionForm.fields;
 
   const snapshots = await db
     .collection(`cfps/${cfpId}/proposals`)
@@ -3252,19 +3289,44 @@ export const reviewQueue = onCall(CALLABLE, async (request) => {
     ].includes(reviewerUid);
   });
   const conflictedIds = new Set(own.map((proposal) => proposal.id));
+  const visible = snapshots.docs.filter((proposal) => !conflictedIds.has(proposal.id));
+  const participantReads = reviewerAttendanceEnabled(resolvedSubmissionForm)
+    ? visible.flatMap((proposal) =>
+        reviewerTravelParticipantIds(proposal.data()).map((uid) => ({
+          proposalId: proposal.id,
+          uid,
+          ref: speakerParticipantRef(db, cfpId, proposal.id, uid),
+        })),
+      )
+    : [];
+  const participantByProposal = new Map<
+    string,
+    Map<string, ReviewerParticipantSource>
+  >();
+  for (let index = 0; index < participantReads.length; index += REVIEW_TRAVEL_READ_CHUNK) {
+    const chunk = participantReads.slice(index, index + REVIEW_TRAVEL_READ_CHUNK);
+    const participants = await db.getAll(...chunk.map(({ ref }) => ref));
+    participants.forEach((participant, participantIndex) => {
+      if (!participant.exists) return;
+      const { proposalId, uid } = chunk[participantIndex];
+      const byUid = participantByProposal.get(proposalId) ?? new Map();
+      byUid.set(uid, participant.data() ?? {});
+      participantByProposal.set(proposalId, byUid);
+    });
+  }
   return {
     ok: true,
     own: own.length,
-    proposals: snapshots.docs
-      .filter((proposal) => !conflictedIds.has(proposal.id))
-      .map((proposal) =>
-        reviewerProposalProjection(
-          proposal.id,
-          proposal.data(),
-          cfp.get('reviewsVisible') === true,
-          submissionFields,
-        ),
+    proposals: visible.map((proposal) =>
+      reviewerProposalProjection(
+        proposal.id,
+        proposal.data(),
+        cfp.get('reviewsVisible') === true,
+        submissionFields,
+        participantByProposal.get(proposal.id),
+        resolvedSubmissionForm,
       ),
+    ),
   };
 });
 
@@ -3967,7 +4029,7 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     // defaults to today", and the day those defaults change, every call that
     // never wrote one silently changes the taxonomy under proposals already
     // submitted against it. Written once, it is this call's own.
-    tx.set(db.doc(`cfps/${input.id}/config/submissionForm`), DEFAULT_SUBMISSION_FORM);
+    tx.set(db.doc(`cfps/${input.id}/config/submissionForm`), NEW_CFP_SUBMISSION_FORM);
     tx.set(db.doc(`cfps/${input.id}/members/${uid}`), {
       cfpId: input.id,
       uid,
@@ -7612,9 +7674,14 @@ export const shareSchedulePreview = onCall(CALLABLE, async (request) => {
         data: {
           speakerName: (speaker?.get('name') as string) || to,
           title: change.title || (proposal?.get('title') as string) || '',
-          needsVisa: usesPerSpeakerLifecycle(proposal!.data()!)
-            ? participant?.get('attendance')?.needsVisa === true
-            : isPrimary && proposal?.get('attendance')?.needsVisa === true,
+          needsVisa: attendanceNeedsVisa(
+            freshFormValue,
+            usesPerSpeakerLifecycle(proposal!.data()!)
+              ? participant?.get('attendance')
+              : isPrimary
+                ? proposal?.get('attendance')
+                : undefined,
+          ),
           scheduleDate,
           scheduleTime: `${change.startsAt} (${config.timeZone})`,
           scheduleRoom: change.room ? localised(change.room.name, locale) : '',

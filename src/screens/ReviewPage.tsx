@@ -24,6 +24,7 @@ import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
 import { reviewError } from '../lib/errors';
 import { loadSubmissionForm } from '../lib/proposals';
+import { reviewerTravelFields } from '../lib/reviewerTravel';
 import { loadCfp, loadReviewQueue, type ReviewerProposalRow } from '../lib/roles';
 import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
 import {
@@ -36,9 +37,10 @@ import { LIMITS, SCORES, type Score } from '@shared/enums';
 import {
   DEFAULT_SUBMISSION_FORM,
   labelOf,
+  type SubmissionField,
   type SubmissionForm,
 } from '@shared/submissionForm';
-import { localised, type Answers, type ConfirmField } from '@shared/confirmForm';
+import { localised, type Answers } from '@shared/confirmForm';
 import type { Review, SpeakerSnapshot } from '@shared/types';
 
 interface SaveFailure {
@@ -783,7 +785,7 @@ function ReviewCard({
         <Speaker key={s.uid || i} speaker={s} />
       ))}
 
-      <Logistics proposal={proposal} />
+      <Logistics proposal={proposal} shape={shape} />
 
       {/* Buttons, not radios. These both record a choice and move the deck on,
           and a control that navigates away the moment you touch it is not a
@@ -870,7 +872,7 @@ function SubmissionAnswers({
   fields,
   answers,
 }: {
-  fields: ConfirmField[];
+  fields: SubmissionField[];
   answers?: Answers;
 }) {
   const { t, locale } = useI18n();
@@ -879,6 +881,7 @@ function SubmissionAnswers({
   const rows = fields.flatMap((field) => {
     if (
       field.type === 'image' ||
+      field.reviewerVisible === false ||
       !Object.prototype.hasOwnProperty.call(answers, field.key)
     ) {
       return [];
@@ -914,24 +917,15 @@ function SubmissionAnswers({
   );
 }
 
-/**
- * What it takes to actually put this talk on the schedule.
- *
- * The applicant answers all of this and none of it reached the committee, so a
- * reviewer scored a talk without knowing the speaker needs a visa and expects
- * to hear about funding after the programme locks. That is not a tie-breaker
- * between two good talks — it is the difference between a session that happens
- * and a hole in the grid.
- *
- * Confirmation answers are a different thing and stay out: they are collected
- * after acceptance, hold dietary and accessibility detail, and belong to the
- * speaker and the organisers. So do `acks` — three `z.literal(true)` fields
- * that say nothing about this proposal — and the speaker's email, which is
- * contact detail rather than evidence about the talk.
- */
-function Logistics({ proposal }: { proposal: ReviewerProposalRow }) {
+/** Review context and the callable's narrow travel projection for active speakers. */
+function Logistics({
+  proposal,
+  shape,
+}: {
+  proposal: ReviewerProposalRow;
+  shape: SubmissionForm;
+}) {
   const { t, locale } = useI18n();
-  const { attendance } = proposal;
   const submitted = toDate(proposal.submittedAt);
 
   // `languagePreference` only exists when the delivery language is `either` —
@@ -940,26 +934,81 @@ function Logistics({ proposal }: { proposal: ReviewerProposalRow }) {
     proposal.languagePreference
       ? [t.review.languagePreference, proposal.languagePreference]
       : null,
-    attendance?.status ? [t.review.travel, t.review.attendance[attendance.status]] : null,
-    attendance?.fundingSource ? [t.review.funding, attendance.fundingSource] : null,
-    attendance?.decisionBy ? [t.review.decisionBy, attendance.decisionBy] : null,
-    attendance?.needsVisa ? [t.review.visa, t.review.visaYes] : null,
     submitted ? [t.review.submitted, formatDate(submitted, locale)] : null,
   ].filter((row): row is [string, string] => row !== null);
 
-  if (rows.length === 0) return null;
+  const travel = (proposal.speakerTravel ?? []).flatMap((speaker) => {
+    const fields = reviewerTravelFields(shape.attendance, speaker);
+    return fields.length > 0 ? [{ speaker, fields }] : [];
+  });
+  if (rows.length === 0 && travel.length === 0) return null;
 
   return (
     <>
-      <h3 className="card__subtitle">{t.review.logistics}</h3>
-      <dl className="answers">
-        {rows.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <h3 className="card__subtitle">
+        {travel.length > 0 ? t.review.logistics : t.review.submissionDetails}
+      </h3>
+      {rows.length > 0 && (
+        <dl className="answers">
+          {rows.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {travel.length > 0 && (
+        <div className="review-travel">
+          {travel.map(({ speaker, fields }, index) => {
+            const name = speaker.name.trim() || t.review.speakerFallback(index + 1);
+            const titleId = `travel-${proposal.id}-${index}`;
+            const attendanceTitle = localised(shape.attendance.title, locale);
+            const speakerRows: [string, string][] = fields.map((field) => {
+              if (field === 'status') {
+                return [
+                  attendanceTitle,
+                  labelOf(shape.attendance.statuses, speaker.status ?? '', locale),
+                ];
+              }
+              if (field === 'fundingSource') {
+                return [
+                  localised(shape.attendance.fundingSource.label, locale),
+                  speaker.fundingSource ?? '',
+                ];
+              }
+              if (field === 'decisionBy') {
+                return [
+                  localised(shape.attendance.decisionBy.label, locale),
+                  speaker.decisionBy ?? '',
+                ];
+              }
+              return [
+                localised(shape.attendance.needsVisa.label, locale),
+                speaker.needsVisa ? t.review.answerYes : t.review.answerNo,
+              ];
+            });
+
+            return (
+              <section
+                className="review-travel__person"
+                aria-labelledby={titleId}
+                key={speaker.uid}
+              >
+                <h4 id={titleId}>{`${attendanceTitle} — ${name}`}</h4>
+                <dl className="answers">
+                  {speakerRows.map(([label, value]) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }

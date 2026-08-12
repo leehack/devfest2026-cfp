@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
-import type { ConfirmField } from '@shared/confirmForm';
+import {
+  DEFAULT_SUBMISSION_FORM,
+  type SubmissionField,
+  type SubmissionForm,
+} from '@shared/submissionForm';
 
 import {
   REVIEWER_PROPOSAL_FIELDS,
   reviewerProposalProjection,
+  reviewerTravelParticipantIds,
 } from '../functions/src/reviewerProjection';
 
 describe('reviewer proposal projection', () => {
-  const submissionFields: ConfirmField[] = [
+  const submissionForm = (): SubmissionForm =>
+    JSON.parse(JSON.stringify(DEFAULT_SUBMISSION_FORM));
+  const submissionFields: SubmissionField[] = [
     {
       key: 'reviewerContext',
       type: 'textarea',
@@ -27,6 +34,13 @@ describe('reviewer proposal projection', () => {
       type: 'checkbox',
       required: false,
       label: { en: 'Source available', fr: 'Code source disponible' },
+    },
+    {
+      key: 'organiserOnly',
+      type: 'textarea',
+      required: false,
+      reviewerVisible: false,
+      label: { en: 'Organiser-only context' },
     },
   ];
 
@@ -69,9 +83,16 @@ describe('reviewer proposal projection', () => {
       reviewerContext: '  The live coding is the core of the session.  ',
       demoMode: 'live',
       sourceAvailable: true,
+      organiserOnly: 'The committee must not receive this answer',
       privateTravelNote: 'Never expose this applicant note',
     },
-    attendance: { status: 'pending', needsVisa: true },
+    attendance: {
+      status: 'pending',
+      fundingSource: 'Community grant',
+      decisionBy: '2026-09-15',
+      needsVisa: true,
+      privateNote: 'Never expose this travel note',
+    },
     confirmAnswers: { dietaryNeeds: 'Severe allergy' },
     headshotUploads: { portrait: { path: 'private-working-path' } },
     speakerPhoto: { path: 'private-confirmed-path' },
@@ -88,17 +109,25 @@ describe('reviewer proposal projection', () => {
     );
 
     expect(Object.keys(projected).sort()).toEqual(
-      ['id', ...REVIEWER_PROPOSAL_FIELDS].sort(),
+      ['id', ...REVIEWER_PROPOSAL_FIELDS, 'speakerTravel'].sort(),
     );
     expect(projected).not.toHaveProperty('aggregate');
     expect(projected).not.toHaveProperty('speakerIds');
     expect(projected).not.toHaveProperty('formerSpeakerIds');
+    expect(projected).not.toHaveProperty('attendance');
     expect(projected).not.toHaveProperty('confirmAnswers');
     expect(projected).not.toHaveProperty('headshotUploads');
     expect(projected).not.toHaveProperty('speakerPhoto');
-    // Submitted logistics the committee schedules against, unlike the
-    // post-acceptance answers on the line above it.
-    expect(projected.attendance).toEqual({ status: 'pending', needsVisa: true });
+    expect(projected.speakerTravel).toEqual([
+      {
+        uid: 'speaker',
+        name: 'Speaker',
+        status: 'pending',
+        fundingSource: 'Community grant',
+        decisionBy: '2026-09-15',
+        needsVisa: true,
+      },
+    ]);
     expect(projected.answers).toEqual({
       reviewerContext: 'The live coding is the core of the session.',
       demoMode: 'live',
@@ -119,6 +148,169 @@ describe('reviewer proposal projection', () => {
     expect(JSON.stringify(projected)).not.toContain('private@example.org');
     expect(JSON.stringify(projected)).not.toContain('Private dietary need');
     expect(JSON.stringify(projected)).not.toContain('Never expose this applicant note');
+    expect(JSON.stringify(projected)).not.toContain('The committee must not receive this answer');
+    expect(JSON.stringify(projected)).not.toContain('Never expose this travel note');
+  });
+
+  it('projects only validated active roster travel in current speaker order', () => {
+    const roster = {
+      ...proposal,
+      speakerIds: ['lead', 'inactive', 'malformed', 'rejoined'],
+      primarySpeakerId: 'lead',
+      formerSpeakerIds: ['removed', 'rejoined'],
+      speakerSnapshot: [
+        { ...proposal.speakerSnapshot[0], uid: 'rejoined', name: 'Rejoined Speaker' },
+        { ...proposal.speakerSnapshot[0], uid: 'lead', name: 'Lead Speaker' },
+        { ...proposal.speakerSnapshot[0], uid: 'inactive', name: 'Inactive Speaker' },
+        { ...proposal.speakerSnapshot[0], uid: 'malformed', name: 'Malformed Speaker' },
+      ],
+      // Roster-mode proposals must never fall back to this legacy root value.
+      attendance: { status: 'local', needsVisa: false },
+    };
+    const participants = new Map([
+      [
+        'lead',
+        {
+          status: 'active',
+          attendance: {
+            status: 'secured',
+            fundingSource: 'Employer',
+            needsVisa: false,
+            email: 'private@example.org',
+            dietaryNeeds: 'Private dietary need',
+          },
+        },
+      ],
+      [
+        'inactive',
+        { status: 'inactive', attendance: { status: 'local', needsVisa: false } },
+      ],
+      [
+        'malformed',
+        {
+          status: 'active',
+          attendance: { status: 'pending', fundingSource: 'Grant', needsVisa: true },
+        },
+      ],
+      [
+        'rejoined',
+        {
+          status: 'active',
+          attendance: {
+            status: 'pending',
+            fundingSource: 'Community grant',
+            decisionBy: '2026-10-01',
+            needsVisa: true,
+            confirmAnswers: { dietaryNeeds: 'Private' },
+          },
+        },
+      ],
+      [
+        'removed',
+        { status: 'active', attendance: { status: 'local', needsVisa: false } },
+      ],
+    ]);
+
+    expect(reviewerTravelParticipantIds(roster)).toEqual([
+      'lead',
+      'inactive',
+      'malformed',
+      'rejoined',
+    ]);
+    const projected = reviewerProposalProjection(
+      'proposal-roster',
+      roster,
+      false,
+      submissionFields,
+      participants,
+    );
+    expect(projected.speakerTravel).toEqual([
+      {
+        uid: 'lead',
+        name: 'Lead Speaker',
+        status: 'secured',
+        fundingSource: 'Employer',
+        needsVisa: false,
+      },
+      {
+        uid: 'rejoined',
+        name: 'Rejoined Speaker',
+        status: 'pending',
+        fundingSource: 'Community grant',
+        decisionBy: '2026-10-01',
+        needsVisa: true,
+      },
+    ]);
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('private@example.org');
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('Private dietary need');
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('confirmAnswers');
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('Inactive Speaker');
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('removed');
+  });
+
+  it('does not use the legacy root fallback after roster mode is initialized', () => {
+    const projected = reviewerProposalProjection(
+      'proposal-solo-roster',
+      { ...proposal, primarySpeakerId: 'speaker' },
+      false,
+      submissionFields,
+    );
+
+    expect(projected).not.toHaveProperty('speakerTravel');
+    expect(reviewerTravelParticipantIds({ ...proposal, primarySpeakerId: 'speaker' })).toEqual([
+      'speaker',
+    ]);
+  });
+
+  it('omits travel when the event disables the section', () => {
+    const form = submissionForm();
+    form.attendance.enabled = false;
+    const projected = reviewerProposalProjection(
+      'proposal-one',
+      proposal,
+      false,
+      submissionFields,
+      new Map(),
+      form,
+    );
+    expect(projected).not.toHaveProperty('speakerTravel');
+  });
+
+  it('projects only the attendance properties enabled for reviewers', () => {
+    const form = submissionForm();
+    form.attendance.statusReviewerVisible = false;
+    form.attendance.fundingSource.reviewerVisible = false;
+    form.attendance.needsVisa.enabled = false;
+    const projected = reviewerProposalProjection(
+      'proposal-one',
+      proposal,
+      false,
+      submissionFields,
+      new Map(),
+      form,
+    );
+    expect(projected.speakerTravel).toEqual([
+      { uid: 'speaker', name: 'Speaker', decisionBy: '2026-09-15' },
+    ]);
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('Community grant');
+    expect(JSON.stringify(projected.speakerTravel)).not.toContain('needsVisa');
+  });
+
+  it('omits the travel row when every collected property is hidden from reviewers', () => {
+    const form = submissionForm();
+    form.attendance.statusReviewerVisible = false;
+    form.attendance.fundingSource.reviewerVisible = false;
+    form.attendance.decisionBy.reviewerVisible = false;
+    form.attendance.needsVisa.reviewerVisible = false;
+    const projected = reviewerProposalProjection(
+      'proposal-one',
+      proposal,
+      false,
+      submissionFields,
+      new Map(),
+      form,
+    );
+    expect(projected).not.toHaveProperty('speakerTravel');
   });
 
   it('drops stale, invalid and image-shaped answers instead of forwarding raw maps', () => {

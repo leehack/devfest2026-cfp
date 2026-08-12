@@ -4,7 +4,7 @@ import { getFirestore, FieldValue, Timestamp, type DocumentSnapshot } from 'fire
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 
 import { validateCfpId } from '../../shared/cfp';
-import { acksSchemaFor, attendanceSchema, speakerSchema } from '../../shared/schema';
+import { acksSchemaFor, attendanceSchemaFor, speakerSchema } from '../../shared/schema';
 import { mergeSubmissionForm } from '../../shared/submissionForm';
 import {
   MAX_ACTIVE_SPEAKERS,
@@ -335,7 +335,8 @@ async function rosterFor(
         ? profile?.exists === true && speakerSchema.safeParse(profile.data()).success
         : Boolean(snapshot?.name),
       detailsComplete:
-        acksSchemaFor(form).safeParse(acks).success && attendanceSchema.safeParse(attendance).success,
+        acksSchemaFor(form).safeParse(acks).success &&
+        attendanceSchemaFor(form).safeParse(attendance).success,
       confirmationState:
         response === 'confirmed' || response === 'declined' ? response : 'none',
       canRemove:
@@ -849,7 +850,7 @@ export const getCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     needsProfile:
       canViewInvitation && (!profile.exists || !speakerSchema.safeParse(profile.data()).success),
     ...(canViewInvitation && phase === 'postAcceptance'
-      ? { participation: { acknowledgements: form.acks } }
+      ? { participation: { acknowledgements: form.acks, attendance: form.attendance } }
       : {}),
     ...(canViewInvitation
       ? {
@@ -959,7 +960,7 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
       ? acksSchemaFor(form).safeParse(input.acks)
       : null;
     const parsedAttendance = phase === 'postAcceptance'
-      ? attendanceSchema.safeParse(input.attendance)
+      ? attendanceSchemaFor(form).safeParse(input.attendance)
       : null;
     if (
       phase === 'postAcceptance' &&
@@ -967,7 +968,7 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
     ) {
       throw new HttpsError(
         'invalid-argument',
-        'Complete the speaker acknowledgements and attendance details before joining.',
+        'Complete the required participation details before joining.',
       );
     }
     if (speakerIds.length >= MAX_ACTIVE_SPEAKERS) {
@@ -1151,7 +1152,9 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
         invitationId,
         joinedPhase: phase,
         acks: phase === 'postAcceptance' ? parsedAcks!.data : {},
-        attendance: phase === 'postAcceptance' ? parsedAttendance!.data : {},
+        ...(phase === 'postAcceptance' && parsedAttendance!.data
+          ? { attendance: parsedAttendance!.data }
+          : {}),
         joinedAt: FieldValue.serverTimestamp(),
         removedBy: FieldValue.delete(),
         removedAt: FieldValue.delete(),

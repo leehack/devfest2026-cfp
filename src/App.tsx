@@ -155,7 +155,7 @@ export function App({
   // would leave focus on the link that disappeared with the previous screen.
   const routeAnnouncementReady =
     place.route !== 'session' ||
-    (cfpReady && (cfpError || !cfp)) ||
+    (cfpReady && loadedCfpId === cfpId && (cfpError || !cfp)) ||
     (sessionPageLabel?.cfpId === cfpId && sessionPageLabel.entryId === place.entryId);
   const handleSessionPageLabelChange = useCallback(
     (entryId: string, label: string) => {

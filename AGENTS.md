@@ -8,12 +8,17 @@ Conventions and hard-won facts for this repo. `SPEC.md` is the product spec;
 ```bash
 npm start            # the whole local stack: emulators, seeded config, next dev on 5173
 npm run verify       # lint, build, unit, rules, e2e — what CI runs
+npm run test:e2e:changed  # browser tests affected by uncommitted changes
+npm run test:e2e:failed   # failures recorded by the previous browser run
 ```
 
 Three suites: `npm test` (vitest `unit` project, node only), `npm run test:rules`
 (vitest `rules` project, needs the Firestore emulator), and `npm run test:e2e`
 (Playwright against the `npm start` stack). Both emulator suites go through
 `scripts/with-java.mjs`, which finds a Homebrew JVM — macOS has none on PATH.
+CI splits Playwright across four isolated runners, each with its own stack, while
+keeping `workers: 1` inside every shard because each test resets shared emulator
+state. The live Sessionize probe runs separately and does not gate a merge.
 
 ```bash
 node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
@@ -96,12 +101,15 @@ get whichever the server guessed.
 
 A speaker may hold several talks (`LIMITS.maxTalksPerSpeaker`), switched by the
 picker on the form. Only the talk half is cleared between them — the speaker
-profile and the travel answers carry over (`clearTalk` in `src/lib/formState.ts`).
+profile and, when the CFP collects them, the travel answers carry over
+(`clearTalk` in `src/lib/formState.ts`).
 
 `src/lib/lifecycle.ts` decides what a speaker may still change: everything until
-the committee starts reading, then travel answers only, then nothing. The speaker
-profile is outside it — that document belongs to the account and never freezes.
-The rules are the enforcement; `editScope` only decides what to disable.
+the committee starts reading, then configured travel answers only, then nothing.
+When attendance is disabled, the logistics scope has no attendance UI or write.
+The speaker profile is outside it — that document belongs to the account and
+never freezes. The rules are the enforcement; `editScope` only decides what to
+disable.
 
 Each accepted speaker answers with `respondToDecision` — `confirmed` or
 `declined`, from `accepted` only. Proposals that have entered roster mode store
@@ -222,21 +230,35 @@ collection — the rule names the two readable documents one at a time.
   across the form, the callables and the admin screen. `firestore.rules` restates
   them because the rules language cannot import — change one, change both.
 - **Reviewers never read raw proposal documents.** They receive the active review
-  queue through a callable-owned whitelist projection, which strips legacy
-  confirmation, logistics, photo, contact and lifecycle state and filters active
-  or former speakers out of their own proposals. Drafts are outside that queue.
-  Active speakers and event admins retain the raw reads they need. An exact
-  pending invitee sees only a separate callable-projected consent summary.
+  queue through a callable-owned whitelist projection. When this CFP enables
+  attendance, the only travel data in that projection is the configured,
+  reviewer-visible subset for each speaker on the current active roster:
+  `status`, `fundingSource`, `decisionBy` and `needsVisa`. Each subfield has its
+  own collection and reviewer-visibility switch; disabled values never enter the
+  DTO. A disabled attendance section produces no travel projection at all.
+  Read active `speakerParticipants` rows first and use root `attendance` only as
+  the legacy solo fallback; never copy an attendance map verbatim. The projection
+  still strips acknowledgements, contact and photo data, lifecycle state, and all
+  post-acceptance confirmation answers, including dietary and accessibility
+  needs. Core proposal fields are always reviewable. For organiser-defined
+  submission questions, `reviewerVisible: false` excludes that answer; an absent
+  flag is the legacy-compatible visible default. Acknowledgements never enter the
+  review payload. It filters active or former speakers out of their own
+  proposals. Drafts are outside that queue. Active speakers and event admins
+  retain the raw reads they need. An exact pending invitee sees only a separate
+  callable-projected consent summary. The queue is a one-shot read, so attendance
+  is current as of its most recent load or refresh rather than updated live.
 - **`speakerIds` starts as `[uid()]` and is callable-only thereafter.** A verified
   email invitation is still only pending metadata: the exact invited account must
   accept before its uid is added. The first speaker remains `primarySpeakerId`
   and owns talk edits. Removed participants stay in `formerSpeakerIds` and remain
   conflicted from reviews permanently.
 - **Late invitations do not mutate a confirmed roster until acceptance.** Only an
-  event admin may create one, and the invitee must supply their own acknowledgements
-  and attendance before joining. A marker preserves only the roster in the prior
-  immutable schedule release; it is cleared by a successful re-share, not merely
-  by the new speaker confirming.
+  event admin may create one, and the invitee must supply their own configured
+  acknowledgements and attendance before joining. Attendance is neither rendered
+  nor required when the current submission form disables it. A marker preserves
+  only the roster in the prior immutable schedule release; it is cleared by a
+  successful re-share, not merely by the new speaker confirming.
 - **A role-holder must never read reviews of their own proposal.** Blocked on
   reads and writes alike, admins included — `firestore.rules` and six tests
   around the `reviewsVisible` flip.
@@ -389,18 +411,32 @@ collection — the rule names the two readable documents one at a time.
   Pass `cfpId: null` to mean no CFP.
 - **Both forms are data.** `config/confirmForm` is what a speaker is asked once
   they accept, readable signed in; `config/submissionForm` is what the call
-  itself asks — its categories, formats, levels, languages, consents and any
-  questions of its own — readable by anyone, because that is the substance of
-  the call's public page. Everything else under `config` stays shut, and the
-  rule names each readable document rather than opening the collection.
-  Both are written only by their callable. The browser's copy of either is a
-  convenience; `validateAnswers` and `submissionSchema(shape)` inside the
-  callable are what count.
-- **An absent `submissionForm` is a working one.** Every CFP created before the
-  form was configurable has no document, and `mergeSubmissionForm` reads that as
-  today's DevFest values, key by key. `createCfp` seeds the document anyway, so
-  a later change to the defaults cannot move the taxonomy under proposals
-  already submitted.
+  itself asks — its categories, formats, levels, languages, consents, optional
+  attendance module and any questions of its own — readable by anyone, because
+  that is the substance of the call's public page. Attendance owns bilingual
+  section/status/subfield copy, per-subfield collection and reviewer visibility,
+  and optional event-scoped GDE guidance. Everything else under `config` stays
+  shut, and the rule names each readable document rather than opening the
+  collection. Both are written only by their callable. The browser's copy of
+  either is a convenience; `validateAnswers` and `submissionSchema(shape)`
+  inside the callable are what count.
+- **An absent `submissionForm` is a working legacy one.** Every CFP created before
+  the form was configurable has no document, and `mergeSubmissionForm` reads that
+  as the DevFest Montréal compatibility form, including enabled attendance and
+  its travel-support acknowledgement. `createCfp` instead seeds
+  `NEW_CFP_SUBMISSION_FORM`: generic calls start with attendance disabled and no
+  travel-support acknowledgement, so they never inherit Montréal or
+  Canada-specific questions. Saving resolves the complete form explicitly, so a
+  later default change cannot move the taxonomy under submitted proposals.
+- **Attendance configuration changes collection and projection, not history.**
+  The organiser owns its bilingual copy and optional GDE guidance, but the
+  stored codes `local`, `secured` and `pending` never move. Funding source,
+  decision date and visa support may each be disabled or hidden from reviewers.
+  `attendanceSchemaFor` ignores disabled values, the late-invitation path uses
+  the same current shape, and the review callable projects only enabled and
+  reviewer-visible keys. Turning the module off never silently purges historical
+  answers. Visa email guidance is conditional on both the question being enabled
+  and the stored answer being true.
 - **`deliveryLanguage`'s values are not the organiser's to change.** `either` is
   what `languagePreference` exists for and what the scheduling dashboard counts,
   so a call picks which of the four to offer and what to call them — not what

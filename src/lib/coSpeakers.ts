@@ -148,7 +148,7 @@ export async function respondToCoSpeakerInvitation(
   response: 'accept' | 'decline',
   participation?: {
     acks: Record<string, boolean>;
-    attendance: Record<string, unknown>;
+    attendance?: Record<string, unknown>;
   },
 ): Promise<{ state: SpeakerInvitationViewState; proposalId: string }> {
   const result = await respond({

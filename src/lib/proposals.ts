@@ -30,7 +30,11 @@ import {
   type HeadshotUploads,
   type SpeakerProfilePhoto,
 } from '@shared/confirmForm';
-import { mergeSubmissionForm, type SubmissionForm } from '@shared/submissionForm';
+import {
+  attendanceWriteFor,
+  mergeSubmissionForm,
+  type SubmissionForm,
+} from '@shared/submissionForm';
 import type { CfpProfile, Visibility } from '@shared/cfp';
 import type {
   Cfp,
@@ -234,6 +238,7 @@ export async function saveDraft(
   cfpId: string,
   user: User,
   form: FormState,
+  shape: SubmissionForm,
   proposalId: string | null,
   scope: EditScope = 'all',
   locale: Locale = 'en',
@@ -241,6 +246,12 @@ export async function saveDraft(
   personalScope: EditScope = scope,
 ): Promise<string> {
   const { proposalDoc, speakerDoc } = toDocuments(form);
+  const attendance = attendanceWriteFor(shape, proposalDoc.attendance);
+  const shapedProposalDoc: Record<string, any> = {
+    ...proposalDoc,
+    ...(attendance ? { attendance } : {}),
+  };
+  if (!attendance) delete shapedProposalDoc.attendance;
   const existing = proposalId !== null;
 
   // On create an empty optional is simply absent; on update it needs an explicit
@@ -265,10 +276,14 @@ export async function saveDraft(
   );
 
   if (proposalId) {
-    const { acks, attendance, ...talkDoc } = proposalDoc;
+    const { acks, attendance: personalAttendance, ...talkDoc } = shapedProposalDoc;
     if (usesPersonalLifecycle && personalScope !== 'none') {
       const personalPatch =
-        personalScope === 'logistics' ? { attendance } : { acks, attendance };
+        personalScope === 'logistics'
+          ? personalAttendance
+            ? { attendance: personalAttendance }
+            : {}
+          : { acks, ...(personalAttendance ? { attendance: personalAttendance } : {}) };
       await setDoc(
         doc(
           db,
@@ -293,8 +308,10 @@ export async function saveDraft(
       scope === 'logistics'
         ? usesPersonalLifecycle
           ? {}
-          : { attendance: proposalDoc.attendance }
-        : forWrite(usesPersonalLifecycle ? talkDoc : proposalDoc);
+          : personalAttendance
+            ? forWrite({ attendance: personalAttendance })
+            : {}
+        : forWrite(usesPersonalLifecycle ? talkDoc : shapedProposalDoc);
 
     if (scope !== 'none' && Object.keys(patch).length > 0) {
       await setDoc(
@@ -307,7 +324,7 @@ export async function saveDraft(
   }
 
   const created = await addDoc(collection(db, 'cfps', cfpId, 'proposals'), {
-    ...forWrite(proposalDoc),
+    ...forWrite(shapedProposalDoc),
     // Denormalised from the path so a collection-group query can be filtered by
     // tenant, and pinned to it by the rules so the field cannot lie.
     cfpId,

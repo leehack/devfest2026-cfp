@@ -651,6 +651,10 @@ export const fr: Dictionary = {
         title: 'Le comité l’évalue',
         help: 'Le contenu est verrouillé pour une évaluation équitable. Votre profil et vos détails de voyage restent modifiables.',
       },
+      underReviewNoAttendance: {
+        title: 'Le comité l’évalue',
+        help: 'Le contenu est verrouillé pour une évaluation équitable. Votre profil de conférencier reste modifiable.',
+      },
       accepted: {
         title: 'Confirmez si vous pouvez présenter',
         help: 'Répondez à l’invitation ici et remplissez chaque détail obligatoire avant la planification de la séance.',
@@ -731,6 +735,12 @@ export const fr: Dictionary = {
       all: 'Vous pouvez encore tout modifier ici jusqu’à la date limite.',
       logistics:
         'La conférence elle-même est maintenant verrouillée. Votre profil et vos réponses de voyage restent modifiables.',
+      none: 'Celle-ci est close. Votre profil vous appartient toujours.',
+    } as Record<string, string>,
+    editHelpNoAttendance: {
+      all: 'Vous pouvez encore modifier tout ce que cet événement demande jusqu’à l’échéance.',
+      logistics:
+        'La conférence elle-même est maintenant verrouillée. Votre profil de conférencier reste modifiable.',
       none: 'Celle-ci est close. Votre profil vous appartient toujours.',
     } as Record<string, string>,
     pastTalksCount: (count: number) => `Propositions passées (${count})`,
@@ -1491,6 +1501,37 @@ export const fr: Dictionary = {
     submission: 'Le formulaire de proposition',
     submissionHelp:
       'Ce qu’on demande aux conférenciers et conférencières au moment de proposer. Les libellés se reformulent en tout temps ; un choix déjà utilisé par une proposition conserve son code, alors le retirer est la façon de le mettre hors service.',
+    attendanceTitle: 'Déplacement et présence',
+    attendanceEditorHelp:
+      'Cette section est propre à chaque événement. Conservez le sens fixe des réponses pour que l’horaire et la validation continuent de fonctionner, puis adaptez le texte au lieu de l’événement.',
+    attendanceEnabled: 'Demander les renseignements de déplacement',
+    attendanceEnabledHelp:
+      'Désactivez cette option pour un événement en ligne ou un appel qui ne nécessite aucune planification de déplacement. Les réponses existantes sont conservées, mais ne sont plus demandées.',
+    attendanceStatusTitle: 'Réponses sur le statut de présence',
+    attendanceFields: {
+      fundingSource: 'Source de financement',
+      decisionBy: 'Date de décision',
+      needsVisa: 'Visa ou conditions d’entrée',
+    },
+    attendanceFieldEnabled: 'Poser cette question complémentaire',
+    attendanceReviewerVisible: 'Montrer cette réponse au comité de sélection',
+    attendanceReviewerVisibleHelp:
+      'Désactivez cette option lorsque le comité n’a pas besoin de ce détail logistique. Les organisateurs conservent la réponse.',
+    attendanceCopy: {
+      title: 'Titre de la section',
+      question: 'Question sur la présence',
+      help: 'Aide de la question',
+      local: 'Réponse sans déplacement',
+      secured: 'Réponse déplacement couvert',
+      pending: 'Réponse déplacement à confirmer',
+      fundingSource: 'Question sur le financement',
+      fundingSourceHelp: 'Aide sur le financement',
+      decisionBy: 'Question sur la date de décision',
+      decisionByHelp: 'Aide sur la date de décision',
+      needsVisa: 'Question sur le visa ou les conditions d’entrée',
+      needsVisaHelp: 'Conseils sur le visa',
+      gdeGuidance: 'Conseils facultatifs pour les Google Developer Experts',
+    },
     submissionSave: 'Enregistrer le formulaire',
     submissionSaved: 'Formulaire de proposition enregistré.',
     taxonomy: {
@@ -1535,6 +1576,9 @@ export const fr: Dictionary = {
     extraTitle: 'Vos propres questions',
     extraHelp:
       'Tout ce que vous voulez demander d’autre sur la conférence. Les photos ne sont pas offertes ici : la plupart de ces personnes seront refusées, et leur photo n’est pas quelque chose à conserver. Demandez-la plutôt sur le formulaire de confirmation.',
+    extraReviewerVisible: 'Montrer cette réponse au comité de sélection',
+    extraReviewerVisibleHelp:
+      'Désactivez cette option pour les renseignements dont le comité n’a pas besoin. Les organisateurs peuvent toujours voir la réponse enregistrée.',
     extraEmpty: 'Aucune question supplémentaire.',
     extraAdd: 'Ajouter une question',
     submissionErrors: {
@@ -1547,6 +1591,13 @@ export const fr: Dictionary = {
       emptyLabel: 'Chaque choix sous {key} a besoin d’un libellé anglais.',
       unknownLanguage: 'Ce n’est pas une des quatre langues que l’horaire comprend.',
       ackNotRequired: '« {key} » doit être une case à cocher obligatoire.',
+      badReviewerVisibility:
+        '« {key} » a un paramètre de visibilité invalide pour le comité.',
+      badAttendanceConfig:
+        'La section de déplacement contient un paramètre invalide sous « {key} ».',
+      unknownAttendanceStatus:
+        'Les réponses de déplacement doivent conserver les trois significations comprises par la plateforme.',
+      tooLong: 'Le texte sous « {key} » est trop long.',
       noImages:
         '« {key} » demande une photo. Demandez-la sur le formulaire de confirmation, une fois la personne retenue.',
     } as Record<string, string>,
@@ -1644,9 +1695,12 @@ export const fr: Dictionary = {
     submissionAnswers: 'Renseignements supplémentaires sur la conférence',
     answerYes: 'Oui',
     answerNo: 'Non',
+    submissionDetails: 'Détails de la soumission',
     logistics: 'Venir sur place',
     languagePreference: 'Préférence de langue',
     travel: 'Déplacement',
+    travelFor: (name: string) => `Déplacement — ${name}`,
+    speakerFallback: (number: number) => `Conférencier ${number}`,
     attendance: {
       local: 'Réside dans la région de Montréal',
       secured: 'Couvert — employeur, programme GDE ou autofinancé',
@@ -1656,6 +1710,7 @@ export const fr: Dictionary = {
     decisionBy: 'Saura d’ici',
     visa: 'Visa',
     visaYes: 'A besoin d’un visa ou d’une AVE pour entrer au Canada',
+    visaNo: 'N’a pas besoin d’un visa ou d’une AVE pour entrer au Canada',
     submitted: 'Soumise',
     conflict: 'J’ai un conflit d’intérêts',
     conflictHelp: 'Exclue des totaux, y compris de votre propre calibrage.',
@@ -1790,6 +1845,10 @@ export const fr: Dictionary = {
     participationTitle: 'Vos renseignements de participation',
     participationHelp:
       'Puisque cette conférence est déjà retenue, complétez les attestations de l’événement et vos renseignements de déplacement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
+    participationHelpAcks:
+      'Puisque cette conférence est déjà retenue, complétez les attestations de l’événement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
+    participationHelpTravel:
+      'Puisque cette conférence est déjà retenue, complétez vos renseignements de déplacement avant de vous joindre. Vous confirmerez ensuite la conférence et répondrez à ses questions de confirmation.',
     join: 'Enregistrer le profil et accepter',
     joinLate: 'Enregistrer les renseignements et accepter',
     joining: 'Acceptation…',
@@ -1821,6 +1880,14 @@ export const fr: Dictionary = {
         'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil, vos attestations de participation et vos détails de voyage.',
       logistics:
         'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil et vos détails de voyage.',
+      none:
+        'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
+    } as Record<string, string>,
+    personalEditHelpNoAttendance: {
+      all:
+        'Le conférencier principal gère la conférence. Vous pouvez encore modifier votre profil et vos attestations de participation.',
+      logistics:
+        'Le conférencier principal gère la conférence. Votre profil de conférencier reste modifiable.',
       none:
         'Le conférencier principal gère la conférence. Votre profil reste modifiable depuis votre compte; les renseignements de participation sont maintenant verrouillés.',
     } as Record<string, string>,

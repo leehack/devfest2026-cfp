@@ -3,8 +3,9 @@ import { signOut, type User } from 'firebase/auth';
 
 import type { SpeakerInvitationSummary } from '@shared/coSpeakers';
 import { localised, type ConfirmField } from '@shared/confirmForm';
-import { ATTENDANCE_STATUSES, LIMITS } from '@shared/enums';
-import { attendanceSchema, speakerSchema } from '@shared/schema';
+import { LIMITS, type AttendanceStatus } from '@shared/enums';
+import { attendanceSchemaFor, speakerSchema } from '@shared/schema';
+import { attendanceInputFor, asOptions } from '@shared/submissionForm';
 
 import { auth } from '../firebase';
 import { useI18n } from '../i18n/context';
@@ -60,10 +61,14 @@ function invitationFaults(
       faults[`acks.${acknowledgement.key}`] = t.form.required;
     }
   }
-  const attendance = attendanceSchema.safeParse(toDocuments(form).proposalDoc.attendance);
-  if (!attendance.success) {
-    for (const issue of attendance.error.issues) {
-      faults[`attendance.${issue.path.join('.')}`] = validationMessage(issue, t);
+  if (summary.participation.attendance.enabled) {
+    const attendance = attendanceSchemaFor(summary.participation.attendance).safeParse(
+      toDocuments(form).proposalDoc.attendance,
+    );
+    if (!attendance.success) {
+      for (const issue of attendance.error.issues) {
+        faults[`attendance.${issue.path.join('.')}`] = validationMessage(issue, t);
+      }
     }
   }
   return faults;
@@ -231,6 +236,9 @@ export function CoSpeakerInvitation({
     try {
       await saveProfile(user, form, locale);
       const proposal = toDocuments(form).proposalDoc;
+      const attendance = summary?.participation
+        ? attendanceInputFor(summary.participation.attendance, proposal.attendance)
+        : undefined;
       responding = true;
       await respondToCoSpeakerInvitation(
         cfpId,
@@ -238,7 +246,7 @@ export function CoSpeakerInvitation({
         invitationId,
         'accept',
         summary?.phase === 'postAcceptance'
-          ? { acks: proposal.acks, attendance: proposal.attendance }
+          ? { acks: proposal.acks, ...(attendance ? { attendance } : {}) }
           : undefined,
       );
       onJoined();
@@ -433,10 +441,18 @@ export function CoSpeakerInvitation({
         <h2>{t.coSpeakers.profileTitle}</h2>
         <p className="section__help">{t.coSpeakers.profileHelp}</p>
         <SpeakerFields form={form} set={set} err={err} disabled={busy !== null} />
-        {summary.participation && (
+        {summary.participation &&
+          (summary.participation.acknowledgements.length > 0 ||
+            summary.participation.attendance.enabled) && (
           <section className="co-speaker-invitation__participation">
             <h2>{t.coSpeakers.participationTitle}</h2>
-            <p className="section__help">{t.coSpeakers.participationHelp}</p>
+            <p className="section__help">
+              {summary.participation.attendance.enabled
+                ? summary.participation.acknowledgements.length > 0
+                  ? t.coSpeakers.participationHelp
+                  : t.coSpeakers.participationHelpTravel
+                : t.coSpeakers.participationHelpAcks}
+            </p>
             {summary.participation.acknowledgements.map((acknowledgement) => (
               <Checkbox
                 key={acknowledgement.key}
@@ -449,29 +465,37 @@ export function CoSpeakerInvitation({
                 disabled={busy !== null}
               />
             ))}
+            {summary.participation.attendance.enabled && (
+            <>
+            <h3>{localised(summary.participation.attendance.title, locale)}</h3>
+            <Reveal
+              when={form.isGde && Boolean(summary.participation.attendance.gdeGuidance)}
+              variant="note"
+            >
+              {localised(summary.participation.attendance.gdeGuidance, locale)}
+            </Reveal>
             <RadioGroup
-              label={t.attendance.question}
-              help={t.attendance.help}
+              label={localised(summary.participation.attendance.question, locale)}
+              help={localised(summary.participation.attendance.help, locale)}
               value={form.attendanceStatus}
-              options={ATTENDANCE_STATUSES.map((value) => ({
-                value,
-                label: t.attendance[value],
-              }))}
+              options={asOptions(summary.participation.attendance.statuses, locale).map(
+                (option) => ({ ...option, value: option.value as AttendanceStatus }),
+              )}
               onChange={(value) => set('attendanceStatus', value)}
               error={err('attendance.status')}
               disabled={busy !== null}
               required
             />
             <Reveal
-              when={form.attendanceStatus === 'secured' || form.attendanceStatus === 'pending'}
-              onHide={() => {
-                set('fundingSource', '');
-                set('decisionBy', '');
-              }}
+              when={
+                summary.participation.attendance.fundingSource.enabled &&
+                (form.attendanceStatus === 'secured' || form.attendanceStatus === 'pending')
+              }
+              onHide={() => set('fundingSource', '')}
             >
               <TextField
-                label={t.attendance.fundingSource}
-                help={t.attendance.fundingSourceHelp}
+                label={localised(summary.participation.attendance.fundingSource.label, locale)}
+                help={localised(summary.participation.attendance.fundingSource.help, locale)}
                 value={form.fundingSource}
                 onChange={(value) => set('fundingSource', value)}
                 maxLength={LIMITS.fundingSourceMax}
@@ -479,31 +503,45 @@ export function CoSpeakerInvitation({
                 disabled={busy !== null}
                 required
               />
-              <Reveal
-                when={form.attendanceStatus === 'pending'}
-                onHide={() => set('decisionBy', '')}
-              >
-                <TextField
-                  label={t.attendance.decisionBy}
-                  help={t.attendance.decisionByHelp}
-                  value={form.decisionBy}
-                  onChange={(value) => set('decisionBy', value)}
-                  type="date"
-                  error={err('attendance.decisionBy')}
-                  disabled={busy !== null}
-                  required
-                />
-              </Reveal>
             </Reveal>
-            <Checkbox
-              label={t.attendance.needsVisa}
-              checked={form.needsVisa}
-              onChange={(value) => set('needsVisa', value)}
-              disabled={busy !== null}
-            />
-            <Reveal when={form.needsVisa} variant="note">
-              {t.attendance.visaGuidance}
+            <Reveal
+              when={
+                summary.participation.attendance.decisionBy.enabled &&
+                form.attendanceStatus === 'pending'
+              }
+              onHide={() => set('decisionBy', '')}
+            >
+              <TextField
+                label={localised(summary.participation.attendance.decisionBy.label, locale)}
+                help={localised(summary.participation.attendance.decisionBy.help, locale)}
+                value={form.decisionBy}
+                onChange={(value) => set('decisionBy', value)}
+                type="date"
+                error={err('attendance.decisionBy')}
+                disabled={busy !== null}
+                required
+              />
             </Reveal>
+            {summary.participation.attendance.needsVisa.enabled && (
+              <Checkbox
+                label={localised(summary.participation.attendance.needsVisa.label, locale)}
+                checked={form.needsVisa}
+                onChange={(value) => set('needsVisa', value)}
+                disabled={busy !== null}
+              />
+            )}
+            <Reveal
+              when={
+                summary.participation.attendance.needsVisa.enabled &&
+                form.needsVisa &&
+                Boolean(summary.participation.attendance.needsVisa.help)
+              }
+              variant="note"
+            >
+              {localised(summary.participation.attendance.needsVisa.help, locale)}
+            </Reveal>
+            </>
+            )}
           </section>
         )}
         {showErrors && Object.keys(faults).length > 0 && (

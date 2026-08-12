@@ -738,7 +738,7 @@ export async function setConfirmFormDirect(fields: unknown[], cfpId = CFP_ID): P
  * exactly what a call with no document at all gets.
  */
 export async function setSubmissionFormDirect(
-  form: Record<string, unknown[]>,
+  form: Record<string, unknown>,
   cfpId = CFP_ID,
 ): Promise<string> {
   const response = await fetch(`${DOCS}/cfps/${cfpId}/config/submissionForm`, {
@@ -746,15 +746,25 @@ export async function setSubmissionFormDirect(
     headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
     body: JSON.stringify({
       fields: Object.fromEntries(
-        Object.entries(form).map(([key, list]) => [
-          key,
-          { arrayValue: { values: list.map(encode) } },
-        ]),
+        Object.entries(form).map(([key, value]) => [key, encode(value)]),
       ),
     }),
   });
   await expectOk(response, 'setSubmissionFormDirect');
   return String(((await response.json()) as { updateTime?: unknown }).updateTime ?? '');
+}
+
+/** Emulator-owner read of the complete event submission-form document. */
+export async function readSubmissionFormDirect(
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/submissionForm`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readSubmissionFormDirect');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
 }
 
 /** The inverse of `unwrap`: enough of it for a form definition. */

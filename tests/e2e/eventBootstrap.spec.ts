@@ -9,7 +9,9 @@ import {
   disableAccount,
   readCfp,
   readMember,
+  readSubmissionFormDirect,
   reset,
+  setSubmissionFormDirect,
 } from './backend';
 
 const run = promisify(execFile);
@@ -89,6 +91,25 @@ test.describe('event owner bootstrap', () => {
     expect(await readMember(owner.uid, 'verified-owner-cfp')).toMatchObject({
       role: 'owner',
       email: identity.email,
+    });
+    const form = await readSubmissionFormDirect('verified-owner-cfp');
+    expect(form).toMatchObject({
+      attendance: { enabled: false },
+      fields: [],
+    });
+    expect(form?.category).toHaveLength(7);
+    expect(form?.format).toHaveLength(3);
+    expect(form?.level).toHaveLength(4);
+    expect(form?.deliveryLanguage).toHaveLength(4);
+    expect(JSON.stringify(form?.attendance)).not.toMatch(/Montréal|Montreal|Canada|GDE/);
+
+    await setSubmissionFormDirect(
+      { attendance: { enabled: true, marker: 'organiser-copy' } },
+      'verified-owner-cfp',
+    );
+    await seed('verified-owner-cfp', identity.email);
+    expect(await readSubmissionFormDirect('verified-owner-cfp')).toMatchObject({
+      attendance: { enabled: true, marker: 'organiser-copy' },
     });
   });
 });

@@ -11,7 +11,6 @@
  */
 
 import { Checkbox, TextAreaField, TextField } from './fields';
-import { Reveal } from './Reveal';
 import { SocialsInput } from './SocialsInput';
 import { useI18n } from '../i18n/context';
 import { toSubmission, type FormState } from '../lib/formState';
@@ -190,11 +189,6 @@ export function SpeakerFields({ form, set, err, disabled }: SpeakerFieldsProps) 
         onChange={(v) => set('isGde', v)}
         disabled={disabled}
       />
-
-      {/* Conditional 1 of 3 — shown only to GDEs, per §5. */}
-      <Reveal when={form.isGde} variant="note">
-        {t.speaker.gdeGuidance}
-      </Reveal>
     </>
   );
 }

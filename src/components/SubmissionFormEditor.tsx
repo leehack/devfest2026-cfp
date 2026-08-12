@@ -33,15 +33,23 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { FieldRows } from './FieldRows';
 import { withKeys } from './ConfirmFormEditor';
-import { Checkbox } from './fields';
+import { Checkbox, TextField } from './fields';
 import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
 import { setSubmissionForm } from '../lib/roles';
-import { FORM_LIMITS, localised, validateForm, type FieldOption, type FieldType } from '@shared/confirmForm';
+import {
+  FORM_LIMITS,
+  localised,
+  validateForm,
+  type FieldOption,
+  type FieldType,
+  type Localised,
+} from '@shared/confirmForm';
 import { DELIVERY_LANGUAGES } from '@shared/enums';
 import {
   DEFAULT_SUBMISSION_FORM,
   validateSubmissionForm,
+  type SubmissionAttendanceField,
   type SubmissionForm,
   type TaxonomyKey,
 } from '@shared/submissionForm';
@@ -349,6 +357,105 @@ function LanguageList({
   );
 }
 
+/** One event-owned piece of bilingual attendance copy. */
+function AttendanceCopy({
+  label,
+  value,
+  onChange,
+  busy,
+  help = false,
+}: {
+  label: string;
+  value: Localised;
+  onChange: (value: Localised) => void;
+  busy: boolean;
+  /** Help copy may be omitted; labels and questions may not. */
+  help?: boolean;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="attendance-editor__copy" role="group" aria-label={label}>
+      <p className="attendance-editor__copy-label">{label}</p>
+      <div className="grid grid--2">
+        <TextField
+          label={`${label} · ${t.admin.columnEnglish}`}
+          value={value.en}
+          onChange={(en) => onChange({ ...value, en })}
+          maxLength={help ? FORM_LIMITS.help : FORM_LIMITS.label}
+          disabled={busy}
+          required={!help}
+        />
+        <TextField
+          label={`${label} · ${t.admin.columnFrench}`}
+          value={value.fr ?? ''}
+          onChange={(fr) => onChange({ ...value, fr })}
+          maxLength={help ? FORM_LIMITS.help : FORM_LIMITS.label}
+          disabled={busy}
+        />
+      </div>
+    </div>
+  );
+}
+
+function AttendanceFieldEditor({
+  title,
+  enabledLabel,
+  reviewerLabel,
+  labelLabel,
+  helpLabel,
+  value,
+  onChange,
+  busy,
+}: {
+  title: string;
+  enabledLabel: string;
+  reviewerLabel: string;
+  labelLabel: string;
+  helpLabel: string;
+  value: SubmissionAttendanceField;
+  onChange: (value: SubmissionAttendanceField) => void;
+  busy: boolean;
+}) {
+  return (
+    <section className="attendance-editor__field" aria-label={title}>
+      <h4>{title}</h4>
+      <div className="attendance-editor__toggles">
+        <Checkbox
+          label={enabledLabel}
+          checked={value.enabled}
+          onChange={(enabled) => onChange({ ...value, enabled })}
+          disabled={busy}
+        />
+        {value.enabled && (
+          <Checkbox
+            label={reviewerLabel}
+            checked={value.reviewerVisible}
+            onChange={(reviewerVisible) => onChange({ ...value, reviewerVisible })}
+            disabled={busy}
+          />
+        )}
+      </div>
+      {value.enabled && (
+        <>
+          <AttendanceCopy
+            label={labelLabel}
+            value={value.label}
+            onChange={(label) => onChange({ ...value, label })}
+            busy={busy}
+          />
+          <AttendanceCopy
+            label={helpLabel}
+            value={value.help ?? { en: '' }}
+            onChange={(help) => onChange({ ...value, help })}
+            busy={busy}
+            help
+          />
+        </>
+      )}
+    </section>
+  );
+}
+
 export function SubmissionFormEditor({
   cfpId,
   form: saved,
@@ -414,6 +521,7 @@ export function SubmissionFormEditor({
       format: coded(form.format),
       level: coded(form.level),
       deliveryLanguage: form.deliveryLanguage,
+      attendance: form.attendance,
       acks: withKeys(form.acks),
       fields: withKeys(form.fields),
     };
@@ -470,6 +578,99 @@ export function SubmissionFormEditor({
         busy={busy || readOnly}
       />
 
+      <fieldset className="fieldset optionlist attendance-editor">
+        <legend>{t.admin.attendanceTitle}</legend>
+        <p className="field__help">{t.admin.attendanceEditorHelp}</p>
+        <Checkbox
+          label={t.admin.attendanceEnabled}
+          help={t.admin.attendanceEnabledHelp}
+          checked={form.attendance.enabled}
+          onChange={(enabled) => set('attendance', { ...form.attendance, enabled })}
+          disabled={busy || readOnly}
+        />
+
+        {form.attendance.enabled && (
+          <div className="attendance-editor__body">
+            <AttendanceCopy
+              label={t.admin.attendanceCopy.title}
+              value={form.attendance.title}
+              onChange={(title) => set('attendance', { ...form.attendance, title })}
+              busy={busy || readOnly}
+            />
+            <AttendanceCopy
+              label={t.admin.attendanceCopy.question}
+              value={form.attendance.question}
+              onChange={(question) => set('attendance', { ...form.attendance, question })}
+              busy={busy || readOnly}
+            />
+            <AttendanceCopy
+              label={t.admin.attendanceCopy.help}
+              value={form.attendance.help ?? { en: '' }}
+              onChange={(help) => set('attendance', { ...form.attendance, help })}
+              busy={busy || readOnly}
+              help
+            />
+
+            <div className="attendance-editor__answers">
+              <div className="attendance-editor__status-heading">
+                <p className="attendance-editor__copy-label">{t.admin.attendanceStatusTitle}</p>
+                <Checkbox
+                  label={t.admin.attendanceReviewerVisible}
+                  help={t.admin.attendanceReviewerVisibleHelp}
+                  checked={form.attendance.statusReviewerVisible}
+                  onChange={(statusReviewerVisible) =>
+                    set('attendance', { ...form.attendance, statusReviewerVisible })
+                  }
+                  disabled={busy || readOnly}
+                />
+              </div>
+              <Preview options={form.attendance.statuses} />
+              {form.attendance.statuses.map((status, index) => {
+                const copyKey = status.value as 'local' | 'secured' | 'pending';
+                return (
+                  <AttendanceCopy
+                    key={status.value}
+                    label={t.admin.attendanceCopy[copyKey]}
+                    value={status.label}
+                    onChange={(label) =>
+                      set('attendance', {
+                        ...form.attendance,
+                        statuses: form.attendance.statuses.map((candidate, candidateIndex) =>
+                          candidateIndex === index ? { ...candidate, label } : candidate,
+                        ),
+                      })
+                    }
+                    busy={busy || readOnly}
+                  />
+                );
+              })}
+            </div>
+
+            {(['fundingSource', 'decisionBy', 'needsVisa'] as const).map((key) => (
+              <AttendanceFieldEditor
+                key={key}
+                title={t.admin.attendanceFields[key]}
+                enabledLabel={t.admin.attendanceFieldEnabled}
+                reviewerLabel={t.admin.attendanceReviewerVisible}
+                labelLabel={t.admin.attendanceCopy[key]}
+                helpLabel={t.admin.attendanceCopy[`${key}Help` as keyof typeof t.admin.attendanceCopy]}
+                value={form.attendance[key]}
+                onChange={(value) => set('attendance', { ...form.attendance, [key]: value })}
+                busy={busy || readOnly}
+              />
+            ))}
+
+            <AttendanceCopy
+              label={t.admin.attendanceCopy.gdeGuidance}
+              value={form.attendance.gdeGuidance ?? { en: '' }}
+              onChange={(gdeGuidance) => set('attendance', { ...form.attendance, gdeGuidance })}
+              busy={busy || readOnly}
+              help
+            />
+          </div>
+        )}
+      </fieldset>
+
       <fieldset className="fieldset optionlist">
         <legend>{t.admin.acksTitle}</legend>
         <p className="field__help">{t.admin.acksHelp}</p>
@@ -498,6 +699,10 @@ export function SubmissionFormEditor({
           onChange={(fields) => set('fields', fields)}
           busy={busy || readOnly}
           types={EXTRA_TYPES}
+          reviewerVisibility={{
+            label: t.admin.extraReviewerVisible,
+            help: t.admin.extraReviewerVisibleHelp,
+          }}
           labels={{
             empty: t.admin.extraEmpty,
             untitled: t.admin.formUntitled,

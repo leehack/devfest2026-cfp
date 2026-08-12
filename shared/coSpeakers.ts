@@ -1,6 +1,7 @@
 /** Proposal-scoped speaker invitations and the safe roster returned by callables. */
 
 import type { ConfirmField, Localised } from './confirmForm';
+import type { SubmissionAttendanceConfig } from './submissionForm';
 
 export const MAX_ACTIVE_SPEAKERS = 4;
 export const MAX_SPEAKER_INVITATION_HISTORY = 20;
@@ -127,6 +128,7 @@ export interface SpeakerInvitationSummary {
   /** Required only when accepting after the proposal was already accepted. */
   participation?: {
     acknowledgements: ConfirmField[];
+    attendance: SubmissionAttendanceConfig;
   };
   /** Present only for the verified invited account, never for a mismatched user. */
   talk?: {

@@ -6,8 +6,10 @@ either inheriting access to an event. Submission form, Firestore write path,
 security rules. `SPEC.md` is the design;
 [`AGENTS.md`](AGENTS.md) is the working conventions.
 
-It began as one event's CFP — DevFest Montréal 2026 — which is still the shape
-of the form and of the spec.
+It began as one event's CFP — DevFest Montréal 2026 — whose form remains the
+compatibility fallback for older calls. Each CFP now owns its submission form,
+including whether it asks about attendance at all. A newly created generic call
+starts with attendance disabled.
 
 Next.js App Router + React + TypeScript on Firebase. One zod schema in `shared/` compiles into
 both the browser bundle and the functions bundle, so the field limits cannot
@@ -58,10 +60,10 @@ co-speakers onto each draft. After a session is accepted or confirmed, an event
 admin may send the same verified invitation for a late co-speaker. The pending
 invitation changes nothing; acceptance reopens the working session until the new
 speaker completes their own participation details and confirmation. The picker on the form switches between talks; the
-speaker profile and travel answers carry over, so a second submission does not
-mean retyping a bio. The talk cap is enforced in `submitProposal`, because rules
-cannot count documents — drafts above it are allowed and simply never reach a
-reviewer.
+speaker profile and, when this CFP collects them, travel answers carry over, so
+a second submission does not mean retyping a bio. The talk cap is enforced in
+`submitProposal`, because rules cannot count documents — drafts above it are
+allowed and simply never reach a reviewer.
 
 ## Running it locally
 
@@ -134,6 +136,8 @@ npm run verify   # lint, build, unit, rules, end-to-end
 | `npm test` | node | schema, scoring, parser, import merge, message translation |
 | `npm run test:rules` | Firestore emulator, JVM | `firestore.rules` |
 | `npm run test:e2e` | the full stack | every applicant, reviewer and admin flow |
+| `npm run test:e2e:changed` | the full stack | browser tests affected by uncommitted changes |
+| `npm run test:e2e:failed` | the full stack | failures recorded by the previous browser run |
 
 For release-level exploratory testing, the reusable persona, seed-state,
 mutation-budget, screenshot, accessibility, and flow catalog lives in
@@ -242,14 +246,32 @@ anchoring). Enforced in `firestore.rules`, not by hiding the section — and the
 review queue re-sorts by disagreement once it is open, because that is what the
 selection meeting is actually for.
 
+**Attendance is optional event data, not platform copy.** An organiser may turn
+the section on for a CFP and owns its English and French title, question, status
+labels, subfield wording and optional GDE guidance. Funding source, decision date
+and visa support can each be collected or omitted, and every collected value has
+its own reviewer-visibility switch. The status codes stay fixed as `local`,
+`secured` and `pending`, because validation, dashboards and exports use their
+meaning rather than their labels.
+
+A missing attendance configuration belongs to a legacy call and preserves the
+DevFest Montréal questions and reviewer visibility. `createCfp` instead writes an
+explicit generic form with attendance disabled and no travel-support
+acknowledgement, so another event never inherits Montréal or Canada-specific
+questions by accident. Disabling the section stops new validation and reviewer
+projection; it does not silently purge previously submitted personal data.
+Post-acceptance co-speaker invitations follow the same current configuration,
+and visa email copy is included only when that question is enabled and answered
+yes.
+
 **Submitting is not what closes a proposal — the deadline is.** A speaker keeps
 editing after they submit, and keeps seeing what they sent: the form stays on
 screen with a status banner rather than being replaced by a dead end. Once the
-committee starts reading, the content freezes but the travel answers do not, and
-they stay editable after the window shuts — accepted in September, visa refused
-in October. `src/lib/lifecycle.ts` names the three states; `firestore.rules`
-enforces them, down to refusing an abstract smuggled in beside an attendance
-change.
+committee starts reading, the content freezes. If this CFP collects attendance,
+those answers remain editable after the window shuts — accepted in September,
+visa refused in October. `src/lib/lifecycle.ts` names the three states;
+`firestore.rules` enforces them, down to refusing an abstract smuggled in beside
+an attendance change.
 
 The first saved review and `submitted → under_review` happen in one callable
 transaction. Review documents are not browser-writable: acknowledging a score
@@ -271,7 +293,7 @@ one lead speaker. While it is still a draft, the lead may invite up to three
 co-speakers by verified email; the invitation grants nothing until that exact
 account reviews the talk, accepts, and completes its own profile and participation
 details. Pending invitations block submission. The lead owns talk content and
-withdrawal, while each active speaker owns their personal logistics,
+withdrawal, while each active speaker owns any personal logistics this CFP asks,
 confirmation answers, and photo. Every active speaker must confirm before the
 proposal becomes `confirmed`.
 

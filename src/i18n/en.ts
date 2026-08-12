@@ -650,6 +650,10 @@ export const en = {
         title: 'The committee is reviewing it',
         help: 'The talk content is locked for a fair review. You can still keep your profile and travel details current.',
       },
+      underReviewNoAttendance: {
+        title: 'The committee is reviewing it',
+        help: 'The talk content is locked for a fair review. Your speaker profile remains yours to update.',
+      },
       accepted: {
         title: 'Confirm whether you can present',
         help: 'Answer the invitation here and complete every required speaker detail before organisers schedule the session.',
@@ -732,6 +736,11 @@ export const en = {
       // "while it is being judged" — by the time a talk is confirmed, it is not.
       logistics:
         'The talk itself is locked now. Your profile and your travel answers are still editable.',
+      none: 'This one is closed. Your profile is still yours to edit.',
+    } as Record<string, string>,
+    editHelpNoAttendance: {
+      all: 'You can still edit anything this event asks for until the deadline.',
+      logistics: 'The talk itself is locked now. Your speaker profile remains yours to update.',
       none: 'This one is closed. Your profile is still yours to edit.',
     } as Record<string, string>,
     pastTalksCount: (count: number) => `Past talks (${count})`,
@@ -1470,6 +1479,37 @@ export const en = {
     submission: 'The submission form',
     submissionHelp:
       'What speakers are asked when they propose a talk. Labels can be reworded at any time; a choice already used by a proposal keeps its stored code, so removing it is how you retire it.',
+    attendanceTitle: 'Travel and attendance',
+    attendanceEditorHelp:
+      'This section is event-specific. Keep the fixed answer meanings so scheduling and validation continue to work, and adapt the wording to where this event is held.',
+    attendanceEnabled: 'Ask speakers for travel information',
+    attendanceEnabledHelp:
+      'Turn this off for an online event or any call that does not need travel planning. Existing answers are kept but speakers are no longer asked.',
+    attendanceStatusTitle: 'Attendance status answers',
+    attendanceFields: {
+      fundingSource: 'Funding source',
+      decisionBy: 'Decision date',
+      needsVisa: 'Visa or entry requirements',
+    },
+    attendanceFieldEnabled: 'Ask this follow-up',
+    attendanceReviewerVisible: 'Show this answer to reviewers',
+    attendanceReviewerVisibleHelp:
+      'Turn this off when the selection committee does not need this logistical detail. Organisers still retain the answer.',
+    attendanceCopy: {
+      title: 'Section heading',
+      question: 'Attendance question',
+      help: 'Question help',
+      local: 'No-travel answer',
+      secured: 'Travel-covered answer',
+      pending: 'Travel-pending answer',
+      fundingSource: 'Funding question',
+      fundingSourceHelp: 'Funding help',
+      decisionBy: 'Decision-date question',
+      decisionByHelp: 'Decision-date help',
+      needsVisa: 'Visa or entry-requirement question',
+      needsVisaHelp: 'Visa guidance',
+      gdeGuidance: 'Optional guidance for Google Developer Experts',
+    },
     submissionSave: 'Save the form',
     submissionSaved: 'Submission form saved.',
     taxonomy: {
@@ -1512,6 +1552,9 @@ export const en = {
     extraTitle: 'Your own questions',
     extraHelp:
       'Anything else you want to ask about the talk. Photos are not offered here — most of these speakers will be turned down, and their picture is not something to be holding. Ask for it on the confirmation form instead.',
+    extraReviewerVisible: 'Show this answer to reviewers',
+    extraReviewerVisibleHelp:
+      'Turn this off for information the selection committee does not need. Organisers can still see the stored answer.',
     extraEmpty: 'No extra questions.',
     extraAdd: 'Add a question',
     submissionErrors: {
@@ -1522,6 +1565,11 @@ export const en = {
       emptyLabel: 'Every choice under {key} needs an English label.',
       unknownLanguage: 'That is not one of the four languages the schedule understands.',
       ackNotRequired: '“{key}” has to be a tick box that must be ticked.',
+      badReviewerVisibility: '“{key}” has an invalid reviewer visibility setting.',
+      badAttendanceConfig: 'The travel section has an invalid setting under “{key}”.',
+      unknownAttendanceStatus:
+        'The travel answers must keep the three attendance meanings the platform understands.',
+      tooLong: 'The wording under “{key}” is too long.',
       noImages:
         '“{key}” asks for a photo. Ask for that on the confirmation form, once the speaker is in.',
     } as Record<string, string>,
@@ -1618,9 +1666,12 @@ export const en = {
     submissionAnswers: 'Additional talk details',
     answerYes: 'Yes',
     answerNo: 'No',
+    submissionDetails: 'Submission details',
     logistics: 'Getting here',
     languagePreference: 'Language preference',
     travel: 'Travel',
+    travelFor: (name: string) => `Travel — ${name}`,
+    speakerFallback: (number: number) => `Speaker ${number}`,
     attendance: {
       local: 'Based in Montréal',
       secured: 'Covered — employer, GDE programme or self-funded',
@@ -1630,6 +1681,7 @@ export const en = {
     decisionBy: 'Knows by',
     visa: 'Visa',
     visaYes: 'Needs a visa or eTA to enter Canada',
+    visaNo: 'Does not need a visa or eTA to enter Canada',
     submitted: 'Submitted',
     conflict: 'I have a conflict of interest',
     conflictHelp: 'Excluded from the totals, including your own calibration.',
@@ -1760,6 +1812,10 @@ export const en = {
     participationTitle: 'Your participation details',
     participationHelp:
       'Because this session was already accepted, complete the event acknowledgements and travel details before joining. You will confirm the session and answer its confirmation questions next.',
+    participationHelpAcks:
+      'Because this session was already accepted, complete the event acknowledgements before joining. You will confirm the session and answer its confirmation questions next.',
+    participationHelpTravel:
+      'Because this session was already accepted, complete the event travel details before joining. You will confirm the session and answer its confirmation questions next.',
     join: 'Save profile and join',
     joinLate: 'Save details and join',
     joining: 'Joining…',
@@ -1790,6 +1846,12 @@ export const en = {
         'The lead speaker owns the talk. You can still update your profile, participation acknowledgements, and travel details.',
       logistics:
         'The lead speaker owns the talk. You can still update your profile and travel details.',
+      none:
+        'The lead speaker owns the talk. Your profile remains editable from your account; participation details are now locked.',
+    } as Record<string, string>,
+    personalEditHelpNoAttendance: {
+      all: 'The lead speaker owns the talk. You can still update your profile and participation acknowledgements.',
+      logistics: 'The lead speaker owns the talk. Your speaker profile remains yours to update.',
       none:
         'The lead speaker owns the talk. Your profile remains editable from your account; participation details are now locked.',
     } as Record<string, string>,

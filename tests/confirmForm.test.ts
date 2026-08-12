@@ -122,6 +122,22 @@ describe('validateForm', () => {
 });
 
 describe('normaliseForm', () => {
+  it('drops submission-only reviewer visibility from confirmation questions', () => {
+    const dirty = {
+      fields: [
+        {
+          ...field(),
+          reviewerVisible: false,
+        },
+      ],
+    };
+
+    expect(
+      (normaliseForm(dirty as unknown as ConfirmForm).fields[0] as unknown as Record<string, unknown>)
+        .reviewerVisible,
+    ).toBeUndefined();
+  });
+
   it('treats an omitted speaker-photo setting as optional', () => {
     expect(EMPTY_FORM.speakerPhoto).toEqual({ required: false });
     expect(confirmFormFromData({ fields: [] })).toEqual({

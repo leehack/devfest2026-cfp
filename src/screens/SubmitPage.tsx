@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { ATTENDANCE_STATUSES, LIMITS, inStatusSet } from '@shared/enums';
+import { LIMITS, inStatusSet, type AttendanceStatus } from '@shared/enums';
 import { submissionSchema } from '@shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -400,6 +400,7 @@ interface StatusBannerProps {
   scope: EditScope;
   personalScope: EditScope;
   isCoSpeaker: boolean;
+  attendanceEnabled: boolean;
   busy: boolean;
   /** Absent once withdrawing is no longer something they can do. */
   onWithdraw?: () => void;
@@ -483,6 +484,7 @@ function StatusBanner({
   scope,
   personalScope,
   isCoSpeaker,
+  attendanceEnabled,
   busy,
   onWithdraw,
   onRespond,
@@ -638,7 +640,13 @@ function StatusBanner({
       )}
 
       <p className="muted">
-        {isCoSpeaker ? t.coSpeakers.personalEditHelp[personalScope] : t.form.editHelp[scope]}
+        {attendanceEnabled
+          ? isCoSpeaker
+            ? t.coSpeakers.personalEditHelp[personalScope]
+            : t.form.editHelp[scope]
+          : isCoSpeaker
+            ? t.coSpeakers.personalEditHelpNoAttendance[personalScope]
+            : t.form.editHelpNoAttendance[scope]}
       </p>
       {onWithdraw && (
         <button type="button" className="btn btn--ghost" disabled={busy} onClick={onWithdraw}>
@@ -1160,6 +1168,7 @@ function ProposalFormPage({
       cfpId,
       user,
       snapshot,
+      shape,
       currentId,
       currentScope,
       localeRef.current,
@@ -1246,7 +1255,7 @@ function ProposalFormPage({
     }
 
     return shouldFlushAgain ? persist(source) : true;
-  }, [cfpId, collapseHistoryGuard, showToast, user]);
+  }, [cfpId, collapseHistoryGuard, shape, showToast, user]);
 
   useEffect(() => {
     if (loading || (scope === 'none' && proposalId === null) || !dirty.current) return;
@@ -1651,7 +1660,7 @@ function ProposalFormPage({
 
       let id = proposalIdRef.current;
       if (!id) {
-        id = await saveDraft(cfpId, user, latest, null, 'all', locale);
+        id = await saveDraft(cfpId, user, latest, shape, null, 'all', locale);
         setProposalId(id);
         proposalIdRef.current = id;
         dirty.current = false;
@@ -1815,20 +1824,19 @@ function ProposalFormPage({
 
   // -------------------------------------------------------------- option sets
 
-  // The four taxonomy lists come from this call's own config; attendance does
-  // not, because it feeds `§5`'s funding logic rather than being a label set.
+  // The stored codes retain their platform meaning; this event owns the labels.
   const options = useMemo(
     () => ({
       category: asOptions(shape.category, locale),
       format: asOptions(shape.format, locale),
       level: asOptions(shape.level, locale),
       delivery: asOptions(shape.deliveryLanguage, locale),
-      attendance: ATTENDANCE_STATUSES.map((v) => ({
-        value: v,
-        label: t.attendance[v],
+      attendance: asOptions(shape.attendance.statuses, locale).map((option) => ({
+        ...option,
+        value: option.value as AttendanceStatus,
       })),
     }),
-    [shape, locale, t],
+    [shape, locale],
   );
 
   const err = (key: string) => (showErrors ? errors[key] : undefined);
@@ -2036,12 +2044,16 @@ function ProposalFormPage({
           },
         ]
       : []),
-    {
-      id: 'submission-attendance',
-      label: t.sections.attendance,
-      complete: !hasPrefix('attendance.'),
-      attention: showErrors && hasPrefix('attendance.'),
-    },
+    ...(shape.attendance.enabled
+      ? [
+          {
+            id: 'submission-attendance',
+            label: localised(shape.attendance.title, locale),
+            complete: !hasPrefix('attendance.'),
+            attention: showErrors && hasPrefix('attendance.'),
+          },
+        ]
+      : []),
   ];
 
   const lifecycleNext = archived
@@ -2059,7 +2071,9 @@ function ProposalFormPage({
           ? t.form.nextSteps.submittedEditable
           : t.form.nextSteps.submitted
         : speakerStatus === 'under_review'
-          ? t.form.nextSteps.underReview
+          ? shape.attendance.enabled
+            ? t.form.nextSteps.underReview
+            : t.form.nextSteps.underReviewNoAttendance
           : speakerStatus === 'accepted'
             ? t.form.nextSteps.accepted
             : speakerStatus === 'confirmed'
@@ -2145,6 +2159,7 @@ function ProposalFormPage({
           scope={scope}
           personalScope={personalScope}
           isCoSpeaker={isCoSpeaker}
+          attendanceEnabled={shape.attendance.enabled}
           busy={archived || submitting || answerSaveState === 'saving' || uploadingAnswer}
           onWithdraw={
             !archived && isPrimarySpeaker && withdrawable ? onWithdraw : undefined
@@ -2494,12 +2509,13 @@ function ProposalFormPage({
         </section>
       )}
 
+      {shape.attendance.enabled && (
       <section className="section submission-section" id="submission-attendance" tabIndex={-1}>
-        <h2>{t.sections.attendance}</h2>
+        <h2>{localised(shape.attendance.title, locale)}</h2>
 
         <RadioGroup
-          label={t.attendance.question}
-          help={t.attendance.help}
+          label={localised(shape.attendance.question, locale)}
+          help={localised(shape.attendance.help, locale)}
           value={form.attendanceStatus}
           options={options.attendance}
           onChange={(v) => set('attendanceStatus', v)}
@@ -2508,17 +2524,16 @@ function ProposalFormPage({
           required
         />
 
-        {/* Conditional 2 of 3 */}
         <Reveal
-          when={form.attendanceStatus === 'secured' || form.attendanceStatus === 'pending'}
-          onHide={() => {
-            set('fundingSource', '');
-            set('decisionBy', '');
-          }}
+          when={
+            shape.attendance.fundingSource.enabled &&
+            (form.attendanceStatus === 'secured' || form.attendanceStatus === 'pending')
+          }
+          onHide={() => set('fundingSource', '')}
         >
           <TextField
-            label={t.attendance.fundingSource}
-            help={t.attendance.fundingSourceHelp}
+            label={localised(shape.attendance.fundingSource.label, locale)}
+            help={localised(shape.attendance.fundingSource.help, locale)}
             value={form.fundingSource}
             onChange={(v) => set('fundingSource', v)}
             maxLength={LIMITS.fundingSourceMax}
@@ -2526,36 +2541,49 @@ function ProposalFormPage({
             disabled={travelDisabled}
             required
           />
-
-          <Reveal
-            when={form.attendanceStatus === 'pending'}
-            onHide={() => set('decisionBy', '')}
-          >
-            <TextField
-              label={t.attendance.decisionBy}
-              help={t.attendance.decisionByHelp}
-              value={form.decisionBy}
-              onChange={(v) => set('decisionBy', v)}
-              type="date"
-              error={err('attendance.decisionBy')}
-              disabled={travelDisabled}
-              required
-            />
-          </Reveal>
         </Reveal>
 
-        <Checkbox
-          label={t.attendance.needsVisa}
-          checked={form.needsVisa}
-          onChange={(v) => set('needsVisa', v)}
-          disabled={travelDisabled}
-        />
+        <Reveal
+          when={shape.attendance.decisionBy.enabled && form.attendanceStatus === 'pending'}
+          onHide={() => set('decisionBy', '')}
+        >
+          <TextField
+            label={localised(shape.attendance.decisionBy.label, locale)}
+            help={localised(shape.attendance.decisionBy.help, locale)}
+            value={form.decisionBy}
+            onChange={(v) => set('decisionBy', v)}
+            type="date"
+            error={err('attendance.decisionBy')}
+            disabled={travelDisabled}
+            required
+          />
+        </Reveal>
 
-        {/* At a Montréal event, visas stop more speakers than money does (§5). */}
-        <Reveal when={form.needsVisa} variant="note">
-          {t.attendance.visaGuidance}
+        {shape.attendance.needsVisa.enabled && (
+          <Checkbox
+            label={localised(shape.attendance.needsVisa.label, locale)}
+            checked={form.needsVisa}
+            onChange={(v) => set('needsVisa', v)}
+            disabled={travelDisabled}
+          />
+        )}
+
+        <Reveal
+          when={
+            shape.attendance.needsVisa.enabled &&
+            form.needsVisa &&
+            Boolean(shape.attendance.needsVisa.help)
+          }
+          variant="note"
+        >
+          {localised(shape.attendance.needsVisa.help, locale)}
+        </Reveal>
+
+        <Reveal when={form.isGde && Boolean(shape.attendance.gdeGuidance)} variant="note">
+          {localised(shape.attendance.gdeGuidance, locale)}
         </Reveal>
       </section>
+      )}
 
       {/* -------------------------------------------------------- actions */}
       <div className="actions">

@@ -12,7 +12,7 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
-import { STATUS_SETS, type ProposalStatus } from '@shared/enums';
+import { STATUS_SETS, type AttendanceStatus, type ProposalStatus } from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
@@ -539,6 +539,16 @@ export interface ReviewQueue {
   own: number;
 }
 
+export interface ReviewerSpeakerTravel {
+  uid: string;
+  /** Frozen with the proposal, like the speaker profile shown on the review card. */
+  name: string;
+  status?: AttendanceStatus;
+  fundingSource?: string;
+  decisionBy?: string;
+  needsVisa?: boolean;
+}
+
 export type ReviewerProposalRow = Pick<
   Proposal,
   | 'speakerSnapshot'
@@ -551,12 +561,13 @@ export type ReviewerProposalRow = Pick<
   | 'deliveryLanguage'
   | 'languagePreference'
   | 'answers'
-  | 'attendance'
   | 'aggregate'
 > & {
   id: string;
   status: (typeof STATUS_SETS.reviewQueue)[number];
   submittedAt?: number;
+  /** A callable-owned, field-by-field projection for each active speaker. */
+  speakerTravel?: ReviewerSpeakerTravel[];
 };
 
 const reviewQueueCall = httpsCallable<

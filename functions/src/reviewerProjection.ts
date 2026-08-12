@@ -2,9 +2,21 @@ import {
   validateAnswers,
   validateForm,
   type Answers,
-  type ConfirmField,
 } from '../../shared/confirmForm';
-import type { ProposalAggregate, Social, SpeakerSnapshot } from '../../shared/types';
+import { MAX_ACTIVE_SPEAKERS } from '../../shared/coSpeakers';
+import { attendanceSchemaFor } from '../../shared/schema';
+import {
+  DEFAULT_SUBMISSION_FORM,
+  reviewerAttendanceEnabled,
+  type SubmissionField,
+  type SubmissionForm,
+} from '../../shared/submissionForm';
+import type {
+  Attendance,
+  ProposalAggregate,
+  Social,
+  SpeakerSnapshot,
+} from '../../shared/types';
 
 /** The complete proposal surface a plain reviewer may receive. */
 export const REVIEWER_PROPOSAL_FIELDS = [
@@ -18,16 +30,22 @@ export const REVIEWER_PROPOSAL_FIELDS = [
   'deliveryLanguage',
   'languagePreference',
   'answers',
-  // Submission-time logistics, not a confirmation answer: the committee has
-  // always had this, and scoring a talk without knowing the speaker needs a
-  // visa is how a session becomes a hole in the grid. `confirmAnswers`, which
-  // is answered after acceptance and is presenter-private, stays out.
-  'attendance',
   'status',
   'submittedAt',
 ] as const;
 
 const REVIEWABLE_ANSWER_TYPES = ['text', 'textarea', 'select', 'checkbox'] as const;
+
+export interface ReviewerSpeakerTravel extends Partial<Attendance> {
+  uid: string;
+  name: string;
+  status?: Attendance['status'];
+}
+
+export interface ReviewerParticipantSource {
+  status?: unknown;
+  attendance?: unknown;
+}
 
 /**
  * Submission answers are talk content, but only while the current form still
@@ -35,11 +53,12 @@ const REVIEWABLE_ANSWER_TYPES = ['text', 'textarea', 'select', 'checkbox'] as co
  * it trims text, rejects stale select values and keeps arbitrary proposal maps
  * (including confirmation, travel and photo paths) out of the payload.
  */
-function answersFrom(value: unknown, fields: ConfirmField[]): Answers | null {
+function answersFrom(value: unknown, fields: SubmissionField[]): Answers | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Answers;
   const reviewable = fields.filter(
     (field) =>
+      field.reviewerVisible !== false &&
       (REVIEWABLE_ANSWER_TYPES as readonly string[]).includes(field.type) &&
       Object.prototype.hasOwnProperty.call(source, field.key),
   );
@@ -74,6 +93,84 @@ function speakerFrom(value: unknown): SpeakerSnapshot | null {
     ...(speaker.pastTalks ? { pastTalks: String(speaker.pastTalks) } : {}),
     ...(speaker.sessionizeUrl ? { sessionizeUrl: String(speaker.sessionizeUrl) } : {}),
   };
+}
+
+function currentSpeakerIds(source: Record<string, unknown>): string[] {
+  if (!Array.isArray(source.speakerIds)) return [];
+  return [
+    ...new Set(
+      source.speakerIds.filter(
+        (uid): uid is string =>
+          typeof uid === 'string' && uid.length > 0 && uid.length <= 128 && !uid.includes('/'),
+      ),
+    ),
+  ].slice(0, MAX_ACTIVE_SPEAKERS);
+}
+
+function usesRosterTravel(source: Record<string, unknown>, speakerIds: readonly string[]): boolean {
+  return (
+    (typeof source.primarySpeakerId === 'string' && source.primarySpeakerId.length > 0) ||
+    speakerIds.length > 1
+  );
+}
+
+/** Exact participant documents the queue must read for a roster-mode proposal. */
+export function reviewerTravelParticipantIds(source: Record<string, unknown>): string[] {
+  const speakerIds = currentSpeakerIds(source);
+  return usesRosterTravel(source, speakerIds) ? speakerIds : [];
+}
+
+/**
+ * The committee's travel view is a new DTO, never a forwarded private map.
+ * Zod strips unknown keys and rejects incomplete conditional answers before
+ * any value crosses the callable boundary.
+ */
+function speakerTravelFrom(
+  source: Record<string, unknown>,
+  participants: ReadonlyMap<string, ReviewerParticipantSource>,
+  form: SubmissionForm,
+): ReviewerSpeakerTravel[] {
+  const config = form.attendance;
+  if (!reviewerAttendanceEnabled(config)) return [];
+  const speakerIds = currentSpeakerIds(source);
+  const rosterMode = usesRosterTravel(source, speakerIds);
+  const names = new Map(
+    (Array.isArray(source.speakerSnapshot) ? source.speakerSnapshot : [])
+      .flatMap((value) => speakerFrom(value) ?? [])
+      .map((speaker) => [speaker.uid, speaker.name]),
+  );
+
+  return speakerIds.flatMap((uid, index) => {
+    const participant = participants.get(uid);
+    if (rosterMode && participant?.status !== 'active') return [];
+    const candidate = rosterMode
+      ? participant?.attendance
+      : index === 0
+        ? source.attendance
+        : undefined;
+    const parsed = attendanceSchemaFor(form).safeParse(candidate);
+    if (!parsed.success) return [];
+    const attendance = parsed.data;
+    if (!attendance) return [];
+    const visible = {
+      ...(config.statusReviewerVisible ? { status: attendance.status } : {}),
+      ...(config.fundingSource.enabled && config.fundingSource.reviewerVisible
+        ? { fundingSource: attendance.fundingSource }
+        : {}),
+      ...(config.decisionBy.enabled && config.decisionBy.reviewerVisible
+        ? { decisionBy: attendance.decisionBy }
+        : {}),
+      ...(config.needsVisa.enabled && config.needsVisa.reviewerVisible
+        ? { needsVisa: attendance.needsVisa }
+        : {}),
+    };
+    const clean = Object.fromEntries(
+      Object.entries(visible).filter(([, value]) => value !== undefined),
+    );
+    return Object.keys(clean).length > 0
+      ? [{ uid, name: names.get(uid) ?? '', ...clean }]
+      : [];
+  });
 }
 
 function aggregateFrom(value: unknown): ProposalAggregate | null {
@@ -119,7 +216,9 @@ export function reviewerProposalProjection(
   id: string,
   source: Record<string, unknown>,
   includeAggregate: boolean,
-  submissionFields: ConfirmField[] = [],
+  submissionFields: SubmissionField[] = [],
+  participants: ReadonlyMap<string, ReviewerParticipantSource> = new Map(),
+  submissionForm: SubmissionForm = DEFAULT_SUBMISSION_FORM,
 ): Record<string, unknown> & { id: string } {
   const projected: Record<string, unknown> & { id: string } = { id };
   for (const field of REVIEWER_PROPOSAL_FIELDS) {
@@ -138,6 +237,8 @@ export function reviewerProposalProjection(
     : [];
   const answers = answersFrom(source.answers, submissionFields);
   if (answers) projected.answers = answers;
+  const speakerTravel = speakerTravelFrom(source, participants, submissionForm);
+  if (speakerTravel.length > 0) projected.speakerTravel = speakerTravel;
   const aggregate = includeAggregate ? aggregateFrom(source.aggregate) : null;
   if (aggregate) projected.aggregate = aggregate;
   return projected;

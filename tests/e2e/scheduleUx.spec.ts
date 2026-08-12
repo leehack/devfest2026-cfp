@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import {
+  CFP_ID,
   callJson,
   createAccount,
   reset,
@@ -701,6 +702,75 @@ test('a directly opened session falls back to a normal programme link', async ({
   await page.goBack();
   await expect(page).toHaveURL(at('/schedule/second-session'));
   await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+});
+
+test('a CFP-less route waits for the session label before moving focus', async ({ page }) => {
+  await seedPublicAgenda();
+  await page.goto('/');
+  await waitForAppHydration(page);
+  await expect(page.getByRole('link', { name: 'DevFest Montréal 2026' })).toBeVisible();
+
+  let releaseLookup!: () => void;
+  const lookupHeld = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  let markLookupStarted!: () => void;
+  const lookupStarted = new Promise<void>((resolve) => {
+    markLookupStarted = resolve;
+  });
+  let holdingLookup = true;
+  await page.route('http://127.0.0.1:8080/**', async (route) => {
+    const request = route.request();
+    const requestData = `${request.url()}\n${request.postData() ?? ''}`;
+    if (holdingLookup && requestData.includes(`/documents/cfps/${CFP_ID}`)) {
+      holdingLookup = false;
+      markLookupStarted();
+      await lookupHeld;
+    }
+    await route.continue();
+  });
+
+  const main = page.locator('#main-content');
+  await page.locator('.skip-link').focus();
+  try {
+    await page.evaluate((path) => {
+      const focusLabels: string[] = [];
+      const content = document.getElementById('main-content');
+      (window as typeof window & { __routeFocusLabels?: string[] }).__routeFocusLabels =
+        focusLabels;
+      content?.addEventListener('focus', () => {
+        focusLabels.push(content.getAttribute('aria-label') ?? '');
+      });
+      window.history.pushState(null, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, at('/schedule/second-session'));
+    await lookupStarted;
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    );
+
+    await expect(main).not.toBeFocused();
+    expect(
+      await page.evaluate(
+        () =>
+          (window as typeof window & { __routeFocusLabels?: string[] }).__routeFocusLabels,
+      ),
+    ).toEqual([]);
+  } finally {
+    releaseLookup();
+  }
+
+  await expect(page.getByRole('heading', { level: 2, name: 'Later session' })).toBeVisible();
+  await expect(main).toHaveAttribute(
+    'aria-label',
+    'Later session — DevFest Montréal 2026',
+  );
+  await expect(main).toBeFocused();
+  expect(
+    await page.evaluate(
+      () => (window as typeof window & { __routeFocusLabels?: string[] }).__routeFocusLabels,
+    ),
+  ).toEqual(['Later session — DevFest Montréal 2026']);
 });
 
 test('in-app session navigation focuses a landmark named for each session', async ({ page }) => {

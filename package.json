@@ -22,6 +22,8 @@
     "verify": "npm run lint && npm run typecheck && npm run build && npm run check:bundle && npm test && npm run test:rules && npm run test:e2e",
     "start": "node scripts/dev.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:changed": "playwright test --only-changed --pass-with-no-tests",
+    "test:e2e:failed": "playwright test --last-failed --pass-with-no-tests",
     "start:next": "next start",
     "check:bundle": "node scripts/check-bundle.mjs"
   },

@@ -265,6 +265,12 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
   const scheduledDelivery = row.assignedLanguage
     ? `${delivery} → ${labelOf(shape.deliveryLanguage, row.assignedLanguage, locale)}`
     : delivery;
+  const attendanceTitle = localised(shape.attendance.title, locale) || t.review.travel;
+  const fundingLabel =
+    localised(shape.attendance.fundingSource.label, locale) || t.review.funding;
+  const decisionLabel =
+    localised(shape.attendance.decisionBy.label, locale) || t.review.decisionBy;
+  const visaLabel = localised(shape.attendance.needsVisa.label, locale) || t.review.visa;
   const socials = speakers
     .flatMap((speaker) =>
       (speaker.socials ?? []).map((social) => `${social.platform}: ${social.handle}`),
@@ -286,13 +292,23 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
     [t.proposal.level, labelOf(shape.level, row.level, locale)],
     [t.language.delivery, scheduledDelivery],
     row.languagePreference ? [t.review.languagePreference, row.languagePreference] : null,
-    row.attendance?.status
-      ? [t.review.travel, t.review.attendance[row.attendance.status] ?? row.attendance.status]
+    shape.attendance.enabled && row.attendance?.status
+      ? [attendanceTitle, labelOf(shape.attendance.statuses, row.attendance.status, locale)]
       : null,
-    row.attendance?.fundingSource ? [t.review.funding, row.attendance.fundingSource] : null,
-    row.attendance?.decisionBy ? [t.review.decisionBy, row.attendance.decisionBy] : null,
-    row.attendance
-      ? [t.review.visa, row.attendance.needsVisa ? t.admin.formYes : t.admin.formNo]
+    shape.attendance.enabled &&
+    shape.attendance.fundingSource.enabled &&
+    row.attendance?.fundingSource
+      ? [fundingLabel, row.attendance.fundingSource]
+      : null,
+    shape.attendance.enabled &&
+    shape.attendance.decisionBy.enabled &&
+    row.attendance?.decisionBy
+      ? [decisionLabel, row.attendance.decisionBy]
+      : null,
+    shape.attendance.enabled &&
+    shape.attendance.needsVisa.enabled &&
+    typeof row.attendance?.needsVisa === 'boolean'
+      ? [visaLabel, row.attendance.needsVisa ? t.admin.formYes : t.admin.formNo]
       : null,
     speakers.some((speaker) => speaker.company)
       ? [t.speaker.company, speakers.map((speaker) => speaker.company).filter(Boolean).join('; ')]
@@ -347,21 +363,27 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
                   </span>
                 </h4>
                 <dl className="answers">
-                  {attendance?.status && (
+                  {shape.attendance.enabled && attendance?.status && (
                     <div>
-                      <dt>{t.review.travel}</dt>
-                      <dd>{t.review.attendance[attendance.status] ?? attendance.status}</dd>
+                      <dt>{attendanceTitle}</dt>
+                      <dd>{labelOf(shape.attendance.statuses, attendance.status, locale)}</dd>
                     </div>
                   )}
-                  {attendance?.fundingSource && (
-                    <div><dt>{t.review.funding}</dt><dd>{attendance.fundingSource}</dd></div>
+                  {shape.attendance.enabled &&
+                    shape.attendance.fundingSource.enabled &&
+                    attendance?.fundingSource && (
+                    <div><dt>{fundingLabel}</dt><dd>{attendance.fundingSource}</dd></div>
                   )}
-                  {attendance?.decisionBy && (
-                    <div><dt>{t.review.decisionBy}</dt><dd>{attendance.decisionBy}</dd></div>
+                  {shape.attendance.enabled &&
+                    shape.attendance.decisionBy.enabled &&
+                    attendance?.decisionBy && (
+                    <div><dt>{decisionLabel}</dt><dd>{attendance.decisionBy}</dd></div>
                   )}
-                  {attendance && (
+                  {shape.attendance.enabled &&
+                    shape.attendance.needsVisa.enabled &&
+                    typeof attendance?.needsVisa === 'boolean' && (
                     <div>
-                      <dt>{t.review.visa}</dt>
+                      <dt>{visaLabel}</dt>
                       <dd>{attendance.needsVisa ? t.admin.formYes : t.admin.formNo}</dd>
                     </div>
                   )}

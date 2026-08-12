@@ -2729,6 +2729,60 @@ p {
   gap: var(--s-3);
 }
 
+/* The event-specific logistics module is one form within the form. Subtle
+   dividers keep its wording groups scannable without turning every label into
+   another heavy card. */
+.attendance-editor__body {
+  display: grid;
+  gap: var(--s-4);
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line);
+}
+
+.attendance-editor__copy,
+.attendance-editor__field,
+.attendance-editor__answers {
+  min-width: 0;
+}
+
+.attendance-editor__copy-label,
+.attendance-editor__field h4 {
+  margin: 0 0 var(--s-2);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.attendance-editor__copy .grid {
+  margin-bottom: 0;
+}
+
+.attendance-editor__field,
+.attendance-editor__answers {
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.attendance-editor__toggles,
+.attendance-editor__status-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-5);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.attendance-editor__toggles .checkbox,
+.attendance-editor__status-heading .checkbox {
+  margin-bottom: var(--s-2);
+}
+
+.attendance-editor__answers .optionlist__preview {
+  margin-bottom: var(--s-3);
+}
+
 /*
   The save, and whatever the save has to say, travelling with you down the page.
   It used to sit below every input on the page, which meant the error telling you
@@ -3236,6 +3290,29 @@ button.deck-queue__item:hover {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* Travel is per speaker. Keep each person's constraints together so a
+   multi-speaker proposal cannot read like one combined itinerary. */
+.review-travel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+.review-travel__person {
+  min-width: 0;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--g-blue);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.review-travel__person h4 {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .tag {

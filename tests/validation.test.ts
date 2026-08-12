@@ -64,10 +64,6 @@ const cases: Record<string, unknown> = {
     proposal: { ...valid.proposal, deliveryLanguage: 'en', languagePreference: 'French please' },
     attendance: { status: 'pending', needsVisa: false, decisionBy: '15 September' },
   },
-  fundingOnLocal: {
-    ...valid,
-    attendance: { status: 'local', needsVisa: false, fundingSource: 'employer' },
-  },
 };
 
 describe.each(Object.entries(cases))('%s', (_label, input) => {
