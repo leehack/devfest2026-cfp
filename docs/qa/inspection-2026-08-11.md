@@ -71,8 +71,9 @@ after the destructive suite.
 
 ## Verification follow-up findings
 
-The implementation audit found adjacent issues while verifying the original report. They are
-tracked separately so closing the original IDs does not erase that evidence.
+The implementation audit found adjacent issues while verifying the original report, and
+stabilising the suites afterwards found two more. They are tracked separately so closing the
+original IDs does not erase that evidence.
 
 | ID | Status | Finding and disposition | Verification evidence |
 |---|---|---|---|
@@ -86,6 +87,8 @@ tracked separately so closing the original IDs does not erase that evidence.
 | V8 | verified | The reviewer-safe projection retains only valid current organiser-defined submission answers, in form order and localized. | reviewer-projection unit tests; review backend/deck browser suites |
 | V9 | verified | Agenda-to-session, session-to-session and direct speaker placement navigation wait for the exact session label before moving focus. | schedule UX and schedule browser suites |
 | V10 | verified | Cross-layer authorization changes have an explicit Functions → app → rules/indexes deployment sequence, avoiding an old-client/new-rules compatibility gap. | package scripts and deployment documentation review |
+| V11 | verified | The schedule route is server-rendered but was imported lazily, so React had no chunk to hydrate with and replaced the published agenda with the Suspense fallback — a blink of "Loading…" over programme content the reader could already see. | schedule metadata browser suite; production build and bundle check |
+| V12 | open | `shareSchedulePreview` refuses with `schedule-cancellation-processing` while an asynchronous cancellation pass finishes. The copy asks the organiser to wait and share again, but no surface reports when the refusal clears; the flag it turns on is never read by the client. | refusal reproduced against the emulated stack; co-speaker lifecycle browser suite waits on that flag |
 
 
 Inspection baseline: commit `cc448d4`, then a clean worktree identical to `origin/main`. Ten inspectors swept the
@@ -1971,7 +1974,8 @@ assert nothing about their accessible names.
 
 ## Resolution outcome
 
-All 52 original findings and the ten verification follow-ups are implemented in the QA
-follow-up working tree and verified by the exact-tree gate recorded in the resolution ledger.
-The original finding narratives above remain as the inspection record; their current status is
-authoritatively tracked in that ledger.
+All 52 original findings and eleven of the twelve verification follow-ups are implemented in the
+QA follow-up working tree and verified by the exact-tree gate recorded in the resolution ledger.
+V12 is left open on purpose: the refusal is brief and its copy is actionable, so a signal for
+when it clears was judged not to be worth the surface. The original finding narratives above
+remain as the inspection record; their current status is authoritatively tracked in that ledger.
