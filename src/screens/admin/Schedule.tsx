@@ -31,6 +31,7 @@ import {
   scheduleEndTime,
   scheduleConflicts,
   scheduleRoomIdsInUse,
+  scheduleProposalEligible,
   snapScheduleDuration,
   suggestedDuration,
   resolvedScheduleLanguage,
@@ -278,9 +279,7 @@ export function Schedule({
       setWorkingConfig(next);
       setEntries(draft.entries);
       setSubmissionForm(nextSubmissionForm);
-      setProposals(
-        proposalRows.filter((proposal) => ['accepted', 'confirmed'].includes(proposal.status)),
-      );
+      setProposals(proposalRows);
       setSelectedDay((current) =>
         next.days.some((day) => day.date === current) ? current : next.days[0]?.date ?? '',
       );
@@ -327,7 +326,11 @@ export function Schedule({
     () => new Set(entries.flatMap((entry) => (entry.kind === 'proposal' ? [entry.proposalId] : []))),
     [entries],
   );
-  const unscheduled = proposals.filter(
+  const eligibleProposals = useMemo(
+    () => proposals.filter((proposal) => scheduleProposalEligible(proposal.status)),
+    [proposals],
+  );
+  const unscheduled = eligibleProposals.filter(
     (proposal) => {
       const searchText = [
         proposal.title,
@@ -350,7 +353,12 @@ export function Schedule({
   );
   const conflicts = scheduleConflicts(entries, speakerMap);
   const tentative = entries.filter(
-    (entry) => entry.kind === 'proposal' && byId.get(entry.proposalId)?.status !== 'confirmed',
+    (entry) => entry.kind === 'proposal' && byId.get(entry.proposalId)?.status === 'accepted',
+  );
+  const ineligible = entries.filter(
+    (entry) =>
+      entry.kind === 'proposal' &&
+      !scheduleProposalEligible(byId.get(entry.proposalId)?.status),
   );
   const shareableEntries = entries.filter(
     (entry) =>
@@ -699,6 +707,11 @@ export function Schedule({
             {tentative.length > 0 && (
               <p className="schedule-stage__note">{t.schedule.privateTentative(tentative.length)}</p>
             )}
+            {ineligible.length > 0 && (
+              <p className="schedule-stage__attention" role="status">
+                {t.schedule.privateIneligible(ineligible.length)}
+              </p>
+            )}
           </li>
 
           <li className={`schedule-stage schedule-stage--shared${sharedStale ? ' schedule-stage--stale' : ''}`}>
@@ -844,6 +857,11 @@ export function Schedule({
         <span className={tentative.length ? 'schedule-metric--warn' : ''}>
           {t.schedule.tentativeCount(tentative.length)}
         </span>
+        {ineligible.length > 0 && (
+          <span className="schedule-metric--danger">
+            {t.schedule.ineligibleCount(ineligible.length)}
+          </span>
+        )}
         <span className={conflicts.length ? 'schedule-metric--danger' : ''}>
           {t.schedule.conflictCount(conflicts.length)}
         </span>
@@ -1227,7 +1245,7 @@ export function Schedule({
         <PublishReview
           scheduled={shareableEntries.length}
           unscheduled={unscheduled.length}
-          tentative={tentative.length}
+          omitted={tentative.length + ineligible.length}
           conflicts={shareConflicts.length}
           callOpen={callOpen}
           busy={busy}
@@ -1240,7 +1258,7 @@ export function Schedule({
       {reviewingShare && config && (
         <ShareReview
           scheduled={shareableEntries.length}
-          tentative={tentative.length}
+          omitted={tentative.length + ineligible.length}
           conflicts={shareConflicts.length}
           busy={busy}
           error={error}
@@ -1359,7 +1377,7 @@ function TimeGrid({
         category: '',
         categoryLabel: t.proposal.category,
         language: t.schedule.languageNeeded,
-        status: '',
+        status: t.schedule.placementIneligible,
         format: '',
         level: '',
       };
@@ -1370,7 +1388,12 @@ function TimeGrid({
       category: optionLabel(submissionForm?.category, proposal.category, locale),
       categoryLabel: t.proposal.category,
       language: language ? t.schedule.languageNames[language] : t.schedule.languageNeeded,
-      status: proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative,
+      status:
+        proposal.status === 'confirmed'
+          ? t.schedule.confirmed
+          : proposal.status === 'accepted'
+            ? t.schedule.tentative
+            : t.enums.status[proposal.status],
       format: optionLabel(submissionForm?.format, proposal.format, locale),
       level: optionLabel(submissionForm?.level, proposal.level, locale),
     };
@@ -1469,7 +1492,15 @@ function TimeGrid({
     );
   }
 
+  function placementEligible(entry: ScheduleEntry): boolean {
+    return (
+      entry.kind === 'custom' ||
+      scheduleProposalEligible(proposals.get(entry.proposalId)?.status)
+    );
+  }
+
   async function commitResize(entry: ScheduleEntry, durationMinutes: number) {
+    if (!placementEligible(entry)) return false;
     if (durationMinutes === entry.durationMinutes) return;
     const candidate = { ...entry, durationMinutes };
     const range = `${candidate.startsAt}–${scheduleEndTime(candidate)}`;
@@ -1511,7 +1542,7 @@ function TimeGrid({
     entry: ScheduleEntry,
     axis: ResizeGesture['axis'],
   ) {
-    if (busy || !interactive) return;
+    if (busy || !interactive || !placementEligible(entry)) return;
     event.preventDefault();
     event.stopPropagation();
     if (axis === 'horizontal') event.currentTarget.focus({ preventScroll: true });
@@ -1595,6 +1626,10 @@ function TimeGrid({
       event.key === 'Home' ||
       event.key === 'End';
     if (!resizeKey) return;
+    if (!placementEligible(entry)) {
+      event.preventDefault();
+      return;
+    }
     if (busy || !interactive) {
       event.preventDefault();
       return;
@@ -1637,6 +1672,7 @@ function TimeGrid({
     ? scheduleDurationBounds(selectedEntry.date, selectedEntry.startsAt, config)
     : null;
   const selectedFacts = selectedEntry ? factsFor(selectedEntry) : null;
+  const selectedEligible = selectedEntry ? placementEligible(selectedEntry) : true;
 
   function selectEntry(entryId: string, reveal = false) {
     setSelectedEntryId(entryId);
@@ -1696,7 +1732,7 @@ function TimeGrid({
               type="button"
               role="slider"
               className="schedule-resize-inspector__slider"
-              aria-disabled={busy || !interactive}
+              aria-disabled={busy || !interactive || !selectedEligible}
               aria-label={t.schedule.resizeLabel(selectedTitle)}
               aria-orientation="horizontal"
               aria-valuemin={selectedBounds.min}
@@ -1739,6 +1775,20 @@ function TimeGrid({
               )}
             </div>
           </div>
+          {!selectedEligible && selectedEntry.kind === 'proposal' && (
+            <div className="schedule-placement-warning" role="status">
+              <div>
+                <strong>{t.schedule.placementIneligibleTitle}</strong>
+                <span>{t.schedule.placementIneligibleHelp}</span>
+              </div>
+              <Link
+                className="btn btn--ghost btn--compact"
+                to={href({ route: 'admin', cfpId, tab: 'proposals' })}
+              >
+                {t.schedule.openProposals}
+              </Link>
+            </div>
+          )}
           {selectedFacts && (
             <dl className="schedule-resize-inspector__facts" aria-label={t.schedule.sessionFacts}>
               {selectedFacts.speaker && (
@@ -1860,6 +1910,7 @@ function TimeGrid({
                   : entry.durationMinutes;
                 const height = displayDuration * PIXELS_PER_MINUTE;
                 const proposal = entry.kind === 'proposal' ? proposals.get(entry.proposalId) : undefined;
+                const eligible = placementEligible(entry);
                 const title = entryTitle(entry, proposals, locale);
                 const range = `${entry.startsAt}–${scheduleEndTime({ ...entry, durationMinutes: displayDuration })}`;
                 const facts = factsFor(entry);
@@ -1869,18 +1920,22 @@ function TimeGrid({
                   <div
                     id={`schedule-grid-entry-${entry.id}`}
                     key={entry.id}
-                    className={`schedule-card schedule-card--${entry.kind}${selectedEntry?.id === entry.id ? ' schedule-card--selected' : ''}${displayDuration < 15 ? ' schedule-card--micro' : displayDuration <= 20 ? ' schedule-card--compact' : ''}${displayDuration <= 45 ? ' schedule-card--condensed' : ''}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}${dragging?.kind === 'entry' && dragging.entryId === entry.id ? ' schedule-card--dragging' : ''}${resizing?.entryId === entry.id ? ' schedule-card--resizing' : ''}`}
+                    className={`schedule-card schedule-card--${entry.kind}${selectedEntry?.id === entry.id ? ' schedule-card--selected' : ''}${displayDuration < 15 ? ' schedule-card--micro' : displayDuration <= 20 ? ' schedule-card--compact' : ''}${displayDuration <= 45 ? ' schedule-card--condensed' : ''}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}${!eligible ? ' schedule-card--ineligible' : ''}${dragging?.kind === 'entry' && dragging.entryId === entry.id ? ' schedule-card--dragging' : ''}${resizing?.entryId === entry.id ? ' schedule-card--resizing' : ''}`}
                     style={{ top, height }}
                   >
                     <button
                       type="button"
                       className="schedule-card__body"
-                      draggable={!busy && interactive}
+                      draggable={!busy && interactive && eligible}
                       disabled={busy || !interactive}
                       aria-label={`${moveLabel}: ${title}, ${range}`}
                       aria-describedby={factsId}
                       title={`${title} · ${range} · ${description}`}
                       onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+                        if (!eligible) {
+                          event.preventDefault();
+                          return;
+                        }
                         setSelectedEntryId(entry.id);
                         onDrag({ kind: 'entry', entryId: entry.id });
                         event.dataTransfer.effectAllowed = 'move';
@@ -1902,7 +1957,7 @@ function TimeGrid({
                       </span>
                       <span id={factsId} className="visually-hidden">{description}</span>
                     </button>
-                    {interactive && !busy && displayDuration >= SLOT_MINUTES && (
+                    {interactive && !busy && eligible && displayDuration >= SLOT_MINUTES && (
                       <span
                         className="schedule-card__resize-direct"
                         aria-hidden="true"
@@ -1956,6 +2011,8 @@ function EntryEditor({
   const proposalLanguage = proposal && entry.kind === 'proposal'
     ? scheduledProposalLanguage(proposal, entry)
     : null;
+  const placementLocked =
+    entry.kind === 'proposal' && !scheduleProposalEligible(proposal?.status);
   const dialogRef = useModalFocus(() => {
     if (!busy && !photoBusy) onCancel();
   });
@@ -2047,7 +2104,13 @@ function EntryEditor({
                     ? t.schedule.languageNames[proposalLanguage]
                     : t.schedule.languageNeeded}
                 </span>
-                <span>{proposal.status === 'confirmed' ? t.schedule.confirmed : t.schedule.tentative}</span>
+                <span>
+                  {proposal.status === 'confirmed'
+                    ? t.schedule.confirmed
+                    : proposal.status === 'accepted'
+                      ? t.schedule.tentative
+                      : t.enums.status[proposal.status]}
+                </span>
               </div>
             )}
           </div>
@@ -2061,6 +2124,20 @@ function EntryEditor({
             {t.schedule.cancelEdit}
           </button>
         </div>
+        {placementLocked && (
+          <div className="schedule-placement-warning" role="status">
+            <div>
+              <strong>{t.schedule.placementIneligibleTitle}</strong>
+              <span>{t.schedule.placementIneligibleHelp}</span>
+            </div>
+            <Link
+              className="btn btn--ghost btn--compact"
+              to={href({ route: 'admin', cfpId, tab: 'proposals' })}
+            >
+              {t.schedule.openProposals}
+            </Link>
+          </div>
+        )}
         <div className="grid grid--2">
           <SelectField
             label={t.schedule.date}
@@ -2070,7 +2147,7 @@ function EntryEditor({
               label: formatCalendarDay(calendarDate(day.date)!, locale),
             }))}
             onChange={(date) => onChange({ ...entry, date })}
-            disabled={busy}
+            disabled={busy || placementLocked}
             required
           />
           <SelectField
@@ -2078,7 +2155,7 @@ function EntryEditor({
             value={entry.roomId}
             options={config.rooms.map((room) => ({ value: room.id, label: roomName(room, locale) }))}
             onChange={(roomId) => onChange({ ...entry, roomId })}
-            disabled={busy}
+            disabled={busy || placementLocked}
             required
           />
           <TextField
@@ -2087,7 +2164,7 @@ function EntryEditor({
             value={entry.startsAt}
             onChange={(startsAt) => onChange({ ...entry, startsAt })}
             placeholder="09:00"
-            disabled={busy}
+            disabled={busy || placementLocked}
             required
           />
           <div className="field">
@@ -2104,7 +2181,7 @@ function EntryEditor({
               step={SCHEDULE_LIMITS.durationStep}
               value={entry.durationMinutes}
               onChange={(event) => onChange({ ...entry, durationMinutes: Number(event.target.value) })}
-              disabled={busy}
+              disabled={busy || placementLocked}
               required
               aria-required="true"
             />
@@ -2119,7 +2196,7 @@ function EntryEditor({
               { value: 'fr', label: t.enums.deliveryLanguage.fr },
             ]}
             onChange={(assignedLanguage) => onChange({ ...entry, assignedLanguage })}
-            disabled={busy}
+            disabled={busy || placementLocked}
             required
           />
         )}
@@ -2304,7 +2381,7 @@ function EntryEditor({
           </button>
           <span className="schedule-dialog__actions-spacer" />
           <button type="button" className="btn" disabled={busy || photoBusy} onClick={onCancel}>{t.schedule.cancelEdit}</button>
-          <button type="button" className="btn btn--primary" disabled={busy || photoBusy || !customSpeakerNamesReady} onClick={onSave}>{t.schedule.saveItem}</button>
+          <button type="button" className="btn btn--primary" disabled={busy || photoBusy || placementLocked || !customSpeakerNamesReady} onClick={onSave}>{t.schedule.saveItem}</button>
         </div>
       </section>
     </div>
@@ -2314,7 +2391,7 @@ function EntryEditor({
 function PublishReview({
   scheduled,
   unscheduled,
-  tentative,
+  omitted,
   conflicts,
   callOpen,
   busy,
@@ -2324,7 +2401,7 @@ function PublishReview({
 }: {
   scheduled: number;
   unscheduled: number;
-  tentative: number;
+  omitted: number;
   conflicts: number;
   callOpen: boolean;
   busy: boolean;
@@ -2364,7 +2441,7 @@ function PublishReview({
         <div className="schedule-metrics" aria-label={t.schedule.metrics}>
           <strong>{t.schedule.scheduledCount(scheduled)}</strong>
           <span>{t.schedule.unassignedCount(unscheduled)}</span>
-          <span>{t.schedule.tentativeCount(tentative)}</span>
+          <span>{t.schedule.omittedCount(omitted)}</span>
           <span>{t.schedule.conflictCount(conflicts)}</span>
         </div>
         {error && <Result ok="" error={error} />}
@@ -2383,7 +2460,7 @@ function PublishReview({
 
 function ShareReview({
   scheduled,
-  tentative,
+  omitted,
   conflicts,
   busy,
   error,
@@ -2391,7 +2468,7 @@ function ShareReview({
   onShare,
 }: {
   scheduled: number;
-  tentative: number;
+  omitted: number;
   conflicts: number;
   busy: boolean;
   error: string;
@@ -2431,7 +2508,7 @@ function ShareReview({
         </ul>
         <div className="schedule-metrics" aria-label={t.schedule.metrics}>
           <strong>{t.schedule.sharedCount(scheduled)}</strong>
-          <span>{t.schedule.omittedCount(tentative)}</span>
+          <span>{t.schedule.omittedCount(omitted)}</span>
           <span>{t.schedule.conflictCount(conflicts)}</span>
         </div>
         {error && <Result ok="" error={error} />}

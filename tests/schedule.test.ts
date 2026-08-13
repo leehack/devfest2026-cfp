@@ -7,6 +7,7 @@ import {
   resolvedScheduleLanguage,
   scheduleDurationBounds,
   scheduleEndTime,
+  scheduleProposalEligible,
   scheduleConflicts,
   scheduleRoomIdsInUse,
   scheduleTaxonomyLabel,
@@ -44,6 +45,14 @@ const entry = (id: string, roomId: string, startsAt: string, proposalId = id): S
 });
 
 describe('schedule validation', () => {
+  it('separates schedule eligibility from the rest of the proposal lifecycle', () => {
+    expect(scheduleProposalEligible('accepted')).toBe(true);
+    expect(scheduleProposalEligible('confirmed')).toBe(true);
+    expect(scheduleProposalEligible('under_review')).toBe(false);
+    expect(scheduleProposalEligible('withdrawn')).toBe(false);
+    expect(scheduleProposalEligible(undefined)).toBe(false);
+  });
+
   it('accepts a multi-room event in an IANA timezone', () => {
     expect(validateScheduleConfig(config)).toBeNull();
     expect(validateScheduleEntry(entry('talk-one', 'blue', '09:00'), config)).toBeNull();
