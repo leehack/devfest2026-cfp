@@ -1123,7 +1123,7 @@ export const fr: Dictionary = {
     emailSourceLabel: 'Source de la configuration courriel',
     emailSourcePlatform: 'Utiliser les réglages de la plateforme',
     emailSourcePlatformHelp:
-      'Utilise le domaine et l’expéditeur de la plateforme. Cet événement garde ses propres textes et peut définir sa propre adresse de réponse.',
+      'Utilise le domaine de la plateforme. Cet événement garde ses propres textes et peut définir son propre nom d’expéditeur et sa propre adresse de réponse.',
     emailSourceEvent: 'Utiliser un réglage propre à l’événement',
     emailSourceEventHelp:
       'Activez-le seulement après la vérification du domaine et la configuration de son expéditeur.',
@@ -1136,6 +1136,15 @@ export const fr: Dictionary = {
     emailEffectiveFrom: 'Expéditeur',
     emailEffectiveReplyTo: 'Réponse à',
     emailNoReplyTo: 'Valeur par défaut du service',
+    emailPlatformSenderTitle: 'Expéditeur de l’événement sur le domaine de la plateforme',
+    emailPlatformSenderHelp:
+      'Donnez à cet événement son propre nom d’expéditeur sans lui permettre d’utiliser une autre adresse du domaine partagé. Laissez le champ vide pour hériter du nom de la plateforme.',
+    emailPlatformSenderLabel: 'Nom de l’expéditeur (facultatif)',
+    emailPlatformSenderAddressHelp: 'L’adresse gérée par la plateforme reste {address}.',
+    emailPlatformSenderInvalid: 'Utilisez un nom d’expéditeur de 100 caractères ou moins.',
+    emailSavePlatformSender: 'Enregistrer le nom',
+    emailPlatformSenderSaved: 'Nom d’expéditeur de l’événement enregistré.',
+    emailPlatformSenderInherited: 'Cet événement hérite maintenant du nom d’expéditeur de la plateforme.',
     emailPlatformReplyToTitle: 'Adresse de réponse de l’événement',
     emailPlatformReplyToHelp:
       'Choisissez si les réponses héritent de l’adresse de la plateforme ou utilisent une adresse propre à l’événement. Une adresse personnalisée vide envoie délibérément sans Répondre à.',

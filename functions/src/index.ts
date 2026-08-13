@@ -52,6 +52,7 @@ import {
 import {
   emailDeliveryReadiness,
   senderMismatch,
+  validSenderDisplayName,
   validateSettings,
   type EmailDeliveryReadiness,
   type EmailSettings,
@@ -5745,9 +5746,19 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   if (data.replyToOnly !== undefined && data.replyToOnly !== true) {
     throw new HttpsError('invalid-argument', 'replyToOnly must be true when provided.');
   }
+  if (data.platformSenderNameOnly !== undefined && data.platformSenderNameOnly !== true) {
+    throw new HttpsError(
+      'invalid-argument',
+      'platformSenderNameOnly must be true when provided.',
+    );
+  }
   const replyToOnly = data.replyToOnly === true;
+  const platformSenderNameOnly = data.platformSenderNameOnly === true;
+  if (replyToOnly && platformSenderNameOnly) {
+    throw new HttpsError('invalid-argument', 'Change one email setting at a time.');
+  }
   if (
-    (replyToOnly || data.senderMode !== undefined) &&
+    (replyToOnly || platformSenderNameOnly || data.senderMode !== undefined) &&
     data.senderMode !== 'platform' &&
     data.senderMode !== 'event'
   ) {
@@ -5755,8 +5766,16 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   }
   const senderMode: EmailSource = data.senderMode === 'platform' ? 'platform' : 'event';
   const from = typeof data.from === 'string' ? data.from.trim() : '';
+  const senderName = typeof data.senderName === 'string' ? data.senderName.trim() : '';
   const replyTo = typeof data.replyTo === 'string' ? data.replyTo.trim() : null;
-  if (replyToOnly && replyTo) {
+  if (platformSenderNameOnly) {
+    if (senderMode !== 'platform') {
+      throw new HttpsError('invalid-argument', 'A platform sender name needs platform mode.');
+    }
+    if (!validSenderDisplayName(senderName)) {
+      throw new HttpsError('invalid-argument', 'The sender name is invalid or too long.');
+    }
+  } else if (replyToOnly && replyTo) {
     const problem = validateSettings({ from: 'sender@example.org', replyTo, publicUrl: '' });
     if (problem) {
       throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
@@ -5777,6 +5796,57 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
   const currentConfig = await configRef.get();
   const currentData = currentConfig.data() ?? {};
+  if (platformSenderNameOnly) {
+    const platformRef = db.doc('config/platformEmail');
+    await db.runTransaction(async (tx) => {
+      const [cfp, config, member, platform] = await tx.getAll(
+        db.doc(`cfps/${cfpId}`),
+        configRef,
+        memberRef,
+        platformRef,
+      );
+      assertMutationActor(member, 'admin');
+      if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+      }
+      if (inferredEventEmailMode(config.data() ?? {}) !== 'platform') {
+        throw new HttpsError(
+          'aborted',
+          'The email delivery source changed. Reload before saving the sender.',
+        );
+      }
+      const platformDomainId = String(platform.get('domainId') ?? '');
+      const platformDomain = String(platform.get('domain') ?? '').toLowerCase();
+      if (!platformDomainId || !platformDomain) {
+        throw new HttpsError('failed-precondition', 'Set up the platform sending domain first.');
+      }
+      const binding = await tx.get(emailDomainBindingRef(db, platformDomainId));
+      if (
+        !platformEmailDomainBindingMatches(
+          binding.data(),
+          platformDomainId,
+          platformDomain,
+        )
+      ) {
+        throw new HttpsError(
+          'failed-precondition',
+          'The platform sending domain is not assigned correctly.',
+        );
+      }
+      tx.set(
+        configRef,
+        { platformSenderName: senderName ? senderName : FieldValue.delete() },
+        { merge: true },
+      );
+    });
+    const resolved = await resolveEmailConfiguration(db, cfpId);
+    logger.info('event platform sender name changed', {
+      byUid,
+      cfpId,
+      inherited: !senderName,
+    });
+    return { ok: true, settings: resolved.settings, source: resolved.source };
+  }
   if (replyToOnly) {
     await db.runTransaction(async (tx) => {
       const [cfp, config, member] = await tx.getAll(

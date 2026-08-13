@@ -33,7 +33,9 @@ import { EmailPreview } from '../../components/EmailPreview';
 import { LIMITS } from '@shared/enums';
 import {
   EMPTY_SETTINGS,
+  parseSender,
   senderMismatch,
+  validSenderDisplayName,
   validateSettings,
   type EmailSettings,
 } from '@shared/emailSettings';
@@ -75,6 +77,7 @@ export function Email({
   const [senderMode, setSenderMode] = useState<'platform' | 'event'>('platform');
   const [eventSettings, setEventSettings] = useState({
     from: '',
+    platformSenderName: '',
     replyTo: null as string | null,
     domainId: '',
     domain: '',
@@ -96,6 +99,8 @@ export function Email({
   const [senderError, setSenderError] = useState('');
   const [replyNote, setReplyNote] = useState('');
   const [replyError, setReplyError] = useState('');
+  const [platformSenderNote, setPlatformSenderNote] = useState('');
+  const [platformSenderError, setPlatformSenderError] = useState('');
   const [ready, setReady] = useState(false);
   const [setupDirty, setSetupDirty] = useState(false);
   const [wordingDirty, setWordingDirty] = useState(false);
@@ -109,8 +114,11 @@ export function Email({
   const activeCfp = useRef(cfpId);
   activeCfp.current = cfpId;
   const eventFromDirty = eventSettings.from !== storedEventSettings.from;
+  const platformSenderNameDirty =
+    eventSettings.platformSenderName !== storedEventSettings.platformSenderName;
   const eventReplyToDirty = eventSettings.replyTo !== storedEventSettings.replyTo;
-  const senderDirty = eventFromDirty || eventReplyToDirty;
+  const eventSettingsDirty = eventFromDirty || eventReplyToDirty;
+  const senderDirty = eventSettingsDirty || platformSenderNameDirty;
   const dirty = !readOnly && (senderDirty || setupDirty || wordingDirty || messageDirty);
   const keyConfigured = Boolean(
     delivery &&
@@ -265,8 +273,20 @@ export function Email({
     setSettings(EMPTY_SETTINGS);
     setSource('platform');
     setSenderMode('platform');
-    setEventSettings({ from: '', replyTo: null, domainId: '', domain: '' });
-    setStoredEventSettings({ from: '', replyTo: null, domainId: '', domain: '' });
+    setEventSettings({
+      from: '',
+      platformSenderName: '',
+      replyTo: null,
+      domainId: '',
+      domain: '',
+    });
+    setStoredEventSettings({
+      from: '',
+      platformSenderName: '',
+      replyTo: null,
+      domainId: '',
+      domain: '',
+    });
     setKeyHint('');
     setDomainId('');
     setDomain('');
@@ -282,6 +302,8 @@ export function Email({
     setSenderError('');
     setReplyNote('');
     setReplyError('');
+    setPlatformSenderNote('');
+    setPlatformSenderError('');
     setSetupDirty(false);
     setWordingDirty(false);
     setMessageDirty(false);
@@ -322,6 +344,9 @@ export function Email({
   // Warned about as you type, not on save: this one only shows up at send time
   // otherwise, by which point the message is a `failed` row.
   const eventMismatch = senderMismatch(eventSettings.from, eventSettings.domain);
+  const parsedEffectiveSender = parseSender(settings.from);
+  const effectivePlatformAddress =
+    'address' in parsedEffectiveSender ? parsedEffectiveSender.address : '—';
 
   const waiting = held.length + heldRemaining;
   const unsent = retryable.length + retryableRemaining;
@@ -488,7 +513,7 @@ export function Email({
         replyTo: eventSettings.replyTo,
       });
       if (activeCfp.current !== scope) return;
-      editing.current = eventFromDirty;
+      editing.current = eventFromDirty || platformSenderNameDirty;
       setStoredEventSettings((current) => ({
         ...current,
         replyTo: eventSettings.replyTo,
@@ -497,6 +522,39 @@ export function Email({
       await run('preview');
     } catch (caught) {
       if (activeCfp.current === scope) setReplyError(emailError(caught, t));
+    } finally {
+      if (activeCfp.current === scope) setBusy(false);
+    }
+  }
+
+  async function savePlatformSender() {
+    if (readOnly || source !== 'platform') return;
+    const scope = cfpId;
+    const senderName = eventSettings.platformSenderName.trim();
+    setPlatformSenderNote('');
+    setPlatformSenderError('');
+    if (!validSenderDisplayName(senderName)) {
+      setPlatformSenderError(t.admin.emailPlatformSenderInvalid);
+      return;
+    }
+    setBusy(true);
+    try {
+      await setEmailSettings({
+        cfpId,
+        senderMode: 'platform',
+        platformSenderNameOnly: true,
+        senderName,
+      });
+      if (activeCfp.current !== scope) return;
+      editing.current = eventSettingsDirty;
+      setStoredEventSettings((current) => ({ ...current, platformSenderName: senderName }));
+      setEventSettings((current) => ({ ...current, platformSenderName: senderName }));
+      setPlatformSenderNote(
+        senderName ? t.admin.emailPlatformSenderSaved : t.admin.emailPlatformSenderInherited,
+      );
+      await run('preview');
+    } catch (caught) {
+      if (activeCfp.current === scope) setPlatformSenderError(emailError(caught, t));
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }
@@ -612,7 +670,7 @@ export function Email({
               <p>{t.admin.emailSourceEventHelp}</p>
             </div>
             {source !== 'event' &&
-              (eventOverrideReady && !senderDirty ? (
+              (eventOverrideReady && !eventSettingsDirty ? (
                 <button
                   type="button"
                   className="btn"
@@ -649,6 +707,39 @@ export function Email({
             </div>
           </dl>
         </section>
+
+        {source === 'platform' && (
+          <div className="email-source__reply-to">
+            <h3>{t.admin.emailPlatformSenderTitle}</h3>
+            <p className="section__help">{t.admin.emailPlatformSenderHelp}</p>
+            <div className="grid grid--2">
+              <TextField
+                label={t.admin.emailPlatformSenderLabel}
+                value={eventSettings.platformSenderName}
+                onChange={(platformSenderName) => {
+                  editing.current = true;
+                  setEventSettings((current) => ({ ...current, platformSenderName }));
+                }}
+                disabled={busy || readOnly}
+              />
+            </div>
+            <p className="field__help">
+              {t.admin.emailPlatformSenderAddressHelp.replace(
+                '{address}',
+                effectivePlatformAddress,
+              )}
+            </p>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || readOnly || !platformSenderNameDirty}
+              onClick={() => void savePlatformSender()}
+            >
+              {t.admin.emailSavePlatformSender}
+            </button>
+            <Result ok={platformSenderNote} error={platformSenderError} />
+          </div>
+        )}
 
         <div className="email-source__reply-to">
           <h3>{t.admin.emailPlatformReplyToTitle}</h3>
@@ -948,7 +1039,7 @@ export function Email({
           <button
             type="button"
             className="btn"
-            disabled={busy || readOnly || !senderDirty}
+            disabled={busy || readOnly || !eventSettingsDirty}
             onClick={() => void saveEventSettings(senderMode)}
           >
             {t.admin.emailSaveSender}
@@ -957,7 +1048,7 @@ export function Email({
             <button
               type="button"
               className="btn btn--primary"
-              disabled={busy || readOnly || !eventOverrideReady || senderDirty}
+              disabled={busy || readOnly || !eventOverrideReady || eventSettingsDirty}
               onClick={() => void saveEventSettings('event')}
             >
               {t.admin.emailActivateEventOverride}

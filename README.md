@@ -551,7 +551,9 @@ silent — the pipeline queued perfectly and sent nothing, and no screen said wh
    generated per domain and exist only in Resend's dashboard. This is the long
    pole — DNS propagation plus Resend's own check. The platform binding is not
    an event binding, even when both use the same Resend account.
-3. **Default sender and reply-to.** New and unconfigured CFPs inherit these.
+3. **Default sender and reply-to.** New and unconfigured CFPs inherit these. An
+   event may give that sender an event-specific display name; the platform-owned
+   address does not change.
    An event administrator may stage a separate domain and sender from `/admin`
    without interrupting the inherited setup. Explicitly activating that event
    override makes it exclusive: an incomplete or stale override does not silently

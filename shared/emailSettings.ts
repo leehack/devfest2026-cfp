@@ -33,6 +33,13 @@ const ADDRESS = /^[^\s@<>",]+@[^\s@<>",.]+(\.[^\s@<>",.]+)+$/;
 
 export type SenderProblem = 'empty' | 'format' | 'brackets';
 
+/** Safe to place before a platform-owned address in `Name <address>` form. */
+export function validSenderDisplayName(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const name = value.trim();
+  return name.length <= 100 && !/[<>\p{Cc}]/u.test(name);
+}
+
 /** The bare address inside a sender string, or a reason it is unusable. */
 export function parseSender(value: string): { address: string } | { problem: SenderProblem } {
   const trimmed = value.trim();

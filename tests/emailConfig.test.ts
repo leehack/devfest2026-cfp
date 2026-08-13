@@ -6,8 +6,10 @@ import {
   emailConfigurationFingerprint,
   emailTemplatesFingerprintInput,
   inferredEventEmailMode,
+  resolvedPlatformSender,
   resolveReplyTo,
 } from '../functions/src/emailConfig';
+import { validSenderDisplayName } from '../shared/emailSettings';
 import {
   builtInTemplate,
   EMAIL_KINDS,
@@ -47,6 +49,47 @@ describe('platform email inheritance', () => {
     expect(boundEmailSender('not an address', 'platform.example')).toBe('');
   });
 
+  it('allows an event sender name while keeping the bound platform address', () => {
+    expect(
+      resolvedPlatformSender(
+        'Platform <mail@platform.example>',
+        '',
+        'platform.example',
+        true,
+      ),
+    ).toBe('Platform <mail@platform.example>');
+    expect(
+      resolvedPlatformSender(
+        'Platform <mail@other.example>',
+        'DevFest Montréal',
+        'platform.example',
+        true,
+      ),
+    ).toBe('');
+    expect(
+      resolvedPlatformSender(
+        'Platform <mail@platform.example>',
+        'DevFest Montréal',
+        'platform.example',
+        true,
+      ),
+    ).toBe('DevFest Montréal <mail@platform.example>');
+    expect(
+      resolvedPlatformSender(
+        'Platform <mail@platform.example>',
+        'DevFest Montréal',
+        'platform.example',
+        false,
+      ),
+    ).toBe('');
+
+    expect(validSenderDisplayName('DevFest Montréal')).toBe(true);
+    expect(validSenderDisplayName('')).toBe(true);
+    expect(validSenderDisplayName('<DevFest>')).toBe(false);
+    expect(validSenderDisplayName('DevFest\tMontréal')).toBe(false);
+    expect(validSenderDisplayName('x'.repeat(101))).toBe(false);
+  });
+
   it('inherits an absent reply-to and preserves an explicit empty override', () => {
     expect(resolveReplyTo({}, 'platform@example.org')).toBe('platform@example.org');
     expect(resolveReplyTo({ replyTo: null }, 'platform@example.org')).toBe('platform@example.org');
@@ -62,7 +105,7 @@ describe('platform email inheritance', () => {
       domain: 'example.org',
       templates: {},
       templateOverrides: {},
-      eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
+      eventSettings: { from: '', platformSenderName: '', replyTo: null, domainId: '', domain: '' },
       platformData: {},
       eventData: {},
       platformBound: true,
@@ -112,7 +155,7 @@ describe('platform email inheritance', () => {
       domain: 'example.org',
       templates: {},
       templateOverrides: {},
-      eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
+      eventSettings: { from: '', platformSenderName: '', replyTo: null, domainId: '', domain: '' },
       platformData: {},
       eventData: {},
       platformBound: true,
@@ -144,7 +187,7 @@ describe('platform email inheritance', () => {
       domain: '',
       templates: {},
       templateOverrides: {},
-      eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
+      eventSettings: { from: '', platformSenderName: '', replyTo: null, domainId: '', domain: '' },
       platformData: {},
       eventData: {},
       platformBound: false,
