@@ -15,6 +15,7 @@ import {
   seedSpeaker,
   seedSpeakerConfirmation,
   setEmailDeliveryReadyDirect,
+  setPlatformEmailDeliveryReadyDirect,
   setScheduleNeedsAttentionDirect,
 } from './backend';
 
@@ -135,6 +136,7 @@ test.describe('explicit event speaker profile copies', () => {
   });
 
   test('previews safe diffs and tracks idempotent request, completion, cancellation and re-request generations', async () => {
+    await setPlatformEmailDeliveryReadyDirect();
     const [speaker, admin, outsider] = await Promise.all(
       [SPEAKER, ADMIN, OUTSIDER].map(createAccount),
     );
