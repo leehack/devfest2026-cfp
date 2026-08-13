@@ -1501,7 +1501,7 @@ test('sharing and publishing have separate review steps and stale-version guidan
   await publish.click();
   const publishDialog = page.getByRole('dialog', { name: 'Publish this programme?' });
   await expect(publishDialog).toContainText('1 scheduled');
-  await expect(publishDialog).toContainText('0 tentative');
+  await expect(publishDialog).toContainText('0 private placements omitted');
   await expect(publishDialog).toContainText('0 conflicts');
   await expect(publishDialog).toContainText('Proposals are still open');
   await expect(publishDialog).toContainText('Confirm that this timing is intentional.');
