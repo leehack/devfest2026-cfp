@@ -1228,7 +1228,7 @@ test.describe('email pipeline', () => {
     });
 
     expect(
-      await callJson(chair.idToken, 'setEmailSettings', {
+      await callAs(chair.idToken, 'setEmailSettings', {
         senderMode: 'platform',
         platformSenderNameOnly: true,
         senderName: '<Wrong>',
