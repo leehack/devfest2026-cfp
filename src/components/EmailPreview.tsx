@@ -41,15 +41,34 @@ export function EmailPreview({
   cfpName,
   configured,
   templates,
+  ownedTemplates,
   readOnly = false,
+  actions,
   onSaved,
   onDirtyChange,
 }: {
   cfpId: string;
   cfpName: string;
   configured: boolean;
+  /** Effective wording used to render the preview. */
   templates: TemplateOverrides;
+  /** Wording owned by this editor, so inherited copy is not presented as a local override. */
+  ownedTemplates?: TemplateOverrides;
   readOnly?: boolean;
+  actions?: {
+    save: (input: {
+      kind: EmailKind;
+      locale: EmailLocale;
+      subject: string;
+      body: string;
+    }) => Promise<void>;
+    reset: (input: { kind: EmailKind; locale: EmailLocale }) => Promise<void>;
+    test: (input: {
+      kind: EmailKind;
+      locale: EmailLocale;
+      needsVisa: boolean;
+    }) => Promise<{ status: string; to: string }>;
+  };
   onSaved: () => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
@@ -68,6 +87,7 @@ export function EmailPreview({
   const [error, setError] = useState('');
   const selection = `${kind}:${previewLocale}`;
   const previousSelection = useRef(selection);
+  const replaceDraftOnRefresh = useRef(false);
   const localeTouched = useRef(false);
   const dirty =
     !readOnly && (draft.subject !== baseline.subject || draft.body !== baseline.body);
@@ -79,8 +99,9 @@ export function EmailPreview({
   useEffect(() => {
     const changed = previousSelection.current !== selection;
     const next = activeTemplate(kind, previewLocale, templates);
-    if (changed || !dirty) setDraft(next);
+    if (changed || !dirty || replaceDraftOnRefresh.current) setDraft(next);
     setBaseline(next);
+    replaceDraftOnRefresh.current = false;
     previousSelection.current = selection;
     if (changed) {
       setNote('');
@@ -115,7 +136,7 @@ export function EmailPreview({
     work();
   }
 
-  const custom = Boolean(templates?.[kind]?.[previewLocale]);
+  const custom = Boolean((ownedTemplates ?? templates)?.[kind]?.[previewLocale]);
   const problem = validateTemplate(draft);
   const staffImmediate = STAFF_EMAIL_KINDS.includes(kind);
   const heldSpeaker = [...DECISION_KINDS, ...SCHEDULE_EMAIL_KINDS].includes(kind);
@@ -285,7 +306,11 @@ export function EmailPreview({
               disabled={busy || readOnly || Boolean(problem)}
               onClick={() =>
                 run(async () => {
-                  await setEmailTemplate({ cfpId, kind, locale: previewLocale, ...draft });
+                  if (actions) {
+                    await actions.save({ kind, locale: previewLocale, ...draft });
+                  } else {
+                    await setEmailTemplate({ cfpId, kind, locale: previewLocale, ...draft });
+                  }
                   setBaseline(draft);
                   await onSaved();
                   return t.admin.emailTemplateSaved;
@@ -300,10 +325,15 @@ export function EmailPreview({
               disabled={busy || readOnly || !custom}
               onClick={() =>
                 run(async () => {
-                  await setEmailTemplate({ cfpId, kind, locale: previewLocale, reset: true });
-                  const restored = builtInTemplate(kind, previewLocale);
-                  setDraft(restored);
-                  setBaseline(restored);
+                  if (actions) {
+                    await actions.reset({ kind, locale: previewLocale });
+                  } else {
+                    await setEmailTemplate({ cfpId, kind, locale: previewLocale, reset: true });
+                  }
+                  // A reset deliberately discards the local draft. The normal
+                  // refresh path preserves dirty text, so opt this refresh into
+                  // replacing it with the newly revealed inherited/built-in copy.
+                  replaceDraftOnRefresh.current = true;
                   await onSaved();
                   return t.admin.emailTemplateReset;
                 })
@@ -339,7 +369,9 @@ export function EmailPreview({
         }
         onClick={() =>
           run(async () => {
-            const { data } = await sendTestEmail({ cfpId, kind, locale: previewLocale, needsVisa });
+            const data = actions
+              ? await actions.test({ kind, locale: previewLocale, needsVisa })
+              : (await sendTestEmail({ cfpId, kind, locale: previewLocale, needsVisa })).data;
             return data.status === 'dry_run'
               ? t.admin.emailTestDryRun
               : t.admin.emailTestSent.replace('{to}', data.to);

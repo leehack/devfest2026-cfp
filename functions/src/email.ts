@@ -46,7 +46,14 @@ import {
 import type { EmailSettings } from '../../shared/emailSettings';
 import { inStatusSet } from '../../shared/enums';
 import { readResendKey } from './secrets';
-import { ensureLegacyEmailDomainBinding } from './emailTenancy';
+import {
+  emailContentContext,
+  emailConfigurationFingerprint,
+  emailTransportConfigurationFingerprint,
+  platformPublicUrl,
+  resolveEmailConfiguration,
+  resolvePlatformEmailConfiguration,
+} from './emailConfig';
 import {
   coSpeakerInvitationStillTrue,
   profileUpdateRequestStillTrue,
@@ -55,10 +62,10 @@ import {
 } from './speakerLifecycle';
 
 /**
- * Neither the key nor the addresses are deploy config: the addresses live in
- * `cfps/{cfpId}/config/email` and the key in Secret Manager, both written from
- * the admin screen. Anything that can only change by redeploying stays wrong for
- * as long as the deploy takes, which on the night decisions go out is too long.
+ * Neither the key nor the addresses are deploy config: platform defaults and
+ * event overrides live in their callable-only config documents, while the key
+ * lives in Secret Manager. Anything that can only change by redeploying stays
+ * wrong for as long as the deploy takes, which on decision night is too long.
  */
 /**
  * Where the site is, most specific first: a stored platform address, then a
@@ -73,8 +80,6 @@ import {
  * no request at all, and the callables that queue only see a client-supplied
  * `Host`.
  */
-const derivedUrl = () => `https://${process.env.GCLOUD_PROJECT ?? 'localhost'}.web.app`;
-
 /**
  * The platform itself: where it lives, what it calls itself, and who it writes
  * as when the message is not about any one CFP — a sign-in link requested from
@@ -87,15 +92,15 @@ export interface Platform {
 }
 
 export async function loadPlatform(db: Firestore): Promise<Platform> {
-  const stored = (await db.doc('config/platform').get()).data() ?? {};
+  const [storedSnap, email] = await Promise.all([
+    db.doc('config/platform').get(),
+    resolvePlatformEmailConfiguration(db),
+  ]);
+  const stored = storedSnap.data() ?? {};
   return {
-    publicUrl: (stored.publicUrl as string) || process.env.CFP_PUBLIC_URL || derivedUrl(),
+    publicUrl: platformPublicUrl(stored),
     name: (stored.name as string) || 'Call for proposals',
-    settings: {
-      from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
-      replyTo: (stored.replyTo as string) || '',
-      publicUrl: '',
-    },
+    settings: email.settings,
   };
 }
 
@@ -108,36 +113,13 @@ export async function loadPlatform(db: Firestore): Promise<Platform> {
  */
 export const cfpUrl = (publicUrl: string, cfpId: string) => `${publicUrl}/c/${cfpId}/submit`;
 
-const configDoc = (db: Firestore, cfpId: string) => db.doc(`cfps/${cfpId}/config/email`);
-
-/** Env is the fallback, so a fresh project sends nothing until someone says so. */
-export function settingsFromConfig(stored: Record<string, unknown>): EmailSettings {
-  return {
-    from: (stored.from as string) || process.env.CFP_EMAIL_FROM || '',
-    replyTo: (stored.replyTo as string) || process.env.CFP_REPLY_TO || '',
-    // Not stored here at all — see `loadPublicUrl`. Kept on the type because the
-    // renderer needs both halves and one object is easier to pass than two.
-    publicUrl: '',
-  };
-}
-
 export async function loadSettings(db: Firestore, cfpId: string): Promise<EmailSettings> {
-  const snap = await configDoc(db, cfpId).get();
-  const config = snap.data() ?? {};
-  const settings = settingsFromConfig(config);
-  // A sender is tenant-owned only through the platform binding. Falling back
-  // to an address in an unbound config would let a copied legacy pointer keep
-  // sending as another CFP even after the binding was assigned correctly.
-  if (!(await ensureLegacyEmailDomainBinding(db, cfpId, config))) {
-    return { ...settings, from: '' };
-  }
-  return settings;
+  return (await resolveEmailConfiguration(db, cfpId)).settings;
 }
 
 /** Organiser-written copy, if any. Absent means the built-in wording is used. */
 export async function loadTemplates(db: Firestore, cfpId: string): Promise<TemplateOverrides> {
-  const snap = await configDoc(db, cfpId).get();
-  return ((snap.data()?.templates ?? {}) as TemplateOverrides) ?? {};
+  return (await resolveEmailConfiguration(db, cfpId)).templates;
 }
 
 export type EmailStatus = 'held' | 'queued' | 'sending' | 'sent' | 'failed' | 'dry_run';
@@ -713,7 +695,8 @@ type EmailErrorReason =
   | 'superseded'
   | 'event_deleted'
   | 'event_archived'
-  | 'email_domain_unbound';
+  | 'email_domain_unbound'
+  | 'email_configuration_changed';
 
 function supersededEmailUpdate(
   error = 'This notification is superseded.',
@@ -1073,17 +1056,7 @@ export const sendQueuedEmail = onDocumentWritten(
         return true;
       });
 
-    const [apiKey, templates, platform, cfpSnap] = await Promise.all([
-      readResendKey(),
-      loadTemplates(db, cfpId),
-      loadPlatform(db),
-      db.doc(`cfps/${cfpId}`).get(),
-    ]);
-    const cfp = {
-      id: cfpId,
-      name: (cfpSnap.get('name') as string) || cfpId,
-      publicUrl: platform.publicUrl,
-    };
+    const cfpSnap = await db.doc(`cfps/${cfpId}`).get();
     if (!cfpSnap.exists || cfpSnap.get('deleting') === true) {
       await updateClaim({
         status: 'failed',
@@ -1294,32 +1267,94 @@ export const sendQueuedEmail = onDocumentWritten(
       });
       return;
     }
-    const finalEmailConfig = await db.doc(`cfps/${cfpId}/config/email`).get();
-    const finalEmailData = finalEmailConfig.data() ?? {};
-    const configuredForDelivery = Boolean(
-      finalEmailData.from || finalEmailData.domain || finalEmailData.domainId,
-    );
-    if (
-      configuredForDelivery &&
-      !(await ensureLegacyEmailDomainBinding(db, cfpId, finalEmailData))
-    ) {
+    const [finalEmail, finalPlatformSnap] = await Promise.all([
+      resolveEmailConfiguration(db, cfpId),
+      db.doc('config/platform').get(),
+    ]);
+    if (!finalEmail.settings.from) {
       await updateClaim({
         status: 'failed',
-        error: 'Email delivery is blocked because this sending domain is not assigned to the event.',
+        error: 'Email delivery is blocked because its sending identity is not assigned.',
         errorReason: 'email_domain_unbound',
       });
       return;
     }
-    const settings = settingsFromConfig(finalEmailData);
+    const reviewedConfigurationFingerprint = claimed.reviewedEmailConfigurationFingerprint;
+    const reviewed = typeof claimed.reviewedTo === 'string' && Boolean(claimed.reviewedTo);
+    const finalContentContext = emailContentContext(
+      cfpId,
+      finalCfp.data() ?? {},
+      finalPlatformSnap.data() ?? {},
+    );
+    const finalConfigurationFingerprint = reviewed
+      ? emailConfigurationFingerprint(finalEmail, finalContentContext)
+      : emailTransportConfigurationFingerprint(finalEmail);
+    if (
+      reviewed &&
+      reviewedConfigurationFingerprint !== finalConfigurationFingerprint
+    ) {
+      await updateClaim({
+        status: 'failed',
+        error: 'Email delivery setup changed after this message was reviewed. Review and retry it.',
+        errorReason: 'email_configuration_changed',
+      });
+      return;
+    }
     // This is the final state check before the provider handoff. An archive
     // racing the HTTP request itself cannot recall a message Resend accepted.
     if (!(await updateClaim(undefined, false, true))) return;
+    const [handoffEmail, handoffCfpSnap, handoffPlatformSnap] = await Promise.all([
+      resolveEmailConfiguration(db, cfpId),
+      db.doc(`cfps/${cfpId}`).get(),
+      db.doc('config/platform').get(),
+    ]);
+    if (
+      !handoffCfpSnap.exists ||
+      handoffCfpSnap.get('deleting') === true ||
+      handoffCfpSnap.get('archived') === true
+    ) {
+      await updateClaim({
+        status: 'failed',
+        error: 'This notification is superseded because the event is unavailable.',
+        errorReason: 'superseded',
+      });
+      return;
+    }
+    if (!handoffEmail.settings.from) {
+      await updateClaim({
+        status: 'failed',
+        error: 'Email delivery is blocked because its sending identity is not assigned.',
+        errorReason: 'email_domain_unbound',
+      });
+      return;
+    }
+    const handoffContentContext = emailContentContext(
+      cfpId,
+      handoffCfpSnap.data() ?? {},
+      handoffPlatformSnap.data() ?? {},
+    );
+    const handoffConfigurationFingerprint = reviewed
+      ? emailConfigurationFingerprint(handoffEmail, handoffContentContext)
+      : emailTransportConfigurationFingerprint(handoffEmail);
+    if (handoffConfigurationFingerprint !== finalConfigurationFingerprint) {
+      await updateClaim({
+        status: 'failed',
+        error: 'Email delivery setup changed before provider handoff. Review and retry this message.',
+        errorReason: 'email_configuration_changed',
+      });
+      return;
+    }
+    const handoffApiKey = await readResendKey();
     const outcome = await deliver(
       claimed,
-      apiKey,
-      settings,
-      cfp,
-      templates,
+      handoffApiKey,
+      handoffEmail.settings,
+      {
+        id: cfpId,
+        name: handoffContentContext.cfpName,
+        publicUrl: handoffContentContext.publicUrl,
+      },
+      handoffEmail.templates,
       resendIdempotencyKey(
         cfpId,
         event.params.logId,

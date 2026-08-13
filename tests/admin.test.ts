@@ -19,6 +19,7 @@ import {
   emailHistoryError,
   friendlyError,
   isCoSpeakerInvitationUnavailable,
+  isEmailConfigurationChanged,
   isSpeakerMessageRecipientsChanged,
   platformAdminError,
   resendError,
@@ -274,6 +275,12 @@ describe('adminError', () => {
       isSpeakerMessageRecipientsChanged({
         code: 'functions/failed-precondition',
         details: { reason: 'speaker_message_recipients_changed' },
+      }),
+    ).toBe(true);
+    expect(
+      isEmailConfigurationChanged({
+        code: 'functions/failed-precondition',
+        details: { reason: 'email_configuration_changed' },
       }),
     ).toBe(true);
   });

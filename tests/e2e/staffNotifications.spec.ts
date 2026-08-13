@@ -10,6 +10,7 @@ import {
   createUnverifiedAccount,
   inviteRole,
   readEmailLog,
+  reviewedEmailConfiguration,
   reset,
   seedMember,
   seedPlatformMember,
@@ -136,6 +137,7 @@ test('a pending committee invite dedupes role edits, becomes stale on revoke, an
       action: 'resend',
       logId: firstLogId,
       reviewedTo: INVITEE_EMAIL,
+      ...reviewedEmailConfiguration(preview),
     }),
   ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 

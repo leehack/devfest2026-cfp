@@ -47,6 +47,7 @@ import {
   type EmailKind,
   type EmailLocale,
   type Template,
+  type TemplateOverrides,
 } from '../../shared/emailTemplates';
 import {
   emailDeliveryReadiness,
@@ -101,13 +102,10 @@ import {
   cfpUrl,
   deliver,
   loadPlatform,
-  loadSettings,
-  loadTemplates,
   logId,
   queueEmail,
   queueEmails,
   sendViaResend,
-  settingsFromConfig,
   isCoSpeakerInvitationEmail,
   isProfileUpdateRequestEmail,
   isStaffEmail,
@@ -183,7 +181,21 @@ import {
   emailDomainBindingRef,
   ensureLegacyEmailDomainBinding,
   legacyEmailDomainOwnerIsExact,
+  platformEmailDomainBindingMatches,
+  supersededStagedEmailDomainId,
 } from './emailTenancy';
+import {
+  boundEmailSender,
+  emailConfigurationHasInvalidActiveIdentity,
+  emailConfigurationFingerprint,
+  emailConfigurationFingerprintInTransaction,
+  inferredEventEmailMode,
+  loadEmailContentContext,
+  resolveEmailConfiguration,
+  resolvePlatformEmailConfiguration,
+  type EmailSource,
+  type EventEmailSettings,
+} from './emailConfig';
 import {
   addDomain,
   cleanDomain,
@@ -192,7 +204,16 @@ import {
   ResendError,
   verifyDomain,
 } from './domains';
-import { signInEmailDeliveryReady, useFreshHostingOrigin } from './authLinks';
+import {
+  nextSignInLinkCounter,
+  normaliseSignInNetwork,
+  signInEmailDeliveryReady,
+  signInLinkLimitId,
+  SIGN_IN_LINKS_PER_ADDRESS,
+  SIGN_IN_LINKS_PER_NETWORK,
+  SIGN_IN_LINKS_PER_PLATFORM,
+  useFreshHostingOrigin,
+} from './authLinks';
 import {
   reviewerProposalProjection,
   reviewerTravelParticipantIds,
@@ -699,28 +720,33 @@ interface ObservedEmailDelivery {
   keyHint: string;
   domainId: string;
   domain: string;
-  templates: unknown;
+  templates: TemplateOverrides;
+  source: EmailSource;
+  senderMode: EmailSource;
+  eventSettings: EventEmailSettings;
+  templateOverrides: TemplateOverrides;
+  configurationFingerprint: string;
 }
 
 /** Reads the credential and Resend itself; a Firestore hint is never proof of readiness. */
 async function observeEmailDelivery(cfpId: string): Promise<ObservedEmailDelivery> {
-  const [configSnap, providerSnap, apiKey] = await Promise.all([
-    db.doc(`cfps/${cfpId}/config/email`).get(),
+  const [resolved, contentContext, providerSnap, apiKey] = await Promise.all([
+    resolveEmailConfiguration(db, cfpId),
+    loadEmailContentContext(db, cfpId),
     db.doc('config/emailProvider').get(),
     readResendKey(),
   ]);
-  const config = configSnap.data() ?? {};
   const provider = providerSnap.data() ?? {};
-  const settings = settingsFromConfig(config);
-  const domainId = String(config.domainId ?? '');
-  const configuredDomain = String(config.domain ?? '');
-  const bound = await ensureLegacyEmailDomainBinding(db, cfpId, config);
+  const active = resolved.source === 'event' ? resolved.eventData : resolved.platformData;
+  const domainId = String(active.domainId ?? '');
+  const configuredDomain = String(active.domain ?? '');
+  const bound = resolved.source === 'event' ? resolved.eventBound : resolved.platformBound;
   // Emulator-only fixture: rules keep config/email closed to browsers, and
   // production ignores the marker even if an imported test export contains it.
   // Delivery still sees the empty emulator secret and records `dry_run`.
   if (
     process.env.FUNCTIONS_EMULATOR === 'true' &&
-    config.emulatorDeliveryReady === true &&
+    active.emulatorDeliveryReady === true &&
     bound
   ) {
     return {
@@ -728,13 +754,18 @@ async function observeEmailDelivery(cfpId: string): Promise<ObservedEmailDeliver
         key: 'present',
         domain: configuredDomain,
         domainStatus: 'verified',
-        from: settings.from,
+        from: resolved.settings.from,
       }),
-      settings,
+      settings: resolved.settings,
       keyHint: String(provider.keyHint ?? ''),
-      domainId,
+      domainId: resolved.source === 'event' ? domainId : '',
       domain: configuredDomain,
-      templates: config.templates ?? {},
+      templates: resolved.templates,
+      source: resolved.source,
+      senderMode: resolved.senderMode,
+      eventSettings: resolved.eventSettings,
+      templateOverrides: resolved.templateOverrides,
+      configurationFingerprint: emailConfigurationFingerprint(resolved, contentContext),
     };
   }
   let domain = bound ? configuredDomain : '';
@@ -760,12 +791,101 @@ async function observeEmailDelivery(cfpId: string): Promise<ObservedEmailDeliver
   }
 
   return {
-    delivery: emailDeliveryReadiness({ key, domain, domainStatus, from: settings.from }),
-    settings,
+    delivery: emailDeliveryReadiness({ key, domain, domainStatus, from: resolved.settings.from }),
+    settings: resolved.settings,
     keyHint: String(provider.keyHint ?? ''),
-    domainId: bound ? domainId : '',
+    domainId: resolved.source === 'event' && bound ? domainId : '',
     domain: bound ? domain : '',
-    templates: config.templates ?? {},
+    templates: resolved.templates,
+    source: resolved.source,
+    senderMode: resolved.senderMode,
+    eventSettings: resolved.eventSettings,
+    templateOverrides: resolved.templateOverrides,
+    configurationFingerprint: emailConfigurationFingerprint(resolved, contentContext),
+  };
+}
+
+async function observePlatformEmailDelivery() {
+  const [resolved, providerSnap, apiKey] = await Promise.all([
+    resolvePlatformEmailConfiguration(db),
+    db.doc('config/emailProvider').get(),
+    readResendKey(),
+  ]);
+  const provider = providerSnap.data() ?? {};
+  const configuredDomainId = String(resolved.data.domainId ?? '');
+  const configuredDomain = String(resolved.data.domain ?? '');
+  const stagedDomainId = String(resolved.data.stagedDomainId ?? '');
+  const stagedDomain = String(resolved.data.stagedDomain ?? '').toLowerCase();
+  if (
+    process.env.FUNCTIONS_EMULATOR === 'true' &&
+    resolved.data.emulatorDeliveryReady === true &&
+    resolved.bound
+  ) {
+    return {
+      settings: resolved.settings,
+      domainId: configuredDomainId,
+      domain: configuredDomain,
+      stagedDomainId,
+      stagedDomain,
+      templates: resolved.templates,
+      keyHint: String(provider.keyHint ?? ''),
+      delivery: emailDeliveryReadiness({
+        key: 'present',
+        domain: configuredDomain,
+        domainStatus: 'verified',
+        from: resolved.settings.from,
+      }),
+    };
+  }
+
+  let domain = resolved.bound ? configuredDomain : '';
+  let domainStatus = 'unknown';
+  let key: 'present' | 'missing' | 'invalid' | 'unavailable' = apiKey ? 'present' : 'missing';
+  if (apiKey && configuredDomainId && resolved.bound) {
+    try {
+      const current = await getDomain(apiKey, configuredDomainId);
+      domain = current.name;
+      domainStatus = current.status;
+    } catch (error) {
+      if (error instanceof ResendError && error.code === 'failed-precondition') key = 'invalid';
+      else if (error instanceof ResendError && error.code === 'not-found') domain = '';
+      else key = 'unavailable';
+    }
+  }
+  return {
+    settings: resolved.settings,
+    domainId: resolved.bound ? configuredDomainId : '',
+    domain: resolved.bound ? domain : '',
+    stagedDomainId,
+    stagedDomain,
+    templates: resolved.templates,
+    keyHint: String(provider.keyHint ?? ''),
+    delivery: emailDeliveryReadiness({
+      key,
+      domain,
+      domainStatus,
+      from: resolved.settings.from,
+    }),
+  };
+}
+
+function platformDomainEmulatorFixture(
+  config: DocumentSnapshot,
+  domainId: string,
+  domain: string,
+) {
+  if (
+    process.env.FUNCTIONS_EMULATOR !== 'true' ||
+    config.get('emulatorDeliveryReady') !== true
+  ) {
+    return null;
+  }
+  const staged = config.get('stagedDomainId') === domainId;
+  return {
+    id: domainId,
+    name: domain,
+    status: staged ? String(config.get('emulatorStagedDomainStatus') ?? 'verified') : 'verified',
+    records: [],
   };
 }
 
@@ -1102,9 +1222,21 @@ function reviewedEmailRecipients(
   return recipients;
 }
 
+function reviewedEmailConfigurationFingerprint(raw: unknown): string {
+  if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(raw)) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Review the current email delivery setup before continuing.',
+    );
+  }
+  return raw;
+}
+
 /** Prevents concurrent releases from re-queuing a row the sender already claimed. */
 async function advanceEmailQueue(
   cfpId: string,
+  actorUid: string,
+  configurationFingerprint: string,
   candidates: DocumentSnapshot[],
   from: EmailStatus[],
   reviewedRecipients: ReadonlyMap<string, string>,
@@ -1133,7 +1265,20 @@ async function advanceEmailQueue(
       await Promise.all(staffUids.map(async (uid) => [uid, await verifiedStaffUser(uid)] as const)),
     );
     const result = await db.runTransaction(async (tx) => {
-      const rows = await tx.getAll(...candidateChunk.map((doc) => doc.ref));
+      const [actor, ...rows] = await tx.getAll(
+        db.doc(`cfps/${cfpId}/members/${actorUid}`),
+        ...candidateChunk.map((doc) => doc.ref),
+      );
+      assertMutationActor(actor, 'admin');
+      const currentConfigurationFingerprint =
+        await emailConfigurationFingerprintInTransaction(db, tx, cfpId);
+      if (currentConfigurationFingerprint !== configurationFingerprint) {
+        throw new HttpsError(
+          'failed-precondition',
+          'The email delivery setup changed. Review the queue again.',
+          { reason: 'email_configuration_changed' },
+        );
+      }
       const proposalIds = [
         ...new Set(
           rows
@@ -1407,6 +1552,7 @@ async function advanceEmailQueue(
           status: 'queued' satisfies EmailStatus,
           to: liveTo,
           reviewedTo: liveTo,
+          reviewedEmailConfigurationFingerprint: configurationFingerprint,
           sendingClaimId: FieldValue.delete(),
           sendingStartedAt: FieldValue.delete(),
           attemptedAt: FieldValue.delete(),
@@ -4247,6 +4393,14 @@ export const deleteCfp = onCall(CALLABLE, async (request) => {
               emailConfig.get('domain') ?? cfp.get('deletingEmailDomain') ?? '',
           }
         : {}),
+      ...(emailConfig.get('stagedDomainId') || cfp.get('deletingStagedEmailDomainId')
+        ? {
+            deletingStagedEmailDomainId:
+              emailConfig.get('stagedDomainId') ?? cfp.get('deletingStagedEmailDomainId'),
+            deletingStagedEmailDomain:
+              emailConfig.get('stagedDomain') ?? cfp.get('deletingStagedEmailDomain') ?? '',
+          }
+        : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
@@ -4276,11 +4430,26 @@ export const deleteCfp = onCall(CALLABLE, async (request) => {
     ) {
       throw new HttpsError('failed-precondition', 'This deletion is no longer reserved.');
     }
-    const domainId = String(cfp.get('deletingEmailDomainId') ?? '');
-    const domain = String(cfp.get('deletingEmailDomain') ?? '');
-    if (domainId) {
-      const binding = await tx.get(emailDomainBindingRef(db, domainId));
-      if (emailDomainBindingMatches(binding.data(), cfpId, domainId, domain)) {
+    const identities = [
+      {
+        domainId: String(cfp.get('deletingEmailDomainId') ?? ''),
+        domain: String(cfp.get('deletingEmailDomain') ?? ''),
+      },
+      {
+        domainId: String(cfp.get('deletingStagedEmailDomainId') ?? ''),
+        domain: String(cfp.get('deletingStagedEmailDomain') ?? ''),
+      },
+    ].filter(
+      (identity, index, all) =>
+        identity.domainId &&
+        all.findIndex((candidate) => candidate.domainId === identity.domainId) === index,
+    );
+    const bindings = identities.length
+      ? await tx.getAll(...identities.map(({ domainId }) => emailDomainBindingRef(db, domainId)))
+      : [];
+    for (const [index, binding] of bindings.entries()) {
+      const identity = identities[index];
+      if (emailDomainBindingMatches(binding.data(), cfpId, identity.domainId, identity.domain)) {
         tx.delete(binding.ref);
       }
     }
@@ -4588,6 +4757,9 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   if (!['readiness', 'summary', 'preview', 'release', 'retry', 'resend'].includes(action)) {
     throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
   }
+  const reviewedConfigurationFingerprint = ['release', 'retry', 'resend'].includes(action)
+    ? reviewedEmailConfigurationFingerprint(data.emailConfigurationFingerprint)
+    : '';
 
   /*
    * The overview needs only setup state. Keeping this ahead of the queue read
@@ -4603,6 +4775,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       domainId: observed.domainId,
       domain: observed.domain,
       delivery: observed.delivery,
+      source: observed.source,
+      senderMode: observed.senderMode,
+      eventSettings: observed.eventSettings,
+      templateOverrides: observed.templateOverrides,
+      emailConfigurationFingerprint: observed.configurationFingerprint,
     };
   }
 
@@ -4634,6 +4811,13 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     }
     await assertCfpNotArchivedNow(cfpId);
     const observed = await requireEmailDelivery(cfpId);
+    if (observed.configurationFingerprint !== reviewedConfigurationFingerprint) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The email delivery setup changed. Review the queue again.',
+        { reason: 'email_configuration_changed' },
+      );
+    }
 
     const ref = db.doc(`cfps/${cfpId}/emailLog/${logId}`);
     const initial = await ref.get();
@@ -4645,7 +4829,21 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       ? await verifiedStaffUser(initialRecipientUid)
       : null;
     const status = await db.runTransaction(async (tx) => {
-      const [cfp, snap] = await tx.getAll(db.doc(`cfps/${cfpId}`), ref);
+      const [cfp, snap, actor] = await tx.getAll(
+        db.doc(`cfps/${cfpId}`),
+        ref,
+        db.doc(`cfps/${cfpId}/members/${byUid}`),
+      );
+      assertMutationActor(actor, 'admin');
+      const currentConfigurationFingerprint =
+        await emailConfigurationFingerprintInTransaction(db, tx, cfpId);
+      if (currentConfigurationFingerprint !== reviewedConfigurationFingerprint) {
+        throw new HttpsError(
+          'failed-precondition',
+          'The email delivery setup changed. Review the queue again.',
+          { reason: 'email_configuration_changed' },
+        );
+      }
       if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
         throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
       }
@@ -4848,6 +5046,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
         status: 'queued' satisfies EmailStatus,
         to: liveTo,
         reviewedTo: liveTo,
+        reviewedEmailConfigurationFingerprint: reviewedConfigurationFingerprint,
         sendingClaimId: FieldValue.delete(),
         sendingStartedAt: FieldValue.delete(),
         // A one-row resend is an explicit new delivery. Bulk retry retains an
@@ -4999,6 +5198,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
       domain: observed.domain,
       delivery: observed.delivery,
       templates: observed.templates,
+      source: observed.source,
+      senderMode: observed.senderMode,
+      eventSettings: observed.eventSettings,
+      templateOverrides: observed.templateOverrides,
+      emailConfigurationFingerprint: observed.configurationFingerprint,
       // Enough to check the copy and the addresses before committing to a send.
       held,
       retryable,
@@ -5024,6 +5228,13 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
 
   await assertCfpNotArchivedNow(cfpId);
   const observed = await requireEmailDelivery(cfpId);
+  if (observed.configurationFingerprint !== reviewedConfigurationFingerprint) {
+    throw new HttpsError(
+      'failed-precondition',
+      'The email delivery setup changed. Review the queue again.',
+      { reason: 'email_configuration_changed' },
+    );
+  }
 
   // `dry_run` counts as unsent, because it is: the row records a message that
   // was rendered while no sender was configured. Retrying picks those up once
@@ -5064,6 +5275,8 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   }
   const { released, stale } = await advanceEmailQueue(
     cfpId,
+    byUid,
+    reviewedConfigurationFingerprint,
     candidates,
     from,
     reviewedRecipients,
@@ -5088,8 +5301,6 @@ const SIGN_IN_PROPOSAL_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SIGN_IN_SPEAKER_INVITATION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const LINK_WINDOW_MS = 60 * 60 * 1000;
-const LINKS_PER_WINDOW = 5;
 const SIGN_IN_DESTINATIONS = new Set([
   'submit',
   'review',
@@ -5105,29 +5316,47 @@ const SIGN_IN_DESTINATIONS = new Set([
 ]);
 
 /**
- * Throttles by address, so this callable cannot be turned into a way to mail
- * someone repeatedly from our verified domain — which would cost us the domain
- * reputation the whole pipeline depends on.
+ * One atomic allowance across the target, best-effort caller network and
+ * platform. The network signal can be shared or rotated; the coarse platform
+ * breaker is the authoritative cost ceiling and may briefly refuse legitimate
+ * links under attack to preserve the shared sender's reputation.
  *
- * Hashed, so the collection is not a readable list of everyone who has ever
- * tried to sign in.
+ * Every specific identifier is hashed. The raw address and request IP never
+ * enter the counter collection or a log.
  */
-async function takeLinkAllowance(email: string): Promise<void> {
-  const ref = db.doc(`signInLinks/${createHash('sha256').update(email).digest('hex')}`);
+async function takeLinkAllowance(
+  email: string,
+  rawIp: string | undefined,
+  callerUid: string | undefined,
+): Promise<void> {
+  const network = normaliseSignInNetwork(rawIp);
+  const caller = network
+    ? `network:${network}`
+    : callerUid
+      ? `uid:${callerUid}`
+      : 'network:unknown';
+  const refs = [
+    // Keep the deployed address bucket id so a rollout cannot reset its window.
+    db.doc(`signInLinks/${createHash('sha256').update(email).digest('hex')}`),
+    db.doc(`signInLinks/${signInLinkLimitId('caller', caller)}`),
+    db.doc(`signInLinks/${signInLinkLimitId('platform', 'all')}`),
+  ];
+  const limits = [
+    SIGN_IN_LINKS_PER_ADDRESS,
+    SIGN_IN_LINKS_PER_NETWORK,
+    SIGN_IN_LINKS_PER_PLATFORM,
+  ];
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
+    const snapshots = await tx.getAll(...refs);
     const now = Date.now();
-    const startedAt = (snap.get('windowStart') as number) ?? 0;
-    const fresh = now - startedAt > LINK_WINDOW_MS;
-    const used = fresh ? 0 : ((snap.get('count') as number) ?? 0);
-
-    if (used >= LINKS_PER_WINDOW) {
+    const next = snapshots.map((snapshot, index) =>
+      nextSignInLinkCounter(snapshot.data() ?? {}, limits[index], now),
+    );
+    if (next.some((counter) => counter === null)) {
       throw new HttpsError('resource-exhausted', 'Too many sign-in links. Try again later.');
     }
-    tx.set(ref, {
-      windowStart: fresh ? now : startedAt,
-      count: used + 1,
-      updatedAt: FieldValue.serverTimestamp(),
+    refs.forEach((ref, index) => {
+      tx.set(ref, { ...next[index]!, updatedAt: FieldValue.serverTimestamp() });
     });
   });
 }
@@ -5159,9 +5388,14 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   };
   const email = String(data.email ?? '').trim().toLowerCase();
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
-  const cfpId = typeof data.cfpId === 'string' && validateCfpId(data.cfpId) === null
-    ? data.cfpId
-    : null;
+  const cfpIdProvided = data.cfpId !== undefined && data.cfpId !== null;
+  if (
+    cfpIdProvided &&
+    (typeof data.cfpId !== 'string' || validateCfpId(data.cfpId) !== null)
+  ) {
+    throw new HttpsError('invalid-argument', 'A valid call for proposals is required.');
+  }
+  const cfpId = typeof data.cfpId === 'string' ? data.cfpId : null;
   const destination =
     typeof data.destination === 'string' && SIGN_IN_DESTINATIONS.has(data.destination)
       ? data.destination
@@ -5197,8 +5431,8 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   const [apiKey, platform] = await Promise.all([readResendKey(), loadPlatform(db)]);
   // Named CFP or not, the sender is looked up server-side. Nothing about who
   // this mail comes from is taken from the caller.
-  const [settings, cfpSnap, invitationSnap, invitationProposalSnap] = await Promise.all([
-    cfpId ? loadSettings(db, cfpId) : Promise.resolve(platform.settings),
+  const [resolvedEmail, cfpSnap, invitationSnap, invitationProposalSnap] = await Promise.all([
+    cfpId ? resolveEmailConfiguration(db, cfpId) : Promise.resolve(null),
     cfpId ? db.doc(`cfps/${cfpId}`).get() : Promise.resolve(null),
     hasSpeakerInvitation && cfpId
       ? db.doc(
@@ -5210,6 +5444,10 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
       ? db.doc(`cfps/${cfpId}/proposals/${proposalId}`).get()
       : Promise.resolve(null),
   ]);
+  const settings = resolvedEmail?.settings ?? platform.settings;
+  if (cfpId && (!cfpSnap?.exists || cfpSnap.get('deleting') === true)) {
+    throw new HttpsError('not-found', 'No such call for proposals.');
+  }
   if (
     hasSpeakerInvitation &&
     !coSpeakerSignInInvitationStillTrue(
@@ -5225,7 +5463,10 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     throw new HttpsError('not-found', 'That speaker invitation is no longer active.');
   }
   const emulatedDelivery = process.env.FUNCTIONS_EMULATOR === 'true';
-  if (!signInEmailDeliveryReady(apiKey, settings.from, emulatedDelivery)) {
+  if (
+    (resolvedEmail && emailConfigurationHasInvalidActiveIdentity(resolvedEmail)) ||
+    !signInEmailDeliveryReady(apiKey, settings.from, emulatedDelivery)
+  ) {
     throw new HttpsError(
       'failed-precondition',
       'Sign-in email delivery is not configured.',
@@ -5233,6 +5474,11 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     );
   }
   const event = (cfpSnap?.get('name') as string) || platform.name;
+
+  // Throttle before Auth mints a bearer credential. Doing this after link
+  // generation would still let a caller burn the Auth OOB quota even when the
+  // Resend handoff is refused as rate-limited.
+  await takeLinkAllowance(email, request.rawRequest.ip, request.auth?.uid);
 
   const generatedLink = await getAuth().generateSignInWithEmailLink(email, {
     // Must be one of Auth's authorized domains, or Firebase refuses to mint it.
@@ -5260,20 +5506,72 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     emulatedDelivery,
   );
 
-  // Configuration failures above must not spend somebody's request allowance.
-  // Take it immediately before the only external side effect: sending mail.
-  await takeLinkAllowance(email);
+  // Auth link generation can take long enough for a sender or binding to be
+  // replaced. Resolve again at the handoff so a deleted CFP cannot borrow the
+  // platform sender and a stale event/platform identity is never used.
+  const [
+    handoffApiKey,
+    handoffResolvedEmail,
+    handoffPlatform,
+    handoffCfp,
+    handoffInvitation,
+    handoffInvitationProposal,
+  ] = await Promise.all([
+    readResendKey(),
+    cfpId ? resolveEmailConfiguration(db, cfpId) : Promise.resolve(null),
+    cfpId ? Promise.resolve(null) : loadPlatform(db),
+    cfpId ? db.doc(`cfps/${cfpId}`).get() : Promise.resolve(null),
+    hasSpeakerInvitation && cfpId
+      ? db.doc(
+          `cfps/${cfpId}/proposals/${proposalId}` +
+            `/speakerInvitations/${speakerInvitationId}`,
+        ).get()
+      : Promise.resolve(null),
+    hasSpeakerInvitation && cfpId
+      ? db.doc(`cfps/${cfpId}/proposals/${proposalId}`).get()
+      : Promise.resolve(null),
+  ]);
+  const handoffSettings =
+    handoffResolvedEmail?.settings ?? handoffPlatform?.settings ?? platform.settings;
+  if (cfpId && (!handoffCfp?.exists || handoffCfp.get('deleting') === true)) {
+    throw new HttpsError('not-found', 'No such call for proposals.');
+  }
+  if (
+    hasSpeakerInvitation &&
+    !coSpeakerSignInInvitationStillTrue(
+      speakerInvitationId,
+      cfpId!,
+      proposalId,
+      email,
+      handoffInvitation,
+      handoffInvitationProposal,
+      handoffCfp,
+    )
+  ) {
+    throw new HttpsError('not-found', 'That speaker invitation is no longer active.');
+  }
+  if (
+    (handoffResolvedEmail &&
+      emailConfigurationHasInvalidActiveIdentity(handoffResolvedEmail)) ||
+    !signInEmailDeliveryReady(handoffApiKey, handoffSettings.from, emulatedDelivery)
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Sign-in email delivery is not configured.',
+      { reason: 'sign_in_email_not_configured' },
+    );
+  }
 
   const outcome = await sendViaResend(
     email,
     renderSignInEmail(link, locale, event),
-    apiKey,
-    settings,
+    handoffApiKey,
+    handoffSettings,
   );
   // The address is not logged: this line would otherwise be a record of who
   // tried to sign in, sitting in Cloud Logging with a much wider audience than
   // Firestore has.
-  logger.info('sign-in link sent', { status: outcome.status, error: outcome.error });
+  logger.info('sign-in link sent', { status: outcome.status });
 
   if (outcome.status === 'dry_run' && !emulatedDelivery) {
     throw new HttpsError(
@@ -5312,9 +5610,11 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
   }
 
   if (action === 'preview') {
-    const contexts = await db.runTransaction((tx) =>
-      speakerMessageContexts(tx, cfpId, proposalId),
-    );
+    const [contexts, resolved, contentContext] = await Promise.all([
+      db.runTransaction((tx) => speakerMessageContexts(tx, cfpId, proposalId)),
+      resolveEmailConfiguration(db, cfpId),
+      loadEmailContentContext(db, cfpId),
+    ]);
     return {
       ok: true,
       kind: MESSAGE_KIND,
@@ -5325,6 +5625,7 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
         name: contextData.speakerName,
       })),
       recipientsFingerprint: speakerMessageRecipientsFingerprint(contexts),
+      emailConfigurationFingerprint: emailConfigurationFingerprint(resolved, contentContext),
     };
   }
 
@@ -5337,6 +5638,9 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
       'Review the current recipients before queueing this message.',
     );
   }
+  const expectedEmailConfigurationFingerprint = reviewedEmailConfigurationFingerprint(
+    data.expectedEmailConfigurationFingerprint,
+  );
 
   if (subject.length > LIMITS.messageSubjectMax) {
     throw new HttpsError('invalid-argument', 'That subject is too long.');
@@ -5358,8 +5662,32 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
   }
 
   const observed = await requireEmailDelivery(cfpId);
+  if (observed.configurationFingerprint !== expectedEmailConfigurationFingerprint) {
+    throw new HttpsError(
+      'failed-precondition',
+      'The email delivery setup changed. Review the message again before queueing.',
+      { reason: 'email_configuration_changed' },
+    );
+  }
 
   const logIds = await db.runTransaction(async (tx) => {
+    const [cfp, member] = await tx.getAll(
+      db.doc(`cfps/${cfpId}`),
+      db.doc(`cfps/${cfpId}/members/${byUid}`),
+    );
+    assertMutationActor(member, 'admin');
+    const currentConfigurationFingerprint =
+      await emailConfigurationFingerprintInTransaction(db, tx, cfpId);
+    if (currentConfigurationFingerprint !== expectedEmailConfigurationFingerprint) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The email delivery setup changed. Review the message again before queueing.',
+        { reason: 'email_configuration_changed' },
+      );
+    }
+    if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
     const contexts = await speakerMessageContexts(tx, cfpId, proposalId);
     if (speakerMessageRecipientsFingerprint(contexts) !== expectedRecipientsFingerprint) {
       throw new HttpsError(
@@ -5379,6 +5707,7 @@ export const sendSpeakerMessage = onCall(CALLABLE, async (request) => {
         recipientUid: context.uid,
         to: context.to,
         reviewedTo: context.to,
+        reviewedEmailConfigurationFingerprint: expectedEmailConfigurationFingerprint,
         locale: context.locale,
         data: context.data,
         // Queued, not held: a message is one deliberate act, not part of a batch
@@ -5415,50 +5744,178 @@ export const setEmailSettings = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
   const byUid = await requireAdmin(request, cfpId, 'change the sending address');
   const data = (request.data ?? {}) as Record<string, unknown>;
-
-  const settings: EmailSettings = {
-    from: String(data.from ?? '').trim(),
-    replyTo: String(data.replyTo ?? '').trim(),
-    // Platform config now — see `loadPlatform`. Kept on the type because the
-    // renderer wants both halves in one object.
-    publicUrl: '',
-  };
-
-  const problem = validateSettings(settings);
-  if (problem) {
-    throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
+  if (data.replyToOnly !== undefined && data.replyToOnly !== true) {
+    throw new HttpsError('invalid-argument', 'replyToOnly must be true when provided.');
+  }
+  const replyToOnly = data.replyToOnly === true;
+  if (
+    (replyToOnly || data.senderMode !== undefined) &&
+    data.senderMode !== 'platform' &&
+    data.senderMode !== 'event'
+  ) {
+    throw new HttpsError('invalid-argument', 'senderMode must be platform or event.');
+  }
+  const senderMode: EmailSource = data.senderMode === 'platform' ? 'platform' : 'event';
+  const from = typeof data.from === 'string' ? data.from.trim() : '';
+  const replyTo = typeof data.replyTo === 'string' ? data.replyTo.trim() : null;
+  if (replyToOnly && replyTo) {
+    const problem = validateSettings({ from: 'sender@example.org', replyTo, publicUrl: '' });
+    if (problem) {
+      throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
+    }
+  } else if (!replyToOnly && senderMode === 'event') {
+    const problem = validateSettings({ from, replyTo: replyTo ?? '', publicUrl: '' });
+    if (problem) {
+      throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
+    }
+  } else if (!replyToOnly && replyTo) {
+    const problem = validateSettings({ from: 'sender@example.org', replyTo, publicUrl: '' });
+    if (problem) {
+      throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
+    }
   }
 
   const configRef = db.doc(`cfps/${cfpId}/config/email`);
+  const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
   const currentConfig = await configRef.get();
-  if (currentConfig.get('domainId') && currentConfig.get('domain')) {
-    await ensureLegacyEmailDomainBinding(db, cfpId, currentConfig.data() ?? {});
+  const currentData = currentConfig.data() ?? {};
+  if (replyToOnly) {
+    await db.runTransaction(async (tx) => {
+      const [cfp, config, member] = await tx.getAll(
+        db.doc(`cfps/${cfpId}`),
+        configRef,
+        memberRef,
+      );
+      assertMutationActor(member, 'admin');
+      if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+      }
+      if (inferredEventEmailMode(config.data() ?? {}) !== senderMode) {
+        throw new HttpsError(
+          'aborted',
+          'The email delivery source changed. Reload before saving the reply-to address.',
+        );
+      }
+      tx.set(
+        configRef,
+        { replyTo: replyTo === null ? FieldValue.delete() : replyTo },
+        { merge: true },
+      );
+    });
+    const resolved = await resolveEmailConfiguration(db, cfpId);
+    logger.info('email reply-to changed', { byUid, cfpId, senderMode });
+    return { ok: true, settings: resolved.settings, source: resolved.source };
   }
-  await db.runTransaction(async (tx) => {
-    const [cfp, config] = await tx.getAll(db.doc(`cfps/${cfpId}`), configRef);
-    if (!cfp.exists || cfp.get('archived') === true) {
-      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
-    }
-    const registered = (config.get('domain') as string | undefined) ?? '';
-    const registeredId = (config.get('domainId') as string | undefined) ?? '';
-    if (!registered || !registeredId) {
-      throw new HttpsError('failed-precondition', 'Add your sending domain first.');
-    }
-    const binding = await tx.get(emailDomainBindingRef(db, registeredId));
-    if (!emailDomainBindingMatches(binding.data(), cfpId, registeredId, registered)) {
+  if (senderMode === 'platform') {
+    await db.runTransaction(async (tx) => {
+      const [cfp, member] = await tx.getAll(db.doc(`cfps/${cfpId}`), memberRef);
+      assertMutationActor(member, 'admin');
+      if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
+        throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+      }
+      const patch: Record<string, unknown> = {
+        senderMode: 'platform',
+        replyTo: replyTo === null ? FieldValue.delete() : replyTo,
+      };
+      if (typeof data.from === 'string') patch.from = from;
+      tx.set(configRef, patch, { merge: true });
+    });
+    const resolved = await resolveEmailConfiguration(db, cfpId);
+    logger.info('email settings changed', { byUid, cfpId, senderMode });
+    return { ok: true, settings: resolved.settings, source: resolved.source };
+  }
+
+  const registeredId = String(currentData.stagedDomainId ?? currentData.domainId ?? '');
+  const registered = String(currentData.stagedDomain ?? currentData.domain ?? '').toLowerCase();
+  if (!registered || !registeredId) {
+    throw new HttpsError('failed-precondition', 'Add your sending domain first.');
+  }
+  const binding = await emailDomainBindingRef(db, registeredId).get();
+  if (!emailDomainBindingMatches(binding.data(), cfpId, registeredId, registered)) {
+    const legacyCandidate =
+      currentData.domainId === registeredId &&
+      String(currentData.domain ?? '').toLowerCase() === registered;
+    if (!legacyCandidate || !(await ensureLegacyEmailDomainBinding(db, cfpId, currentData))) {
       throw new HttpsError(
         'failed-precondition',
         'This sending domain is not assigned to this call for proposals.',
       );
     }
-    const mismatch = senderMismatch(settings.from, registered);
-    if (mismatch) {
-      throw new HttpsError('invalid-argument', `${mismatch} is not your verified domain.`);
+  }
+  const mismatch = senderMismatch(from, registered);
+  if (mismatch) {
+    throw new HttpsError('invalid-argument', `${mismatch} is not your verified domain.`);
+  }
+  if (!(process.env.FUNCTIONS_EMULATOR === 'true' && currentData.emulatorDeliveryReady === true)) {
+    try {
+      const providerDomain = await getDomain(await readResendKey(), registeredId);
+      if (
+        providerDomain.id !== registeredId ||
+        providerDomain.name.toLowerCase() !== registered ||
+        providerDomain.status !== 'verified'
+      ) {
+        throw new HttpsError('failed-precondition', 'Verify this sending domain first.');
+      }
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      throw asResendError(error);
     }
-    tx.set(configRef, { from: settings.from, replyTo: settings.replyTo }, { merge: true });
+  }
+
+  await db.runTransaction(async (tx) => {
+    const oldDomainId = String(currentData.domainId ?? '');
+    const refs = [
+      db.doc(`cfps/${cfpId}`),
+      configRef,
+      memberRef,
+      emailDomainBindingRef(db, registeredId),
+      ...(oldDomainId && oldDomainId !== registeredId
+        ? [emailDomainBindingRef(db, oldDomainId)]
+        : []),
+    ];
+    const [cfp, config, member, activeBinding, oldBinding] = await tx.getAll(
+      ...refs,
+    ) as DocumentSnapshot[];
+    assertMutationActor(member, 'admin');
+    if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
+    const latestId = String(config.get('stagedDomainId') ?? config.get('domainId') ?? '');
+    const latestDomain = String(config.get('stagedDomain') ?? config.get('domain') ?? '').toLowerCase();
+    if (
+      latestId !== registeredId ||
+      latestDomain !== registered ||
+      !emailDomainBindingMatches(activeBinding.data(), cfpId, registeredId, registered)
+    ) {
+      throw new HttpsError(
+        'aborted',
+        'The sending domain changed. Try again.',
+      );
+    }
+    tx.set(configRef, {
+      senderMode: 'event',
+      from,
+      replyTo: replyTo === null ? FieldValue.delete() : replyTo,
+      domainId: registeredId,
+      domain: registered,
+      stagedDomainId: FieldValue.delete(),
+      stagedDomain: FieldValue.delete(),
+    }, { merge: true });
+    if (
+      oldBinding &&
+      emailDomainBindingMatches(
+        oldBinding.data(),
+        cfpId,
+        oldDomainId,
+        String(currentData.domain ?? ''),
+      )
+    ) {
+      tx.delete(oldBinding.ref);
+    }
   });
-  logger.info('email settings changed', { byUid, ...settings });
-  return { ok: true, settings };
+  const resolved = await resolveEmailConfiguration(db, cfpId);
+  logger.info('email settings changed', { byUid, cfpId, senderMode });
+  return { ok: true, settings: resolved.settings, source: resolved.source };
 });
 
 /**
@@ -5484,11 +5941,14 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
 
   const path = `templates.${kind}.${locale}`;
   const configRef = db.doc(`cfps/${cfpId}/config/email`);
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  const memberRef = db.doc(`cfps/${cfpId}/members/${byUid}`);
 
   if (data.reset === true) {
     await db.runTransaction(async (tx) => {
-      const [cfp, config] = await tx.getAll(db.doc(`cfps/${cfpId}`), configRef);
-      if (!cfp.exists || cfp.get('archived') === true) {
+      const [cfp, config, member] = await tx.getAll(cfpRef, configRef, memberRef);
+      assertMutationActor(member, 'admin');
+      if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
         throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
       }
       // Nothing stored for it yet is already the state `reset` asks for.
@@ -5509,7 +5969,11 @@ export const setEmailTemplate = onCall(CALLABLE, async (request) => {
   }
 
   await db.runTransaction(async (tx) => {
-    await assertCfpNotArchived(tx, cfpId);
+    const [cfp, member] = await tx.getAll(cfpRef, memberRef);
+    assertMutationActor(member, 'admin');
+    if (!cfp.exists || cfp.get('archived') === true || cfp.get('deleting') === true) {
+      throw new HttpsError('failed-precondition', 'This call for proposals is archived.');
+    }
     tx.set(configRef, { templates: { [kind]: { [locale]: template } } }, { merge: true });
   });
   logger.info('email template changed', { byUid, kind, locale });
@@ -5536,16 +6000,22 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
   }
   const locale = (data.locale === 'fr' ? 'fr' : 'en') as EmailLocale;
   const cfpSnap = await assertCfpNotArchivedNow(cfpId);
-  const observed = await requireEmailDelivery(cfpId);
-
-  const [apiKey, templates, platform] = await Promise.all([
-    readResendKey(),
-    loadTemplates(db, cfpId),
-    loadPlatform(db),
-  ]);
+  await requireEmailDelivery(cfpId);
+  const platform = await loadPlatform(db);
   // This is the last check possible before the provider handoff. An archive
   // racing the HTTP request itself cannot recall a message Resend accepted.
   await assertCfpNotArchivedNow(cfpId);
+  const finalObserved = await requireEmailDelivery(cfpId);
+  const currentUser = await verifiedStaffUser(uid);
+  const currentMember = await db.doc(`cfps/${cfpId}/members/${uid}`).get();
+  if (
+    !currentUser?.email ||
+    currentUser.email.trim().toLowerCase() !== to.trim().toLowerCase() ||
+    (currentMember.get('role') !== 'owner' && currentMember.get('role') !== 'admin')
+  ) {
+    throw new HttpsError('permission-denied', 'Only a current admin can send a test.');
+  }
+  const finalApiKey = await readResendKey();
   const outcome = await deliver(
     {
       kind,
@@ -5557,17 +6027,17 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
         needsVisa: data.needsVisa === true,
       },
     },
-    apiKey,
-    observed.settings,
+    finalApiKey,
+    finalObserved.settings,
     { id: cfpId, name: (cfpSnap.get('name') as string) || cfpId, publicUrl: platform.publicUrl },
-    templates,
+    finalObserved.templates,
   );
 
   logger.info('test email', { uid, kind, status: outcome.status });
   if (outcome.status === 'failed') {
     throw new HttpsError('unavailable', outcome.error ?? 'Resend refused it.');
   }
-  return { ok: true, status: outcome.status, to, delivery: observed.delivery };
+  return { ok: true, status: outcome.status, to, delivery: finalObserved.delivery };
 });
 
 /** The shared provider credential can be rotated only by platform administration. */
@@ -5681,6 +6151,503 @@ function asResendError(error: unknown): HttpsError {
   return new HttpsError('internal', 'Could not reach Resend.');
 }
 
+async function requireCurrentPlatformAdmin(
+  byUid: string,
+  email: string,
+): Promise<DocumentSnapshot> {
+  const [user, member] = await Promise.all([
+    getAuth().getUser(byUid),
+    db.doc(`platformMembers/${byUid}`).get(),
+  ]);
+  const normalized = email.trim().toLowerCase();
+  if (
+    user.disabled ||
+    !user.emailVerified ||
+    user.email?.trim().toLowerCase() !== normalized ||
+    String(member.get('email') ?? '').trim().toLowerCase() !== normalized ||
+    (member.get('role') !== 'owner' && member.get('role') !== 'admin')
+  ) {
+    throw new HttpsError('permission-denied', 'Only a current platform admin can do that.');
+  }
+  return member;
+}
+
+async function acquirePlatformEmailMutation(
+  identity: { uid: string; email: string },
+  kind: string,
+): Promise<string> {
+  await requireCurrentPlatformAdmin(identity.uid, identity.email);
+  const mutationId = randomUUID();
+  await db.runTransaction(async (tx) => {
+    const configRef = db.doc('config/platformEmail');
+    const [member, config] = await tx.getAll(
+      db.doc(`platformMembers/${identity.uid}`),
+      configRef,
+    );
+    if (
+      String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
+      (member.get('role') !== 'owner' && member.get('role') !== 'admin')
+    ) {
+      throw new HttpsError('permission-denied', 'Only a current platform admin can do that.');
+    }
+    const expiresAt = config.get('domainMutationExpiresAt');
+    if (expiresAt instanceof Timestamp && expiresAt.toMillis() > Date.now()) {
+      throw new HttpsError('aborted', 'Another platform email change is in progress. Try again.');
+    }
+    tx.set(
+      configRef,
+      {
+        domainMutationId: mutationId,
+        domainMutationKind: kind,
+        domainMutationBy: identity.uid,
+        domainMutationExpiresAt: Timestamp.fromMillis(Date.now() + EXTERNAL_MUTATION_LEASE_MS),
+      },
+      { merge: true },
+    );
+  });
+  return mutationId;
+}
+
+async function releasePlatformEmailMutation(mutationId: string): Promise<void> {
+  const ref = db.doc('config/platformEmail');
+  await db.runTransaction(async (tx) => {
+    const config = await tx.get(ref);
+    if (config.get('domainMutationId') !== mutationId) return;
+    tx.set(
+      ref,
+      {
+        domainMutationId: FieldValue.delete(),
+        domainMutationKind: FieldValue.delete(),
+        domainMutationBy: FieldValue.delete(),
+        domainMutationExpiresAt: FieldValue.delete(),
+      },
+      { merge: true },
+    );
+  });
+}
+
+export const getPlatformEmailConfiguration = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'view platform email settings');
+  return { ok: true, ...(await observePlatformEmailDelivery()) };
+});
+
+export const setPlatformEmailSettings = onCall(CALLABLE, async (request) => {
+  const identity = await requirePlatformAdmin(request, 'change platform email settings');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const settings: EmailSettings = {
+    from: String(data.from ?? '').trim(),
+    replyTo: String(data.replyTo ?? '').trim(),
+    publicUrl: '',
+  };
+  const problem = validateSettings(settings);
+  if (problem) throw new HttpsError('invalid-argument', `${problem.field}: ${problem.problem}`);
+
+  await requireCurrentPlatformAdmin(identity.uid, identity.email);
+  const configRef = db.doc('config/platformEmail');
+  await db.runTransaction(async (tx) => {
+    const [member, config] = await tx.getAll(
+      db.doc(`platformMembers/${identity.uid}`),
+      configRef,
+    );
+    if (
+      String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
+      (member.get('role') !== 'owner' && member.get('role') !== 'admin')
+    ) {
+      throw new HttpsError('permission-denied', 'Only a current platform admin can do that.');
+    }
+    const domainId = String(config.get('domainId') ?? '');
+    const domain = String(config.get('domain') ?? '').toLowerCase();
+    if (!domainId || !domain) {
+      throw new HttpsError('failed-precondition', 'Add the platform sending domain first.');
+    }
+    const binding = await tx.get(emailDomainBindingRef(db, domainId));
+    if (!platformEmailDomainBindingMatches(binding.data(), domainId, domain)) {
+      throw new HttpsError('failed-precondition', 'The platform sending domain is not assigned.');
+    }
+    const mismatch = senderMismatch(settings.from, domain);
+    if (mismatch) throw new HttpsError('invalid-argument', `${mismatch} is not the verified domain.`);
+    tx.set(configRef, { from: settings.from, replyTo: settings.replyTo }, { merge: true });
+  });
+  logger.info('platform email settings changed', { byUid: identity.uid });
+  return { ok: true, settings };
+});
+
+export const setPlatformEmailTemplate = onCall(CALLABLE, async (request) => {
+  const identity = await requirePlatformAdmin(request, 'change platform email wording');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const kind = String(data.kind ?? '') as EmailKind;
+  const locale = String(data.locale ?? '') as EmailLocale;
+  if (!EMAIL_KINDS.includes(kind)) throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
+  if (!EMAIL_LOCALES.includes(locale)) throw new HttpsError('invalid-argument', `Unknown language "${locale}".`);
+  const path = `templates.${kind}.${locale}`;
+  const ref = db.doc('config/platformEmail');
+  await requireCurrentPlatformAdmin(identity.uid, identity.email);
+  await db.runTransaction(async (tx) => {
+    const member = await tx.get(db.doc(`platformMembers/${identity.uid}`));
+    if (
+      String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
+      (member.get('role') !== 'owner' && member.get('role') !== 'admin')
+    ) {
+      throw new HttpsError('permission-denied', 'Only a current platform admin can do that.');
+    }
+    if (data.reset === true) {
+      const config = await tx.get(ref);
+      if (config.exists) tx.update(ref, { [path]: FieldValue.delete() });
+      return;
+    }
+    const template: Template = { subject: String(data.subject ?? ''), body: String(data.body ?? '') };
+    const problem = validateTemplate(template);
+    if (problem) throw new HttpsError('invalid-argument', `${problem.problem}: ${problem.detail ?? ''}`);
+    tx.set(ref, { templates: { [kind]: { [locale]: template } } }, { merge: true });
+  });
+  return data.reset === true ? { ok: true, reset: true } : { ok: true };
+});
+
+export const sendPlatformTestEmail = onCall(CALLABLE, async (request) => {
+  const identity = await requirePlatformAdmin(request, 'send a platform email test');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const kind = String(data.kind ?? 'submission_received') as EmailKind;
+  if (!EMAIL_KINDS.includes(kind)) throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
+  const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
+  const observed = await observePlatformEmailDelivery();
+  if (!observed.delivery.ready) {
+    throw new HttpsError('failed-precondition', 'Email delivery setup is incomplete.', {
+      reason: 'email_delivery_not_ready',
+      problems: observed.delivery.problems,
+      domainStatus: observed.delivery.domainStatus,
+    });
+  }
+  await requireCurrentPlatformAdmin(identity.uid, identity.email);
+  const platform = await loadPlatform(db);
+  await requireCurrentPlatformAdmin(identity.uid, identity.email);
+  const finalHandoff = await observePlatformEmailDelivery();
+  if (!finalHandoff.delivery.ready) {
+    throw new HttpsError('failed-precondition', 'Email delivery setup changed.', {
+      reason: 'email_delivery_not_ready',
+      problems: finalHandoff.delivery.problems,
+      domainStatus: finalHandoff.delivery.domainStatus,
+    });
+  }
+  await requireCurrentPlatformAdmin(identity.uid, identity.email);
+  // Rechecking readiness above is the provider-handoff boundary; use that
+  // exact snapshot below rather than the earlier preflight snapshot.
+  const finalApiKey = await readResendKey();
+  const outcome = await deliver(
+    {
+      kind,
+      locale,
+      to: identity.email,
+      data: {
+        speakerName: identity.name || identity.email,
+        title: 'A test of the platform sending setup',
+        needsVisa: data.needsVisa === true,
+      },
+    },
+    finalApiKey,
+    finalHandoff.settings,
+    { id: 'platform', name: platform.name, publicUrl: platform.publicUrl },
+    finalHandoff.templates,
+  );
+  if (outcome.status === 'failed') throw new HttpsError('unavailable', 'Resend refused the test.');
+  return { ok: true, status: outcome.status, to: identity.email, delivery: finalHandoff.delivery };
+});
+
+export const platformEmailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => {
+  const identity = await requirePlatformAdmin(request, 'manage the platform sending domain');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const action = String(data.action ?? 'list');
+  const configRef = db.doc('config/platformEmail');
+
+  try {
+    if (action === 'list' || action === 'get') {
+      const [apiKey, config] = await Promise.all([readResendKey(), configRef.get()]);
+      const domainId = String(config.get('stagedDomainId') ?? config.get('domainId') ?? '');
+      const storedName = String(
+        config.get('stagedDomain') ?? config.get('domain') ?? '',
+      ).toLowerCase();
+      if (!domainId) {
+        if (action === 'get') throw new HttpsError('failed-precondition', 'No domain has been added yet.');
+        return { ok: true, domains: [] };
+      }
+      const binding = await emailDomainBindingRef(db, domainId).get();
+      if (!platformEmailDomainBindingMatches(binding.data(), domainId, storedName)) {
+        throw new HttpsError('failed-precondition', 'The platform sending domain is not assigned.');
+      }
+      const domain =
+        platformDomainEmulatorFixture(config, domainId, storedName) ??
+        (await getDomain(apiKey, domainId));
+      if (domain.id !== domainId || domain.name.toLowerCase() !== storedName) {
+        throw new HttpsError('failed-precondition', 'The stored sending domain no longer matches Resend.');
+      }
+      return action === 'get' ? { ok: true, domain } : { ok: true, domains: [domain] };
+    }
+
+    if (action === 'add') {
+      const name = cleanDomain(String(data.domain ?? ''));
+      if (!name) throw new HttpsError('invalid-argument', 'That is not a domain name.');
+      const mutationId = await acquirePlatformEmailMutation(identity, 'domain-add');
+      try {
+        const apiKey = await readResendKey();
+        const existing = (await listDomains(apiKey)).find((candidate) => candidate.name.toLowerCase() === name);
+        const domain = existing ?? (await addDomain(apiKey, name));
+        if (!domain.id || domain.name.toLowerCase() !== name) {
+          throw new HttpsError('unavailable', 'Resend returned an incomplete domain record.');
+        }
+        await requireCurrentPlatformAdmin(identity.uid, identity.email);
+        await db.runTransaction(async (tx) => {
+          const memberRef = db.doc(`platformMembers/${identity.uid}`);
+          const config = await tx.get(configRef);
+          const activeDomainId = String(config.get('domainId') ?? '');
+          const activeDomain = String(config.get('domain') ?? '').toLowerCase();
+          const oldStagedDomainId = String(config.get('stagedDomainId') ?? '');
+          const oldStagedDomain = String(config.get('stagedDomain') ?? '').toLowerCase();
+          if (domain.id === activeDomainId && domain.name.toLowerCase() === activeDomain) {
+            throw new HttpsError('failed-precondition', 'That platform sending domain is already active.');
+          }
+          const refs = [
+            memberRef,
+            emailDomainBindingRef(db, domain.id),
+            ...(oldStagedDomainId &&
+            oldStagedDomainId !== domain.id &&
+            oldStagedDomainId !== activeDomainId
+              ? [emailDomainBindingRef(db, oldStagedDomainId)]
+              : []),
+          ];
+          const [member, binding, oldStagedBinding] = await tx.getAll(
+            ...refs,
+          ) as DocumentSnapshot[];
+          if (
+            config.get('domainMutationId') !== mutationId ||
+            String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
+            (member.get('role') !== 'owner' && member.get('role') !== 'admin')
+          ) {
+            throw new HttpsError('aborted', 'The platform email change expired. Try again.');
+          }
+          const ours = platformEmailDomainBindingMatches(binding.data(), domain.id, domain.name);
+          const legacyReferences = await legacyEmailDomainReferences(tx, '__platform__', domain);
+          if (
+            (binding.exists && !ours) ||
+            (existing && !ours && legacyReferences.count > 0)
+          ) {
+            throw new HttpsError(
+              'failed-precondition',
+              'This Resend domain is already assigned and cannot become the platform default.',
+              { reason: 'email_domain_unavailable' },
+            );
+          }
+          if (!binding.exists) {
+            tx.create(emailDomainBindingRef(db, domain.id), {
+              scope: 'platform',
+              domainId: domain.id,
+              domain: domain.name.toLowerCase(),
+              assignedBy: identity.uid,
+              createdAt: FieldValue.serverTimestamp(),
+            });
+          }
+          if (
+            oldStagedBinding &&
+            platformEmailDomainBindingMatches(
+              oldStagedBinding.data(),
+              oldStagedDomainId,
+              oldStagedDomain,
+            )
+          ) {
+            tx.delete(oldStagedBinding.ref);
+          }
+          tx.set(
+            configRef,
+            {
+              stagedDomainId: domain.id,
+              stagedDomain: domain.name.toLowerCase(),
+              domainMutationId: FieldValue.delete(),
+              domainMutationKind: FieldValue.delete(),
+              domainMutationBy: FieldValue.delete(),
+              domainMutationExpiresAt: FieldValue.delete(),
+            },
+            { merge: true },
+          );
+        });
+        return { ok: true, domain: existing ? await getDomain(apiKey, domain.id) : domain };
+      } catch (error) {
+        await releasePlatformEmailMutation(mutationId);
+        throw error;
+      }
+    }
+
+    if (action === 'verify') {
+      const mutationId = await acquirePlatformEmailMutation(identity, 'domain-verify');
+      try {
+        const [apiKey, config] = await Promise.all([readResendKey(), configRef.get()]);
+        const domainId = String(config.get('stagedDomainId') ?? config.get('domainId') ?? '');
+        const storedName = String(
+          config.get('stagedDomain') ?? config.get('domain') ?? '',
+        ).toLowerCase();
+        if (!domainId) throw new HttpsError('failed-precondition', 'No domain has been added yet.');
+        const binding = await emailDomainBindingRef(db, domainId).get();
+        if (!platformEmailDomainBindingMatches(binding.data(), domainId, storedName)) {
+          throw new HttpsError('failed-precondition', 'The platform sending domain is not assigned.');
+        }
+        const emulatorDomain = platformDomainEmulatorFixture(config, domainId, storedName);
+        const current = emulatorDomain ?? (await getDomain(apiKey, domainId));
+        if (current.id !== domainId || current.name.toLowerCase() !== storedName) {
+          throw new HttpsError('failed-precondition', 'The stored sending domain no longer matches Resend.');
+        }
+        const domain = emulatorDomain ?? (await verifyDomain(apiKey, domainId));
+        await requireCurrentPlatformAdmin(identity.uid, identity.email);
+        await db.runTransaction(async (tx) => {
+          const [member, latest, exactBinding] = await tx.getAll(
+            db.doc(`platformMembers/${identity.uid}`),
+            configRef,
+            emailDomainBindingRef(db, domainId),
+          );
+          if (
+            latest.get('domainMutationId') !== mutationId ||
+            String(latest.get('stagedDomainId') ?? latest.get('domainId') ?? '') !== domainId ||
+            String(latest.get('stagedDomain') ?? latest.get('domain') ?? '').toLowerCase() !==
+              storedName ||
+            String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
+            (member.get('role') !== 'owner' && member.get('role') !== 'admin') ||
+            !platformEmailDomainBindingMatches(exactBinding.data(), domainId, storedName)
+          ) {
+            throw new HttpsError('aborted', 'The platform sending domain changed. Try again.');
+          }
+          tx.set(
+            configRef,
+            {
+              domainMutationId: FieldValue.delete(),
+              domainMutationKind: FieldValue.delete(),
+              domainMutationBy: FieldValue.delete(),
+              domainMutationExpiresAt: FieldValue.delete(),
+            },
+            { merge: true },
+          );
+        });
+        return { ok: true, domain };
+      } catch (error) {
+        await releasePlatformEmailMutation(mutationId);
+        throw error;
+      }
+    }
+
+    if (action === 'activate') {
+      const mutationId = await acquirePlatformEmailMutation(identity, 'domain-activate');
+      try {
+        const [apiKey, config] = await Promise.all([readResendKey(), configRef.get()]);
+        const stagedDomainId = String(config.get('stagedDomainId') ?? '');
+        const stagedDomain = String(config.get('stagedDomain') ?? '').toLowerCase();
+        if (!stagedDomainId || !stagedDomain) {
+          throw new HttpsError(
+            'failed-precondition',
+            'Add and verify a replacement platform sending domain first.',
+          );
+        }
+        const stagedBinding = await emailDomainBindingRef(db, stagedDomainId).get();
+        if (
+          !platformEmailDomainBindingMatches(
+            stagedBinding.data(),
+            stagedDomainId,
+            stagedDomain,
+          )
+        ) {
+          throw new HttpsError(
+            'failed-precondition',
+            'The staged platform sending domain is not assigned.',
+          );
+        }
+        const domain =
+          platformDomainEmulatorFixture(config, stagedDomainId, stagedDomain) ??
+          (await getDomain(apiKey, stagedDomainId));
+        if (
+          domain.id !== stagedDomainId ||
+          domain.name.toLowerCase() !== stagedDomain ||
+          domain.status !== 'verified'
+        ) {
+          throw new HttpsError(
+            'failed-precondition',
+            'Verify the staged platform sending domain before activating it.',
+          );
+        }
+
+        await requireCurrentPlatformAdmin(identity.uid, identity.email);
+        await db.runTransaction(async (tx) => {
+          const memberRef = db.doc(`platformMembers/${identity.uid}`);
+          const oldDomainId = String(config.get('domainId') ?? '');
+          const reviewedOldDomain = String(config.get('domain') ?? '').toLowerCase();
+          const refs = [
+            memberRef,
+            configRef,
+            emailDomainBindingRef(db, stagedDomainId),
+            ...(oldDomainId && oldDomainId !== stagedDomainId
+              ? [emailDomainBindingRef(db, oldDomainId)]
+              : []),
+          ];
+          const [member, latest, exactStagedBinding, oldBinding] = await tx.getAll(
+            ...refs,
+          ) as DocumentSnapshot[];
+          const latestOldDomainId = String(latest.get('domainId') ?? '');
+          const latestOldDomain = String(latest.get('domain') ?? '').toLowerCase();
+          if (
+            latest.get('domainMutationId') !== mutationId ||
+            String(latest.get('stagedDomainId') ?? '') !== stagedDomainId ||
+            String(latest.get('stagedDomain') ?? '').toLowerCase() !== stagedDomain ||
+            latestOldDomainId !== oldDomainId ||
+            latestOldDomain !== reviewedOldDomain ||
+            String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
+            (member.get('role') !== 'owner' && member.get('role') !== 'admin') ||
+            !platformEmailDomainBindingMatches(
+              exactStagedBinding.data(),
+              stagedDomainId,
+              stagedDomain,
+            )
+          ) {
+            throw new HttpsError('aborted', 'The platform sending domain changed. Try again.');
+          }
+          const retainedFrom = boundEmailSender(latest.get('from'), stagedDomain);
+          tx.set(
+            configRef,
+            {
+              domainId: stagedDomainId,
+              domain: stagedDomain,
+              from: retainedFrom || FieldValue.delete(),
+              stagedDomainId: FieldValue.delete(),
+              stagedDomain: FieldValue.delete(),
+              emulatorStagedDomainStatus: FieldValue.delete(),
+              domainMutationId: FieldValue.delete(),
+              domainMutationKind: FieldValue.delete(),
+              domainMutationBy: FieldValue.delete(),
+              domainMutationExpiresAt: FieldValue.delete(),
+            },
+            { merge: true },
+          );
+          if (
+            oldBinding &&
+            oldDomainId !== stagedDomainId &&
+            platformEmailDomainBindingMatches(
+              oldBinding.data(),
+              oldDomainId,
+              latestOldDomain,
+            )
+          ) {
+            tx.delete(oldBinding.ref);
+          }
+        });
+        logger.info('platform email domain activated', {
+          byUid: identity.uid,
+          domainId: stagedDomainId,
+        });
+        return { ok: true, activated: true, domain };
+      } catch (error) {
+        await releasePlatformEmailMutation(mutationId);
+        throw error;
+      }
+    }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error;
+    throw asResendError(error);
+  }
+  throw new HttpsError('invalid-argument', `Unknown action "${action}".`);
+});
+
 function cfpIdFromEmailConfig(snapshot: QueryDocumentSnapshot): string | null {
   const parts = snapshot.ref.path.split('/');
   return parts.length === 4 && parts[0] === 'cfps' && parts[2] === 'config' && parts[3] === 'email'
@@ -5753,8 +6720,8 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
     if (action === 'list' || action === 'get') {
       const apiKey = await readResendKey();
       const config = await configRef.get();
-      const domainId = String(config.get('domainId') ?? '');
-      const storedName = String(config.get('domain') ?? '').toLowerCase();
+      const domainId = String(config.get('stagedDomainId') ?? config.get('domainId') ?? '');
+      const storedName = String(config.get('stagedDomain') ?? config.get('domain') ?? '').toLowerCase();
       if (!domainId) {
         if (action === 'get') {
           throw new HttpsError('failed-precondition', 'No domain has been added yet.');
@@ -5769,7 +6736,16 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
           { reason: 'email_domain_mismatch' },
         );
       }
-      await migrateLegacyEmailDomainBinding(cfpId, domain);
+      const binding = await emailDomainBindingRef(db, domainId).get();
+      if (!emailDomainBindingMatches(binding.data(), cfpId, domainId, storedName)) {
+        const isActiveLegacy =
+          config.get('domainId') === domainId &&
+          String(config.get('domain') ?? '').toLowerCase() === storedName;
+        if (!isActiveLegacy) {
+          throw new HttpsError('failed-precondition', 'This sending domain is not assigned to this event.');
+        }
+        await migrateLegacyEmailDomainBinding(cfpId, domain);
+      }
       return action === 'get'
         ? { ok: true, domain }
         : { ok: true, domains: [domain] };
@@ -5792,12 +6768,17 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
         }
         await finishCfpMutation(cfpId, leaseId, async (tx) => {
           const currentConfig = await tx.get(configRef);
-          const currentDomainId = String(currentConfig.get('domainId') ?? '');
+          const currentData = currentConfig.data() ?? {};
+          const currentStagedDomainId = String(currentConfig.get('stagedDomainId') ?? '');
+          const supersededDomainId = supersededStagedEmailDomainId(
+            currentStagedDomainId,
+            String(currentConfig.get('domainId') ?? ''),
+            domain.id,
+          );
           const bindingRef = emailDomainBindingRef(db, domain.id);
-          const oldBindingRef =
-            currentDomainId && currentDomainId !== domain.id
-              ? emailDomainBindingRef(db, currentDomainId)
-              : null;
+          const oldBindingRef = supersededDomainId
+            ? emailDomainBindingRef(db, supersededDomainId)
+            : null;
           const refs = [memberRef, bindingRef, ...(oldBindingRef ? [oldBindingRef] : [])];
           const [member, binding, oldBinding] = await tx.getAll(...refs) as DocumentSnapshot[];
           assertMutationActor(member, 'admin');
@@ -5814,8 +6795,7 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
             (binding.exists && !bindingIsOurs) ||
             (existing && !bindingIsOurs && !exactLegacyOwner) ||
             (!existing && binding.exists) ||
-            (!existing && legacyReferences.count > 0) ||
-            (existing && bindingIsOurs && !exactLegacyOwner)
+            (!existing && legacyReferences.count > 0)
           ) {
             throw new HttpsError(
               'failed-precondition',
@@ -5826,6 +6806,7 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
 
           if (!binding.exists) {
             tx.create(bindingRef, {
+              scope: 'event',
               cfpId,
               domainId: domain.id,
               domain: domain.name.toLowerCase(),
@@ -5833,15 +6814,23 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
               createdAt: FieldValue.serverTimestamp(),
             });
           }
-          tx.set(configRef, { domainId: domain.id, domain: domain.name.toLowerCase() }, { merge: true });
+          tx.set(
+            configRef,
+            {
+              senderMode: inferredEventEmailMode(currentData),
+              stagedDomainId: domain.id,
+              stagedDomain: domain.name.toLowerCase(),
+            },
+            { merge: true },
+          );
           if (
             oldBindingRef &&
             oldBinding &&
             emailDomainBindingMatches(
               oldBinding.data(),
               cfpId,
-              currentDomainId,
-              String(currentConfig.get('domain') ?? ''),
+              currentStagedDomainId,
+              String(currentConfig.get('stagedDomain') ?? ''),
             )
           ) {
             tx.delete(oldBindingRef);
@@ -5861,8 +6850,8 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
       try {
         const apiKey = await readResendKey();
         const config = await configRef.get();
-        const currentDomainId = String(config.get('domainId') ?? '');
-        const storedName = String(config.get('domain') ?? '').toLowerCase();
+        const currentDomainId = String(config.get('stagedDomainId') ?? config.get('domainId') ?? '');
+        const storedName = String(config.get('stagedDomain') ?? config.get('domain') ?? '').toLowerCase();
         if (!currentDomainId) {
           throw new HttpsError('failed-precondition', 'No domain has been added yet.');
         }
@@ -5878,7 +6867,16 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
             { reason: 'email_domain_mismatch' },
           );
         }
-        await migrateLegacyEmailDomainBinding(cfpId, current);
+        const currentBinding = await emailDomainBindingRef(db, currentDomainId).get();
+        if (!emailDomainBindingMatches(currentBinding.data(), cfpId, currentDomainId, storedName)) {
+          const isActiveLegacy =
+            config.get('domainId') === currentDomainId &&
+            String(config.get('domain') ?? '').toLowerCase() === storedName;
+          if (!isActiveLegacy) {
+            throw new HttpsError('failed-precondition', 'This sending domain is not assigned to this event.');
+          }
+          await migrateLegacyEmailDomainBinding(cfpId, current);
+        }
         const domain = await verifyDomain(apiKey, currentDomainId);
         if (domain.id !== currentDomainId || domain.name.toLowerCase() !== storedName) {
           throw new HttpsError('unavailable', 'Resend returned an incomplete domain record.');
@@ -5891,12 +6889,12 @@ export const emailDomain = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) =>
           );
           assertMutationActor(member, 'admin');
           if (
-            latestConfig.get('domainId') !== currentDomainId ||
+            String(latestConfig.get('stagedDomainId') ?? latestConfig.get('domainId') ?? '') !== currentDomainId ||
             !emailDomainBindingMatches(
               binding.data(),
               cfpId,
               currentDomainId,
-              String(latestConfig.get('domain') ?? ''),
+              String(latestConfig.get('stagedDomain') ?? latestConfig.get('domain') ?? ''),
             )
           ) {
             throw new HttpsError('aborted', 'The sending domain changed. Try again.');

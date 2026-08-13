@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { SelectField, TextAreaField, TextField } from '../../components/fields';
+import { Checkbox, SelectField, TextAreaField, TextField } from '../../components/fields';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
 import {
   emailError,
   emailHistoryError,
+  isEmailConfigurationChanged,
   isSpeakerMessageRecipientsChanged,
 } from '../../lib/errors';
 import { useLatest } from '../../lib/useLatest';
 import {
   emailQueue,
+  emailDomain,
   loadAllProposals,
   sendSpeakerMessage,
   setEmailSettings,
@@ -67,12 +69,23 @@ export function Email({
   const [retryableRemaining, setRetryableRemaining] = useState(0);
   const [delivery, setDelivery] = useState<EmailDeliveryReadiness | null>(null);
   const [staleHeld, setStaleHeld] = useState(0);
+  /** Effective values used by messages sent right now. */
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
-  const [storedSettings, setStoredSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
+  const [source, setSource] = useState<'platform' | 'event'>('platform');
+  const [senderMode, setSenderMode] = useState<'platform' | 'event'>('platform');
+  const [eventSettings, setEventSettings] = useState({
+    from: '',
+    replyTo: null as string | null,
+    domainId: '',
+    domain: '',
+  });
+  const [storedEventSettings, setStoredEventSettings] = useState(eventSettings);
   const [keyHint, setKeyHint] = useState('');
   const [domainId, setDomainId] = useState('');
   const [domain, setDomain] = useState('');
+  const [eventDomainStatus, setEventDomainStatus] = useState('unknown');
   const [templates, setTemplates] = useState<TemplateOverrides>({});
+  const [templateOverrides, setTemplateOverrides] = useState<TemplateOverrides>({});
   const [rows, setRows] = useState<EmailRow[]>([]);
   const [truncated, setTruncated] = useState(0);
   const [filter, setFilter] = useState('');
@@ -81,6 +94,8 @@ export function Email({
   const [error, setError] = useState('');
   const [senderNote, setSenderNote] = useState('');
   const [senderError, setSenderError] = useState('');
+  const [replyNote, setReplyNote] = useState('');
+  const [replyError, setReplyError] = useState('');
   const [ready, setReady] = useState(false);
   const [setupDirty, setSetupDirty] = useState(false);
   const [wordingDirty, setWordingDirty] = useState(false);
@@ -90,10 +105,12 @@ export function Email({
     rows: EmailReviewRow[];
   } | null>(null);
   const editing = useRef(false);
+  const configurationFingerprint = useRef('');
   const activeCfp = useRef(cfpId);
   activeCfp.current = cfpId;
-  const senderDirty =
-    settings.from !== storedSettings.from || settings.replyTo !== storedSettings.replyTo;
+  const eventFromDirty = eventSettings.from !== storedEventSettings.from;
+  const eventReplyToDirty = eventSettings.replyTo !== storedEventSettings.replyTo;
+  const senderDirty = eventFromDirty || eventReplyToDirty;
   const dirty = !readOnly && (senderDirty || setupDirty || wordingDirty || messageDirty);
   const keyConfigured = Boolean(
     delivery &&
@@ -124,16 +141,16 @@ export function Email({
       setError('');
       if (action !== 'preview') setNote('');
       try {
-        const { data } = await emailQueue({
-          cfpId,
-          action,
-          ...(reviewedRows
-            ? {
-                logIds: reviewedRows.map((row) => row.logId),
-                reviewedRecipients: reviewedRows.map(({ logId, to }) => ({ logId, to })),
-              }
-            : {}),
-        });
+        const { data } =
+          action === 'preview'
+            ? await emailQueue({ cfpId, action })
+            : await emailQueue({
+                cfpId,
+                action,
+                logIds: (reviewedRows ?? []).map((row) => row.logId),
+                reviewedRecipients: (reviewedRows ?? []).map(({ logId, to }) => ({ logId, to })),
+                emailConfigurationFingerprint: configurationFingerprint.current,
+              });
         if (activeCfp.current !== scope) return false;
         // Grouped by outcome: an admin checking a batch is looking for a
         // rejection sitting in the acceptances, not for a particular address.
@@ -157,16 +174,29 @@ export function Email({
           // Never over the top of someone mid-sentence: this load is async, and
           // an admin who starts typing before it lands would otherwise watch the
           // field empty itself under the cursor.
-          if (data.settings && !editing.current) {
-            setSettings(data.settings);
-            setStoredSettings(data.settings);
+          if (data.settings) setSettings(data.settings);
+          setSource(data.source ?? 'event');
+          setSenderMode(data.senderMode ?? 'event');
+          if (data.eventSettings) {
+            if (editing.current) {
+              setEventSettings((current) => ({
+                ...current,
+                domainId: data.eventSettings!.domainId,
+                domain: data.eventSettings!.domain,
+              }));
+            } else {
+              setEventSettings(data.eventSettings);
+              setStoredEventSettings(data.eventSettings);
+            }
           }
           setKeyHint(data.keyHint ?? '');
-          setDomainId(data.domainId ?? '');
+          setDomainId(data.eventSettings?.domainId ?? data.domainId ?? '');
           setDomain(data.domain ?? '');
           setRows(data.rows ?? []);
           setTruncated(data.truncated ?? 0);
           setTemplates(data.templates ?? {});
+          setTemplateOverrides(data.templateOverrides ?? data.templates ?? {});
+          configurationFingerprint.current = data.emailConfigurationFingerprint ?? '';
         } else {
           setNote(tRef.current.admin.emailSent(data.released ?? 0));
           const { data: after } = await emailQueue({ cfpId, action: 'preview' });
@@ -186,16 +216,29 @@ export function Email({
             waiting: after.waiting ?? nextHeld.length,
             needsAttention: after.needsAttention ?? after.retryable?.length ?? 0,
           });
-          if (after.settings && !editing.current) {
-            setSettings(after.settings);
-            setStoredSettings(after.settings);
+          if (after.settings) setSettings(after.settings);
+          setSource(after.source ?? 'event');
+          setSenderMode(after.senderMode ?? 'event');
+          if (after.eventSettings) {
+            if (editing.current) {
+              setEventSettings((current) => ({
+                ...current,
+                domainId: after.eventSettings!.domainId,
+                domain: after.eventSettings!.domain,
+              }));
+            } else {
+              setEventSettings(after.eventSettings);
+              setStoredEventSettings(after.eventSettings);
+            }
           }
           setKeyHint(after.keyHint ?? '');
-          setDomainId(after.domainId ?? '');
+          setDomainId(after.eventSettings?.domainId ?? after.domainId ?? '');
           setDomain(after.domain ?? '');
           setRows(after.rows ?? []);
           setTruncated(after.truncated ?? 0);
           setTemplates(after.templates ?? {});
+          setTemplateOverrides(after.templateOverrides ?? after.templates ?? {});
+          configurationFingerprint.current = after.emailConfigurationFingerprint ?? '';
         }
         return true;
       } catch (e) {
@@ -220,11 +263,16 @@ export function Email({
     setDelivery(null);
     setStaleHeld(0);
     setSettings(EMPTY_SETTINGS);
-    setStoredSettings(EMPTY_SETTINGS);
+    setSource('platform');
+    setSenderMode('platform');
+    setEventSettings({ from: '', replyTo: null, domainId: '', domain: '' });
+    setStoredEventSettings({ from: '', replyTo: null, domainId: '', domain: '' });
     setKeyHint('');
     setDomainId('');
     setDomain('');
+    setEventDomainStatus('unknown');
     setTemplates({});
+    setTemplateOverrides({});
     setRows([]);
     setTruncated(0);
     setFilter('');
@@ -232,15 +280,39 @@ export function Email({
     setError('');
     setSenderNote('');
     setSenderError('');
+    setReplyNote('');
+    setReplyError('');
     setSetupDirty(false);
     setWordingDirty(false);
     setMessageDirty(false);
+    configurationFingerprint.current = '';
     setReview(null);
   }, [cfpId]);
 
   useEffect(() => {
     void run('preview');
   }, [run]);
+
+  const refreshEventDomainStatus = useCallback(async () => {
+    if (!domainId) {
+      setEventDomainStatus('unknown');
+      return;
+    }
+    try {
+      const { data } = await emailDomain({ cfpId, action: 'list' });
+      if (activeCfp.current === cfpId) {
+        setEventDomainStatus(
+          data.domains?.find((candidate) => candidate.id === domainId)?.status ?? 'unknown',
+        );
+      }
+    } catch {
+      if (activeCfp.current === cfpId) setEventDomainStatus('unknown');
+    }
+  }, [cfpId, domainId]);
+
+  useEffect(() => {
+    void refreshEventDomainStatus();
+  }, [refreshEventDomainStatus]);
 
   const count = (prefix: string) =>
     Object.entries(tally)
@@ -249,13 +321,23 @@ export function Email({
 
   // Warned about as you type, not on save: this one only shows up at send time
   // otherwise, by which point the message is a `failed` row.
-  const mismatch = senderMismatch(settings.from, domain);
+  const eventMismatch = senderMismatch(eventSettings.from, eventSettings.domain);
 
   const waiting = held.length + heldRemaining;
   const unsent = retryable.length + retryableRemaining;
   const inProgress = count('queued') + count('sending');
   const delivered = count('sent');
   const deliveryReady = delivery?.ready === true;
+  const eventOverrideProblem = validateSettings({
+    from: eventSettings.from,
+    replyTo: eventSettings.replyTo ?? '',
+    publicUrl: '',
+  });
+  const eventOverrideReady =
+    keyConfigured &&
+    eventDomainStatus === 'verified' &&
+    !eventOverrideProblem &&
+    !eventMismatch;
 
   /*
    * Its own function rather than another `run` action: resend answers with an
@@ -274,6 +356,7 @@ export function Email({
         action: 'resend',
         logId: row.logId,
         reviewedTo: row.currentTo,
+        emailConfigurationFingerprint: configurationFingerprint.current,
       });
       if (activeCfp.current !== scope) return false;
       setNote(t.admin.emailResent.replace('{to}', row.currentTo));
@@ -301,13 +384,41 @@ export function Email({
     if (done) setReview(null);
   }
 
-  async function saveSender() {
+  async function saveEventSettings(
+    nextMode = senderMode,
+    saveStagedEventValues = true,
+  ) {
     if (readOnly) return;
     const scope = cfpId;
     setSenderNote('');
     setSenderError('');
 
-    const problem = validateSettings(settings);
+    if (nextMode === 'platform' && !saveStagedEventValues) {
+      setBusy(true);
+      try {
+        await setEmailSettings({
+          cfpId,
+          senderMode: 'platform',
+          replyTo: storedEventSettings.replyTo,
+        });
+        if (activeCfp.current !== scope) return;
+        editing.current = false;
+        setSenderNote(t.admin.emailSourceSavedPlatform);
+        await run('preview');
+      } catch (caught) {
+        if (activeCfp.current === scope) setSenderError(emailError(caught, t));
+      } finally {
+        if (activeCfp.current === scope) setBusy(false);
+      }
+      return;
+    }
+
+    const candidate: EmailSettings = {
+      from: eventSettings.from,
+      replyTo: eventSettings.replyTo ?? '',
+      publicUrl: '',
+    };
+    const problem = validateSettings(candidate);
     if (problem) {
       setSenderError(t.admin.emailSender[problem.problem]);
       return;
@@ -315,28 +426,77 @@ export function Email({
 
     // The server refuses both of these, and says so in English. Catching them
     // here is what turns "invalid argument" into a sentence naming the domain.
-    if (!domain) {
+    if (!eventSettings.domain) {
       setSenderError(t.admin.emailDomainFirst);
       return;
     }
-    if (mismatch) {
+    if (eventMismatch) {
       setSenderError(
-        t.admin.emailDomainMismatch.replace('{sender}', mismatch).replace('{verified}', domain),
+        t.admin.emailDomainMismatch
+          .replace('{sender}', eventMismatch)
+          .replace('{verified}', eventSettings.domain),
       );
       return;
     }
 
     setBusy(true);
     try {
-      await setEmailSettings({ cfpId, ...settings });
+      await setEmailSettings({
+        cfpId,
+        senderMode: nextMode,
+        from: eventSettings.from,
+        replyTo: eventSettings.replyTo,
+      });
       if (activeCfp.current !== scope) return;
       // Stored now, so the server's copy is the one to trust again.
       editing.current = false;
-      setStoredSettings(settings);
-      setSenderNote(t.admin.windowSaved);
+      setStoredEventSettings(eventSettings);
+      setSenderNote(
+        nextMode === 'event'
+          ? source === 'event'
+            ? t.admin.windowSaved
+            : t.admin.emailSourceSavedEvent
+          : t.admin.windowSaved,
+      );
       await run('preview');
     } catch (e) {
       if (activeCfp.current === scope) setSenderError(emailError(e, t));
+    } finally {
+      if (activeCfp.current === scope) setBusy(false);
+    }
+  }
+
+  async function saveReplyTo() {
+    if (readOnly) return;
+    const scope = cfpId;
+    setReplyNote('');
+    setReplyError('');
+    const replyTo = eventSettings.replyTo ?? '';
+    if (replyTo) {
+      const problem = validateSettings({ from: settings.from, replyTo, publicUrl: '' });
+      if (problem?.field === 'replyTo') {
+        setReplyError(t.admin.emailSender[problem.problem]);
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      await setEmailSettings({
+        cfpId,
+        senderMode,
+        replyToOnly: true,
+        replyTo: eventSettings.replyTo,
+      });
+      if (activeCfp.current !== scope) return;
+      editing.current = eventFromDirty;
+      setStoredEventSettings((current) => ({
+        ...current,
+        replyTo: eventSettings.replyTo,
+      }));
+      setReplyNote(t.admin.emailReplyToSaved);
+      await run('preview');
+    } catch (caught) {
+      if (activeCfp.current === scope) setReplyError(emailError(caught, t));
     } finally {
       if (activeCfp.current === scope) setBusy(false);
     }
@@ -401,11 +561,143 @@ export function Email({
           )}
         </div>
         {!deliveryReady && (
-          <a className="btn email-delivery-status__action" href="#email-delivery-setup">
+          <a
+            className="btn email-delivery-status__action"
+            href={
+              source === 'platform' && canManageProvider
+                ? '/platform#email-defaults'
+                : '#email-event-override'
+            }
+          >
             {t.admin.emailCompleteSetup}
           </a>
         )}
       </section>
+
+      <fieldset className="email-source" aria-describedby="email-source-help">
+        <legend>{t.admin.emailSourceLabel}</legend>
+        <p className="section__help" id="email-source-help">
+          {source === 'platform'
+            ? t.admin.emailSourceActivePlatform
+            : t.admin.emailSourceActiveEvent}
+        </p>
+        <div className="email-source__choices">
+          <article
+            className={`email-source__choice${
+              source === 'platform' ? ' email-source__choice--active' : ''
+            }`}
+          >
+            <div>
+              <h3>{t.admin.emailSourcePlatform}</h3>
+              <p>{t.admin.emailSourcePlatformHelp}</p>
+            </div>
+            {source !== 'platform' && (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || readOnly}
+                onClick={() => void saveEventSettings('platform', false)}
+              >
+                {t.admin.emailUsePlatformDefaults}
+              </button>
+            )}
+          </article>
+          <article
+            className={`email-source__choice${
+              source === 'event' ? ' email-source__choice--active' : ''
+            }`}
+          >
+            <div>
+              <h3>{t.admin.emailSourceEvent}</h3>
+              <p>{t.admin.emailSourceEventHelp}</p>
+            </div>
+            {source !== 'event' &&
+              (eventOverrideReady && !senderDirty ? (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || readOnly}
+                  onClick={() => void saveEventSettings('event')}
+                >
+                  {t.admin.emailActivateEventOverride}
+                </button>
+              ) : (
+                <a className="btn" href="#email-event-override">
+                  {t.admin.emailCompleteSetup}
+                </a>
+              ))}
+          </article>
+        </div>
+
+        <section className="email-effective" aria-labelledby="email-effective-title">
+          <div>
+            <h3 id="email-effective-title">{t.admin.emailSourceEffective}</h3>
+            <p>{t.admin.emailSourceEffectiveHelp}</p>
+          </div>
+          <dl>
+            <div>
+              <dt>{t.admin.emailEffectiveDomain}</dt>
+              <dd>{domain || '—'}</dd>
+            </div>
+            <div>
+              <dt>{t.admin.emailEffectiveFrom}</dt>
+              <dd>{settings.from || '—'}</dd>
+            </div>
+            <div>
+              <dt>{t.admin.emailEffectiveReplyTo}</dt>
+              <dd>{settings.replyTo || t.admin.emailNoReplyTo}</dd>
+            </div>
+            <div>
+              <dt>{t.platformAdmin.emailDefaultsWordingTitle}</dt>
+              <dd>
+                {source === 'platform'
+                  ? t.admin.emailEffectiveWordingPlatform
+                  : t.admin.emailEffectiveWordingEvent}
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <div className="email-source__reply-to">
+          <h3>{t.admin.emailPlatformReplyToTitle}</h3>
+          <p className="section__help">{t.admin.emailPlatformReplyToHelp}</p>
+          <Checkbox
+            label={t.admin.emailReplyToInherit}
+            checked={eventSettings.replyTo === null}
+            onChange={(inherit) => {
+              editing.current = true;
+              setEventSettings((current) => ({
+                ...current,
+                replyTo: inherit ? null : (current.replyTo ?? ''),
+              }));
+            }}
+            disabled={busy || readOnly}
+          />
+          <div className="grid grid--2">
+            <TextField
+              label={t.admin.emailReplyTo}
+              value={eventSettings.replyTo ?? ''}
+              onChange={(replyTo) => {
+                editing.current = true;
+                setEventSettings((current) => ({ ...current, replyTo }));
+              }}
+              disabled={busy || readOnly || eventSettings.replyTo === null}
+            />
+          </div>
+          {eventSettings.replyTo === '' && (
+            <p className="field__help">{t.admin.emailReplyToClearHelp}</p>
+          )}
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || readOnly || !eventReplyToDirty}
+            onClick={() => void saveReplyTo()}
+          >
+            {t.admin.emailSaveReplyTo}
+          </button>
+          <Result ok={replyNote} error={replyError} />
+        </div>
+      </fieldset>
 
       <section className="email-operations" aria-labelledby="email-operations-title">
         <div className="email-operations__heading">
@@ -612,61 +904,76 @@ export function Email({
         )}
       </section>
 
-      <h3 className="card__subtitle" id="email-delivery-setup">
-        {t.admin.setupEmail}
-      </h3>
-      <EmailSetup
-        cfpId={cfpId}
-        keyHint={keyHint}
-        keyConfigured={keyConfigured}
-        canManageProvider={canManageProvider}
-        domainId={domainId}
-        readOnly={readOnly}
-        onKeySet={(hint) => {
-          setKeyHint(hint);
-          void run('preview');
-        }}
-        onDomainChanged={async () => {
-          await run('preview');
-        }}
-        onDirtyChange={setSetupDirty}
-      />
-
-      <h3 className="card__subtitle">{t.admin.emailStepSender}</h3>
-      {!settings.from && <p className="note note--inline">{t.admin.emailNoSender}</p>}
-
-      <div className="grid grid--2">
-        <TextField
-          label={t.admin.emailFrom}
-          required
-          value={settings.from}
-          onChange={(from) => {
-            editing.current = true;
-            setSettings((s) => ({ ...s, from }));
+      <section id="email-event-override" className="email-event-override">
+        <h3 className="card__subtitle">{t.admin.emailEventOverrideTitle}</h3>
+        <p className="section__help">{t.admin.emailEventOverrideHelp}</p>
+        <EmailSetup
+          cfpId={cfpId}
+          keyHint={keyHint}
+          keyConfigured={keyConfigured}
+          canManageProvider={false}
+          platformManageHref={canManageProvider ? '/platform#email-defaults' : undefined}
+          domainId={domainId}
+          readOnly={readOnly}
+          onKeySet={setKeyHint}
+          onDomainChanged={async () => {
+            await run('preview');
+            await refreshEventDomainStatus();
           }}
-          disabled={busy || readOnly}
+          onDirtyChange={setSetupDirty}
         />
-        <TextField
-          label={t.admin.emailReplyTo}
-          value={settings.replyTo}
-          onChange={(replyTo) => {
-            editing.current = true;
-            setSettings((s) => ({ ...s, replyTo }));
-          }}
-          disabled={busy || readOnly}
-        />
-      </div>
-      <p className="field__help">{t.admin.emailFromHelp}</p>
-      {mismatch && (
-        <p className="note note--inline" role="status">
-          {t.admin.emailDomainMismatch.replace('{sender}', mismatch).replace('{verified}', domain)}
+
+        <h4>{t.admin.emailStepSender}</h4>
+        {!eventSettings.from && (
+          <p className="note note--inline">{t.admin.emailNoSender}</p>
+        )}
+        <div className="grid grid--2">
+          <TextField
+            label={t.admin.emailFrom}
+            required
+            value={eventSettings.from}
+            onChange={(from) => {
+              editing.current = true;
+              setEventSettings((current) => ({ ...current, from }));
+            }}
+            disabled={busy || readOnly}
+          />
+        </div>
+        <p className="field__help">{t.admin.emailFromHelp}</p>
+        {eventMismatch && (
+          <p className="note note--inline" role="status">
+            {t.admin.emailDomainMismatch
+              .replace('{sender}', eventMismatch)
+              .replace('{verified}', eventSettings.domain)}
+          </p>
+        )}
+        <p className={eventOverrideReady ? 'note note--inline' : 'muted'} role="status">
+          {eventOverrideReady
+            ? t.admin.emailEventOverrideReady
+            : t.admin.emailEventOverrideNotReady}
         </p>
-      )}
-
-      <button type="button" className="btn" disabled={busy || readOnly} onClick={saveSender}>
-        {t.admin.emailSaveSender}
-      </button>
-      <Result ok={senderNote} error={senderError} />
+        <div className="row row--wrap">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || readOnly || !senderDirty}
+            onClick={() => void saveEventSettings(senderMode)}
+          >
+            {t.admin.emailSaveSender}
+          </button>
+          {source !== 'event' && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy || readOnly || !eventOverrideReady || senderDirty}
+              onClick={() => void saveEventSettings('event')}
+            >
+              {t.admin.emailActivateEventOverride}
+            </button>
+          )}
+        </div>
+        <Result ok={senderNote} error={senderError} />
+      </section>
 
       <h3 className="card__subtitle">{t.admin.emailPreview}</h3>
       <EmailPreview
@@ -674,6 +981,7 @@ export function Email({
         cfpName={cfpName}
         configured={deliveryReady}
         templates={templates}
+        ownedTemplates={templateOverrides}
         readOnly={readOnly}
         onSaved={async () => {
           await run('preview');
@@ -689,8 +997,10 @@ export function Email({
           cfpId={cfpId}
           replyTo={settings.replyTo}
           deliveryReady={deliveryReady}
+          visibleConfigurationFingerprint={configurationFingerprint.current}
           readOnly={readOnly}
           onSent={() => run('preview')}
+          onConfigurationChanged={() => run('preview')}
           onDirtyChange={setMessageDirty}
         />
       </section>
@@ -848,19 +1158,24 @@ function WriteToSpeaker({
   cfpId,
   replyTo,
   deliveryReady,
+  visibleConfigurationFingerprint,
   readOnly = false,
   onSent,
+  onConfigurationChanged,
   onDirtyChange,
 }: {
   cfpId: string;
   replyTo: string;
   deliveryReady: boolean;
+  visibleConfigurationFingerprint: string;
   readOnly?: boolean;
   onSent: () => void;
+  onConfigurationChanged: () => Promise<boolean | void>;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
   const tRef = useLatest(t);
+  const onConfigurationChangedRef = useLatest(onConfigurationChanged);
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [proposalId, setProposalId] = useState('');
   const [subject, setSubject] = useState('');
@@ -873,6 +1188,7 @@ function WriteToSpeaker({
   const [error, setError] = useState('');
   const [recipientPreview, setRecipientPreview] = useState<SpeakerMessageRecipient[]>([]);
   const [recipientsFingerprint, setRecipientsFingerprint] = useState('');
+  const [messageConfigurationFingerprint, setMessageConfigurationFingerprint] = useState('');
   const [recipientLoading, setRecipientLoading] = useState(false);
   const [recipientError, setRecipientError] = useState('');
   const [reviewing, setReviewing] = useState(false);
@@ -904,6 +1220,7 @@ function WriteToSpeaker({
     setError('');
     setRecipientPreview([]);
     setRecipientsFingerprint('');
+    setMessageConfigurationFingerprint('');
     setRecipientLoading(false);
     setRecipientError('');
     setReviewing(false);
@@ -928,6 +1245,7 @@ function WriteToSpeaker({
     let cancelled = false;
     setRecipientPreview([]);
     setRecipientsFingerprint('');
+    setMessageConfigurationFingerprint('');
     setRecipientError('');
     setReviewing(false);
     if (!proposalId) {
@@ -945,8 +1263,21 @@ function WriteToSpeaker({
           proposalId,
         });
         if (cancelled) return;
+        if (
+          !visibleConfigurationFingerprint ||
+          data.emailConfigurationFingerprint !== visibleConfigurationFingerprint
+        ) {
+          // The parent is the visible delivery review. Never replace its token
+          // with a newer, hidden composer result.
+          setRecipientsFingerprint('');
+          setMessageConfigurationFingerprint('');
+          setError(tRef.current.admin.emailActionInvalid);
+          await onConfigurationChangedRef.current();
+          return;
+        }
         setRecipientPreview(data.recipients ?? []);
         setRecipientsFingerprint(data.recipientsFingerprint ?? '');
+        setMessageConfigurationFingerprint(visibleConfigurationFingerprint);
       } catch (e) {
         if (!cancelled) setRecipientError(emailError(e, tRef.current));
       } finally {
@@ -956,7 +1287,7 @@ function WriteToSpeaker({
     return () => {
       cancelled = true;
     };
-  }, [cfpId, proposalId, tRef]);
+  }, [cfpId, onConfigurationChangedRef, proposalId, tRef, visibleConfigurationFingerprint]);
 
   // From the snapshot frozen onto the proposal — the global speaker profile is
   // not the committee's to read. See `ReviewPage`.
@@ -969,7 +1300,14 @@ function WriteToSpeaker({
   const target = rows.find((row) => row.id === proposalId);
   async function send() {
     if (readOnly) return;
-    if (!target || !recipientsFingerprint) return;
+    if (
+      !target ||
+      !recipientsFingerprint ||
+      !messageConfigurationFingerprint ||
+      messageConfigurationFingerprint !== visibleConfigurationFingerprint
+    ) {
+      return;
+    }
 
     const scope = cfpId;
     setBusy(true);
@@ -983,6 +1321,7 @@ function WriteToSpeaker({
         subject,
         body,
         expectedRecipientsFingerprint: recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: messageConfigurationFingerprint,
       });
       if (activeCfp.current !== scope) return;
       setSubject('');
@@ -992,8 +1331,22 @@ function WriteToSpeaker({
       onSent();
     } catch (e) {
       if (activeCfp.current !== scope) return;
-      if (!isSpeakerMessageRecipientsChanged(e)) {
+      const recipientsChanged = isSpeakerMessageRecipientsChanged(e);
+      const configurationChanged = isEmailConfigurationChanged(e);
+      if (!recipientsChanged && !configurationChanged) {
         setError(emailError(e, t));
+        return;
+      }
+      if (configurationChanged) {
+        // A fresh parent review must precede a fresh dialog; keeping this one
+        // open would turn its second click into approval of an unseen sender.
+        setReviewing(false);
+        setRecipientPreview([]);
+        setRecipientsFingerprint('');
+        setMessageConfigurationFingerprint('');
+        setRecipientError('');
+        setError(emailError(e, t));
+        await onConfigurationChangedRef.current();
         return;
       }
       try {
@@ -1003,6 +1356,16 @@ function WriteToSpeaker({
           proposalId,
         });
         if (activeCfp.current !== scope) return;
+        if (data.emailConfigurationFingerprint !== messageConfigurationFingerprint) {
+          setReviewing(false);
+          setRecipientPreview([]);
+          setRecipientsFingerprint('');
+          setMessageConfigurationFingerprint('');
+          setRecipientError('');
+          setError(t.admin.emailActionInvalid);
+          await onConfigurationChangedRef.current();
+          return;
+        }
         setRecipientPreview(data.recipients ?? []);
         setRecipientsFingerprint(data.recipientsFingerprint ?? '');
         setRecipientError('');
@@ -1107,10 +1470,15 @@ function WriteToSpeaker({
           recipientLoading ||
           Boolean(recipientError) ||
           !recipientsFingerprint ||
+          !messageConfigurationFingerprint ||
+          messageConfigurationFingerprint !== visibleConfigurationFingerprint ||
           recipientPreview.length === 0
         }
         aria-describedby={!deliveryReady ? 'email-message-setup-reason' : undefined}
-        onClick={() => setReviewing(true)}
+        onClick={() => {
+          setError('');
+          setReviewing(true);
+        }}
       >
         {busy ? t.admin.messageSending : t.admin.messageSend}
       </button>

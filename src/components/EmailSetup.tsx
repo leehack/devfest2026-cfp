@@ -43,6 +43,8 @@ export function EmailSetup({
   keyHint,
   keyConfigured,
   canManageProvider,
+  platformManageHref,
+  domainActions,
   domainId,
   readOnly = false,
   onKeySet,
@@ -53,6 +55,12 @@ export function EmailSetup({
   keyHint: string;
   keyConfigured: boolean;
   canManageProvider: boolean;
+  platformManageHref?: string;
+  domainActions?: {
+    list: () => Promise<Domain[]>;
+    add: (domain: string) => Promise<void>;
+    verify: () => Promise<Domain | undefined>;
+  };
   domainId: string;
   readOnly?: boolean;
   onKeySet: (hint: string) => void;
@@ -99,12 +107,14 @@ export function EmailSetup({
     try {
       // At most one: `list` returns the domain this CFP registered and nothing
       // else, because the Resend account is shared across the whole platform.
-      const { data } = await emailDomain({ cfpId, action: 'list' });
-      if (current()) setDomains(data.domains ?? []);
+      const next = domainActions
+        ? await domainActions.list()
+        : (await emailDomain({ cfpId, action: 'list' })).data.domains ?? [];
+      if (current()) setDomains(next);
     } catch (e) {
       if (current()) setError(resendError(e, tRef.current));
     }
-  }, [cfpId, keyConfigured, tRef]);
+  }, [cfpId, domainActions, keyConfigured, tRef]);
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -155,7 +165,14 @@ export function EmailSetup({
             </p>
           </>
         ) : (
-          <p className="field__help">{t.admin.emailKeyPlatformManaged}</p>
+          <p className="field__help">
+            {t.admin.emailKeyPlatformManaged}{' '}
+            {platformManageHref && (
+              <a className="link" href={platformManageHref}>
+                {t.admin.emailManagePlatform}
+              </a>
+            )}
+          </p>
         )}
         {keyHint && <p className="muted">{t.admin.emailKeySet.replace('{hint}', keyHint)}</p>}
         {canManageProvider && (
@@ -216,7 +233,8 @@ export function EmailSetup({
                 disabled={busy || readOnly || !name.trim()}
                 onClick={() =>
                   run(async (current) => {
-                    await emailDomain({ cfpId, action: 'add', domain: name.trim() });
+                    if (domainActions) await domainActions.add(name.trim());
+                    else await emailDomain({ cfpId, action: 'add', domain: name.trim() });
                     if (!current()) return '';
                     setName('');
                     setChanging(false);
@@ -291,13 +309,15 @@ export function EmailSetup({
                 disabled={busy || readOnly}
                 onClick={() =>
                   run(async (current) => {
-                    const { data } = await emailDomain({ cfpId, action: 'verify' });
+                    const nextDomain = domainActions
+                      ? await domainActions.verify()
+                      : (await emailDomain({ cfpId, action: 'verify' })).data.domain;
                     if (!current()) return '';
                     await refresh();
                     if (!current()) return '';
                     await onDomainChanged?.();
                     if (!current()) return '';
-                    return data.domain?.status === 'verified'
+                    return nextDomain?.status === 'verified'
                       ? tRef.current.admin.emailDomainVerified
                       : tRef.current.admin.emailDomainChecking;
                   })

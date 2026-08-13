@@ -53,7 +53,10 @@ slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
 the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
 creator access), `signInLinks` and `speakerInvitationLimits` (platform-wide
-hashed throttles) and `config/platform` sit outside. Storage keeps server-only
+hashed address/network/global throttles), `config/platform`, callable-only
+`config/platformEmail`, callable-only `config/emailProvider` and
+`emailDomainBindings/{hash(domainId)}` sit outside.
+Storage keeps server-only
 working versions under
 `cfps/{cfpId}/workingHeadshots/{proposalId}/{uid}/{key}/{uploadId}` and confirmed
 copies under
@@ -138,20 +141,34 @@ immediate, but re-check the grant/member, proposal or shared pointer before send
 An explicit `locale` on the event member or pending grant is honoured; otherwise
 one notice renders both EN and FR, including both organiser overrides.
 
-Email setup needs no redeploy: a platform owner/admin rotates the one shared key,
-then each event admin manages its bound domain, sender and wording from `/admin`.
+Email setup needs no redeploy: a platform owner/admin rotates the one shared key
+and manages the default domain, sender, reply-to and wording from `/platform`.
+Adding a replacement platform domain only stages its binding; the active domain
+continues serving events until a verified candidate is explicitly activated.
+Activation swaps the pointer, removes only the old platform binding, and clears
+an old sender that does not belong to the new domain.
+An event inherits that default while its admin stages a separate sender setup
+from `/admin`. Only explicitly activating the event override switches identity;
+after that it fails closed until its own domain binding is valid rather than
+silently borrowing the platform identity.
 Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
 the built-in and an organiser's override are the same shape and one editor
-prefills from either. Overrides live in `config/email.templates`; a half-written
-one (blank subject or body) falls back rather than sending a blank.
-Addresses are data (`cfps/{id}/config/email`, `setEmailSettings`); the **key is
+prefills from either. Event templates overlay platform templates by kind and
+locale, then fall back to built-ins. A half-written override (blank subject or
+body) falls back rather than sending a blank.
+Addresses are data; the **key is
 Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
 a response — callable-only `config/emailProvider` holds only `keyHint`, the last
-four characters. Resend's domain API is proxied by `emailDomain` so the DNS
-records can be shown and re-checked. `emailDomainBindings/{hash(domainId)}` is
-the callable-only, exclusive tenant assignment; an event admin may create a new
-domain or migrate its CFP's unique exact legacy pointer, never adopt an existing
-unbound domain by typing its public name.
+four characters. Platform defaults live in callable-only `config/platformEmail`;
+events store `senderMode` and their own fields in `cfps/{id}/config/email`.
+An absent/null event `replyTo` inherits; an explicit empty string clears it.
+Resend's domain API is proxied by scope-specific callables so the DNS
+records can be shown and re-checked. `emailDomainBindings/{hash(domainId)}` is a
+callable-only, exclusive scope assignment: platform and event bindings are
+distinct, and an event may not adopt an existing unbound or differently scoped
+domain by typing its public name. A platform administrator may reclaim an
+unbound domain already in the shared provider account only when no event config
+references its exact provider id.
 `functions/.env*` is only a fallback. `config` is *not* world-readable as a
 collection — the rule names the two readable documents one at a time.
 
@@ -450,14 +467,17 @@ collection — the rule names the two readable documents one at a time.
 - **A field's `key` never moves.** Every stored answer is filed under it, so the
   editor generates it once from the English label and then shows it read-only.
   Renaming it would orphan the answers already collected, silently.
-- **One Resend account serves the whole platform.** So `emailDomain` is pinned to
-  the domain id stored on *this* CFP and its exclusive
-  `emailDomainBindings/{hash(domainId)}` row — `list` used to return the account's
-  whole roster, and `get`/`verify` took an id straight from the caller. An existing
-  unbound Resend domain is never adopted by name; legacy migration needs exactly
-  one matching CFP config. `setEmailSettings`, readiness and the delivery trigger
-  all re-check the binding, or one organiser could write as another organiser's
-  verified event. The shared key is rotatable only by a current verified platform
+- **One Resend account serves the whole platform.** Its default sending identity
+  has an exclusive platform binding; every event override has an exclusive CFP
+  binding. Absent or platform `senderMode` inherits the platform settings even
+  while event fields are staged. Explicit event mode selects the event scope and
+  fails closed until complete; legacy identity fields without a mode remain
+  event-scoped for compatibility. Event wording still overlays platform wording
+  independently.
+  Readiness, test sends, sign-in links and the delivery trigger all resolve the
+  same effective configuration and re-check its binding. Deleting a CFP removes
+  only that CFP's binding; it cannot touch the platform default. The shared key
+  and platform defaults are writable only by a current verified platform
   owner/admin; event administration alone is deliberately insufficient.
 - **`config/platform` is unwritable by anyone.** `publicUrl` is the origin of
   every link the server mails, sign-in links included, and those are bearer

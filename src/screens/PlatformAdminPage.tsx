@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { TextField } from '../components/fields';
+import { PlatformEmailDefaults } from '../components/PlatformEmailDefaults';
 import { useI18n } from '../i18n/context';
 import { platformAdminError } from '../lib/errors';
+import { goTo } from '../lib/router';
 import {
   grantCfpCreator,
   grantPlatformAdmin,
@@ -24,7 +26,17 @@ export function PlatformAdminPage({ user }: { user: User }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
+  const [emailDirty, setEmailDirty] = useState(false);
+  // The server cannot see a fragment. Settle it after mount so a direct
+  // `/platform#email-defaults` visit hydrates the same Access view it rendered.
+  const [section, setSection] = useState<'access' | 'email'>('access');
   const generation = useRef(0);
+  const sectionPanel = useRef<HTMLDivElement>(null);
+  const sectionMounted = useRef(false);
+  const emailDirtyRef = useRef(false);
+  const allowedHashChange = useRef(false);
+  const restoringHistory = useRef(false);
+  emailDirtyRef.current = emailDirty;
 
   const refresh = useCallback(async (reportError = true) => {
     const request = ++generation.current;
@@ -54,6 +66,111 @@ export function PlatformAdminPage({ user }: { user: User }) {
       generation.current += 1;
     };
   }, [refresh, user.uid]);
+
+  useEffect(() => {
+    let previousHash = window.location.hash;
+    const selectHash = () => {
+      const nextSection = window.location.hash === '#email-defaults' ? 'email' : 'access';
+      if (allowedHashChange.current) {
+        allowedHashChange.current = false;
+      } else if (
+        nextSection !== section &&
+        emailDirtyRef.current &&
+        !window.confirm(t.admin.unsaved)
+      ) {
+        window.history.replaceState(null, '', `/platform${previousHash || '#access'}`);
+        return;
+      }
+      previousHash = window.location.hash;
+      if (nextSection !== section) setEmailDirty(false);
+      setSection(nextSection);
+    };
+    selectHash();
+    window.addEventListener('hashchange', selectHash);
+    return () => window.removeEventListener('hashchange', selectHash);
+  }, [section, t.admin.unsaved]);
+
+  useEffect(() => {
+    if (sectionMounted.current) sectionPanel.current?.focus();
+    else sectionMounted.current = true;
+  }, [section]);
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!emailDirty) return;
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, [emailDirty]);
+
+  useEffect(() => {
+    const pagePath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const allowLeaving = () => {
+      emailDirtyRef.current = false;
+      setEmailDirty(false);
+    };
+    const confirmHistoryNavigation = () => {
+      if (restoringHistory.current) {
+        restoringHistory.current = false;
+        return;
+      }
+      if (!emailDirtyRef.current) return;
+      if (window.confirm(t.admin.unsaved)) {
+        allowLeaving();
+        return;
+      }
+      restoringHistory.current = true;
+      goTo(pagePath);
+    };
+    const confirmInternalNavigation = (event: MouseEvent) => {
+      if (
+        !emailDirtyRef.current ||
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const signOut = target.closest('.account-menu__action--button');
+      const link = target.closest<HTMLAnchorElement>('a[href]');
+      const destination = link ? new URL(link.href, window.location.href) : null;
+      const leavesPage =
+        signOut !== null ||
+        (destination !== null &&
+          destination.origin === window.location.origin &&
+          (destination.pathname !== window.location.pathname ||
+            destination.search !== window.location.search));
+      if (!leavesPage) return;
+      if (window.confirm(t.admin.unsaved)) {
+        allowLeaving();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('popstate', confirmHistoryNavigation);
+    document.addEventListener('click', confirmInternalNavigation, true);
+    return () => {
+      window.removeEventListener('popstate', confirmHistoryNavigation);
+      document.removeEventListener('click', confirmInternalNavigation, true);
+    };
+  }, [t.admin.unsaved]);
+
+  function changeSection(event: React.MouseEvent<HTMLAnchorElement>, next: 'access' | 'email') {
+    if (next === section) return;
+    if (emailDirty && !window.confirm(t.admin.unsaved)) {
+      event.preventDefault();
+      return;
+    }
+    allowedHashChange.current = true;
+    setEmailDirty(false);
+  }
 
   async function grant() {
     const target = email.trim();
@@ -143,14 +260,44 @@ export function PlatformAdminPage({ user }: { user: User }) {
     <div className="platform-admin">
       <header className="platform-admin__intro">
         <p className="platform-admin__eyebrow">{t.platformAdmin.eyebrow}</p>
-        <h2>{t.platformAdmin.accessTitle}</h2>
+        <h2>{t.platformAdmin.title}</h2>
         <p>{t.platformAdmin.intro}</p>
       </header>
 
-      <div className="platform-admin__grid">
-        <section className="section platform-admin__directory">
-          <h3>{t.platformAdmin.activeTitle}</h3>
-          <p className="section__help">{t.platformAdmin.activeHelp}</p>
+      <nav className="subnav platform-admin__nav" aria-label={t.platformAdmin.sections}>
+        <a
+          className={`subnav__tab${section === 'access' ? ' subnav__tab--on' : ''}`}
+          aria-current={section === 'access' ? 'page' : undefined}
+          href="#access"
+          onClick={(event) => changeSection(event, 'access')}
+        >
+          {t.platformAdmin.accessNav}
+        </a>
+        <a
+          className={`subnav__tab${section === 'email' ? ' subnav__tab--on' : ''}`}
+          aria-current={section === 'email' ? 'page' : undefined}
+          href="#email-defaults"
+          onClick={(event) => changeSection(event, 'email')}
+        >
+          {t.platformAdmin.emailDefaultsNav}
+        </a>
+      </nav>
+
+      {section === 'access' ? (
+        <>
+          <h2 id="platform-access-title" className="platform-admin__section-title">
+            {t.platformAdmin.accessTitle}
+          </h2>
+          <div
+            id="access"
+            ref={sectionPanel}
+            className="platform-admin__grid"
+            tabIndex={-1}
+            aria-labelledby="platform-access-title"
+          >
+            <section className="section platform-admin__directory">
+              <h3>{t.platformAdmin.activeTitle}</h3>
+              <p className="section__help">{t.platformAdmin.activeHelp}</p>
 
           {directory === null ? (
             error ? (
@@ -243,10 +390,10 @@ export function PlatformAdminPage({ user }: { user: User }) {
               ))}
             </ul>
           )}
-        </section>
+            </section>
 
-        <div className="platform-admin__controls">
-          <section className="section platform-admin__grant">
+            <div className="platform-admin__controls">
+              <section className="section platform-admin__grant">
             <h3>{t.platformAdmin.addTitle}</h3>
             <p className="section__help">{t.platformAdmin.addHelp}</p>
             <form
@@ -273,7 +420,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
                   : t.platformAdmin.grant}
               </button>
             </form>
-          </section>
+              </section>
 
           {isOwner && (
             <section className="section platform-admin__grant">
@@ -305,11 +452,22 @@ export function PlatformAdminPage({ user }: { user: User }) {
               </form>
             </section>
           )}
-        </div>
-      </div>
+            </div>
+          </div>
 
-      <p className="platform-admin__boundary">{t.platformAdmin.accessHelp}</p>
-      <Result ok={note} error={error} />
+          <p className="platform-admin__boundary">{t.platformAdmin.accessHelp}</p>
+          <Result ok={note} error={error} />
+        </>
+      ) : (
+        <div
+          id="email-defaults"
+          ref={sectionPanel}
+          tabIndex={-1}
+          aria-labelledby="platform-email-defaults-title"
+        >
+          <PlatformEmailDefaults onDirtyChange={setEmailDirty} />
+        </div>
+      )}
     </div>
   );
 }

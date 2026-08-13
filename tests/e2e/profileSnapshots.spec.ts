@@ -8,6 +8,7 @@ import {
   readEmailLog,
   readProposalById,
   readScheduleConfigDirect,
+  reviewedEmailConfiguration,
   reset,
   seedMember,
   seedProposal,
@@ -359,6 +360,7 @@ test.describe('explicit event speaker profile copies', () => {
         action: 'retry',
         logIds: [firstLogId],
         reviewedRecipients: [{ logId: firstLogId, to: SPEAKER.email }],
+        ...reviewedEmailConfiguration(resolvedQueue),
       }),
     ).toMatchObject({ released: 0, stale: 1 });
     expect(
@@ -366,6 +368,7 @@ test.describe('explicit event speaker profile copies', () => {
         action: 'resend',
         logId: firstLogId,
         reviewedTo: SPEAKER.email,
+        ...reviewedEmailConfiguration(resolvedQueue),
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(

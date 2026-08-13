@@ -511,6 +511,23 @@ committee notices are immediate.
 
 ### Email templates
 
+The platform has one default sending identity and wording set managed by a
+platform owner or administrator. Replacing its domain is a staged operation:
+the active identity remains effective during DNS setup, and activation swaps
+only a verified candidate and clears a sender that no longer matches. A CFP without its own delivery configuration
+inherits that identity while a separate event domain is being staged. Activating
+an event-specific sender is an explicit, isolated override: it must have its own
+verified domain binding and may not silently fall back to the platform identity
+when incomplete or stale. Event
+template overrides layer over platform overrides by message kind and language,
+then over the built-in copy. Platform and CFP domain bindings remain distinct,
+and deleting a CFP cannot delete or transfer the platform binding. Global
+sign-in links use the platform identity; CFP-scoped sign-in links use the same
+effective identity as that CFP without ever entering `emailLog`.
+For rollout compatibility, legacy event identity fields with no `senderMode`
+remain an event override; a templates-only legacy document inherits platform
+delivery.
+
 | Template | Trigger | Conditional content |
 |---|---|---|
 | Submission received | On submit | Bilingual, echo of what was submitted |

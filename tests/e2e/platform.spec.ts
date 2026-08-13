@@ -27,7 +27,9 @@ import {
   readExternalMutationLease,
   readMember,
   readProposalById,
+  readPlatformEmailConfigurationDirect,
   readProposalUpdateTime,
+  reviewedEmailConfiguration,
   reviewedEmailRecipients,
   readStoredObjects,
   reserveCfpDeletionDirect,
@@ -40,6 +42,7 @@ import {
   seedReview,
   seedSpeaker,
   setEmailDeliveryReadyDirect,
+  setPlatformEmailDeliveryReadyDirect,
   setSendingDomainDirect,
   setSendingDomainPointerDirect,
   setSubmissionFormDirect,
@@ -291,7 +294,7 @@ test.describe('nothing crosses between two calls', () => {
       ['setConfirmForm', { fields: [] }],
       ['sendSpeakerMessage', { proposalId: 'theirs', subject: 's', body: 'b' }],
       ['headshotImage', { proposalId: 'theirs', key: 'headshot' }],
-      ['setEmailSettings', { from: 'x@evil.test', replyTo: '' }],
+      ['setEmailSettings', { senderMode: 'event', from: 'x@evil.test', replyTo: '' }],
       ['setEmailTemplate', { kind: 'accepted', locale: 'en', subject: 's', body: 'b' }],
     ] as const) {
       expect(
@@ -319,6 +322,7 @@ test.describe('nothing crosses between two calls', () => {
     expect(
       await callAs(chair.idToken, 'setEmailSettings', {
         cfpId: CFP_ID,
+        senderMode: 'event',
         from: `Our CFP <cfp@${domain}>`,
         replyTo: '',
       }),
@@ -460,6 +464,7 @@ test.describe('archiving and deleting', () => {
     expect(await callAs(owner.idToken, 'archiveCfp', { archived: true })).toMatchObject({
       ok: true,
     });
+    const preview = await callJson(owner.idToken, 'emailQueue', { action: 'preview' });
 
     const refused: [string, Record<string, unknown>][] = [
       ['updateCfp', { name: 'Changed after archive', visibility: 'private' }],
@@ -473,7 +478,10 @@ test.describe('archiving and deleting', () => {
         'sendSpeakerMessage',
         { action: 'preview', proposalId: 'p-history' },
       ],
-      ['setEmailSettings', { from: 'Event <cfp@event.example>', replyTo: '' }],
+      [
+        'setEmailSettings',
+        { senderMode: 'event', from: 'Event <cfp@event.example>', replyTo: '' },
+      ],
       [
         'setEmailTemplate',
         { kind: 'accepted', locale: 'en', subject: 'Accepted', body: 'Hello.' },
@@ -481,14 +489,28 @@ test.describe('archiving and deleting', () => {
       ['sendTestEmail', { kind: 'accepted', locale: 'en' }],
       ['emailDomain', { action: 'add', domain: 'event.example' }],
       ['emailDomain', { action: 'verify' }],
-      ['emailQueue', { action: 'release', logIds: ['held-history'] }],
-      ['emailQueue', { action: 'retry' }],
+      [
+        'emailQueue',
+        {
+          action: 'release',
+          logIds: ['held-history'],
+          ...reviewedEmailConfiguration(preview),
+        },
+      ],
+      [
+        'emailQueue',
+        {
+          action: 'retry',
+          ...reviewedEmailConfiguration(preview),
+        },
+      ],
       [
         'emailQueue',
         {
           action: 'resend',
           logId: 'failed-history',
           reviewedTo: 'speaker@example.org',
+          ...reviewedEmailConfiguration(preview),
         },
       ],
     ];
@@ -513,7 +535,6 @@ test.describe('archiving and deleting', () => {
     expect(await callJson(owner.idToken, 'emailQueue', { action: 'summary' })).toMatchObject({
       waiting: 0,
     });
-    const preview = await callJson(owner.idToken, 'emailQueue', { action: 'preview' });
     for (const logId of ['held-history', 'failed-history', 'dry-history']) {
       expect(preview.rows.find((row: { logId: string }) => row.logId === logId)).toMatchObject({
         stale: true,
@@ -724,6 +745,7 @@ test.describe('archiving and deleting', () => {
       action: 'retry',
       logIds: preview.retryable.map((row: { logId: string }) => row.logId),
       reviewedRecipients: reviewedEmailRecipients(preview.retryable),
+      ...reviewedEmailConfiguration(preview),
     })).toMatchObject({
       released: 1,
     });
@@ -757,6 +779,7 @@ test.describe('archiving and deleting', () => {
     const owner = await createAccount(OWNER);
     await seedMember(owner.uid, 'owner');
     await seedMember('departing-reviewer', 'reviewer');
+    await setPlatformEmailDeliveryReadyDirect();
     await setSendingDomainDirect('deleting.example');
 
     const speaker = await createAccount(SPEAKER);
@@ -787,6 +810,15 @@ test.describe('archiving and deleting', () => {
     expect(await readProposalById('p-1')).toBeNull();
     expect(await readStoredObjects('cfps/')).toEqual([]);
     expect(await readEmailDomainBinding('dom-deleting.example')).toBeNull();
+    expect(await readPlatformEmailConfigurationDirect()).toMatchObject({
+      from: 'CFP Platform <mail@platform.example.test>',
+      domainId: 'dom-platform.example.test',
+    });
+    expect(await readEmailDomainBinding('dom-platform.example.test')).toMatchObject({
+      scope: 'platform',
+      domainId: 'dom-platform.example.test',
+      domain: 'platform.example.test',
+    });
   });
 
   test('delete and unarchive serialize so a deletion reservation cannot be revived', async () => {

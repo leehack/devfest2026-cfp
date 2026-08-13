@@ -2,8 +2,10 @@ import { expect, test } from '@playwright/test';
 
 import {
   callAs,
+  callJson,
   createAccount,
   readProposals,
+  reviewedEmailConfiguration,
   reset,
   seedMember,
   seedProposal,
@@ -474,12 +476,14 @@ test('pending and completed email rows become readable cards on a phone', async 
     status: 'accepted',
   });
   await setEmailDeliveryReadyDirect();
+  const emailPreview = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
   await callAs(admin.idToken, 'emailQueue', {
     action: 'release',
     logIds: ['accepted__email-card-complete'],
     reviewedRecipients: [
       { logId: 'accepted__email-card-complete', to: SPEAKER.email },
     ],
+    ...reviewedEmailConfiguration(emailPreview),
   });
   await waitForEmail(
     (rows) =>

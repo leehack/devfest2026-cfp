@@ -12,6 +12,7 @@ import {
   readProposalIdsForSpeaker,
   readPublicScheduleEntry,
   readScheduleEntry,
+  reviewedEmailConfiguration,
   reviewedEmailRecipients,
   reset,
   seedMember,
@@ -130,6 +131,7 @@ async function releaseHeldDecisions(adminToken: string, proposalIds: readonly st
       action: 'release',
       logIds: selected,
       reviewedRecipients: reviewedEmailRecipients(selectedRows),
+      ...reviewedEmailConfiguration(preview),
     }),
   ).resolves.toMatchObject({ ok: true, released: proposalIds.length, stale: 0 });
   await waitForEmail(
@@ -160,6 +162,7 @@ async function releaseHeldSchedule(
       action: 'release',
       logIds: selected,
       reviewedRecipients: reviewedEmailRecipients(selectedRows),
+      ...reviewedEmailConfiguration(preview),
     }),
   ).resolves.toMatchObject({ ok: true, released: 1, stale: 0 });
   await waitForEmail(

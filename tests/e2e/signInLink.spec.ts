@@ -20,6 +20,8 @@ import {
   reset,
   seedProposal,
   seedSpeaker,
+  setEventEmailSettingsDirect,
+  setPlatformEmailDeliveryReadyDirect,
   setPublicUrlDirect,
 } from './backend';
 import { at, signInAs, type Identity } from './form';
@@ -152,6 +154,45 @@ test.describe('signing in by email link', () => {
     await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe('/');
     expect(new URL(page.url()).search).toBe('');
+  });
+
+  test('CFP links inherit the platform sender, while an invalid event override fails closed', async () => {
+    await setPlatformEmailDeliveryReadyDirect();
+
+    expect((await request(ADDRESS)).ok).toBe(true);
+    await setEventEmailSettingsDirect({
+      senderMode: 'event',
+      from: 'Event <mail@platform.example.test>',
+      domain: 'platform.example.test',
+      domainId: 'dom-platform.example.test',
+    });
+    expect(await request('event-override@example.test')).toMatchObject({
+      ok: false,
+      code: 'FAILED_PRECONDITION',
+    });
+
+    // The broken event identity cannot break platform-global sign in.
+    expect(
+      await callPublic('requestSignInLink', {
+        email: 'global-platform-link@example.test',
+        locale: 'en',
+        cfpId: null,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  test('a nonexistent CFP does not borrow the platform sender or event name', async () => {
+    await setPlatformEmailDeliveryReadyDirect();
+    const before = await readSignInLinks();
+
+    expect(
+      await callPublic('requestSignInLink', {
+        email: 'missing-cfp@example.test',
+        locale: 'en',
+        cfpId: 'missing-cfp',
+      }),
+    ).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    expect(await readSignInLinks()).toEqual(before);
   });
 
   test('a link replaces an existing signed-in account instead of being ignored', async ({ page }) => {
@@ -299,6 +340,18 @@ test.describe('signing in by email link', () => {
         email: ADDRESS,
         locale: 'en',
         proposalId: 'not/a/document-id',
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+    expect(await readSignInLinks()).toEqual(before);
+  });
+
+  test('a malformed event id cannot fall through to the platform sender', async () => {
+    const before = await readSignInLinks();
+    expect(
+      await callPublic('requestSignInLink', {
+        cfpId: 'not/a/cfp-id',
+        email: ADDRESS,
+        locale: 'en',
       }),
     ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
     expect(await readSignInLinks()).toEqual(before);

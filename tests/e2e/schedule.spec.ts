@@ -16,6 +16,7 @@ import {
   readPublicScheduleRelease,
   readScheduleEntry,
   readScheduleReleaseIds,
+  reviewedEmailConfiguration,
   reviewedEmailRecipients,
   reset,
   seedPlatformMember,
@@ -382,6 +383,7 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
       action: 'release',
       logIds: unchangedQueue.held.map((row: { logId: string }) => row.logId),
       reviewedRecipients: reviewedEmailRecipients(unchangedQueue.held),
+      ...reviewedEmailConfiguration(unchangedQueue),
     }),
   ).toMatchObject({ ok: true, released: 1, stale: 0 });
   await waitForEmail(
@@ -427,6 +429,7 @@ test('an admin shares and publishes without duplicating notices, and cancellatio
     action: 'retry',
     logIds: retryableQueue.retryable.map((row: { logId: string }) => row.logId),
     reviewedRecipients: reviewedEmailRecipients(retryableQueue.retryable),
+    ...reviewedEmailConfiguration(retryableQueue),
   })).toMatchObject({
     ok: true,
     released: 1,
@@ -1146,6 +1149,7 @@ test('releases a trigger-created cancellation from its mapped release before any
       reviewedRecipients: reviewedEmailRecipients(
         queue.held.filter((row: { logId: string }) => row.logId === cancellation.id),
       ),
+      ...reviewedEmailConfiguration(queue),
     }),
   ).toMatchObject({ ok: true, released: 1, stale: 0 });
   await waitForEmail(
@@ -1445,12 +1449,14 @@ test('blocks held schedule assignment and change mail once proposals are no long
   });
 
   await setEmailDeliveryReadyDirect();
+  const queue = await callJson(fixture.admin.idToken, 'emailQueue', { action: 'preview' });
   for (const row of actionable) {
     expect(
       await callAs(fixture.admin.idToken, 'emailQueue', {
         action: 'resend',
         logId: row.id,
         reviewedTo: row.to,
+        ...reviewedEmailConfiguration(queue),
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   }
@@ -1459,6 +1465,7 @@ test('blocks held schedule assignment and change mail once proposals are no long
       action: 'release',
       logIds: actionable.map((row) => row.id),
       reviewedRecipients: actionable.map((row) => ({ logId: row.id, to: row.to })),
+      ...reviewedEmailConfiguration(queue),
     }),
   ).toMatchObject({ ok: true, released: 0, stale: 2 });
   for (const row of actionable) {
@@ -1468,6 +1475,7 @@ test('blocks held schedule assignment and change mail once proposals are no long
         action: 'resend',
         logId: row.id,
         reviewedTo: row.to,
+        ...reviewedEmailConfiguration(queue),
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   }

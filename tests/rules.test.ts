@@ -1504,10 +1504,17 @@ describe('platform access is callable-only', () => {
       });
       await setDoc(doc(db, 'emailDomainBindings', 'domain-hash'), {
         cfpId: CFP_ID,
+        scope: 'event',
         domainId: 'domain-id',
         domain: 'mail.example.org',
       });
       await setDoc(doc(db, 'config', 'emailProvider'), { keyHint: '…test' });
+      await setDoc(doc(db, 'config', 'platformEmail'), {
+        domainId: 'platform-domain-id',
+        domain: 'platform.example.org',
+        from: 'CFP Platform <mail@platform.example.org>',
+        replyTo: 'support@platform.example.org',
+      });
     });
   });
 
@@ -1535,15 +1542,22 @@ describe('platform access is callable-only', () => {
   it('does not expose or let browsers rewrite provider and domain ownership', async () => {
     await assertFails(getDoc(doc(asReviewer(), 'emailDomainBindings', 'domain-hash')));
     await assertFails(getDoc(doc(asReviewer(), 'config', 'emailProvider')));
+    await assertFails(getDoc(doc(asReviewer(), 'config', 'platformEmail')));
     await assertFails(
       setDoc(doc(asReviewer(), 'emailDomainBindings', 'domain-hash'), {
         cfpId: OTHER_CFP_ID,
+        scope: 'event',
         domainId: 'domain-id',
         domain: 'mail.example.org',
       }),
     );
     await assertFails(
       updateDoc(doc(asReviewer(), 'config', 'emailProvider'), { keyHint: '…evil' }),
+    );
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'config', 'platformEmail'), {
+        from: 'Attacker <mail@platform.example.org>',
+      }),
     );
   });
 

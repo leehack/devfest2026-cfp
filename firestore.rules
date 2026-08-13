@@ -463,10 +463,9 @@ service cloud.firestore {
 
     // --------------------------------------------------------- sign-in links
 
-    // How many links an address has asked for lately. Platform-wide rather than
-    // per CFP: the throttle protects the sending domain's reputation, which is
-    // one thing however many CFPs are running. Nobody signs in to read it, and
-    // its contents would say who has been trying to.
+    // Hashed per-address and per-network counters plus one platform circuit
+    // breaker. Platform-wide rather than per CFP: they protect the one shared
+    // sending domain. Nobody signs in to read or change them.
     match /signInLinks/{hash} {
       allow read, write: if false;
     }

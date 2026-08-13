@@ -63,6 +63,37 @@ export const revokePlatformAdmin = httpsCallable<{ email: string }, { email: str
   'revokePlatformAdmin',
 );
 
+export interface PlatformEmailConfiguration {
+  ok: boolean;
+  settings: EmailSettings;
+  keyHint: string;
+  /** Active, platform-bound identity used by inheriting events. */
+  domainId: string;
+  domain: string;
+  /** Candidate identity under DNS setup; it is inert until explicit activation. */
+  stagedDomainId: string;
+  stagedDomain: string;
+  delivery: EmailDeliveryReadiness;
+  templates: TemplateOverrides;
+}
+
+export const getPlatformEmailConfiguration = httpsCallable<
+  Record<string, never>,
+  PlatformEmailConfiguration
+>(functions, 'getPlatformEmailConfiguration');
+export const setPlatformEmailSettings = httpsCallable<
+  Pick<EmailSettings, 'from' | 'replyTo'>,
+  { ok: boolean }
+>(functions, 'setPlatformEmailSettings');
+export const setPlatformEmailTemplate = httpsCallable<
+  { kind: string; locale: string; subject?: string; body?: string; reset?: boolean },
+  { ok: boolean }
+>(functions, 'setPlatformEmailTemplate');
+export const sendPlatformTestEmail = httpsCallable<
+  { kind: string; locale: string; needsVisa?: boolean },
+  { ok: boolean; status: string; to: string }
+>(functions, 'sendPlatformTestEmail');
+
 export function usePlatformAccess(user: User | null): {
   status: PlatformAccessStatus | null;
   ready: boolean;
@@ -198,13 +229,19 @@ export interface RetryableEmail extends HeldEmail {
 }
 
 export const emailQueue = httpsCallable<
-  In<{
-    action: 'readiness' | 'summary' | 'preview' | 'release' | 'retry' | 'resend';
-    logId?: string;
-    logIds?: string[];
-    reviewedRecipients?: Array<{ logId: string; to: string }>;
-    reviewedTo?: string;
-  }>,
+  | In<{ action: 'readiness' | 'summary' | 'preview' }>
+  | In<{
+      action: 'release' | 'retry';
+      logIds: string[];
+      reviewedRecipients: Array<{ logId: string; to: string }>;
+      emailConfigurationFingerprint: string;
+    }>
+  | In<{
+      action: 'resend';
+      logId: string;
+      reviewedTo: string;
+      emailConfigurationFingerprint: string;
+    }>,
   {
     ok: boolean;
     /** Sendable decision emails, without returning their recipient data. */
@@ -226,6 +263,7 @@ export const emailQueue = httpsCallable<
     /** Server-checked provider and sender readiness for delivery actions. */
     delivery?: EmailDeliveryReadiness;
     released?: number;
+    emailConfigurationFingerprint?: string;
     settings?: EmailSettings;
     /** Last four characters of the API key — never the key. */
     keyHint?: string;
@@ -233,6 +271,17 @@ export const emailQueue = httpsCallable<
     /** The verified domain's name, to check the sender against. */
     domain?: string;
     templates?: TemplateOverrides;
+    /** Effective source after resolving the event's selected mode. */
+    source?: 'platform' | 'event';
+    senderMode?: 'platform' | 'event';
+    eventSettings?: {
+      from: string;
+      replyTo: string | null;
+      domainId: string;
+      domain: string;
+    };
+    /** Only leaves stored by this event; effective `templates` may include platform defaults. */
+    templateOverrides?: TemplateOverrides;
     rows?: EmailRow[];
     /** How many rows the cap left out, so it never reads as "that is all". */
     truncated?: number;
@@ -264,7 +313,15 @@ export interface EmailRow {
   recoverable?: boolean;
 }
 
-export const setEmailSettings = httpsCallable<In<EmailSettings>, { ok: boolean }>(
+export const setEmailSettings = httpsCallable<
+  In<{
+    senderMode: 'platform' | 'event';
+    from?: string;
+    replyTo?: string | null;
+    replyToOnly?: boolean;
+  }>,
+  { ok: boolean }
+>(
   functions,
   'setEmailSettings',
 );
@@ -295,6 +352,11 @@ export const emailDomain = httpsCallable<
   In<{ action: 'list' | 'add' | 'get' | 'verify'; domain?: string }>,
   { ok: boolean; domains?: Domain[]; domain?: Domain }
 >(functions, 'emailDomain');
+
+export const platformEmailDomain = httpsCallable<
+  { action: 'list' | 'add' | 'get' | 'verify' | 'activate'; domain?: string },
+  { ok: boolean; domains?: Domain[]; domain?: Domain; activated?: boolean }
+>(functions, 'platformEmailDomain');
 
 export const setEmailTemplate = httpsCallable<
   In<{ kind: string; locale: string; subject?: string; body?: string; reset?: boolean }>,
@@ -336,6 +398,7 @@ export const sendSpeakerMessage = httpsCallable<
         subject: string;
         body: string;
         expectedRecipientsFingerprint: string;
+        expectedEmailConfigurationFingerprint: string;
       }
   >,
   {
@@ -345,6 +408,7 @@ export const sendSpeakerMessage = httpsCallable<
     recipientCount?: number;
     recipients?: SpeakerMessageRecipient[];
     recipientsFingerprint?: string;
+    emailConfigurationFingerprint?: string;
   }
 >(functions, 'sendSpeakerMessage');
 

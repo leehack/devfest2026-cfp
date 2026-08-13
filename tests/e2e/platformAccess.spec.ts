@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { builtInTemplate } from '@shared/emailTemplates';
+
 import {
   CFP_ID,
   callAs,
@@ -8,8 +10,15 @@ import {
   createAccount,
   createUnverifiedAccount,
   invitePlatformRole,
+  readEmailDomainBinding,
+  readPlatformEmailConfigurationDirect,
   reset,
+  seedCfp,
+  seedMember,
   seedPlatformMember,
+  setPlatformEmailDeliveryReadyDirect,
+  setPlatformStagedEmailDomainDirect,
+  setSendingDomainDirect,
 } from './backend';
 import { signInAs, type Identity } from './form';
 
@@ -362,6 +371,221 @@ test.describe('platform creator access', () => {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test('a platform administrator can inspect the effective email defaults without event access', async ({
+    page,
+  }) => {
+    const admin = await createAccount(ADMIN);
+    await seedPlatformMember(admin.uid, 'admin', ADMIN.email, ADMIN.name);
+    await setPlatformEmailDeliveryReadyDirect({
+      templates: {
+        accepted: {
+          en: { subject: 'Platform acceptance: {title}', body: 'Welcome, {speakerName}.' },
+        },
+      },
+    });
+
+    await signInAs(page, ADMIN, '/platform#email-defaults');
+    await expect(page.getByRole('link', { name: 'Email defaults' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await expect(page.getByRole('heading', { name: 'Platform email defaults' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Platform delivery is ready' })).toBeVisible();
+    await expect(page.getByLabel('Send as')).toHaveValue(
+      'CFP Platform <mail@platform.example.test>',
+    );
+    await expect(page.getByLabel('Reply-to')).toHaveValue('support@platform.example.test');
+    await expect(page.getByRole('heading', { name: 'Default wording' })).toBeVisible();
+    await page.getByLabel('Edit the wording').check();
+    const subject = page.getByLabel('Subject line');
+    await expect(subject).toHaveValue('Platform acceptance: {title}');
+
+    await subject.fill('Unsaved replacement: {title}');
+    await page.getByRole('button', { name: 'Restore ours' }).click();
+    await expect(page.getByText('Restored.', { exact: true })).toBeVisible();
+    await expect(subject).toHaveValue(builtInTemplate('accepted', 'en').subject);
+    await expect(page.getByRole('button', { name: 'Send this to me' })).toBeEnabled();
+  });
+
+  test('platform domain activation refuses an unverified staged replacement', async () => {
+    const admin = await createAccount(ADMIN);
+    await seedPlatformMember(admin.uid, 'admin', ADMIN.email, ADMIN.name);
+    await setPlatformEmailDeliveryReadyDirect();
+    const staged = await setPlatformStagedEmailDomainDirect(
+      'pending.platform.example.test',
+      'pending',
+    );
+
+    expect(await callJson(admin.idToken, 'getPlatformEmailConfiguration', {})).toMatchObject({
+      domainId: 'dom-platform.example.test',
+      domain: 'platform.example.test',
+      stagedDomainId: staged.domainId,
+      stagedDomain: staged.domain,
+      delivery: { ready: true },
+    });
+    expect(await callJson(admin.idToken, 'platformEmailDomain', { action: 'verify' })).toMatchObject({
+      domain: { id: staged.domainId, name: staged.domain, status: 'pending' },
+    });
+    expect(
+      await callAs(admin.idToken, 'platformEmailDomain', { action: 'activate' }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await readPlatformEmailConfigurationDirect()).toMatchObject({
+      domainId: 'dom-platform.example.test',
+      stagedDomainId: staged.domainId,
+    });
+    expect(await readEmailDomainBinding('dom-platform.example.test')).toMatchObject({
+      scope: 'platform',
+    });
+    expect(await readEmailDomainBinding(staged.domainId)).toMatchObject({ scope: 'platform' });
+  });
+
+  test('platform domain activation atomically cuts over and deletes only the old platform binding', async () => {
+    const admin = await createAccount(ADMIN);
+    await Promise.all([
+      seedPlatformMember(admin.uid, 'admin', ADMIN.email, ADMIN.name),
+      seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
+    ]);
+    await setPlatformEmailDeliveryReadyDirect();
+    const staged = await setPlatformStagedEmailDomainDirect('next.platform.example.test');
+    await seedCfp('other-event');
+    await setSendingDomainDirect('event-owned.example.test', 'other-event');
+
+    expect(await callJson(admin.idToken, 'emailQueue', { action: 'preview' })).toMatchObject({
+      source: 'platform',
+      domain: 'platform.example.test',
+      settings: { from: 'CFP Platform <mail@platform.example.test>' },
+      delivery: { ready: true },
+    });
+    expect(await callJson(admin.idToken, 'platformEmailDomain', { action: 'verify' })).toMatchObject({
+      domain: { id: staged.domainId, status: 'verified' },
+    });
+    expect(
+      await callJson(admin.idToken, 'platformEmailDomain', { action: 'activate' }),
+    ).toMatchObject({ ok: true, activated: true, domain: { id: staged.domainId } });
+
+    const activated = await readPlatformEmailConfigurationDirect();
+    expect(activated).toMatchObject({ domainId: staged.domainId, domain: staged.domain });
+    expect(activated).not.toHaveProperty('stagedDomainId');
+    expect(activated).not.toHaveProperty('stagedDomain');
+    expect(activated).not.toHaveProperty('from');
+    expect(await readEmailDomainBinding('dom-platform.example.test')).toBeNull();
+    expect(await readEmailDomainBinding(staged.domainId)).toMatchObject({
+      scope: 'platform',
+      domainId: staged.domainId,
+      domain: staged.domain,
+    });
+    expect(await readEmailDomainBinding('dom-event-owned.example.test')).toMatchObject({
+      scope: 'event',
+      cfpId: 'other-event',
+    });
+
+    expect(await callJson(admin.idToken, 'emailQueue', { action: 'preview' })).toMatchObject({
+      source: 'platform',
+      domain: staged.domain,
+      settings: { from: '' },
+      delivery: { ready: false, problems: expect.arrayContaining(['invalid_sender']) },
+    });
+    await callJson(admin.idToken, 'setPlatformEmailSettings', {
+      from: `CFP Platform <mail@${staged.domain}>`,
+      replyTo: 'support@platform.example.test',
+    });
+    expect(await callJson(admin.idToken, 'emailQueue', { action: 'preview' })).toMatchObject({
+      source: 'platform',
+      domain: staged.domain,
+      settings: { from: `CFP Platform <mail@${staged.domain}>` },
+      delivery: { ready: true },
+    });
+  });
+
+  test('a verified platform replacement stays staged until its explicit cutover', async ({ page }) => {
+    const admin = await createAccount(ADMIN);
+    await seedPlatformMember(admin.uid, 'admin', ADMIN.email, ADMIN.name);
+    let activated = false;
+    const replacement = {
+      id: 'dom-next.platform.example.test',
+      name: 'next.platform.example.test',
+      status: 'verified',
+      records: [],
+    };
+
+    await page.route('**/getPlatformEmailConfiguration', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: {
+            ok: true,
+            settings: {
+              from: activated ? '' : 'CFP Platform <mail@platform.example.test>',
+              replyTo: 'support@platform.example.test',
+              publicUrl: '',
+            },
+            keyHint: '…test',
+            domainId: activated ? replacement.id : 'dom-platform.example.test',
+            domain: activated ? replacement.name : 'platform.example.test',
+            stagedDomainId: activated ? '' : replacement.id,
+            stagedDomain: activated ? '' : replacement.name,
+            delivery: activated
+              ? { ready: false, problems: ['invalid_sender'], domainStatus: 'verified' }
+              : { ready: true, problems: [], domainStatus: 'verified' },
+            templates: {},
+          },
+        }),
+      });
+    });
+    await page.route('**/platformEmailDomain', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      const request = route.request().postDataJSON() as { data?: { action?: string } };
+      if (request.data?.action === 'activate') activated = true;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result:
+            request.data?.action === 'list'
+              ? { ok: true, domains: [replacement] }
+              : { ok: true, activated: true, domain: replacement },
+        }),
+      });
+    });
+
+    await signInAs(page, ADMIN, '/platform#email-defaults');
+    const active = page.locator('article', {
+      has: page.getByRole('heading', { name: 'Active platform domain' }),
+    });
+    const staged = page.locator('article', {
+      has: page.getByRole('heading', { name: 'Staged replacement' }),
+    });
+    await expect(active).toContainText('platform.example.test');
+    await expect(staged).toContainText(replacement.name);
+    await expect(staged).toContainText('Verified');
+    await expect(page.getByRole('heading', { name: 'Platform delivery is ready' })).toBeVisible();
+
+    await staged.getByRole('button', { name: 'Activate verified domain' }).click();
+
+    await expect(active).toContainText(replacement.name);
+    await expect(staged).toContainText('No replacement domain is staged.');
+    await expect(page.getByLabel('Send as')).toHaveValue('');
+    await expect(page.getByRole('heading', { name: 'Platform delivery needs setup' })).toBeVisible();
+    await expect(
+      page.getByText('Verified platform domain activated. Save a matching sender before delivery can resume.'),
+    ).toBeVisible();
+  });
+
+  test('platform email drafts guard internal navigation', async ({ page }) => {
+    const admin = await createAccount(ADMIN);
+    await seedPlatformMember(admin.uid, 'admin', ADMIN.email, ADMIN.name);
+    await setPlatformEmailDeliveryReadyDirect();
+    await signInAs(page, ADMIN, '/platform#email-defaults');
+
+    const sender = page.getByLabel('Send as');
+    await sender.fill('Unsaved <mail@platform.example.test>');
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.getByRole('link', { name: 'All calls' }).click();
+
+    await expect(page).toHaveURL(/\/platform#email-defaults$/);
+    await expect(sender).toHaveValue('Unsaved <mail@platform.example.test>');
   });
 
   test('the owner screen delegates and revokes pending administrators', async ({ page }) => {

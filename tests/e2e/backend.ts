@@ -111,6 +111,10 @@ export async function setCfpArchivedDirect(archived: boolean, cfpId = CFP_ID) {
   await patch(`cfps/${cfpId}`, { archived: { booleanValue: archived } });
 }
 
+export async function setCfpNameDirect(name: string, cfpId = CFP_ID) {
+  await patch(`cfps/${cfpId}`, { name: { stringValue: name } });
+}
+
 /** Simulates an interrupted owner deletion after its transaction committed. */
 export async function reserveCfpDeletionDirect(uid: string, cfpId = CFP_ID) {
   await patch(`cfps/${cfpId}`, {
@@ -639,10 +643,20 @@ export async function setPublicUrlDirect(url: string) {
  * that is not on it — one Resend account serves the whole platform, so without
  * that check any organiser could write as somebody else's verified domain.
  */
-export async function setSendingDomainDirect(domain: string, cfpId = CFP_ID) {
+export async function setSendingDomainDirect(
+  domain: string,
+  cfpId = CFP_ID,
+  { emulatorVerified = false }: { emulatorVerified?: boolean } = {},
+) {
   const domainId = `dom-${domain}`;
   await setSendingDomainPointerDirect(domain, domainId, cfpId);
+  if (emulatorVerified) {
+    await patch(`cfps/${cfpId}/config/email`, {
+      emulatorDeliveryReady: { booleanValue: true },
+    });
+  }
   await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    scope: { stringValue: 'event' },
     cfpId: { stringValue: cfpId },
     domain: { stringValue: domain },
     domainId: { stringValue: domainId },
@@ -694,6 +708,115 @@ export async function setEmailDeliveryReadyDirect(cfpId = CFP_ID) {
     domain: { stringValue: domain },
     domainId: { stringValue: domainId },
   });
+}
+
+/**
+ * Makes the platform default independently ready under the emulator.
+ *
+ * Its binding is deliberately not an event binding: an unconfigured CFP may
+ * inherit it, but an activated event override cannot claim or delete it.
+ */
+export async function setPlatformEmailDeliveryReadyDirect(
+  {
+    from = 'CFP Platform <mail@platform.example.test>',
+    replyTo = 'support@platform.example.test',
+    templates,
+  }: {
+    from?: string;
+    replyTo?: string;
+    templates?: Record<string, unknown>;
+  } = {},
+) {
+  const domain = 'platform.example.test';
+  const domainId = `dom-${domain}`;
+  await patch('config/platformEmail', {
+    from: { stringValue: from },
+    replyTo: { stringValue: replyTo },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+    emulatorDeliveryReady: { booleanValue: true },
+    ...(templates ? { templates: encode(templates) } : {}),
+  });
+  await patch('config/emailProvider', { keyHint: { stringValue: '…test' } });
+  await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    scope: { stringValue: 'platform' },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+  });
+}
+
+/** Stages a platform-bound replacement without disturbing the active identity. */
+export async function setPlatformStagedEmailDomainDirect(
+  domain: string,
+  status: string = 'verified',
+) {
+  const domainId = `dom-${domain}`;
+  await patch('config/platformEmail', {
+    stagedDomain: { stringValue: domain },
+    stagedDomainId: { stringValue: domainId },
+    emulatorStagedDomainStatus: { stringValue: status },
+  });
+  await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
+    scope: { stringValue: 'platform' },
+    domain: { stringValue: domain },
+    domainId: { stringValue: domainId },
+  });
+  return { domain, domainId };
+}
+
+export async function setEventEmailSettingsDirect(
+  fields: {
+    senderMode?: 'platform' | 'event';
+    from?: string;
+    replyTo?: string | null;
+    domain?: string;
+    domainId?: string;
+    stagedDomain?: string;
+    stagedDomainId?: string;
+    templates?: Record<string, unknown>;
+  },
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/config/email`, {
+    ...(fields.senderMode ? { senderMode: { stringValue: fields.senderMode } } : {}),
+    ...(fields.from !== undefined ? { from: { stringValue: fields.from } } : {}),
+    ...(fields.replyTo === null
+      ? { replyTo: { nullValue: null } }
+      : fields.replyTo !== undefined
+        ? { replyTo: { stringValue: fields.replyTo } }
+        : {}),
+    ...(fields.domain !== undefined ? { domain: { stringValue: fields.domain } } : {}),
+    ...(fields.domainId !== undefined ? { domainId: { stringValue: fields.domainId } } : {}),
+    ...(fields.stagedDomain !== undefined
+      ? { stagedDomain: { stringValue: fields.stagedDomain } }
+      : {}),
+    ...(fields.stagedDomainId !== undefined
+      ? { stagedDomainId: { stringValue: fields.stagedDomainId } }
+      : {}),
+    ...(fields.templates ? { templates: encode(fields.templates) } : {}),
+  });
+}
+
+export async function readEventEmailConfigurationDirect(
+  cfpId = CFP_ID,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/cfps/${cfpId}/config/email`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readEventEmailConfigurationDirect');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+export async function readPlatformEmailConfigurationDirect(): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/config/platformEmail`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readPlatformEmailConfigurationDirect');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
 }
 
 /** Plants the private external-mutation fence for archive/provider race tests. */
@@ -804,6 +927,15 @@ export function reviewedEmailRecipients(
   return rows.map(({ logId, to }) => ({ logId, to }));
 }
 
+/** Exact effective delivery setup returned by the same queue preview. */
+export function reviewedEmailConfiguration(
+  preview: { emailConfigurationFingerprint?: unknown },
+): { emailConfigurationFingerprint: string } {
+  return {
+    emailConfigurationFingerprint: String(preview.emailConfigurationFingerprint ?? ''),
+  };
+}
+
 /** Holds a queue row in a claimed send, with a caller-selected lease age. */
 export async function setEmailSendingDirect(
   logId: string,
@@ -880,6 +1012,7 @@ export async function seedEmailLog(
     recipientUid,
     to = 'speaker@example.org',
     reviewedTo,
+    reviewedEmailConfigurationFingerprint,
     subject,
     body,
     error,
@@ -898,6 +1031,7 @@ export async function seedEmailLog(
     recipientUid?: string;
     to?: string;
     reviewedTo?: string;
+    reviewedEmailConfigurationFingerprint?: string;
     subject?: string;
     body?: string;
     error?: string;
@@ -914,6 +1048,13 @@ export async function seedEmailLog(
     proposalId: { stringValue: proposalId },
     to: { stringValue: to },
     ...(reviewedTo ? { reviewedTo: { stringValue: reviewedTo } } : {}),
+    ...(reviewedEmailConfigurationFingerprint
+      ? {
+          reviewedEmailConfigurationFingerprint: {
+            stringValue: reviewedEmailConfigurationFingerprint,
+          },
+        }
+      : {}),
     ...(recipientUid ? { recipientUid: { stringValue: recipientUid } } : {}),
     ...(subject ? { subject: { stringValue: subject } } : {}),
     ...(body ? { body: { stringValue: body } } : {}),
