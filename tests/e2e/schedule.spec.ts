@@ -197,6 +197,78 @@ async function seedDisclosureSchedule() {
   };
 }
 
+test('keeps a stale draft placement understandable after its proposal returns to review', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  const shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: fixture.revision,
+  });
+
+  await setProposalStatusDirect('modern-web', 'under_review');
+  const unrelatedEdit = await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: shared.revision,
+    entry: {
+      id: 'coffee-break',
+      kind: 'custom',
+      customType: 'break',
+      title: { en: 'Coffee and conversation', fr: 'Café et conversation' },
+      date: '2026-11-14',
+      startsAt: '10:00',
+      durationMinutes: 20,
+      roomId: 'amber',
+    },
+  });
+  expect(unrelatedEdit.revision).toBeGreaterThan(shared.revision);
+  expect(
+    await callAs(fixture.admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: unrelatedEdit.revision,
+      entry: {
+        id: 'modern-web',
+        kind: 'proposal',
+        proposalId: 'modern-web',
+        date: '2026-11-14',
+        startsAt: '10:15',
+        durationMinutes: 40,
+        roomId: 'blue',
+      },
+    }),
+  ).toEqual({ ok: false, code: 'FAILED_PRECONDITION' });
+  expect(await readScheduleEntry(shared.releaseId, 'modern-web')).toMatchObject({
+    session: { title: 'The modern web, without the maze' },
+  });
+
+  await signInAs(page, ADMIN, at('/admin/schedule'));
+  const stalePlacement = page
+    .locator('.schedule-card--ineligible')
+    .filter({ hasText: 'The modern web, without the maze' });
+  await expect(stalePlacement).toContainText('The modern web, without the maze');
+  await expect(stalePlacement).toContainText(SPEAKER.name);
+  await expect(stalePlacement).toContainText('Under review');
+  await expect(page.getByText('modern-web', { exact: true })).toHaveCount(0);
+  await stalePlacement.getByRole('button').click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'The modern web, without the maze' })).toBeVisible();
+  await expect(dialog.getByText('This placement needs attention')).toBeVisible();
+  await expect(dialog.getByText(/cannot be moved or shared/)).toBeVisible();
+  await expect(dialog.getByLabel('Start time')).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Save item' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Remove from schedule' })).toBeEnabled();
+  await expect(dialog.getByRole('link', { name: 'Open proposals' })).toBeVisible();
+
+  await setProposalStatusDirect('modern-web', 'accepted');
+  await page.reload();
+  await expect(
+    page.locator('.schedule-card--ineligible').filter({ hasText: 'The modern web, without the maze' }),
+  ).toHaveCount(0);
+  const restoredPlacement = page
+    .locator('.schedule-card--tentative')
+    .filter({ hasText: 'The modern web, without the maze' });
+  await expect(restoredPlacement).toContainText('Awaiting confirmation');
+  await restoredPlacement.getByRole('button').click();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Save item' })).toBeEnabled();
+});
+
 test('custom item language is validated, filterable, and frozen into each schedule release', async ({
   page,
 }) => {

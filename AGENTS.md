@@ -129,6 +129,9 @@ No token in the link: the signed-in session is the authentication. Admins cannot
 set a speaker response, because doing so would bypass that person's required
 answers and image. Moving a committee decision back clears every personal
 response and re-enters `under_review`, never editable `submitted`.
+The private schedule keeps an existing placement when that happens. Its proposal
+metadata remains visible, but only `accepted` or `confirmed` proposals may be
+newly placed or moved, and only `confirmed` proposals enter a shared release.
 
 Email is a queue, not a send: callables write a deterministic `emailLog` row and
 the `sendQueuedEmail` trigger delivers. Proposal decisions key by proposal;

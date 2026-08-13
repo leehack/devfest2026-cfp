@@ -247,6 +247,7 @@ import {
   SCHEDULE_LIMITS,
   publicScheduleSpeakers,
   resolvedScheduleLanguage,
+  scheduleProposalEligible,
   scheduleTaxonomyLabel,
   scheduleConflicts,
   sharedScheduleAudience,
@@ -7360,10 +7361,9 @@ export const upsertScheduleEntry = onCall(CALLABLE, async (request) => {
       ? await tx.getAll(...proposalIds.map((id) => db.doc(`cfps/${cfpId}/proposals/${id}`)))
       : [];
     const proposals = new Map(proposalSnaps.map((snap) => [snap.id, snap.data()]));
-    for (const item of entries) {
-      if (item.kind !== 'proposal') continue;
-      const proposal = proposals.get(item.proposalId);
-      if (!proposal || !['accepted', 'confirmed'].includes(String(proposal.status))) {
+    if (entry.kind === 'proposal') {
+      const proposal = proposals.get(entry.proposalId);
+      if (!proposal || !scheduleProposalEligible(proposal.status)) {
         throw new HttpsError('failed-precondition', 'Only accepted or confirmed talks can be scheduled.');
       }
     }

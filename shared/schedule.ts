@@ -84,6 +84,11 @@ export interface CustomScheduleEntry extends ScheduleEntryBase {
 
 export type ScheduleEntry = ProposalScheduleEntry | CustomScheduleEntry;
 
+/** A proposal may be placed or moved only while it remains selected for the programme. */
+export function scheduleProposalEligible(status: unknown): boolean {
+  return status === 'accepted' || status === 'confirmed';
+}
+
 export interface PublishedProposalSession {
   proposalId: string;
   title: string;

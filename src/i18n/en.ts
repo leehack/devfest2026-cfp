@@ -1957,7 +1957,7 @@ export const en = {
     offlineBadge: 'Offline',
     privateDraftTitle: 'Private draft',
     privateDraftHelp:
-      'Your working board. Accepted, tentative, and confirmed placements stay with admins here.',
+      'Your working board. Existing placements stay visible if a proposal status changes, so organisers can resolve them deliberately.',
     sharedPreviewTitle: 'Shared preview',
     sharedPreviewHelp:
       'A frozen confirmed-only version for speakers and the committee. Draft edits do not leak into it.',
@@ -1972,6 +1972,8 @@ export const en = {
     publicAudience: 'Everyone',
     updatedLabel: 'Updated',
     privateTentative: (n: number) => `${n} tentative ${n === 1 ? 'placement stays' : 'placements stay'} private`,
+    privateIneligible: (n: number) =>
+      `${n} ${n === 1 ? 'placement needs' : 'placements need'} attention before sharing`,
     sharedStale:
       'The shared preview no longer matches the current programme details. Share a new preview before publishing.',
     archivedTitle: 'Archived programme — read only',
@@ -1980,7 +1982,7 @@ export const en = {
     share: 'Review and share',
     shareTitle: 'Share this confirmed preview?',
     shareHelp:
-      'This creates a frozen version from confirmed sessions and public-safe programme items. Tentative placements remain private.',
+      'This creates a frozen version from confirmed sessions and public-safe programme items. Tentative or no-longer-eligible placements remain private.',
     shareDeliveryHelp:
       'After sharing, committee delivery starts immediately. New speaker placement messages stay held in Email for organiser review.',
     shareConfirm: 'Share preview',
@@ -1991,10 +1993,10 @@ export const en = {
     shareCommitteeAudience: 'Reviewers, admins, and owners see the confirmed programme read-only.',
     sharePublicAudience: 'The public still sees only the currently published programme.',
     sharedCount: (n: number) => `${n} items shared`,
-    omittedCount: (n: number) => `${n} tentative omitted`,
+    omittedCount: (n: number) => `${n} private placements omitted`,
     shared: 'Preview shared.',
     sharedVersion: (n: number) => `Shared version ${n}`,
-    sharedSummary: (shared: number, omitted: number) => `${shared} items shared; ${omitted} tentative omitted.`,
+    sharedSummary: (shared: number, omitted: number) => `${shared} items shared; ${omitted} private placements omitted.`,
     sharedChannels: (committee: number, speakers: number) =>
       `Committee delivery started for ${committee} eligible ${committee === 1 ? 'member' : 'members'}. ${speakers} speaker placement ${speakers === 1 ? 'message is' : 'messages are'} managed in Email; new messages remain held for review.`,
     publishNeedsShare: 'Review and share the confirmed preview first.',
@@ -2047,6 +2049,11 @@ export const en = {
     tentative: 'Awaiting confirmation',
     confirmed: 'Confirmed',
     confirmationStatus: 'Confirmation',
+    placementIneligible: 'No longer eligible',
+    placementIneligibleTitle: 'This placement needs attention',
+    placementIneligibleHelp:
+      'The proposal is no longer accepted or confirmed. Its draft placement is preserved, but it cannot be moved or shared. Remove it or accept the proposal again.',
+    openProposals: 'Open proposals',
     sessionFacts: 'Scheduling facts',
     search: 'Search sessions',
     searchHelp: 'Search by title, speaker, category, format, level, or language.',
@@ -2119,6 +2126,7 @@ export const en = {
     scheduledCount: (n: number) => `${n} scheduled`,
     unassignedCount: (n: number) => `${n} unscheduled`,
     tentativeCount: (n: number) => `${n} tentative`,
+    ineligibleCount: (n: number) => `${n} need attention`,
     conflictCount: (n: number) => `${n} conflicts`,
     unpublished: 'Changes not shared',
     publishedVersion: (n: number) => `Public version ${n}`,

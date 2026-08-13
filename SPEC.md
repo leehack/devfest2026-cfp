@@ -557,6 +557,9 @@ Organisers build the programme privately from accepted and confirmed talks.
 Room, speaker and duplicate-talk overlaps are hard publication errors. An
 `either` proposal must be assigned `en` or `fr`; accepted-but-unconfirmed talks
 may be placed tentatively but are never copied into a shared release.
+If a placed proposal later leaves `accepted` or `confirmed`, the private draft
+keeps its title, speakers and placement visible but marks it ineligible. It may
+be removed or accepted again, but not moved or copied into a new release.
 
 Disclosure has three explicit stages. The mutable private draft is visible only
 to event admins and owners. **Share preview** writes a complete immutable

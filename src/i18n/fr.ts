@@ -1995,7 +1995,7 @@ export const fr: Dictionary = {
     offlineBadge: 'Hors ligne',
     privateDraftTitle: 'Brouillon privé',
     privateDraftHelp:
-      'Votre tableau de travail. Les plages acceptées, provisoires et confirmées restent ici avec l’administration.',
+      'Votre tableau de travail. Les plages existantes restent visibles si le statut d’une proposition change, afin que l’équipe puisse les régler délibérément.',
     sharedPreviewTitle: 'Aperçu partagé',
     sharedPreviewHelp:
       'Une version figée des séances confirmées pour les conférenciers et le comité. Les changements du brouillon n’y paraissent pas.',
@@ -2010,6 +2010,8 @@ export const fr: Dictionary = {
     publicAudience: 'Tout le monde',
     updatedLabel: 'Mise à jour',
     privateTentative: (n: number) => `${n} ${n === 1 ? 'plage provisoire reste' : 'plages provisoires restent'} privée${n === 1 ? '' : 's'}`,
+    privateIneligible: (n: number) =>
+      `${n} ${n === 1 ? 'plage doit' : 'plages doivent'} être vérifiée${n === 1 ? '' : 's'} avant le partage`,
     sharedStale:
       'L’aperçu partagé ne correspond plus aux détails actuels du programme. Partagez un nouvel aperçu avant de publier.',
     archivedTitle: 'Programme archivé — lecture seule',
@@ -2018,7 +2020,7 @@ export const fr: Dictionary = {
     share: 'Vérifier et partager',
     shareTitle: 'Partager cet aperçu confirmé?',
     shareHelp:
-      'Une version figée est créée avec les séances confirmées et les éléments publics. Les plages provisoires restent privées.',
+      'Une version figée est créée avec les séances confirmées et les éléments publics. Les plages provisoires ou devenues inadmissibles restent privées.',
     shareDeliveryHelp:
       'Après le partage, l’envoi au comité commence immédiatement. Les nouveaux messages de placement restent retenus dans Courriel pour vérification.',
     shareConfirm: 'Partager l’aperçu',
@@ -2029,10 +2031,10 @@ export const fr: Dictionary = {
     shareCommitteeAudience: 'Les évaluateurs, administrateurs et propriétaires voient le programme confirmé en lecture seule.',
     sharePublicAudience: 'Le public continue de voir uniquement le programme actuellement publié.',
     sharedCount: (n: number) => `${n} éléments partagés`,
-    omittedCount: (n: number) => `${n} provisoires omis`,
+    omittedCount: (n: number) => `${n} plages privées omises`,
     shared: 'Aperçu partagé.',
     sharedVersion: (n: number) => `Version partagée ${n}`,
-    sharedSummary: (shared: number, omitted: number) => `${shared} éléments partagés; ${omitted} provisoires omis.`,
+    sharedSummary: (shared: number, omitted: number) => `${shared} éléments partagés; ${omitted} plages privées omises.`,
     sharedChannels: (committee: number, speakers: number) =>
       `L’envoi a commencé pour ${committee} membre${committee === 1 ? '' : 's'} admissible${committee === 1 ? '' : 's'} du comité. ${speakers} message${speakers === 1 ? '' : 's'} de placement ${speakers === 1 ? 'est géré' : 'sont gérés'} dans Courriel; les nouveaux restent retenus pour vérification.`,
     publishNeedsShare: 'Vérifiez et partagez d’abord l’aperçu confirmé.',
@@ -2085,6 +2087,11 @@ export const fr: Dictionary = {
     tentative: 'Confirmation en attente',
     confirmed: 'Confirmée',
     confirmationStatus: 'Confirmation',
+    placementIneligible: 'Plus admissible',
+    placementIneligibleTitle: 'Cette plage doit être vérifiée',
+    placementIneligibleHelp:
+      'La proposition n’est plus acceptée ou confirmée. Sa plage provisoire est conservée, mais elle ne peut être ni déplacée ni partagée. Retirez-la ou acceptez de nouveau la proposition.',
+    openProposals: 'Ouvrir les propositions',
     sessionFacts: 'Détails de planification',
     search: 'Rechercher des séances',
     searchHelp: 'Recherchez par titre, conférencier, catégorie, format, niveau ou langue.',
@@ -2159,6 +2166,7 @@ export const fr: Dictionary = {
     scheduledCount: (n: number) => `${n} programmées`,
     unassignedCount: (n: number) => `${n} non programmées`,
     tentativeCount: (n: number) => `${n} provisoires`,
+    ineligibleCount: (n: number) => `${n} à vérifier`,
     conflictCount: (n: number) => `${n} conflits`,
     unpublished: 'Modifications non partagées',
     publishedVersion: (n: number) => `Version publique ${n}`,

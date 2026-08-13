@@ -468,6 +468,9 @@ must reload instead of overwriting another organiser. The server rejects room,
 speaker and duplicate-proposal overlaps. Accepted talks may be planned
 tentatively, but they stay private until they are confirmed and the organiser
 shares a new preview. Every flexible language in that preview must be resolved.
+When a placed proposal returns to review or otherwise becomes ineligible, its
+private placement keeps enough proposal metadata to identify and remove it; it
+cannot be moved or enter the next shared release.
 
 Disclosure is explicit and versioned. **Share preview** creates an immutable
 `scheduleReleases/{releaseId}` snapshot and moves
