@@ -529,6 +529,10 @@ For rollout compatibility, legacy event identity fields with no `senderMode`
 remain an event override; a templates-only legacy document inherits platform
 delivery.
 
+An event using platform delivery may override its sender display name without
+owning another domain. The platform-owned address never changes, so one event
+cannot impersonate another address on the shared domain.
+
 | Template | Trigger | Conditional content |
 |---|---|---|
 | Submission received | On submit | Bilingual, echo of what was submitted |

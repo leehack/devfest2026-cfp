@@ -1113,7 +1113,7 @@ export const en = {
     emailSourceLabel: 'Email configuration source',
     emailSourcePlatform: 'Use platform defaults',
     emailSourcePlatformHelp:
-      'Send with the platform domain and sender. This event keeps its own wording and can set its own reply-to address.',
+      'Send with the platform domain. This event keeps its own wording and may override the sender name and reply-to address.',
     emailSourceEvent: 'Use an event override',
     emailSourceEventHelp:
       'Activate this only after the event domain is verified and its sender is ready.',
@@ -1126,6 +1126,15 @@ export const en = {
     emailEffectiveFrom: 'Sender',
     emailEffectiveReplyTo: 'Reply-to',
     emailNoReplyTo: 'Provider default',
+    emailPlatformSenderTitle: 'Event sender on the platform domain',
+    emailPlatformSenderHelp:
+      'Give this event its own sender name without letting it impersonate another address on the shared domain. Leave it blank to inherit the platform name.',
+    emailPlatformSenderLabel: 'Sender name (optional)',
+    emailPlatformSenderAddressHelp: 'The platform-owned address remains {address}.',
+    emailPlatformSenderInvalid: 'Use a sender name of 100 characters or fewer.',
+    emailSavePlatformSender: 'Save sender name',
+    emailPlatformSenderSaved: 'Event sender name saved.',
+    emailPlatformSenderInherited: 'This event now inherits the platform sender name.',
     emailPlatformReplyToTitle: 'Event reply-to',
     emailPlatformReplyToHelp:
       'Choose whether replies inherit the platform address or use an event-specific address. A custom blank address deliberately sends without Reply-to.',

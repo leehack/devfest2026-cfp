@@ -25,6 +25,8 @@ export type EmailSource = 'platform' | 'event';
 
 export interface EventEmailSettings {
   from: string;
+  /** Optional display name while the platform retains ownership of the address. */
+  platformSenderName: string;
   /** `null` inherits the platform value; an empty string explicitly clears it. */
   replyTo: string | null;
   domainId: string;
@@ -162,6 +164,22 @@ export function boundEmailSender(value: unknown, domain: string): string {
   return 'address' in parseSender(from) && !senderMismatch(from, domain) ? from : '';
 }
 
+/** An event may rename the sender, but never choose another address on the shared domain. */
+export function resolvedPlatformSender(
+  platformFrom: unknown,
+  eventSenderName: unknown,
+  domain: string,
+  bound: boolean,
+): string {
+  if (!bound) return '';
+  const inherited = boundEmailSender(platformFrom, domain);
+  if (!inherited) return '';
+  const name = text(eventSenderName);
+  if (!name) return inherited;
+  const parsed = parseSender(inherited);
+  return 'address' in parsed ? `${name} <${parsed.address}>` : '';
+}
+
 function owns(data: DocumentData, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(data, key);
 }
@@ -197,9 +215,12 @@ function resolveEmailConfigurationData(
   // The legacy platform sender remains usable only for CFP-less sign-in links.
   // Event delivery needs the new platform identity and its exact binding.
   const platformFrom = hasPlatformIdentity
-    ? platformBound
-      ? boundEmailSender(platformData.from, platformDomain)
-      : ''
+    ? resolvedPlatformSender(
+        platformData.from,
+        eventData.platformSenderName,
+        platformDomain,
+        platformBound,
+      )
     : '';
   const platformReplyTo = owns(platformData, 'replyTo')
     ? text(platformData.replyTo)
@@ -252,6 +273,7 @@ function resolveEmailConfigurationData(
     templateOverrides,
     eventSettings: {
       from: text(eventData.from),
+      platformSenderName: text(eventData.platformSenderName),
       replyTo: eventReplyTo,
       domainId: candidateEventDomainId,
       domain: candidateEventDomain,

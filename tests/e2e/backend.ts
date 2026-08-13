@@ -769,6 +769,7 @@ export async function setEventEmailSettingsDirect(
   fields: {
     senderMode?: 'platform' | 'event';
     from?: string;
+    platformSenderName?: string;
     replyTo?: string | null;
     domain?: string;
     domainId?: string;
@@ -781,6 +782,9 @@ export async function setEventEmailSettingsDirect(
   await patch(`cfps/${cfpId}/config/email`, {
     ...(fields.senderMode ? { senderMode: { stringValue: fields.senderMode } } : {}),
     ...(fields.from !== undefined ? { from: { stringValue: fields.from } } : {}),
+    ...(fields.platformSenderName !== undefined
+      ? { platformSenderName: { stringValue: fields.platformSenderName } }
+      : {}),
     ...(fields.replyTo === null
       ? { replyTo: { nullValue: null } }
       : fields.replyTo !== undefined

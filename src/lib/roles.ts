@@ -271,6 +271,7 @@ export const emailQueue = httpsCallable<
     senderMode?: 'platform' | 'event';
     eventSettings?: {
       from: string;
+      platformSenderName: string;
       replyTo: string | null;
       domainId: string;
       domain: string;
@@ -314,6 +315,8 @@ export const setEmailSettings = httpsCallable<
     from?: string;
     replyTo?: string | null;
     replyToOnly?: boolean;
+    senderName?: string;
+    platformSenderNameOnly?: boolean;
   }>,
   { ok: boolean }
 >(

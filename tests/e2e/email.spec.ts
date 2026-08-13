@@ -878,6 +878,11 @@ test.describe('email pipeline', () => {
     await expect(source).toContainText('CFP Platform <mail@platform.example.test>');
     await expect(source).toContainText('support@platform.example.test');
     await expect(source).not.toContainText('dom-platform.example.test');
+    const senderOverride = source.getByRole('textbox', { name: 'Sender name (optional)' });
+    await senderOverride.fill('DevFest Montréal');
+    await source.getByRole('button', { name: 'Save sender name' }).click();
+    await expect(source.getByText('Event sender name saved.')).toBeVisible();
+    await expect(source).toContainText('DevFest Montréal <mail@platform.example.test>');
     await expect(page.getByRole('heading', { name: 'Event delivery override' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Ready to deliver' })).toBeVisible();
 
@@ -1157,7 +1162,7 @@ test.describe('email pipeline', () => {
         replyTo: 'support@platform.example.test',
       },
       delivery: { ready: true },
-      eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
+      eventSettings: { from: '', platformSenderName: '', replyTo: null, domainId: '', domain: '' },
       templateOverrides: {
         accepted: {
           en: { subject: 'Event accepted: {title}', body: 'Event English.' },
@@ -1193,6 +1198,54 @@ test.describe('email pipeline', () => {
       settings: { replyTo: '' },
       eventSettings: { replyTo: '' },
     });
+  });
+
+  test('an event may rename the sender while retaining the platform address', async () => {
+    const { chair } = await stage();
+    await setPlatformEmailDeliveryReadyDirect();
+    await setEventEmailSettingsDirect({ senderMode: 'platform' });
+
+    expect(
+      await callJson(chair.idToken, 'setEmailSettings', {
+        senderMode: 'platform',
+        platformSenderNameOnly: true,
+        senderName: 'DevFest Montréal',
+      }),
+    ).toMatchObject({
+      ok: true,
+      source: 'platform',
+      settings: { from: 'DevFest Montréal <mail@platform.example.test>' },
+    });
+    expect(await readEventEmailConfigurationDirect()).toMatchObject({
+      senderMode: 'platform',
+      platformSenderName: 'DevFest Montréal',
+    });
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'preview' })).toMatchObject({
+      source: 'platform',
+      settings: { from: 'DevFest Montréal <mail@platform.example.test>' },
+      eventSettings: { platformSenderName: 'DevFest Montréal' },
+      delivery: { ready: true },
+    });
+
+    expect(
+      await callJson(chair.idToken, 'setEmailSettings', {
+        senderMode: 'platform',
+        platformSenderNameOnly: true,
+        senderName: '<Wrong>',
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
+
+    expect(
+      await callJson(chair.idToken, 'setEmailSettings', {
+        senderMode: 'platform',
+        platformSenderNameOnly: true,
+        senderName: '',
+      }),
+    ).toMatchObject({
+      ok: true,
+      settings: { from: 'CFP Platform <mail@platform.example.test>' },
+    });
+    expect(await readEventEmailConfigurationDirect()).not.toHaveProperty('platformSenderName');
   });
 
   test('a reply-to-only save preserves an active event sender and its staged replacement', async () => {

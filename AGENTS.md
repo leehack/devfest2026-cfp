@@ -162,6 +162,8 @@ Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
 a response — callable-only `config/emailProvider` holds only `keyHint`, the last
 four characters. Platform defaults live in callable-only `config/platformEmail`;
 events store `senderMode` and their own fields in `cfps/{id}/config/email`.
+Platform-mode events may store `platformSenderName` as a display-name override;
+the effective address always remains the platform-owned address.
 An absent/null event `replyTo` inherits; an explicit empty string clears it.
 Resend's domain API is proxied by scope-specific callables so the DNS
 records can be shown and re-checked. `emailDomainBindings/{hash(domainId)}` is a
