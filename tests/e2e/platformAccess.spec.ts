@@ -1,7 +1,5 @@
 import { expect, test } from '@playwright/test';
 
-import { builtInTemplate } from '@shared/emailTemplates';
-
 import {
   CFP_ID,
   callAs,
@@ -378,15 +376,15 @@ test.describe('platform creator access', () => {
   }) => {
     const admin = await createAccount(ADMIN);
     await seedPlatformMember(admin.uid, 'admin', ADMIN.email, ADMIN.name);
-    await setPlatformEmailDeliveryReadyDirect({
-      templates: {
-        accepted: {
-          en: { subject: 'Platform acceptance: {title}', body: 'Welcome, {speakerName}.' },
-        },
-      },
-    });
+    await setPlatformEmailDeliveryReadyDirect();
 
-    await signInAs(page, ADMIN, '/platform#email-defaults');
+    await signInAs(page, ADMIN, '/');
+    await page.getByRole('button', { name: 'Account' }).click();
+    await page
+      .locator('.account-menu__panel')
+      .getByRole('link', { name: 'Platform email settings' })
+      .click();
+    await expect(page).toHaveURL('/platform#email-defaults');
     await expect(page.getByRole('link', { name: 'Email defaults' })).toHaveAttribute(
       'aria-current',
       'page',
@@ -397,16 +395,12 @@ test.describe('platform creator access', () => {
       'CFP Platform <mail@platform.example.test>',
     );
     await expect(page.getByLabel('Reply-to')).toHaveValue('support@platform.example.test');
-    await expect(page.getByRole('heading', { name: 'Default wording' })).toBeVisible();
-    await page.getByLabel('Edit the wording').check();
-    const subject = page.getByLabel('Subject line');
-    await expect(subject).toHaveValue('Platform acceptance: {title}');
-
-    await subject.fill('Unsaved replacement: {title}');
-    await page.getByRole('button', { name: 'Restore ours' }).click();
-    await expect(page.getByText('Restored.', { exact: true })).toBeVisible();
-    await expect(subject).toHaveValue(builtInTemplate('accepted', 'en').subject);
-    await expect(page.getByRole('button', { name: 'Send this to me' })).toBeEnabled();
+    await expect(page.getByRole('heading', { name: 'Default wording' })).toHaveCount(0);
+    await expect(page.getByLabel('Edit the wording')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Send test email' }).click();
+    await expect(
+      page.getByText('Test rendered locally; no message was sent.'),
+    ).toBeVisible();
   });
 
   test('platform domain activation refuses an unverified staged replacement', async () => {
@@ -530,7 +524,6 @@ test.describe('platform creator access', () => {
             delivery: activated
               ? { ready: false, problems: ['invalid_sender'], domainStatus: 'verified' }
               : { ready: true, problems: [], domainStatus: 'verified' },
-            templates: {},
           },
         }),
       });

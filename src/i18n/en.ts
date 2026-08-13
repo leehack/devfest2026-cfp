@@ -153,6 +153,7 @@ export const en = {
   platformAdmin: {
     title: 'Platform administration',
     accountLink: 'Platform access',
+    emailDefaultsAccountLink: 'Platform email settings',
     eyebrow: 'Platform controls',
     intro:
       'Manage who can create CFP workspaces and the email defaults available to every event. Event roles stay separate: platform access does not reveal proposals, speakers, or reviews.',
@@ -210,7 +211,7 @@ export const en = {
     retry: 'Try again',
     emailDefaultsTitle: 'Platform email defaults',
     emailDefaultsIntro:
-      'Events can send with this verified domain, sender, reply-to address, and wording without repeating delivery setup. An event can still activate its own verified sending domain and wording.',
+      'Events can send with this verified domain, sender, and reply-to address without repeating delivery setup. Each event keeps control of its own message wording.',
     emailDefaultsLoadError: 'Platform email defaults could not be loaded.',
     emailDefaultsProviderTitle: 'Shared delivery provider',
     emailDefaultsProviderHelp:
@@ -231,16 +232,16 @@ export const en = {
     emailDefaultsSenderTitle: 'Default sender',
     emailDefaultsSenderHelp:
       'New and inheriting events use these addresses. Saving a platform default never replaces an event override.',
-    emailDefaultsWordingTitle: 'Default wording',
-    emailDefaultsWordingHelp:
-      'This wording sits between event-specific copy and the built-in copy. Resetting a platform message reveals the built-in version.',
     emailDefaultsReady: 'Platform delivery is ready',
     emailDefaultsReadyHelp: 'Events can inherit this delivery configuration now.',
     emailDefaultsBlocked: 'Platform delivery needs setup',
     emailDefaultsBlockedHelp:
       'Complete the provider key, verified domain, and default sender before events can inherit it.',
     emailDefaultsSaved: 'Platform sender defaults saved.',
-    emailDefaultsSampleEvent: 'Example event (email preview)',
+    emailDefaultsTest: 'Send test email',
+    emailDefaultsTestNeedsSetup: 'Complete the shared delivery setup before sending a test.',
+    emailDefaultsTestSent: 'Test sent to {to}.',
+    emailDefaultsTestDryRun: 'Test rendered locally; no message was sent.',
   },
 
   cfpPage: {
@@ -1112,7 +1113,7 @@ export const en = {
     emailSourceLabel: 'Email configuration source',
     emailSourcePlatform: 'Use platform defaults',
     emailSourcePlatformHelp:
-      'Send with the platform domain, sender, and wording. You can still set this event’s reply-to address.',
+      'Send with the platform domain and sender. This event keeps its own wording and can set its own reply-to address.',
     emailSourceEvent: 'Use an event override',
     emailSourceEventHelp:
       'Activate this only after the event domain is verified and its sender is ready.',
@@ -1124,8 +1125,6 @@ export const en = {
     emailEffectiveDomain: 'Sending domain',
     emailEffectiveFrom: 'Sender',
     emailEffectiveReplyTo: 'Reply-to',
-    emailEffectiveWordingPlatform: 'Platform wording, with any event message overrides',
-    emailEffectiveWordingEvent: 'Event wording, falling back to platform defaults',
     emailNoReplyTo: 'Provider default',
     emailPlatformReplyToTitle: 'Event reply-to',
     emailPlatformReplyToHelp:

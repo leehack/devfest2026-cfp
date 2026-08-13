@@ -647,14 +647,6 @@ export function Email({
               <dt>{t.admin.emailEffectiveReplyTo}</dt>
               <dd>{settings.replyTo || t.admin.emailNoReplyTo}</dd>
             </div>
-            <div>
-              <dt>{t.platformAdmin.emailDefaultsWordingTitle}</dt>
-              <dd>
-                {source === 'platform'
-                  ? t.admin.emailEffectiveWordingPlatform
-                  : t.admin.emailEffectiveWordingEvent}
-              </dd>
-            </div>
           </dl>
         </section>
 

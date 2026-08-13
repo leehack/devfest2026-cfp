@@ -421,8 +421,8 @@ to autoscale past that — anything beyond is a loop or an attack, and should
 queue rather than bill.
 
 One Resend account serves every call on the platform. Platform owners and
-administrators manage its shared key and a default domain, sender, reply-to and
-wording. Replacing the platform domain is staged too: the active identity keeps
+administrators manage its shared key and a default domain, sender and reply-to.
+Replacing the platform domain is staged too: the active identity keeps
 serving inheriting events while DNS is verified, and only an explicit activation
 swaps the verified pointer. A sender that does not match the replacement is
 cleared at that cutover and must be saved on the new domain. A CFP inherits that default while an event-specific domain is being
@@ -532,8 +532,8 @@ With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
 without sending anything, and the log never claims a send that did not happen.
 
-**Set the platform default up from `/platform`**, then inspect or override it for
-one CFP from `/admin`, under Email. Each screen says which scope supplies the
+**Set the platform default up from the account menu's Platform email settings
+link**, then inspect or override it for one CFP from `/admin`, under Email. Each screen says which scope supplies the
 effective setup and whether it is ready, because the failure this replaces was
 silent — the pipeline queued perfectly and sent nothing, and no screen said why.
 
@@ -566,16 +566,14 @@ silent — the pipeline queued perfectly and sent nothing, and no screen said wh
    and a test is not that.
 
 Every message can be rewritten per language from that last step. Event wording
-overlays the platform wording one template and language at a time, and the
-built-in copy is the final fallback. Placeholders are `{speakerName}`, `{title}`,
+overlays the built-in copy one template and language at a time. Placeholders are `{speakerName}`, `{title}`,
 `{proposalUrl}`, `{reviewUrl}`, `{scheduleUrl}`, `{scheduleDate}`,
 `{scheduleTime}`, `{scheduleRoom}`, `{event}` and `{visa}` — the last is
 conditional, so a paragraph containing only `{visa}` disappears for speakers
 who do not need one. A blank
 subject or body, or a mistyped placeholder that would print braces to an
 applicant, is refused in the browser *and* in the callable. Restoring an event
-override reveals the platform version when one exists, otherwise the built-in
-copy; restoring a platform override reveals the built-in copy.
+override reveals the built-in copy.
 
 Nothing here needs a redeploy. Checking DNS from a terminal is still quicker than
 any dashboard — no Resend DKIM record means the domain is not verified, whatever

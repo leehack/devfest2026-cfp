@@ -1130,13 +1130,13 @@ test.describe('email pipeline', () => {
     expect(JSON.stringify(preview)).not.toContain('re_');
   });
 
-  test('an unconfigured event inherits platform delivery and overlays only its own wording', async () => {
+  test('an unconfigured event inherits platform delivery but keeps event-owned wording', async () => {
     const { chair } = await stage();
     await setPlatformEmailDeliveryReadyDirect({
-      templates: {
+      // Rollout-era platform copy must not become another event's wording.
+      legacyTemplates: {
         accepted: {
-          en: { subject: 'Platform accepted: {title}', body: 'Platform English.' },
-          fr: { subject: 'Plateforme : {title}', body: 'Français plateforme.' },
+          fr: { subject: 'Legacy platform: {title}', body: 'Legacy platform body.' },
         },
       },
     });
@@ -1166,10 +1166,10 @@ test.describe('email pipeline', () => {
       templates: {
         accepted: {
           en: { subject: 'Event accepted: {title}', body: 'Event English.' },
-          fr: { subject: 'Plateforme : {title}', body: 'Français plateforme.' },
         },
       },
     });
+    expect(preview.templates.accepted).not.toHaveProperty('fr');
     // A CFP inherits the effective sender, never the platform DNS handle.
     expect(preview.domainId).toBe('');
   });
@@ -1275,17 +1275,8 @@ test.describe('email pipeline', () => {
           'setPlatformEmailSettings',
           { from: 'Changed <mail@platform.example.test>', replyTo: '' },
         ],
-        [
-          'setPlatformEmailTemplate',
-          {
-            kind: 'accepted',
-            locale: 'en',
-            subject: 'Changed: {title}',
-            body: 'Changed.',
-          },
-        ],
         ['platformEmailDomain', { action: 'list' }],
-        ['sendPlatformTestEmail', { kind: 'accepted', locale: 'en' }],
+        ['sendPlatformTestEmail', { locale: 'en' }],
       ] as const) {
         expect(await callAs(identity.idToken, name, data), name).toMatchObject({
           ok: false,

@@ -6,7 +6,6 @@ import {
   emailConfigurationFingerprint,
   emailTemplatesFingerprintInput,
   inferredEventEmailMode,
-  overlayEmailTemplates,
   resolveReplyTo,
 } from '../functions/src/emailConfig';
 import {
@@ -54,26 +53,6 @@ describe('platform email inheritance', () => {
     expect(resolveReplyTo({ replyTo: '' }, 'platform@example.org')).toBe('');
   });
 
-  it('overlays event copy on platform copy one complete leaf at a time', () => {
-    const platform = {
-      accepted: {
-        en: { subject: 'Platform EN', body: 'Platform body' },
-        fr: { subject: 'Plateforme FR', body: 'Corps plateforme' },
-      },
-    };
-    const event = {
-      accepted: {
-        en: { subject: 'Event EN', body: 'Event body' },
-      },
-    };
-    expect(overlayEmailTemplates(platform, event)).toEqual({
-      accepted: {
-        en: event.accepted.en,
-        fr: platform.accepted.fr,
-      },
-    });
-  });
-
   it('returns an opaque stable fingerprint that changes with effective delivery', () => {
     const configuration = {
       source: 'platform' as const,
@@ -82,7 +61,6 @@ describe('platform email inheritance', () => {
       domainId: 'provider-secret-id',
       domain: 'example.org',
       templates: {},
-      platformTemplates: {},
       templateOverrides: {},
       eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
       platformData: {},
@@ -133,7 +111,6 @@ describe('platform email inheritance', () => {
       domainId: 'provider-secret-id',
       domain: 'example.org',
       templates: {},
-      platformTemplates: {},
       templateOverrides: {},
       eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
       platformData: {},
@@ -166,7 +143,6 @@ describe('platform email inheritance', () => {
       domainId: '',
       domain: '',
       templates: {},
-      platformTemplates: {},
       templateOverrides: {},
       eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
       platformData: {},

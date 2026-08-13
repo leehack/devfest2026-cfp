@@ -12,7 +12,6 @@ import {
   EMAIL_LOCALES,
   type EmailKind,
   type EmailLocale,
-  type Template,
   type TemplateOverrides,
 } from '../../shared/emailTemplates';
 import {
@@ -39,7 +38,6 @@ export interface ResolvedEmailConfiguration {
   domainId: string;
   domain: string;
   templates: TemplateOverrides;
-  platformTemplates: TemplateOverrides;
   templateOverrides: TemplateOverrides;
   eventSettings: EventEmailSettings;
   platformData: DocumentData;
@@ -168,34 +166,6 @@ function owns(data: DocumentData, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(data, key);
 }
 
-function complete(template: unknown): template is Template {
-  if (!template || typeof template !== 'object') return false;
-  const candidate = template as Partial<Template>;
-  return Boolean(candidate.subject?.trim() && candidate.body?.trim());
-}
-
-/** Event copy wins one kind/language leaf at a time, then platform copy, then built-in copy. */
-export function overlayEmailTemplates(
-  platform: TemplateOverrides = {},
-  event: TemplateOverrides = {},
-): TemplateOverrides {
-  const merged: TemplateOverrides = {};
-  for (const kind of EMAIL_KINDS) {
-    for (const locale of EMAIL_LOCALES) {
-      const candidate = complete(event[kind]?.[locale])
-        ? event[kind]?.[locale]
-        : complete(platform[kind]?.[locale])
-          ? platform[kind]?.[locale]
-          : undefined;
-      if (!candidate) continue;
-      const byLocale = (merged[kind] ?? {}) as Partial<Record<EmailLocale, Template>>;
-      byLocale[locale] = candidate;
-      merged[kind] = byLocale as Partial<Record<EmailLocale, Template>>;
-    }
-  }
-  return merged;
-}
-
 export function inferredEventEmailMode(data: DocumentData): EmailSource {
   if (data.senderMode === 'platform' || data.senderMode === 'event') return data.senderMode;
   return text(data.from) || text(data.domainId) || text(data.domain) ? 'event' : 'platform';
@@ -244,9 +214,10 @@ function resolveEmailConfigurationData(
   const eventReplyTo = owns(eventData, 'replyTo') && eventData.replyTo !== null
     ? text(eventData.replyTo)
     : null;
-  const platformTemplates = templatesFrom(platformData);
   const templateOverrides = templatesFrom(eventData);
-  const templates = overlayEmailTemplates(platformTemplates, templateOverrides);
+  // Wording belongs to the event. `activeTemplate` fills every absent leaf
+  // from the built-in copy; old platform template data is deliberately inert.
+  const templates = templateOverrides;
   const source = senderMode;
   const settings: EmailSettings =
     source === 'event'
@@ -278,7 +249,6 @@ function resolveEmailConfigurationData(
           ? platformDomain
           : '',
     templates,
-    platformTemplates,
     templateOverrides,
     eventSettings: {
       from: text(eventData.from),
@@ -383,7 +353,6 @@ export async function resolvePlatformEmailConfiguration(db: Firestore): Promise<
   settings: EmailSettings;
   domainId: string;
   domain: string;
-  templates: TemplateOverrides;
   data: DocumentData;
   bound: boolean;
 }> {
@@ -412,7 +381,6 @@ export async function resolvePlatformEmailConfiguration(db: Firestore): Promise<
     },
     domainId: bound ? domainId : '',
     domain: bound ? domain : '',
-    templates: templatesFrom(data),
     data,
     bound,
   };

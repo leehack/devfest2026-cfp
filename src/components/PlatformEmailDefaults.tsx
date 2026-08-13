@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { EmailPreview } from './EmailPreview';
 import { EmailSetup } from './EmailSetup';
 import { TextField } from './fields';
 import { useI18n } from '../i18n/context';
@@ -10,7 +9,6 @@ import {
   platformEmailDomain,
   sendPlatformTestEmail,
   setPlatformEmailSettings,
-  setPlatformEmailTemplate,
   type Domain,
   type EmailDeliveryReadiness,
 } from '../lib/roles';
@@ -21,11 +19,10 @@ import {
   validateSettings,
   type EmailSettings,
 } from '@shared/emailSettings';
-import type { TemplateOverrides } from '@shared/emailTemplates';
 import { Result } from '../screens/admin/Result';
 
 export function PlatformEmailDefaults({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const tRef = useLatest(t);
   const [settings, setSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
   const [storedSettings, setStoredSettings] = useState<EmailSettings>(EMPTY_SETTINGS);
@@ -36,7 +33,6 @@ export function PlatformEmailDefaults({ onDirtyChange }: { onDirtyChange?: (dirt
   const [stagedDomain, setStagedDomain] = useState('');
   const [candidateDomain, setCandidateDomain] = useState<Domain | null>(null);
   const [delivery, setDelivery] = useState<EmailDeliveryReadiness | null>(null);
-  const [templates, setTemplates] = useState<TemplateOverrides>({});
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
@@ -44,12 +40,11 @@ export function PlatformEmailDefaults({ onDirtyChange }: { onDirtyChange?: (dirt
   const [domainNote, setDomainNote] = useState('');
   const [domainError, setDomainError] = useState('');
   const [setupDirty, setSetupDirty] = useState(false);
-  const [wordingDirty, setWordingDirty] = useState(false);
   const editing = useRef(false);
   const generation = useRef(0);
   const senderDirty =
     settings.from !== storedSettings.from || settings.replyTo !== storedSettings.replyTo;
-  const dirty = senderDirty || setupDirty || wordingDirty;
+  const dirty = senderDirty || setupDirty;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -79,7 +74,6 @@ export function PlatformEmailDefaults({ onDirtyChange }: { onDirtyChange?: (dirt
       const candidateId = data.stagedDomainId || data.domainId;
       setCandidateDomain((current) => (current?.id === candidateId ? current : null));
       setDelivery(data.delivery);
-      setTemplates(data.templates ?? {});
       setReady(true);
       setError('');
     } catch (caught) {
@@ -170,6 +164,24 @@ export function PlatformEmailDefaults({ onDirtyChange }: { onDirtyChange?: (dirt
       await refresh();
     } catch (caught) {
       setDomainError(emailError(caught, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendTest() {
+    setNote('');
+    setError('');
+    setBusy(true);
+    try {
+      const { data } = await sendPlatformTestEmail({ locale });
+      setNote(
+        data.status === 'dry_run'
+          ? t.platformAdmin.emailDefaultsTestDryRun
+          : t.platformAdmin.emailDefaultsTestSent.replace('{to}', data.to),
+      );
+    } catch (caught) {
+      setError(emailError(caught, t));
     } finally {
       setBusy(false);
     }
@@ -328,39 +340,30 @@ export function PlatformEmailDefaults({ onDirtyChange }: { onDirtyChange?: (dirt
             {t.admin.emailDomainMismatch.replace('{sender}', mismatch).replace('{verified}', domain)}
           </p>
         )}
-        <button
-          type="button"
-          className="btn"
-          disabled={busy || !senderDirty}
-          onClick={() => void saveSender()}
-        >
-          {t.admin.emailSaveSender}
-        </button>
+        <div className="row row--wrap">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || !senderDirty}
+            onClick={() => void saveSender()}
+          >
+            {t.admin.emailSaveSender}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || !configured || senderDirty || setupDirty}
+            onClick={() => void sendTest()}
+          >
+            {t.platformAdmin.emailDefaultsTest}
+          </button>
+        </div>
+        {!configured && (
+          <p className="field__help">{t.platformAdmin.emailDefaultsTestNeedsSetup}</p>
+        )}
         <Result ok={note} error={error} />
       </section>
 
-      <section className="section platform-email-defaults__section">
-        <h3>{t.platformAdmin.emailDefaultsWordingTitle}</h3>
-        <p className="section__help">{t.platformAdmin.emailDefaultsWordingHelp}</p>
-        <EmailPreview
-          cfpId="email-preview-example"
-          cfpName={t.platformAdmin.emailDefaultsSampleEvent}
-          configured={configured}
-          templates={templates}
-          ownedTemplates={templates}
-          actions={{
-            save: async (input) => {
-              await setPlatformEmailTemplate(input);
-            },
-            reset: async (input) => {
-              await setPlatformEmailTemplate({ ...input, reset: true });
-            },
-            test: async (input) => (await sendPlatformTestEmail(input)).data,
-          }}
-          onSaved={refresh}
-          onDirtyChange={setWordingDirty}
-        />
-      </section>
     </div>
   );
 }

@@ -154,6 +154,7 @@ export const fr: Dictionary = {
   platformAdmin: {
     title: 'Administration de la plateforme',
     accountLink: 'Accès à la plateforme',
+    emailDefaultsAccountLink: 'Réglages courriel de la plateforme',
     eyebrow: 'Contrôles de la plateforme',
     intro:
       'Gérez les personnes pouvant créer des espaces d’appel et les réglages de courriel offerts à chaque événement. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations.',
@@ -214,7 +215,7 @@ export const fr: Dictionary = {
     retry: 'Réessayer',
     emailDefaultsTitle: 'Réglages courriel de la plateforme',
     emailDefaultsIntro:
-      'Les événements peuvent utiliser ce domaine vérifié, cet expéditeur, cette adresse de réponse et ces textes sans répéter la configuration. Un événement peut toujours activer son propre domaine vérifié et ses propres textes.',
+      'Les événements peuvent utiliser ce domaine vérifié, cet expéditeur et cette adresse de réponse sans répéter la configuration. Chaque événement garde le contrôle de ses propres textes.',
     emailDefaultsLoadError: 'Impossible de charger les réglages courriel de la plateforme.',
     emailDefaultsProviderTitle: 'Service de livraison partagé',
     emailDefaultsProviderHelp:
@@ -236,16 +237,17 @@ export const fr: Dictionary = {
     emailDefaultsSenderTitle: 'Expéditeur par défaut',
     emailDefaultsSenderHelp:
       'Les nouveaux événements et ceux qui héritent utilisent ces adresses. L’enregistrement ne remplace jamais le réglage propre à un événement.',
-    emailDefaultsWordingTitle: 'Textes par défaut',
-    emailDefaultsWordingHelp:
-      'Ces textes se placent entre les textes propres à l’événement et les textes intégrés. La restauration d’un texte de plateforme révèle la version intégrée.',
     emailDefaultsReady: 'La livraison de la plateforme est prête',
     emailDefaultsReadyHelp: 'Les événements peuvent maintenant hériter de cette configuration.',
     emailDefaultsBlocked: 'La livraison de la plateforme doit être configurée',
     emailDefaultsBlockedHelp:
       'Configurez la clé, le domaine vérifié et l’expéditeur avant que les événements puissent en hériter.',
     emailDefaultsSaved: 'Expéditeur par défaut de la plateforme enregistré.',
-    emailDefaultsSampleEvent: 'Événement exemple (aperçu courriel)',
+    emailDefaultsTest: 'Envoyer un courriel test',
+    emailDefaultsTestNeedsSetup:
+      'Terminez la configuration de livraison partagée avant d’envoyer un test.',
+    emailDefaultsTestSent: 'Courriel test envoyé à {to}.',
+    emailDefaultsTestDryRun: 'Test rendu localement; aucun message n’a été envoyé.',
   },
 
   cfpPage: {
@@ -1121,7 +1123,7 @@ export const fr: Dictionary = {
     emailSourceLabel: 'Source de la configuration courriel',
     emailSourcePlatform: 'Utiliser les réglages de la plateforme',
     emailSourcePlatformHelp:
-      'Utilise le domaine, l’expéditeur et les textes de la plateforme. L’adresse de réponse peut rester propre à cet événement.',
+      'Utilise le domaine et l’expéditeur de la plateforme. Cet événement garde ses propres textes et peut définir sa propre adresse de réponse.',
     emailSourceEvent: 'Utiliser un réglage propre à l’événement',
     emailSourceEventHelp:
       'Activez-le seulement après la vérification du domaine et la configuration de son expéditeur.',
@@ -1133,8 +1135,6 @@ export const fr: Dictionary = {
     emailEffectiveDomain: 'Domaine d’envoi',
     emailEffectiveFrom: 'Expéditeur',
     emailEffectiveReplyTo: 'Réponse à',
-    emailEffectiveWordingPlatform: 'Textes de la plateforme, avec les remplacements de messages de l’événement',
-    emailEffectiveWordingEvent: 'Textes de l’événement, avec repli vers les réglages de la plateforme',
     emailNoReplyTo: 'Valeur par défaut du service',
     emailPlatformReplyToTitle: 'Adresse de réponse de l’événement',
     emailPlatformReplyToHelp:

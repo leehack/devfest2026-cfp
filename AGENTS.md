@@ -142,7 +142,8 @@ An explicit `locale` on the event member or pending grant is honoured; otherwise
 one notice renders both EN and FR, including both organiser overrides.
 
 Email setup needs no redeploy: a platform owner/admin rotates the one shared key
-and manages the default domain, sender, reply-to and wording from `/platform`.
+and manages the default domain, sender and reply-to from Platform email settings
+in the account menu.
 Adding a replacement platform domain only stages its binding; the active domain
 continues serving events until a verified candidate is explicitly activated.
 Activation swaps the pointer, removes only the old platform binding, and clears
@@ -152,9 +153,9 @@ from `/admin`. Only explicitly activating the event override switches identity;
 after that it fails closed until its own domain binding is valid rather than
 silently borrowing the platform identity.
 Copy in `shared/emailTemplates.ts` is placeholder *strings*, not functions, so
-the built-in and an organiser's override are the same shape and one editor
-prefills from either. Event templates overlay platform templates by kind and
-locale, then fall back to built-ins. A half-written override (blank subject or
+the built-in and an organiser's event override are the same shape and one editor
+prefills from either. Event templates fall back directly to built-ins; platform
+administration does not own wording. A half-written override (blank subject or
 body) falls back rather than sending a blank.
 Addresses are data; the **key is
 Secret Manager only** (`functions/src/secrets.ts`) and never enters Firestore or
@@ -472,8 +473,8 @@ collection — the rule names the two readable documents one at a time.
   binding. Absent or platform `senderMode` inherits the platform settings even
   while event fields are staged. Explicit event mode selects the event scope and
   fails closed until complete; legacy identity fields without a mode remain
-  event-scoped for compatibility. Event wording still overlays platform wording
-  independently.
+  event-scoped for compatibility. Event wording falls back directly to built-in
+  copy and never inherits from platform administration.
   Readiness, test sends, sign-in links and the delivery trigger all resolve the
   same effective configuration and re-check its binding. Deleting a CFP removes
   only that CFP's binding; it cannot touch the platform default. The shared key

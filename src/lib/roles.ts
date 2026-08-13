@@ -74,7 +74,6 @@ export interface PlatformEmailConfiguration {
   stagedDomainId: string;
   stagedDomain: string;
   delivery: EmailDeliveryReadiness;
-  templates: TemplateOverrides;
 }
 
 export const getPlatformEmailConfiguration = httpsCallable<
@@ -85,12 +84,8 @@ export const setPlatformEmailSettings = httpsCallable<
   Pick<EmailSettings, 'from' | 'replyTo'>,
   { ok: boolean }
 >(functions, 'setPlatformEmailSettings');
-export const setPlatformEmailTemplate = httpsCallable<
-  { kind: string; locale: string; subject?: string; body?: string; reset?: boolean },
-  { ok: boolean }
->(functions, 'setPlatformEmailTemplate');
 export const sendPlatformTestEmail = httpsCallable<
-  { kind: string; locale: string; needsVisa?: boolean },
+  { locale: 'en' | 'fr' },
   { ok: boolean; status: string; to: string }
 >(functions, 'sendPlatformTestEmail');
 
@@ -280,7 +275,7 @@ export const emailQueue = httpsCallable<
       domainId: string;
       domain: string;
     };
-    /** Only leaves stored by this event; effective `templates` may include platform defaults. */
+    /** Only leaves stored by this event; absent leaves use built-in copy. */
     templateOverrides?: TemplateOverrides;
     rows?: EmailRow[];
     /** How many rows the cap left out, so it never reads as "that is all". */

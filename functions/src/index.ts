@@ -827,7 +827,6 @@ async function observePlatformEmailDelivery() {
       domain: configuredDomain,
       stagedDomainId,
       stagedDomain,
-      templates: resolved.templates,
       keyHint: String(provider.keyHint ?? ''),
       delivery: emailDeliveryReadiness({
         key: 'present',
@@ -858,7 +857,6 @@ async function observePlatformEmailDelivery() {
     domain: resolved.bound ? domain : '',
     stagedDomainId,
     stagedDomain,
-    templates: resolved.templates,
     keyHint: String(provider.keyHint ?? ''),
     delivery: emailDeliveryReadiness({
       key,
@@ -6272,42 +6270,10 @@ export const setPlatformEmailSettings = onCall(CALLABLE, async (request) => {
   return { ok: true, settings };
 });
 
-export const setPlatformEmailTemplate = onCall(CALLABLE, async (request) => {
-  const identity = await requirePlatformAdmin(request, 'change platform email wording');
-  const data = (request.data ?? {}) as Record<string, unknown>;
-  const kind = String(data.kind ?? '') as EmailKind;
-  const locale = String(data.locale ?? '') as EmailLocale;
-  if (!EMAIL_KINDS.includes(kind)) throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
-  if (!EMAIL_LOCALES.includes(locale)) throw new HttpsError('invalid-argument', `Unknown language "${locale}".`);
-  const path = `templates.${kind}.${locale}`;
-  const ref = db.doc('config/platformEmail');
-  await requireCurrentPlatformAdmin(identity.uid, identity.email);
-  await db.runTransaction(async (tx) => {
-    const member = await tx.get(db.doc(`platformMembers/${identity.uid}`));
-    if (
-      String(member.get('email') ?? '').trim().toLowerCase() !== identity.email.toLowerCase() ||
-      (member.get('role') !== 'owner' && member.get('role') !== 'admin')
-    ) {
-      throw new HttpsError('permission-denied', 'Only a current platform admin can do that.');
-    }
-    if (data.reset === true) {
-      const config = await tx.get(ref);
-      if (config.exists) tx.update(ref, { [path]: FieldValue.delete() });
-      return;
-    }
-    const template: Template = { subject: String(data.subject ?? ''), body: String(data.body ?? '') };
-    const problem = validateTemplate(template);
-    if (problem) throw new HttpsError('invalid-argument', `${problem.problem}: ${problem.detail ?? ''}`);
-    tx.set(ref, { templates: { [kind]: { [locale]: template } } }, { merge: true });
-  });
-  return data.reset === true ? { ok: true, reset: true } : { ok: true };
-});
-
+/** Tests the shared transport with built-in copy; wording remains event-owned. */
 export const sendPlatformTestEmail = onCall(CALLABLE, async (request) => {
   const identity = await requirePlatformAdmin(request, 'send a platform email test');
   const data = (request.data ?? {}) as Record<string, unknown>;
-  const kind = String(data.kind ?? 'submission_received') as EmailKind;
-  if (!EMAIL_KINDS.includes(kind)) throw new HttpsError('invalid-argument', `Unknown message "${kind}".`);
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
   const observed = await observePlatformEmailDelivery();
   if (!observed.delivery.ready) {
@@ -6319,7 +6285,6 @@ export const sendPlatformTestEmail = onCall(CALLABLE, async (request) => {
   }
   await requireCurrentPlatformAdmin(identity.uid, identity.email);
   const platform = await loadPlatform(db);
-  await requireCurrentPlatformAdmin(identity.uid, identity.email);
   const finalHandoff = await observePlatformEmailDelivery();
   if (!finalHandoff.delivery.ready) {
     throw new HttpsError('failed-precondition', 'Email delivery setup changed.', {
@@ -6329,24 +6294,21 @@ export const sendPlatformTestEmail = onCall(CALLABLE, async (request) => {
     });
   }
   await requireCurrentPlatformAdmin(identity.uid, identity.email);
-  // Rechecking readiness above is the provider-handoff boundary; use that
-  // exact snapshot below rather than the earlier preflight snapshot.
   const finalApiKey = await readResendKey();
   const outcome = await deliver(
     {
-      kind,
+      kind: 'submission_received',
       locale,
       to: identity.email,
       data: {
         speakerName: identity.name || identity.email,
         title: 'A test of the platform sending setup',
-        needsVisa: data.needsVisa === true,
+        needsVisa: false,
       },
     },
     finalApiKey,
     finalHandoff.settings,
     { id: 'platform', name: platform.name, publicUrl: platform.publicUrl },
-    finalHandoff.templates,
   );
   if (outcome.status === 'failed') throw new HttpsError('unavailable', 'Resend refused the test.');
   return { ok: true, status: outcome.status, to: identity.email, delivery: finalHandoff.delivery };

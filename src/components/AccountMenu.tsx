@@ -86,13 +86,22 @@ export function AccountMenu({
           )}
           <div className="account-menu__actions">
             {showPlatformAdmin && (
-              <Link
-                className="account-menu__action"
-                to={href({ route: 'platform' })}
-                onClick={() => setOpen(false)}
-              >
-                {t.platformAdmin.accountLink}
-              </Link>
+              <>
+                <Link
+                  className="account-menu__action"
+                  to={href({ route: 'platform' })}
+                  onClick={() => setOpen(false)}
+                >
+                  {t.platformAdmin.accountLink}
+                </Link>
+                <Link
+                  className="account-menu__action"
+                  to="/platform#email-defaults"
+                  onClick={() => setOpen(false)}
+                >
+                  {t.platformAdmin.emailDefaultsAccountLink}
+                </Link>
+              </>
             )}
             {showProfile && (
               <Link

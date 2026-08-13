@@ -720,11 +720,12 @@ export async function setPlatformEmailDeliveryReadyDirect(
   {
     from = 'CFP Platform <mail@platform.example.test>',
     replyTo = 'support@platform.example.test',
-    templates,
+    legacyTemplates,
   }: {
     from?: string;
     replyTo?: string;
-    templates?: Record<string, unknown>;
+    /** Seeds rollout-era data to prove it is ignored by the current resolver. */
+    legacyTemplates?: Record<string, unknown>;
   } = {},
 ) {
   const domain = 'platform.example.test';
@@ -735,7 +736,7 @@ export async function setPlatformEmailDeliveryReadyDirect(
     domain: { stringValue: domain },
     domainId: { stringValue: domainId },
     emulatorDeliveryReady: { booleanValue: true },
-    ...(templates ? { templates: encode(templates) } : {}),
+    ...(legacyTemplates ? { templates: encode(legacyTemplates) } : {}),
   });
   await patch('config/emailProvider', { keyHint: { stringValue: '…test' } });
   await patch(`emailDomainBindings/${createHash('sha256').update(domainId).digest('hex')}`, {
