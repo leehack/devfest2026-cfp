@@ -13,20 +13,26 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  CFP_ID,
   callAs,
   callJson,
   createAccount,
   invitePlatformRole,
   inviteRole,
+  readEventEmailConfigurationDirect,
   readEmailLog,
   reset,
   seedEmailLog,
   seedProposal,
   seedSpeaker,
+  setCfpNameDirect,
   setEmailDeliveryReadyDirect,
+  setEventEmailSettingsDirect,
   setEmailStatusDirect,
+  setPlatformEmailDeliveryReadyDirect,
   setSendingDomainDirect,
   setProposalStatusDirect,
+  setPublicUrlDirect,
   waitForEmail,
 } from './backend';
 import { at, signInAs } from './form';
@@ -69,6 +75,7 @@ function reviewedPayload(
   return {
     logIds: rows.map((row) => row.logId),
     reviewedRecipients: rows.map(({ logId, to }) => ({ logId, to })),
+    emailConfigurationFingerprint: String(preview.emailConfigurationFingerprint ?? ''),
   };
 }
 
@@ -103,6 +110,7 @@ async function queueSpeakerMessage(
     action: 'send',
     ...draft,
     expectedRecipientsFingerprint: preview.recipientsFingerprint,
+    expectedEmailConfigurationFingerprint: preview.emailConfigurationFingerprint,
   });
 }
 
@@ -122,12 +130,14 @@ test.describe('email pipeline', () => {
       await callAs(chair.idToken, 'emailQueue', {
         action: 'release',
         logIds: heldLogIds(preview),
+        emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(
       await callAs(chair.idToken, 'emailQueue', {
         action: 'retry',
         logIds: heldLogIds(preview),
+        emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(
@@ -135,6 +145,7 @@ test.describe('email pipeline', () => {
         action: 'resend',
         logId: heldLogIds(preview)[0],
         reviewedTo: speaker.email,
+        emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     const recipients = await callJson(chair.idToken, 'sendSpeakerMessage', {
@@ -148,6 +159,7 @@ test.describe('email pipeline', () => {
         subject: 'Setup gate',
         body: 'This must not be queued.',
         expectedRecipientsFingerprint: recipients.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: recipients.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(
@@ -161,11 +173,13 @@ test.describe('email pipeline', () => {
 
   test('resend rejects a slash-bearing log id before resolving a document path', async () => {
     const { chair } = await stage();
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(
       await callAs(chair.idToken, 'emailQueue', {
         action: 'resend',
         logId: 'a/b',
         reviewedTo: speaker.email,
+        emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
   });
@@ -310,10 +324,128 @@ test.describe('email pipeline', () => {
         action: 'resend',
         logId: 'accepted__talk-1',
         reviewedTo: resendAddress,
+        emailConfigurationFingerprint: resendPreview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: true });
     const rows = await waitForEmail((current) => current[0]?.attempts === 3, 'the live resend');
     expect(rows[0]).toMatchObject({ to: resendAddress, reviewedTo: resendAddress });
+  });
+
+  test('reviewed queue actions stay bound to the effective setup while immediate rows stay unbound', async () => {
+    const { chair, author } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await setEmailDeliveryReadyDirect();
+    const reviewed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+
+    await setEventEmailSettingsDirect({ replyTo: 'changed@example.test' });
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(reviewed),
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect((await readEmailLog()).find((row) => row.id === 'accepted__talk-1')).toMatchObject({
+      status: 'held',
+      attempts: 0,
+    });
+
+    const refreshed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(refreshed.emailConfigurationFingerprint).not.toBe(
+      reviewed.emailConfigurationFingerprint,
+    );
+    expect(
+      await callJson(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(refreshed),
+      }),
+    ).toMatchObject({ released: 1, stale: 0 });
+    await waitForEmail(
+      (rows) => rows.some((row) => row.id === 'accepted__talk-1' && row.status === 'dry_run'),
+      'the refreshed reviewed decision',
+    );
+    expect((await readEmailLog()).find((row) => row.id === 'accepted__talk-1')).toMatchObject({
+      reviewedEmailConfigurationFingerprint: refreshed.emailConfigurationFingerprint,
+    });
+
+    await Promise.all([
+      seedEmailLog('stale-reviewed-configuration', {
+        status: 'queued',
+        kind: 'submission_received',
+        proposalId: 'talk-1',
+        recipientUid: author.uid,
+        to: speaker.email,
+        reviewedTo: speaker.email,
+        reviewedEmailConfigurationFingerprint: reviewed.emailConfigurationFingerprint,
+      }),
+      seedEmailLog('unreviewed-immediate-configuration', {
+        status: 'queued',
+        kind: 'submission_received',
+        proposalId: 'talk-1',
+        recipientUid: author.uid,
+        to: speaker.email,
+      }),
+    ]);
+    const terminal = await waitForEmail(
+      (rows) =>
+        rows.some(
+          (row) => row.id === 'stale-reviewed-configuration' && row.status === 'failed',
+        ) &&
+        rows.some(
+          (row) => row.id === 'unreviewed-immediate-configuration' && row.status === 'dry_run',
+        ),
+      'reviewed and immediate setup binding outcomes',
+    );
+    expect(terminal.find((row) => row.id === 'stale-reviewed-configuration')).toMatchObject({
+      status: 'failed',
+      errorReason: 'email_configuration_changed',
+    });
+    expect(
+      terminal.find((row) => row.id === 'unreviewed-immediate-configuration'),
+    ).not.toHaveProperty('reviewedEmailConfigurationFingerprint');
+  });
+
+  test('reviewed queue actions include the event name and platform URL rendered in copy', async () => {
+    const { chair } = await stage();
+    await callJson(chair.idToken, 'setProposalStatus', {
+      proposalId: 'talk-1',
+      status: 'accepted',
+    });
+    await setEmailDeliveryReadyDirect();
+
+    const reviewedName = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    await setCfpNameDirect('Renamed DevFest');
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(reviewedName),
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+
+    const reviewedUrl = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(reviewedUrl.emailConfigurationFingerprint).not.toBe(
+      reviewedName.emailConfigurationFingerprint,
+    );
+    await setPublicUrlDirect('https://new-cfp.example.test');
+    expect(
+      await callAs(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(reviewedUrl),
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+
+    const refreshed = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(refreshed.emailConfigurationFingerprint).not.toBe(
+      reviewedUrl.emailConfigurationFingerprint,
+    );
+    expect(
+      await callJson(chair.idToken, 'emailQueue', {
+        action: 'release',
+        ...reviewedPayload(refreshed),
+      }),
+    ).toMatchObject({ released: 1, stale: 0 });
   });
 
   test('a large queue exposes one atomic reviewed batch and a truthful remainder', async ({
@@ -380,6 +512,7 @@ test.describe('email pipeline', () => {
     expect(held[0].kind).toBe('accepted');
     expect(held[0].to).toBe(speaker.email);
     expect(held[0].status).toBe('held');
+    const heldPreview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
 
     // Resend is only for a message that has already left the reviewed batch.
     // A direct call must not turn one held decision into an early notification.
@@ -388,6 +521,7 @@ test.describe('email pipeline', () => {
         action: 'resend',
         logId: 'accepted__talk-1',
         reviewedTo: speaker.email,
+        emailConfigurationFingerprint: heldPreview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect((await readEmailLog())[0].status).toBe('held');
@@ -487,14 +621,17 @@ test.describe('email pipeline', () => {
         action: 'resend',
         logId: 'accepted__talk-1',
         reviewedTo: speaker.email,
+        emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 
     await setEmailDeliveryReadyDirect();
+    const releasable = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     const released = await callJson(chair.idToken, 'emailQueue', {
       action: 'release',
       logIds: ['accepted__talk-1'],
       reviewedRecipients: [{ logId: 'accepted__talk-1', to: speaker.email }],
+      emailConfigurationFingerprint: releasable.emailConfigurationFingerprint,
     });
     expect(released).toMatchObject({ ok: true, released: 0, stale: 1 });
 
@@ -516,10 +653,12 @@ test.describe('email pipeline', () => {
       proposalId: 'talk-1',
       status: 'under_review',
     });
+    const retryable = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(await callJson(chair.idToken, 'emailQueue', {
       action: 'retry',
       logIds: ['accepted__talk-1'],
       reviewedRecipients: [{ logId: 'accepted__talk-1', to: speaker.email }],
+      emailConfigurationFingerprint: retryable.emailConfigurationFingerprint,
     })).toMatchObject({
       released: 0,
       stale: 1,
@@ -638,6 +777,7 @@ test.describe('email pipeline', () => {
 
   test('a receipt goes out without waiting for a batch', async () => {
     const { author } = await stage();
+    await setEmailDeliveryReadyDirect();
     await setProposalStatusDirect('talk-1', 'draft');
 
     const submitted = await callAs(author.idToken, 'submitProposal', { proposalId: 'talk-1' });
@@ -723,6 +863,35 @@ test.describe('email pipeline', () => {
 
     const rows = await waitForEmail((r) => r[0]?.status === 'dry_run', 'the send');
     expect(rows[0].kind).toBe('rejected');
+  });
+
+  test('the event workspace distinguishes inherited delivery from an activated override', async ({
+    page,
+  }) => {
+    await stage();
+    await setPlatformEmailDeliveryReadyDirect();
+    await signInAs(page, admin, at('/admin/email'));
+
+    const source = page.getByRole('group', { name: 'Email configuration source' });
+    await expect(source.getByText('Using platform defaults')).toBeVisible();
+    await expect(source.getByRole('heading', { name: 'Effective delivery identity' })).toBeVisible();
+    await expect(source).toContainText('CFP Platform <mail@platform.example.test>');
+    await expect(source).toContainText('support@platform.example.test');
+    await expect(source).not.toContainText('dom-platform.example.test');
+    await expect(page.getByRole('heading', { name: 'Event delivery override' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Ready to deliver' })).toBeVisible();
+
+    await setEventEmailSettingsDirect({
+      senderMode: 'event',
+      from: 'Event <mail@event.example.test>',
+      domain: 'event.example.test',
+      domainId: 'dom-event.example.test',
+    });
+    await page.reload();
+
+    await expect(source.getByText('Using this event’s override')).toBeVisible();
+    await expect(source.getByRole('button', { name: 'Switch to platform defaults' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Setup required' })).toBeVisible();
   });
 
   test('a saved decision is visibly pending until an admin reviews the email batch', async ({
@@ -824,15 +993,22 @@ test.describe('email pipeline', () => {
   });
 
   test('a message rendered before the sender was configured can be recovered', async () => {
-    // The whole emulator runs unconfigured, so every send lands on `dry_run`.
-    // That is the same state a real receipt would be in if someone submitted
-    // between deploying the pipeline and verifying the domain — and it must not
-    // be a message that is lost for good.
+    // No sender is configured, so the first attempt fails closed. It must still
+    // remain recoverable after the organiser completes setup.
     const { chair, author } = await stage();
     await setProposalStatusDirect('talk-1', 'draft');
     await callAs(author.idToken, 'submitProposal', { proposalId: 'talk-1' });
 
-    await waitForEmail((r) => r[0]?.status === 'dry_run', 'the unsent receipt');
+    await waitForEmail(
+      (r) =>
+        r.some(
+          (row) =>
+            row.kind === 'submission_received' &&
+            row.status === 'failed' &&
+            row.errorReason === 'email_domain_unbound',
+        ),
+      'the blocked receipt',
+    );
 
     const retried = await retryCurrent(chair.idToken);
     expect(retried.ok).toBe(true);
@@ -849,7 +1025,7 @@ test.describe('email pipeline', () => {
 
   test('the sending address is set from the admin page, not a deploy', async ({ page }) => {
     const { chair } = await stage();
-    await setSendingDomainDirect('example.org');
+    await setSendingDomainDirect('example.org', CFP_ID, { emulatorVerified: true });
 
     // Hold the panel's first load open so the typing below is guaranteed to
     // happen while it is still in flight. Without the delay this race only
@@ -878,17 +1054,20 @@ test.describe('email pipeline', () => {
     // A display name without brackets is caught before it reaches the server.
     await panel.getByLabel('Send as').fill('DevFest Montréal cfp@example.org');
     await panel.getByRole('button', { name: 'Save address' }).click();
-    await expect(panel.getByRole('alert')).toContainText(/angle brackets/);
+    await expect(panel.getByText(/Put the display name in angle brackets/)).toBeVisible();
 
     // An address on a domain this CFP never registered is refused by the
     // server. The Resend account is shared, so otherwise one organiser could
     // send mail signed by another organiser's event.
     await panel.getByLabel('Send as').fill('cfp@someone-elses.example');
     await panel.getByRole('button', { name: 'Save address' }).click();
-    await expect(panel.getByRole('alert')).toContainText(/someone-elses.example/);
+    await expect(
+      panel.getByRole('alert').filter({ hasText: 'someone-elses.example' }),
+    ).toBeVisible();
 
     await panel.getByLabel('Send as').fill('DevFest Montréal <cfp@example.org>');
-    await panel.getByLabel('Reply-to').fill('organisers@example.org');
+    await panel.getByRole('checkbox', { name: 'Inherit the platform reply-to' }).uncheck();
+    await panel.getByRole('textbox', { name: /^Reply-to/ }).fill('organisers@example.org');
     await panel.getByRole('button', { name: 'Save address' }).click();
 
     // Wait for the save to land, not for the banner to clear — the banner keys
@@ -911,6 +1090,7 @@ test.describe('email pipeline', () => {
   test('a non-admin cannot change who the CFP writes as', async () => {
     const { author } = await stage();
     const result = await callAs(author.idToken, 'setEmailSettings', {
+      senderMode: 'event',
       from: 'attacker@evil.example',
       replyTo: '',
     });
@@ -950,8 +1130,192 @@ test.describe('email pipeline', () => {
     expect(JSON.stringify(preview)).not.toContain('re_');
   });
 
+  test('an unconfigured event inherits platform delivery but keeps event-owned wording', async () => {
+    const { chair } = await stage();
+    await setPlatformEmailDeliveryReadyDirect({
+      // Rollout-era platform copy must not become another event's wording.
+      legacyTemplates: {
+        accepted: {
+          fr: { subject: 'Legacy platform: {title}', body: 'Legacy platform body.' },
+        },
+      },
+    });
+    await setEventEmailSettingsDirect({
+      templates: {
+        accepted: {
+          en: { subject: 'Event accepted: {title}', body: 'Event English.' },
+        },
+      },
+    });
+
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(preview).toMatchObject({
+      source: 'platform',
+      senderMode: 'platform',
+      settings: {
+        from: 'CFP Platform <mail@platform.example.test>',
+        replyTo: 'support@platform.example.test',
+      },
+      delivery: { ready: true },
+      eventSettings: { from: '', replyTo: null, domainId: '', domain: '' },
+      templateOverrides: {
+        accepted: {
+          en: { subject: 'Event accepted: {title}', body: 'Event English.' },
+        },
+      },
+      templates: {
+        accepted: {
+          en: { subject: 'Event accepted: {title}', body: 'Event English.' },
+        },
+      },
+    });
+    expect(preview.templates.accepted).not.toHaveProperty('fr');
+    // A CFP inherits the effective sender, never the platform DNS handle.
+    expect(preview.domainId).toBe('');
+  });
+
+  test('reply-to may inherit or deliberately clear without changing the inherited sender', async () => {
+    const { chair } = await stage();
+    await setPlatformEmailDeliveryReadyDirect();
+    await setEventEmailSettingsDirect({ senderMode: 'platform', replyTo: null });
+
+    const inherited = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(inherited).toMatchObject({
+      source: 'platform',
+      settings: { replyTo: 'support@platform.example.test' },
+      eventSettings: { replyTo: null },
+    });
+
+    await setEventEmailSettingsDirect({ senderMode: 'platform', replyTo: '' });
+    const cleared = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(cleared).toMatchObject({
+      source: 'platform',
+      settings: { replyTo: '' },
+      eventSettings: { replyTo: '' },
+    });
+  });
+
+  test('a reply-to-only save preserves an active event sender and its staged replacement', async () => {
+    const { chair } = await stage();
+    await setEventEmailSettingsDirect({
+      senderMode: 'event',
+      from: 'Active event <mail@active.example.test>',
+      replyTo: 'old@example.test',
+      domain: 'active.example.test',
+      domainId: 'dom-active.example.test',
+      stagedDomain: 'replacement.example.test',
+      stagedDomainId: 'dom-replacement.example.test',
+    });
+
+    expect(
+      await callJson(chair.idToken, 'setEmailSettings', {
+        senderMode: 'event',
+        replyToOnly: true,
+        replyTo: 'new@example.test',
+      }),
+    ).toMatchObject({
+      ok: true,
+      source: 'event',
+      settings: {
+        from: 'Active event <mail@active.example.test>',
+        replyTo: 'new@example.test',
+      },
+    });
+
+    expect(await readEventEmailConfigurationDirect()).toMatchObject({
+      senderMode: 'event',
+      from: 'Active event <mail@active.example.test>',
+      replyTo: 'new@example.test',
+      domain: 'active.example.test',
+      domainId: 'dom-active.example.test',
+      stagedDomain: 'replacement.example.test',
+      stagedDomainId: 'dom-replacement.example.test',
+    });
+  });
+
+  test('staging an event sender keeps inheritance, but activating it fails closed', async () => {
+    const { chair } = await stage();
+    await setPlatformEmailDeliveryReadyDirect();
+    const staged = {
+      from: 'Event <mail@event.example.test>',
+      domain: 'event.example.test',
+      domainId: 'dom-event.example.test',
+    };
+    await setEventEmailSettingsDirect({ senderMode: 'platform', ...staged });
+
+    expect(await callJson(chair.idToken, 'emailQueue', { action: 'preview' })).toMatchObject({
+      source: 'platform',
+      senderMode: 'platform',
+      settings: { from: 'CFP Platform <mail@platform.example.test>' },
+      delivery: { ready: true },
+      eventSettings: staged,
+    });
+
+    await setEventEmailSettingsDirect({ senderMode: 'event', ...staged });
+    const activated = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(activated).toMatchObject({
+      source: 'event',
+      senderMode: 'event',
+      delivery: { ready: false },
+      domainId: 'dom-event.example.test',
+      domain: 'event.example.test',
+      settings: { from: 'Event <mail@event.example.test>' },
+    });
+    expect(activated.settings.from).not.toBe('CFP Platform <mail@platform.example.test>');
+  });
+
+  test('platform configuration stays platform-admin-only and cannot be reused as an event binding', async () => {
+    const { chair, author } = await stage();
+    await setPlatformEmailDeliveryReadyDirect();
+
+    for (const identity of [author, chair]) {
+      for (const [name, data] of [
+        ['getPlatformEmailConfiguration', {}],
+        [
+          'setPlatformEmailSettings',
+          { from: 'Changed <mail@platform.example.test>', replyTo: '' },
+        ],
+        ['platformEmailDomain', { action: 'list' }],
+        ['sendPlatformTestEmail', { locale: 'en' }],
+      ] as const) {
+        expect(await callAs(identity.idToken, name, data), name).toMatchObject({
+          ok: false,
+          code: 'PERMISSION_DENIED',
+        });
+      }
+    }
+
+    await invitePlatformRole(admin.email, 'admin');
+    await callJson(chair.idToken, 'platformAccess', {});
+    expect(
+      await callJson(chair.idToken, 'getPlatformEmailConfiguration', {}),
+    ).toMatchObject({
+      ok: true,
+      settings: {
+        from: 'CFP Platform <mail@platform.example.test>',
+        replyTo: 'support@platform.example.test',
+      },
+      delivery: { ready: true },
+    });
+
+    await setEventEmailSettingsDirect({
+      senderMode: 'platform',
+      from: 'Event <mail@platform.example.test>',
+      domain: 'platform.example.test',
+      domainId: 'dom-platform.example.test',
+    });
+    expect(
+      await callAs(chair.idToken, 'setEmailSettings', {
+        senderMode: 'event',
+        from: 'Event <mail@platform.example.test>',
+        replyTo: null,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+  });
+
   test('custom wording reaches the sender, and a broken one cannot be saved', async () => {
     const { chair, author } = await stage();
+    await setEmailDeliveryReadyDirect();
 
     const rejected = await callAs(chair.idToken, 'setEmailTemplate', {
       kind: 'accepted',
@@ -1286,6 +1650,7 @@ test.describe('email pipeline', () => {
       action: 'resend',
       logId: 'accepted__talk-1',
       reviewedTo: reviewed.currentTo,
+      emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
     });
     expect(again.ok).toBe(true);
 
@@ -1313,10 +1678,12 @@ test.describe('email pipeline', () => {
      * time rather than only when the machine is quiet.
      */
     await setEmailStatusDirect('accepted__talk-1', 'sending');
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     const refused = await callAs(chair.idToken, 'emailQueue', {
       action: 'resend',
       logId: 'accepted__talk-1',
       reviewedTo: speaker.email,
+      emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
     });
     expect(refused).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   });
@@ -1359,11 +1726,13 @@ test.describe('email pipeline', () => {
   test('resending something that was never queued says so', async () => {
     const { chair } = await stage();
     await setEmailDeliveryReadyDirect();
+    const preview = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
     expect(
       await callAs(chair.idToken, 'emailQueue', {
         action: 'resend',
         logId: 'accepted__nope',
         reviewedTo: speaker.email,
+        emailConfigurationFingerprint: preview.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'NOT_FOUND' });
   });
@@ -1455,6 +1824,7 @@ test.describe('a message to one speaker', () => {
         proposalId: 'talk-1',
         ...message,
         expectedRecipientsFingerprint: first.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: first.emailConfigurationFingerprint,
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(await readEmailLog()).toHaveLength(0);
@@ -1466,6 +1836,100 @@ test.describe('a message to one speaker', () => {
     expect(current.recipients).toEqual([
       { uid: author.uid, to: 'ada-new@example.test', name: speaker.name },
     ]);
+  });
+
+  test('requires the exact email setup reviewed with a manual speaker message', async () => {
+    const { chair } = await stage();
+    await setEmailDeliveryReadyDirect();
+    const reviewed = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+
+    await setEventEmailSettingsDirect({ replyTo: 'manual-changed@example.test' });
+    expect(
+      await callAs(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        ...message,
+        expectedRecipientsFingerprint: reviewed.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: reviewed.emailConfigurationFingerprint,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(await readEmailLog()).toHaveLength(0);
+
+    const current = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+    expect(current.emailConfigurationFingerprint).not.toBe(
+      reviewed.emailConfigurationFingerprint,
+    );
+    expect(
+      await callJson(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        ...message,
+        expectedRecipientsFingerprint: current.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: current.emailConfigurationFingerprint,
+      }),
+    ).toMatchObject({ recipientCount: 1 });
+    const rows = await waitForEmail(
+      (all) => all.some((row) => row.kind === 'message' && row.status === 'dry_run'),
+      'the message reviewed against the refreshed setup',
+    );
+    expect(rows.find((row) => row.kind === 'message')).toMatchObject({
+      reviewedEmailConfigurationFingerprint: current.emailConfigurationFingerprint,
+    });
+  });
+
+  test('requires the event name and platform URL reviewed with a manual speaker message', async () => {
+    const { chair } = await stage();
+    await setEmailDeliveryReadyDirect();
+    const reviewedName = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+
+    await setCfpNameDirect('Renamed DevFest');
+    expect(
+      await callAs(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        ...message,
+        expectedRecipientsFingerprint: reviewedName.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: reviewedName.emailConfigurationFingerprint,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+
+    const reviewedUrl = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+    await setPublicUrlDirect('https://new-cfp.example.test');
+    expect(
+      await callAs(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        ...message,
+        expectedRecipientsFingerprint: reviewedUrl.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: reviewedUrl.emailConfigurationFingerprint,
+      }),
+    ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+
+    const refreshed = await callJson(chair.idToken, 'sendSpeakerMessage', {
+      action: 'preview',
+      proposalId: 'talk-1',
+    });
+    expect(
+      await callJson(chair.idToken, 'sendSpeakerMessage', {
+        action: 'send',
+        proposalId: 'talk-1',
+        ...message,
+        expectedRecipientsFingerprint: refreshed.recipientsFingerprint,
+        expectedEmailConfigurationFingerprint: refreshed.emailConfigurationFingerprint,
+      }),
+    ).toMatchObject({ recipientCount: 1 });
   });
 
   test('two of them are two emails, not one overwritten row', async () => {
@@ -1577,6 +2041,38 @@ test.describe('a message to one speaker', () => {
     await expect(panel.getByText('1 copy queued for delivery.')).toBeVisible();
   });
 
+  test('a changed email setup closes the open review before it can send', async ({ page }) => {
+    await stage();
+    await setEmailDeliveryReadyDirect();
+    await signInAs(page, admin, at('/admin/email'));
+
+    const panel = page.getByRole('region', { name: 'Write to all speakers on a talk' });
+    await panel.getByLabel('Talk').selectOption('talk-1');
+    await panel.getByRole('textbox', { name: /^Subject/ }).fill('Setup-sensitive message');
+    await panel.getByRole('textbox', { name: /^Message/ }).fill('Hello {speakerName}.');
+    await panel.getByRole('button', { name: 'Review recipients' }).click();
+
+    const review = page.getByRole('dialog', { name: 'Review speaker message' });
+    await expect(review.getByText(speaker.email)).toBeVisible();
+    await setEventEmailSettingsDirect({ replyTo: 'changed-during-review@example.test' });
+    await review.getByRole('button', { name: 'Queue 1 copy' }).click();
+
+    await expect(review).toHaveCount(0);
+    await expect(panel.getByText('The email state changed before this action finished.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Queue 1 copy' })).toHaveCount(0);
+    expect(await readEmailLog()).toHaveLength(0);
+
+    // The refreshed parent configuration must be reviewed through a new dialog;
+    // the rejected dialog never receives a replacement token in place.
+    const reviewAgain = panel.getByRole('button', { name: 'Review recipients' });
+    await expect(reviewAgain).toBeEnabled();
+    await reviewAgain.click();
+    const refreshedReview = page.getByRole('dialog', { name: 'Review speaker message' });
+    await expect(refreshedReview.getByText(speaker.email)).toBeVisible();
+    await refreshedReview.getByRole('button', { name: 'Queue 1 copy' }).click();
+    await expect(panel.getByText('1 copy queued for delivery.')).toBeVisible();
+  });
+
   const bad = {
     'a placeholder that does not exist': { subject: 'Hi {speaker}', body: 'x' },
     'an empty subject': { subject: '   ', body: 'x' },
@@ -1595,6 +2091,7 @@ test.describe('a message to one speaker', () => {
           proposalId: 'talk-1',
           ...draft,
           expectedRecipientsFingerprint: preview.recipientsFingerprint,
+          expectedEmailConfigurationFingerprint: preview.emailConfigurationFingerprint,
         }),
       ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
       expect(await readEmailLog()).toHaveLength(0);

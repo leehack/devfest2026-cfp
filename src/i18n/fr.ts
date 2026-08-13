@@ -154,9 +154,13 @@ export const fr: Dictionary = {
   platformAdmin: {
     title: 'Administration de la plateforme',
     accountLink: 'Accès à la plateforme',
+    emailDefaultsAccountLink: 'Réglages courriel de la plateforme',
     eyebrow: 'Contrôles de la plateforme',
     intro:
-      'Les propriétaires délèguent l’administration de la plateforme, puis les administrateurs approuvent les personnes pouvant créer des espaces d’appel. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations, ni courriels.',
+      'Gérez les personnes pouvant créer des espaces d’appel et les réglages de courriel offerts à chaque événement. Les rôles des événements restent distincts : cet accès ne révèle ni propositions, ni profils, ni évaluations.',
+    sections: 'Sections de l’administration de la plateforme',
+    accessNav: 'Accès',
+    emailDefaultsNav: 'Réglages courriel',
     accessTitle: 'Accès à la plateforme',
     accessHelp:
       'Les propriétaires, les administrateurs et les créateurs approuvés peuvent lancer un appel. Le retrait de cet accès ne supprime jamais les appels que la personne possède déjà.',
@@ -209,6 +213,41 @@ export const fr: Dictionary = {
       'Un administrateur de la plateforme doit approuver votre compte avant que vous puissiez lancer un nouvel appel.',
     checkAgain: 'Vérifier l’accès de nouveau',
     retry: 'Réessayer',
+    emailDefaultsTitle: 'Réglages courriel de la plateforme',
+    emailDefaultsIntro:
+      'Les événements peuvent utiliser ce domaine vérifié, cet expéditeur et cette adresse de réponse sans répéter la configuration. Chaque événement garde le contrôle de ses propres textes.',
+    emailDefaultsLoadError: 'Impossible de charger les réglages courriel de la plateforme.',
+    emailDefaultsProviderTitle: 'Service de livraison partagé',
+    emailDefaultsProviderHelp:
+      'La clé Resend et le domaine de la plateforme sont des contrôles privés. Les administrateurs d’événement voient seulement si la livraison partagée est prête et l’expéditeur effectif.',
+    emailDefaultsActiveDomainTitle: 'Domaine actif de la plateforme',
+    emailDefaultsActiveDomainHelp:
+      'Les événements qui héritent continuent d’utiliser ce domaine pendant la préparation et la vérification d’un remplacement.',
+    emailDefaultsNoActiveDomain: 'Aucun domaine de plateforme n’est encore actif.',
+    emailDefaultsStagedDomainTitle: 'Remplacement en préparation',
+    emailDefaultsStagedDomainHelp:
+      'L’ajout réserve le domaine à la plateforme sans changer la livraison. Vérifiez son DNS, puis activez-le explicitement.',
+    emailDefaultsNoStagedDomain: 'Aucun domaine de remplacement n’est en préparation.',
+    emailDefaultsActivateDomain: 'Activer le domaine vérifié',
+    emailDefaultsActivateDomainDirty:
+      'Enregistrez ou annulez d’abord la modification inachevée du service ou de l’expéditeur.',
+    emailDefaultsDomainActivated: 'Domaine vérifié de la plateforme activé.',
+    emailDefaultsDomainActivatedSenderCleared:
+      'Domaine vérifié de la plateforme activé. Enregistrez un expéditeur correspondant pour reprendre la livraison.',
+    emailDefaultsSenderTitle: 'Expéditeur par défaut',
+    emailDefaultsSenderHelp:
+      'Les nouveaux événements et ceux qui héritent utilisent ces adresses. L’enregistrement ne remplace jamais le réglage propre à un événement.',
+    emailDefaultsReady: 'La livraison de la plateforme est prête',
+    emailDefaultsReadyHelp: 'Les événements peuvent maintenant hériter de cette configuration.',
+    emailDefaultsBlocked: 'La livraison de la plateforme doit être configurée',
+    emailDefaultsBlockedHelp:
+      'Configurez la clé, le domaine vérifié et l’expéditeur avant que les événements puissent en hériter.',
+    emailDefaultsSaved: 'Expéditeur par défaut de la plateforme enregistré.',
+    emailDefaultsTest: 'Envoyer un courriel test',
+    emailDefaultsTestNeedsSetup:
+      'Terminez la configuration de livraison partagée avant d’envoyer un test.',
+    emailDefaultsTestSent: 'Courriel test envoyé à {to}.',
+    emailDefaultsTestDryRun: 'Test rendu localement; aucun message n’a été envoyé.',
   },
 
   cfpPage: {
@@ -1080,6 +1119,41 @@ export const fr: Dictionary = {
       'Une seule clé dessert toute la plateforme. Seuls les administrateurs de la plateforme peuvent la remplacer; elle est conservée dans Secret Manager, vérifiée auprès de Resend et jamais réaffichée.',
     emailKeyPlatformManaged:
       'La clé Resend est partagée entre tous les appels. Demandez à un administrateur de la plateforme de la configurer ou de la remplacer; les administrateurs d’un événement ne peuvent pas la modifier.',
+    emailManagePlatform: 'Gérer les réglages courriel de la plateforme',
+    emailSourceLabel: 'Source de la configuration courriel',
+    emailSourcePlatform: 'Utiliser les réglages de la plateforme',
+    emailSourcePlatformHelp:
+      'Utilise le domaine et l’expéditeur de la plateforme. Cet événement garde ses propres textes et peut définir sa propre adresse de réponse.',
+    emailSourceEvent: 'Utiliser un réglage propre à l’événement',
+    emailSourceEventHelp:
+      'Activez-le seulement après la vérification du domaine et la configuration de son expéditeur.',
+    emailSourceActivePlatform: 'Réglages de la plateforme utilisés',
+    emailSourceActiveEvent: 'Réglage propre à cet événement utilisé',
+    emailSourceEffective: 'Identité de livraison effective',
+    emailSourceEffectiveHelp:
+      'Les messages envoyés maintenant utilisent les valeurs ci-dessous. Un domaine d’événement en préparation ne change rien avant son activation.',
+    emailEffectiveDomain: 'Domaine d’envoi',
+    emailEffectiveFrom: 'Expéditeur',
+    emailEffectiveReplyTo: 'Réponse à',
+    emailNoReplyTo: 'Valeur par défaut du service',
+    emailPlatformReplyToTitle: 'Adresse de réponse de l’événement',
+    emailPlatformReplyToHelp:
+      'Choisissez si les réponses héritent de l’adresse de la plateforme ou utilisent une adresse propre à l’événement. Une adresse personnalisée vide envoie délibérément sans Répondre à.',
+    emailReplyToInherit: 'Hériter de l’adresse de réponse de la plateforme',
+    emailReplyToClearHelp:
+      'L’événement enverra explicitement sans adresse Répondre à. Sélectionnez l’héritage ci-dessus pour utiliser plutôt l’adresse de la plateforme.',
+    emailSaveReplyTo: 'Enregistrer l’adresse de réponse',
+    emailReplyToSaved: 'Adresse de réponse enregistrée.',
+    emailEventOverrideTitle: 'Réglage de livraison de l’événement',
+    emailEventOverrideHelp:
+      'Préparez et vérifiez ici un domaine distinct. La livraison de la plateforme reste active tant que la configuration n’est pas terminée.',
+    emailEventOverrideReady: 'Le réglage de l’événement est prêt à être activé.',
+    emailEventOverrideNotReady:
+      'Terminez le domaine et l’expéditeur avant d’activer ce réglage.',
+    emailActivateEventOverride: 'Activer le réglage de l’événement',
+    emailUsePlatformDefaults: 'Revenir aux réglages de la plateforme',
+    emailSourceSavedPlatform: 'Les réglages de la plateforme sont maintenant actifs.',
+    emailSourceSavedEvent: 'Le réglage de l’événement est maintenant actif.',
     emailKeySteps: [
       'Utilisez le compte Resend de la plateforme.',
       'Ouvrez API Keys, puis Create API Key.',
@@ -1186,6 +1260,8 @@ export const fr: Dictionary = {
       event_archived: 'Cette notification a été remplacée parce que l’événement est archivé.',
       email_domain_unbound:
         'L’envoi est bloqué parce que ce domaine d’expédition n’est pas attribué à l’événement.',
+      email_configuration_changed:
+        'La configuration courriel a changé pendant l’envoi. Vérifiez l’expéditeur actuel et réessayez cette notification.',
     } as Record<string, string>,
     emailQueue: 'File d’attente',
     emailDecisionQueue: 'Notifications aux conférenciers retenues',

@@ -124,6 +124,13 @@ export function isSpeakerMessageRecipientsChanged(error: unknown): boolean {
   );
 }
 
+export function isEmailConfigurationChanged(error: unknown): boolean {
+  return (
+    codeOf(error) === 'failed-precondition' &&
+    reasonOf(error) === 'email_configuration_changed'
+  );
+}
+
 /** Email actions have lifecycle failures of their own, never the last-admin guard. */
 export function emailError(error: unknown, t: Dictionary): string {
   if (codeOf(error) === 'failed-precondition') {
@@ -133,6 +140,8 @@ export function emailError(error: unknown, t: Dictionary): string {
       case 'speaker_message_recipients_changed':
       case 'email_recipients_changed':
         return t.admin.messageRecipientChanged;
+      case 'email_configuration_changed':
+        return t.admin.emailActionInvalid;
       default:
         return t.admin.emailActionInvalid;
     }

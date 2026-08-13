@@ -153,9 +153,13 @@ export const en = {
   platformAdmin: {
     title: 'Platform administration',
     accountLink: 'Platform access',
+    emailDefaultsAccountLink: 'Platform email settings',
     eyebrow: 'Platform controls',
     intro:
-      'Owners delegate platform administration, and administrators approve who may create CFP workspaces. Event roles stay separate: platform access does not reveal proposals, speakers, reviews, or email.',
+      'Manage who can create CFP workspaces and the email defaults available to every event. Event roles stay separate: platform access does not reveal proposals, speakers, or reviews.',
+    sections: 'Platform administration sections',
+    accessNav: 'Access',
+    emailDefaultsNav: 'Email defaults',
     accessTitle: 'Platform access',
     accessHelp:
       'Platform owners, administrators, and approved creators can start a call for proposals. Revoking access never removes CFPs the person already owns.',
@@ -205,6 +209,39 @@ export const en = {
       'A platform administrator must approve your account before you can start a new call for proposals.',
     checkAgain: 'Check access again',
     retry: 'Try again',
+    emailDefaultsTitle: 'Platform email defaults',
+    emailDefaultsIntro:
+      'Events can send with this verified domain, sender, and reply-to address without repeating delivery setup. Each event keeps control of its own message wording.',
+    emailDefaultsLoadError: 'Platform email defaults could not be loaded.',
+    emailDefaultsProviderTitle: 'Shared delivery provider',
+    emailDefaultsProviderHelp:
+      'The Resend key and platform domain are private platform controls. Event administrators see only whether the shared delivery setup is ready and the effective sender they will use.',
+    emailDefaultsActiveDomainTitle: 'Active platform domain',
+    emailDefaultsActiveDomainHelp:
+      'Inheriting events continue using this domain while a replacement is staged and verified.',
+    emailDefaultsNoActiveDomain: 'No platform domain is active yet.',
+    emailDefaultsStagedDomainTitle: 'Staged replacement',
+    emailDefaultsStagedDomainHelp:
+      'Adding a domain reserves it for platform use without changing delivery. Verify its DNS, then activate it explicitly.',
+    emailDefaultsNoStagedDomain: 'No replacement domain is staged.',
+    emailDefaultsActivateDomain: 'Activate verified domain',
+    emailDefaultsActivateDomainDirty: 'Save or discard the unfinished provider or sender edit first.',
+    emailDefaultsDomainActivated: 'Verified platform domain activated.',
+    emailDefaultsDomainActivatedSenderCleared:
+      'Verified platform domain activated. Save a matching sender before delivery can resume.',
+    emailDefaultsSenderTitle: 'Default sender',
+    emailDefaultsSenderHelp:
+      'New and inheriting events use these addresses. Saving a platform default never replaces an event override.',
+    emailDefaultsReady: 'Platform delivery is ready',
+    emailDefaultsReadyHelp: 'Events can inherit this delivery configuration now.',
+    emailDefaultsBlocked: 'Platform delivery needs setup',
+    emailDefaultsBlockedHelp:
+      'Complete the provider key, verified domain, and default sender before events can inherit it.',
+    emailDefaultsSaved: 'Platform sender defaults saved.',
+    emailDefaultsTest: 'Send test email',
+    emailDefaultsTestNeedsSetup: 'Complete the shared delivery setup before sending a test.',
+    emailDefaultsTestSent: 'Test sent to {to}.',
+    emailDefaultsTestDryRun: 'Test rendered locally; no message was sent.',
   },
 
   cfpPage: {
@@ -1072,6 +1109,41 @@ export const en = {
       'One key serves the whole platform. Only platform administrators can rotate it; it is stored in Secret Manager, checked against Resend, and never shown again.',
     emailKeyPlatformManaged:
       'The Resend key is shared across every CFP. Ask a platform administrator to set or rotate it; event administrators cannot change it.',
+    emailManagePlatform: 'Manage platform email defaults',
+    emailSourceLabel: 'Email configuration source',
+    emailSourcePlatform: 'Use platform defaults',
+    emailSourcePlatformHelp:
+      'Send with the platform domain and sender. This event keeps its own wording and can set its own reply-to address.',
+    emailSourceEvent: 'Use an event override',
+    emailSourceEventHelp:
+      'Activate this only after the event domain is verified and its sender is ready.',
+    emailSourceActivePlatform: 'Using platform defaults',
+    emailSourceActiveEvent: 'Using this event’s override',
+    emailSourceEffective: 'Effective delivery identity',
+    emailSourceEffectiveHelp:
+      'Messages sent now use the values below. A staged event domain does not change delivery until you activate it.',
+    emailEffectiveDomain: 'Sending domain',
+    emailEffectiveFrom: 'Sender',
+    emailEffectiveReplyTo: 'Reply-to',
+    emailNoReplyTo: 'Provider default',
+    emailPlatformReplyToTitle: 'Event reply-to',
+    emailPlatformReplyToHelp:
+      'Choose whether replies inherit the platform address or use an event-specific address. A custom blank address deliberately sends without Reply-to.',
+    emailReplyToInherit: 'Inherit the platform reply-to address',
+    emailReplyToClearHelp:
+      'The event will explicitly send without a Reply-to address. Select inheritance above to use the platform address instead.',
+    emailSaveReplyTo: 'Save reply-to',
+    emailReplyToSaved: 'Reply-to saved.',
+    emailEventOverrideTitle: 'Event delivery override',
+    emailEventOverrideHelp:
+      'Prepare and verify a separate event domain here. Platform delivery stays active while this setup is incomplete.',
+    emailEventOverrideReady: 'The event override is ready to activate.',
+    emailEventOverrideNotReady:
+      'Finish the event domain and sender before activating this override.',
+    emailActivateEventOverride: 'Activate event override',
+    emailUsePlatformDefaults: 'Switch to platform defaults',
+    emailSourceSavedPlatform: 'Platform defaults are now active for this event.',
+    emailSourceSavedEvent: 'The event override is now active.',
     emailKeySteps: [
       'Use the platform’s account at resend.com.',
       'Open API Keys, then Create API Key.',
@@ -1174,6 +1246,8 @@ export const en = {
       event_archived: 'This notification is superseded because the event is archived.',
       email_domain_unbound:
         'Email delivery is blocked because this sending domain is not assigned to the event.',
+      email_configuration_changed:
+        'The email setup changed during delivery. Review the current sender and retry this notification.',
     } as Record<string, string>,
     emailQueue: 'Queue',
     emailDecisionQueue: 'Held speaker notifications',

@@ -10,12 +10,14 @@ import {
   createUnverifiedAccount,
   inviteRole,
   readEmailLog,
+  reviewedEmailConfiguration,
   reset,
   seedMember,
   seedPlatformMember,
   seedProposal,
   seedSpeaker,
   setEmailStatusDirect,
+  setPlatformEmailDeliveryReadyDirect,
   waitForEmail,
 } from './backend';
 import type { Identity } from './form';
@@ -65,6 +67,7 @@ const INVITEE_EMAIL = 'staff-invitee@example.org';
 
 test.beforeEach(async () => {
   await reset();
+  await setPlatformEmailDeliveryReadyDirect();
 });
 
 test('a pending committee invite dedupes role edits, becomes stale on revoke, and re-invite gets a fresh authenticated link', async () => {
@@ -136,6 +139,7 @@ test('a pending committee invite dedupes role edits, becomes stale on revoke, an
       action: 'resend',
       logId: firstLogId,
       reviewedTo: INVITEE_EMAIL,
+      ...reviewedEmailConfiguration(preview),
     }),
   ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
 

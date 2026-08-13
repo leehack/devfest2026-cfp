@@ -8,12 +8,14 @@ import {
   readEmailLog,
   readProposalById,
   readScheduleConfigDirect,
+  reviewedEmailConfiguration,
   reset,
   seedMember,
   seedProposal,
   seedSpeaker,
   seedSpeakerConfirmation,
   setEmailDeliveryReadyDirect,
+  setPlatformEmailDeliveryReadyDirect,
   setScheduleNeedsAttentionDirect,
 } from './backend';
 
@@ -134,6 +136,7 @@ test.describe('explicit event speaker profile copies', () => {
   });
 
   test('previews safe diffs and tracks idempotent request, completion, cancellation and re-request generations', async () => {
+    await setPlatformEmailDeliveryReadyDirect();
     const [speaker, admin, outsider] = await Promise.all(
       [SPEAKER, ADMIN, OUTSIDER].map(createAccount),
     );
@@ -359,6 +362,7 @@ test.describe('explicit event speaker profile copies', () => {
         action: 'retry',
         logIds: [firstLogId],
         reviewedRecipients: [{ logId: firstLogId, to: SPEAKER.email }],
+        ...reviewedEmailConfiguration(resolvedQueue),
       }),
     ).toMatchObject({ released: 0, stale: 1 });
     expect(
@@ -366,6 +370,7 @@ test.describe('explicit event speaker profile copies', () => {
         action: 'resend',
         logId: firstLogId,
         reviewedTo: SPEAKER.email,
+        ...reviewedEmailConfiguration(resolvedQueue),
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(

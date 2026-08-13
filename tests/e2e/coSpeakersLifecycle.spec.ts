@@ -18,6 +18,7 @@ import {
   readSpeakerConfirmation,
   readSpeakerParticipant,
   readStoredObjects,
+  reviewedEmailConfiguration,
   reset,
   seedMember,
   seedProfileUpdateRequestDirect,
@@ -310,6 +311,7 @@ test.describe('co-speaker lifecycle boundaries', () => {
         action: 'release',
         logIds: [invitationRow.id],
         reviewedRecipients: [{ logId: invitationRow.id, to: invitationRow.to }],
+        ...reviewedEmailConfiguration(preview),
       }),
     ).resolves.toMatchObject({ ok: false });
     await expect(
@@ -317,6 +319,7 @@ test.describe('co-speaker lifecycle boundaries', () => {
         action: 'resend',
         logId: invitationRow.id,
         reviewedTo: invitationRow.to,
+        ...reviewedEmailConfiguration(preview),
       }),
     ).resolves.toMatchObject({ ok: false });
     await expect(
@@ -324,6 +327,7 @@ test.describe('co-speaker lifecycle boundaries', () => {
         action: 'retry',
         logIds: [invitationRow.id],
         reviewedRecipients: [{ logId: invitationRow.id, to: invitationRow.to }],
+        ...reviewedEmailConfiguration(preview),
       }),
     ).resolves.toMatchObject({ ok: false });
     const afterAdminActions = (await readEmailLog()).find(

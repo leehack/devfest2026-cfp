@@ -28,9 +28,13 @@ one call. The document id being the slug means creating one *is* the uniqueness
 check: there is no second index to keep honest, and no window in which two people
 both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
 account, not to any one talk), `platformMembers/{uid}` and
-`platformRoleGrants/{email}` (global creator access), `signInLinks` (a
-platform-wide throttle), `speakerInvitationLimits` (hashed invitation-rate
-limits) and `config/platform` sit outside.
+`platformRoleGrants/{email}` (global creator access), `signInLinks` (hashed
+address/network throttles and a platform circuit breaker),
+`speakerInvitationLimits` (hashed invitation-rate limits), `config/platform`
+(public platform identity and link origin), `config/platformEmail` (platform
+email defaults), `config/emailProvider` (provider key hint) and
+`emailDomainBindings/{hash(domainId)}` (exclusive event/platform domain
+ownership) sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
 `/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
@@ -416,11 +420,20 @@ peaking at a few hundred submissions in the final hour has no legitimate reason
 to autoscale past that — anything beyond is a loop or an attack, and should
 queue rather than bill.
 
-One Resend account serves every call on the platform, so each one registers its
-own sending domain. A callable-only platform binding assigns each Resend domain
-id to exactly one CFP; typing another event's public domain name cannot adopt it.
-`setEmailSettings` and delivery both refuse a `from` whose exact binding is not
-owned by that CFP. Only platform owners and administrators rotate the shared key.
+One Resend account serves every call on the platform. Platform owners and
+administrators manage its shared key and a default domain, sender and reply-to.
+Replacing the platform domain is staged too: the active identity keeps
+serving inheriting events while DNS is verified, and only an explicit activation
+swaps the verified pointer. A sender that does not match the replacement is
+cleared at that cutover and must be saved on the new domain. A CFP inherits that default while an event-specific domain is being
+staged; only explicitly activating the event override switches identity, after
+which delivery fails closed until its exact binding is ready. A callable-only binding assigns
+each Resend domain id either to the platform default or to exactly one CFP, so
+typing another scope's public domain name cannot adopt it.
+The defaults live in callable-only `config/platformEmail`; an event records its
+selection and overrides in `cfps/{cfpId}/config/email`. Existing CFPs that
+already have a sender or domain remain event-scoped when `senderMode` is absent;
+the rollout does not silently move their mail to the platform identity.
 `config/platform` holds the site's own origin and is writable by nobody through
 the app — it is where every mailed link points, sign-in links included, and those
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
@@ -519,9 +532,10 @@ With no API key configured the trigger renders the message, logs it, and records
 `dry_run` instead of `sent` — the pipeline runs end to end locally and in tests
 without sending anything, and the log never claims a send that did not happen.
 
-**Set event mail up from `/admin`**, under Email. Four steps, each of which says
-whether it is done, because the failure this replaces was silent — the pipeline
-queued perfectly and sent nothing, and no screen said why.
+**Set the platform default up from the account menu's Platform email settings
+link**, then inspect or override it for one CFP from `/admin`, under Email. Each screen says which scope supplies the
+effective setup and whether it is ready, because the failure this replaces was
+silent — the pipeline queued perfectly and sent nothing, and no screen said why.
 
 1. **Shared API key.** A platform owner or administrator pastes the platform's
    Resend key. Event administrators can see whether it is ready but cannot
@@ -532,16 +546,18 @@ queued perfectly and sent nothing, and no screen said why.
    Firestore** — Firestore has no version history, no access audit, and a copy of
    every document lands in every export. The page shows the last four characters
    and nothing more.
-2. **Sending domain.** Add a new domain, and the page lists the exact DNS records Resend
-   wants and re-checks them on a button. Those records are generated per domain
-   and exist only in Resend's dashboard, which is the one part of the setup
-   nobody can be told in advance. This is the long pole — DNS propagation plus
-   Resend's own check. An exact legacy domain pointer migrates only when no
-   other CFP references it; an existing unbound Resend domain is refused rather
-   than implicitly claimed by its public name.
-3. **Sender.** The from address and reply-to, stored in `config/email`.
-   `CFP_EMAIL_FROM` and `CFP_REPLY_TO` in `functions/.env*` remain a fallback for
-   a fresh project, empty on purpose so nothing sends until someone says so.
+2. **Default sending domain.** Add it on the platform page, which lists the exact
+   DNS records Resend wants and re-checks them on a button. Those records are
+   generated per domain and exist only in Resend's dashboard. This is the long
+   pole — DNS propagation plus Resend's own check. The platform binding is not
+   an event binding, even when both use the same Resend account.
+3. **Default sender and reply-to.** New and unconfigured CFPs inherit these.
+   An event administrator may stage a separate domain and sender from `/admin`
+   without interrupting the inherited setup. Explicitly activating that event
+   override makes it exclusive: an incomplete or stale override does not silently
+   send through the platform identity instead. Event deletion never deletes the
+   platform default or its binding. A missing event reply-to inherits the
+   platform value; deliberately saving an empty reply-to suppresses it.
 4. **Preview and wording**, then send one to yourself. The preview renders
    through the same pure `renderEmail` the sender uses, so it is the message
    rather than an impression of it — and it renders from the editor's text, so
@@ -549,15 +565,15 @@ queued perfectly and sent nothing, and no screen said why.
    skip `emailLog`: that collection is the record of what applicants were told,
    and a test is not that.
 
-Every message can be rewritten per language from that last step, stored in
-`config/email.templates`. Placeholders are `{speakerName}`, `{title}`,
+Every message can be rewritten per language from that last step. Event wording
+overlays the built-in copy one template and language at a time. Placeholders are `{speakerName}`, `{title}`,
 `{proposalUrl}`, `{reviewUrl}`, `{scheduleUrl}`, `{scheduleDate}`,
 `{scheduleTime}`, `{scheduleRoom}`, `{event}` and `{visa}` — the last is
 conditional, so a paragraph containing only `{visa}` disappears for speakers
 who do not need one. A blank
 subject or body, or a mistyped placeholder that would print braces to an
-applicant, is refused in the browser *and* in the callable. "Restore ours" drops
-the override and the built-in copy applies again.
+applicant, is refused in the browser *and* in the callable. Restoring an event
+override reveals the built-in copy.
 
 Nothing here needs a redeploy. Checking DNS from a terminal is still quicker than
 any dashboard — no Resend DKIM record means the domain is not verified, whatever
@@ -616,7 +632,10 @@ readable. The rules suite exercises every boundary and is mutation-checked.
   transitive in the current Next and Firebase/Google dependency trees rather
   than ignored behind a claim of zero.
 - **Cost is a security property here.** Every callable sets `maxInstances: 10`,
-  and no view uses `onSnapshot`.
+  and no view uses `onSnapshot`. Public sign-in mail also consumes atomic
+  per-address, best-effort per-network and platform-wide hourly allowances before
+  Auth mints its bearer link. The shared platform circuit breaker is the hard
+  ceiling and deliberately fails closed under attack.
 
 Still open, in rough order of how much they would matter on the day:
 

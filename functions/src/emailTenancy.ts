@@ -31,10 +31,37 @@ export function emailDomainBindingMatches(
   return Boolean(
     domainId &&
       domain &&
+      (binding?.scope === undefined || binding?.scope === 'event') &&
       binding?.cfpId === cfpId &&
       binding?.domainId === domainId &&
       String(binding?.domain ?? '').toLowerCase() === domain.toLowerCase(),
   );
+}
+
+export function platformEmailDomainBindingMatches(
+  binding: DocumentData | undefined,
+  domainId: string,
+  domain: string,
+): boolean {
+  return Boolean(
+    domainId &&
+      domain &&
+      binding?.scope === 'platform' &&
+      binding?.domainId === domainId &&
+      String(binding?.domain ?? '').toLowerCase() === domain.toLowerCase(),
+  );
+}
+
+export function supersededStagedEmailDomainId(
+  stagedDomainId: string,
+  activeDomainId: string,
+  replacementDomainId: string,
+): string | null {
+  return stagedDomainId &&
+    stagedDomainId !== activeDomainId &&
+    stagedDomainId !== replacementDomainId
+    ? stagedDomainId
+    : null;
 }
 
 export function legacyEmailDomainOwnerIsExact(
@@ -112,6 +139,7 @@ export async function ensureLegacyEmailDomainBinding(
     if (!legacyEmailDomainOwnerIsExact(cfpId, domain, references)) return false;
 
     tx.create(bindingRef, {
+      scope: 'event',
       cfpId,
       domainId,
       domain,
