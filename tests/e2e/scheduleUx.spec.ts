@@ -1467,7 +1467,7 @@ test('sharing and publishing have separate review steps and stale-version guidan
   await share.click();
   const shareDialog = page.getByRole('dialog', { name: 'Share this confirmed preview?' });
   await expect(shareDialog).toContainText('1 items shared');
-  await expect(shareDialog).toContainText('0 tentative omitted');
+  await expect(shareDialog).toContainText('0 private placements omitted');
   await expect(shareDialog).toContainText('Confirmed speakers see only their own');
   await expect(shareDialog).toContainText('The public still sees only the currently published programme.');
   await shareDialog.getByRole('button', { name: 'Share preview' }).click();
