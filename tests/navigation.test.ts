@@ -6,6 +6,7 @@ import {
   sessionDocumentTitle,
 } from '../src/components/AppNavigation';
 import { en } from '../src/i18n/en';
+import { fr } from '../src/i18n/fr';
 import type { Place } from '../src/lib/router';
 import {
   AGENDA_RETURN_STATE,
@@ -75,6 +76,40 @@ describe('navigation labels', () => {
     expect(sessionDocumentTitle('Building reliable systems', cfp)).toBe(
       `Building reliable systems — ${cfp}`,
     );
+  });
+});
+
+describe('platform administration navigation and roles', () => {
+  it('defines coherent task-oriented navigation labels in English and French', () => {
+    expect(en.platformAdmin.accountSection).toBe('Administration');
+    expect(fr.platformAdmin.accountSection).toBe('Administration');
+
+    expect(en.platformAdmin.accessNav).toBe('People & permissions');
+    expect(fr.platformAdmin.accessNav).toBe('Personnes et permissions');
+
+    expect(en.platformAdmin.limitsNav).toBe('Usage limits');
+    expect(fr.platformAdmin.limitsNav).toBe('Limites d’utilisation');
+
+    expect(en.platformAdmin.emailDefaultsNav).toBe('Email delivery');
+    expect(fr.platformAdmin.emailDefaultsNav).toBe('Livraison des courriels');
+
+    expect(en.platformAdmin.paginationNext).toBe('Next');
+    expect(fr.platformAdmin.paginationNext).toBe('Suivante');
+
+    expect(en.platformAdmin.globalLimitsTitle).toBe('Global defaults');
+    expect(fr.platformAdmin.globalLimitsTitle).toBe('Valeurs par défaut globales');
+  });
+
+  it('distinguishes platform roles from organization and event access', () => {
+    expect(en.platformAdmin.roleHelp.owner).toContain('single owner');
+    expect(en.platformAdmin.roleHelp.owner).toContain('every administrator capability');
+    expect(en.platformAdmin.roleHelp.admin).toContain('account and organization limits');
+    expect(en.platformAdmin.accessHelp).toContain('granted separately');
+
+    expect(fr.platformAdmin.roleHelp.owner).toContain('unique propriétaire');
+    expect(fr.platformAdmin.roleHelp.owner).toContain('tous les droits');
+    expect(fr.platformAdmin.roleHelp.admin).toContain('limites des comptes');
+    expect(fr.platformAdmin.accessHelp).toContain('accordés séparément');
   });
 });
 

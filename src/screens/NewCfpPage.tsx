@@ -7,13 +7,14 @@
  * against the address field, which is where the fix is.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { useI18n } from '../i18n/context';
-import { navigate } from '../lib/router';
+import { goTo, navigate } from '../lib/router';
 import { createCfp } from '../lib/roles';
-import { RadioGroup, TextField } from '../components/fields';
+import { useMyOrgs } from '../lib/orgs';
+import { RadioGroup, SelectField, TextField } from '../components/fields';
 import { CFP_LIMITS, idFromName, validateCfp, type Visibility } from '@shared/cfp';
 
 /** Local midnight, as the `datetime-local` input wants it. */
@@ -31,6 +32,15 @@ const inWeeks = (weeks: number) => {
 
 export function NewCfpPage({ user }: { user: User }) {
   const { t } = useI18n();
+  const { orgs, loading: orgsLoading, refresh: refreshOrgs } = useMyOrgs(user);
+  const manageableOrgs = useMemo(
+    () =>
+      orgs.filter(
+        (org) => org.membershipRole === 'owner' || org.membershipRole === 'admin',
+      ),
+    [orgs],
+  );
+  const [selectedOrgId, setSelectedOrgId] = useState('');
   const [name, setName] = useState('');
   // Follows the name until the address is typed into directly — after that it
   // is the author's, because an address that keeps changing under you is worse
@@ -52,13 +62,20 @@ export function NewCfpPage({ user }: { user: User }) {
   const publicUrl = `${origin}${publicPath}`;
   const ownerName = user.displayName?.trim() || t.platform.ownerFallback;
 
-  // These values only exist in a browser. Keeping the first render independent
-  // of them lets Next render this client component on the server without
-  // crashing or producing different markup at hydration.
   useEffect(() => {
     setOrigin(window.location.origin);
     setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    const params = new URLSearchParams(window.location.search);
+    const urlOrgId = params.get('orgId');
+    if (urlOrgId) setSelectedOrgId(urlOrgId);
   }, []);
+
+  useEffect(() => {
+    if (orgsLoading) return;
+    const selectedIsManageable = manageableOrgs.some((org) => org.slug === selectedOrgId);
+    if (selectedIsManageable) return;
+    setSelectedOrgId(manageableOrgs[0]?.slug ?? '');
+  }, [manageableOrgs, orgsLoading, selectedOrgId]);
 
   async function create() {
     if (busy) return;
@@ -88,6 +105,7 @@ export function NewCfpPage({ user }: { user: User }) {
         visibility,
         opensAt: new Date(opensAt).toISOString(),
         closesAt: new Date(closesAt).toISOString(),
+        orgId: selectedOrgId,
       });
       navigate('admin', { cfpId, tab: 'overview' });
     } catch (err: any) {
@@ -98,11 +116,11 @@ export function NewCfpPage({ user }: { user: User }) {
       } else {
         setError(
           code === 'functions/resource-exhausted'
-            ? t.platform.errors.limit
+            ? t.orgs.eventLimitReached
             : code === 'functions/failed-precondition'
               ? t.platform.errors.unverified
               : code === 'functions/permission-denied'
-                ? t.platformAdmin.accessRequiredHelp
+                ? t.nav.forbidden
                 : t.errors.generic,
         );
       }
@@ -111,24 +129,67 @@ export function NewCfpPage({ user }: { user: User }) {
     }
   }
 
+  if (orgsLoading) {
+    return <p className="muted">{t.app.loading}</p>;
+  }
+
+  if (manageableOrgs.length === 0) {
+    return (
+      <div className="panel platform-access-gate">
+        <p className="platform-admin__eyebrow">{t.orgs.title}</p>
+        <h2>{t.orgs.createFirstTitle}</h2>
+        <p>{t.orgs.createFirstHelp}</p>
+        <div className="platform-access-gate__actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => goTo('/orgs')}
+          >
+            {t.orgs.createTitle}
+          </button>
+          <button type="button" className="btn" onClick={() => void refreshOrgs()}>
+            {t.platformAdmin.checkAgain}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="new-cfp">
-      <header className="new-cfp__intro">
-        <p className="new-cfp__eyebrow">{t.platform.createEyebrow}</p>
-        <h2 className="new-cfp__title" id="new-cfp-title">
-          {t.platform.createDetailsTitle}
-        </h2>
-        <p className="new-cfp__help">{t.platform.createHelp}</p>
-      </header>
+    <div className="container container--narrow create-cfp">
+      <h2 className="create-cfp__title">{t.platform.createDetailsTitle}</h2>
+      <p className="create-cfp__lead">{t.platform.createHelp}</p>
+
+      {error && (
+        <p className="field__error create-cfp__banner-error" role="alert">
+          {error}
+        </p>
+      )}
 
       <form
         className="create-form"
-        aria-labelledby="new-cfp-title"
         onSubmit={(event) => {
           event.preventDefault();
           void create();
         }}
       >
+        <section className="create-form__section">
+            <header className="create-form__section-header">
+              <h3 className="create-form__section-title">
+                {t.orgs.title}
+              </h3>
+            </header>
+            <SelectField
+              label={t.orgs.nameLabel}
+              value={selectedOrgId}
+              onChange={(val) => setSelectedOrgId(val)}
+              options={manageableOrgs.map((o) => ({
+                  value: o.slug,
+                  label: `${o.name} (${o.slug})`,
+                }))}
+            />
+        </section>
+
         <section className="create-form__section" aria-labelledby="create-identity-title">
           <header className="create-form__section-header">
             <p className="create-form__step">{t.platform.createStep.replace('{step}', '1')}</p>

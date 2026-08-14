@@ -71,10 +71,10 @@ test.beforeEach(async () => {
 });
 
 test('a pending committee invite dedupes role edits, becomes stale on revoke, and re-invite gets a fresh authenticated link', async () => {
-  const admin = await createAccount(ADMIN);
-  await seedMember(admin.uid, 'admin', undefined, ADMIN.email);
+  const owner = await createAccount(OWNER);
+  await seedMember(owner.uid, 'owner', undefined, OWNER.email);
 
-  const firstGrant = await callJson(admin.idToken, 'grantRole', {
+  const firstGrant = await callJson(owner.idToken, 'grantRole', {
     email: INVITEE_EMAIL,
     role: 'reviewer',
   });
@@ -115,7 +115,7 @@ test('a pending committee invite dedupes role edits, becomes stale on revoke, an
 
   // Editing the pending role retains the invitation identity, so neither the
   // document trigger nor a deterministic log id can create a second message.
-  const editedGrant = await callJson(admin.idToken, 'grantRole', {
+  const editedGrant = await callJson(owner.idToken, 'grantRole', {
     email: INVITEE_EMAIL,
     role: 'admin',
   });
@@ -129,13 +129,13 @@ test('a pending committee invite dedupes role edits, becomes stale on revoke, an
     (await readEmailLog()).filter((row) => row.kind === 'committee_role_invited'),
   ).toHaveLength(1);
 
-  await callJson(admin.idToken, 'revokeRole', { email: INVITEE_EMAIL });
-  const preview = await callJson(admin.idToken, 'emailQueue', { action: 'preview' });
+  await callJson(owner.idToken, 'revokeRole', { email: INVITEE_EMAIL });
+  const preview = await callJson(owner.idToken, 'emailQueue', { action: 'preview' });
   expect(preview.rows).toContainEqual(
     expect.objectContaining({ logId: firstLogId, stale: true }),
   );
   expect(
-    await callAs(admin.idToken, 'emailQueue', {
+    await callAs(owner.idToken, 'emailQueue', {
       action: 'resend',
       logId: firstLogId,
       reviewedTo: INVITEE_EMAIL,
@@ -153,7 +153,7 @@ test('a pending committee invite dedupes role edits, becomes stale on revoke, an
     attemptsBeforeRetry,
   );
 
-  const secondGrant = await callJson(admin.idToken, 'grantRole', {
+  const secondGrant = await callJson(owner.idToken, 'grantRole', {
     email: INVITEE_EMAIL,
     role: 'reviewer',
   });

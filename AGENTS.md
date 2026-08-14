@@ -21,7 +21,7 @@ keeping `workers: 1` inside every shard because each test resets shared emulator
 state. The live Sessionize probe runs separately and does not gate a merge.
 
 ```bash
-node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
+node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --org my-org --org-name "My Org" --owner owner@example.org --opens 2027-01-01 --closes 2027-02-01
 node scripts/set-platform.mjs --url https://cfp.example.org
 GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email admin@example.org
 GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email owner@example.org --role owner
@@ -31,10 +31,10 @@ Standing a CFP up outside the app (a fresh emulator, or one for somebody else),
 the platform's own settings, an administrator, and the first global owner. The seeding scripts
 take emulator env vars from their own headers. `seed-cfp --owner` requires that
 organiser to already have a verified, enabled Auth account; it never leaves a
-pending owner grant. There is no in-app CFP-owner bootstrap: an approved creator
-is written as owner in the creation transaction. Platform
-owners are different and deliberately bootstrapped out of band; they delegate
-platform admins, and owners or admins delegate creator access.
+pending owner grant. There is no in-app CFP-owner bootstrap: the organization
+owner or admin who creates an event is written as its owner in the creation
+transaction. Platform owners are different and deliberately bootstrapped out of
+band; they delegate platform admins.
 
 ## Layout
 
@@ -51,9 +51,11 @@ tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 **It is a platform: everything hangs under `cfps/{cfpId}`, where the id is the
 slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
 are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
-the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (global
-creator access), `signInLinks` and `speakerInvitationLimits` (platform-wide
-hashed address/network/global throttles), `config/platform`, callable-only
+the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (platform
+administrator access), callable-only `platformUserLimits/{uid}` (per-account
+organization ownership overrides), `signInLinks` and `speakerInvitationLimits`
+(platform-wide hashed address/network/global throttles), `config/platform`, callable-only
+`config/platformLimits` (global organization ownership default), callable-only
 `config/platformEmail`, callable-only `config/emailProvider` and
 `emailDomainBindings/{hash(domainId)}` sit outside.
 Storage keeps server-only
@@ -72,14 +74,36 @@ callable-only.
 before proposal pointers existed.
 
 Routes off one path router (`src/lib/router.ts`): `/` the public listing, `/new`
-to start one, `/platform` for global creator access, `/me` the speaker's own
-profile, then `/c/{cfpId}` the call's public page, `/c/{cfpId}/submit` the form,
-`/review` for any role-holder and `/admin/{tab}` for admins. Only
-`/c/{cfpId}` — one segment — is rewritten to the `cfpPage` function for its meta
-tags; everything under it stays a static file. Roles are per CFP in `cfps/{cfpId}/members/{uid}` —
-`owner` above `admin` above `reviewer`; `roleGrants/{email}` holds an invitation
-until its holder first visits. Only an owner archives, deletes or is written by
-`createCfp`; `owner` is deliberately not grantable through `grantRole`.
+to start one, `/platform` for the administration overview with `/platform/access`,
+`/platform/limits`, and `/platform/email` as its dedicated pages, `/orgs` for organizations,
+`/me` the speaker's own profile, then `/c/{cfpId}` the call's public page,
+`/c/{cfpId}/submit` the form, `/review` for any role-holder and `/admin/{tab}`
+for admins. Only `/c/{cfpId}` — one segment — is rewritten to the `cfpPage`
+function for its meta tags; everything under it stays a static file.
+
+Access control hierarchy is single-owner at every scope: platform, organization,
+and event. Exactly one active owner exists per scope; multiple owners are not
+supported. Canonical `ownerUid` is recorded on organizations and events (with
+the matching membership maintained in the same transaction). Admins operate;
+owners control authority and permanence.
+- Platform owner: manages platform admins and initiates platform ownership
+  transfer. Platform admins configure organization event limits and shared
+  email delivery, but cannot manage platform admins or transfer.
+- Organization owner: manages organization admins, deletes organization, and
+  initiates org ownership transfer. Organization admins edit settings/branding,
+  manage ordinary members, and create events, but cannot manage admins or transfer.
+- Event owner: manages event admins, archives/deletes the CFP, and initiates
+  event ownership transfer. Event admins manage reviewers and operations (settings,
+  proposals, schedule, email), but cannot manage admins, archive, delete, or transfer.
+- Reviewer: scores proposals; cannot delegate any roles.
+
+Ownership transfer (platform, organization, event) uses an explicit
+initiate -> accept -> cancel lifecycle. Only the current owner initiates or cancels.
+The verified intended successor accepts, which atomically promotes the successor
+to owner and demotes the former owner to admin. A pending transfer expires after
+seven days, a second pending transfer is refused, and each superseded lifecycle is
+archived under its transfer id before the stable `current` slot is reused. Exact
+targets and current owners may read a pending transfer; ordinary admins may not.
 
 A pending event grant carries an opaque `invitationId`. The grant trigger uses
 that id for one generic committee invitation and revalidates the exact pending
@@ -87,16 +111,18 @@ grant before delivery. Changing a pending role does not spam another invite;
 revoking and later inviting again creates a fresh id. A claimed grant is already
 active and receives later proposal/schedule staff notices instead.
 
-Platform roles are separate: `owner`, `admin` and `creator` answer who may
-delegate platform access and create a CFP. They grant no access to event data.
-Both global collections are callable-only; owners grant/revoke admins, while
-owners and admins grant/revoke creators. `scripts/set-platform-admin.mjs --role
-owner` is the only path for platform-owner changes and transactionally refuses
-to remove the last active owner. A disabled, deleted or unverified Auth account
-does not count as a fallback. Auth and Firestore cannot share a transaction, so
-there is an unavoidable narrow race if an account is disabled during that
-removal; the role-document check itself is transactional. `createCfp` checks
-the global role again inside its creation transaction.
+Platform roles are separate: `owner` and `admin` answer who may administer the
+platform. They grant no access to organization or event data. Owners
+grant/revoke admins. Any verified user may own one organization by default;
+platform owners or admins may change that global default or set a per-account override without changing
+existing ownership. Organization owners and admins create events until the organization's active-event limit is
+reached. The default is one, configurable by a platform owner or admin.
+`scripts/set-platform-admin.mjs --role owner` remains the out-of-band
+bootstrap/emergency repair path and requires a verified, enabled Auth account;
+ordinary handoff uses the in-app accepted transfer. The script transactionally
+demotes any prior owner, and owner removal refuses to leave no usable owner.
+Organization creation, ownership acceptance, and event creation recheck their
+ownership and quota boundaries inside their transactions.
 
 Every callable takes a `cfpId` and checks the caller's role against *that* id.
 It is never inferred from the caller's memberships — somebody on two CFPs would

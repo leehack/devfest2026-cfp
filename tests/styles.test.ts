@@ -39,3 +39,11 @@ describe('status contrast tokens', () => {
     }
   });
 });
+
+describe('platform limits layout', () => {
+  it('does not leak platform-org-limit grid-area to platform-global-limit', () => {
+    const globalField = css.match(/\.platform-global-limit__field\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(globalField).not.toMatch(/grid-area\s*:/);
+    expect(globalField).toMatch(/display\s*:\s*grid/);
+  });
+});

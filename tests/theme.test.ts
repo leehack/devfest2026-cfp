@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   THEME_KEY,
+  clearThemePreference,
   resolveTheme,
   setThemePreference,
   storedTheme,
@@ -124,6 +125,15 @@ describe('theme preference', () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it('clears an explicit choice to follow the system again', () => {
+    const values = new Map<string, string>([[THEME_KEY, 'dark']]);
+    clearThemePreference({
+      setItem: (key, value) => void values.set(key, value),
+      removeItem: (key) => void values.delete(key),
+    });
+    expect(values.has(THEME_KEY)).toBe(false);
   });
 });
 

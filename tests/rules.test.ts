@@ -48,7 +48,7 @@ const OTHER_CFP = `cfps/${OTHER_CFP_ID}`;
 
 const CFP_BASE = {
   name: 'DevFest Montréal 2026',
-  ownerUids: ['owner-olive'],
+  ownerUid: 'owner-olive',
   visibility: 'public',
   archived: false,
 };
@@ -186,6 +186,32 @@ const asReviewer = () => env.authenticatedContext(REVIEWER, VERIFIED).firestore(
 const asOtherReviewer = () => env.authenticatedContext(OTHER_REVIEWER, VERIFIED).firestore();
 const asUnverified = () => env.authenticatedContext(APPLICANT, {}).firestore();
 const asOwner = () => env.authenticatedContext(OWNER, VERIFIED).firestore();
+
+describe('organization documents', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'orgs/community'), {
+        name: 'Community',
+        billingEmail: 'private-billing@example.org',
+      });
+      await setDoc(doc(db, 'orgs/community/members', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        role: 'member',
+      });
+    });
+  });
+
+  it('keeps the root document behind callable projections', async () => {
+    await assertFails(getDoc(doc(asApplicant(), 'orgs/community')));
+    await assertFails(getDocs(collection(asApplicant(), 'orgs')));
+  });
+
+  it('keeps membership documents behind callable projections', async () => {
+    await assertFails(getDoc(doc(asApplicant(), 'orgs/community/members', APPLICANT)));
+  });
+});
 
 describe('schedule drafts, shared previews and published releases', () => {
   beforeEach(async () => {
@@ -1452,16 +1478,16 @@ describe('finding a CFP', () => {
   });
 
   it('lets an owner list their own, private and archived alike', async () => {
-    await setCfp({ ownerUids: [APPLICANT], archived: true, archivedAt: new Date() }, OTHER_CFP);
+    await setCfp({ ownerUid: APPLICANT, archived: true, archivedAt: new Date() }, OTHER_CFP);
     const snap = await assertSucceeds(
-      getDocs(query(collection(asApplicant(), 'cfps'), where('ownerUids', 'array-contains', APPLICANT))),
+      getDocs(query(collection(asApplicant(), 'cfps'), where('ownerUid', '==', APPLICANT))),
     );
     expect(snap.docs.map((d) => d.id)).toEqual([OTHER_CFP_ID]);
   });
 
   it('lets a member find every CFP they are on, and nobody else’s', async () => {
     const mine = await assertSucceeds(
-      getDocs(query(collection(asReviewer(), 'cfps'), where('ownerUids', 'array-contains', REVIEWER))),
+      getDocs(query(collection(asReviewer(), 'cfps'), where('ownerUid', '==', REVIEWER))),
     );
     expect(mine.empty).toBe(true);
 
@@ -1481,7 +1507,7 @@ describe('finding a CFP', () => {
   });
 
   it('is not client-writable at all', async () => {
-    await assertFails(setDoc(doc(asApplicant(), 'cfps/mine'), { ...CFP_BASE, ownerUids: [APPLICANT] }));
+    await assertFails(setDoc(doc(asApplicant(), 'cfps/mine'), { ...CFP_BASE, ownerUid: APPLICANT }));
     await assertFails(updateDoc(doc(asApplicant(), CFP), { name: 'Mine now' }));
     await assertFails(deleteDoc(doc(asApplicant(), CFP)));
   });
@@ -1497,10 +1523,16 @@ describe('platform access is callable-only', () => {
         role: 'admin',
         grantedBy: 'bootstrap',
       });
-      await setDoc(doc(db, 'platformRoleGrants', 'creator@example.org'), {
-        email: 'creator@example.org',
-        role: 'creator',
+      await setDoc(doc(db, 'platformRoleGrants', 'admin@example.org'), {
+        email: 'admin@example.org',
+        role: 'admin',
         createdBy: REVIEWER,
+      });
+      await setDoc(doc(db, 'platformUserLimits', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        organizationLimit: 2,
+        updatedBy: REVIEWER,
       });
       await setDoc(doc(db, 'emailDomainBindings', 'domain-hash'), {
         cfpId: CFP_ID,
@@ -1515,6 +1547,10 @@ describe('platform access is callable-only', () => {
         from: 'CFP Platform <mail@platform.example.org>',
         replyTo: 'support@platform.example.org',
       });
+      await setDoc(doc(db, 'config', 'platformLimits'), {
+        organizationOwnershipDefault: 3,
+        updatedBy: REVIEWER,
+      });
     });
   });
 
@@ -1522,6 +1558,8 @@ describe('platform access is callable-only', () => {
     await assertFails(getDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
     await assertFails(getDocs(collection(asReviewer(), 'platformMembers')));
     await assertFails(getDocs(collection(asReviewer(), 'platformRoleGrants')));
+    await assertFails(getDoc(doc(asReviewer(), 'platformUserLimits', APPLICANT)));
+    await assertFails(getDocs(collection(asReviewer(), 'platformUserLimits')));
   });
 
   it('does not expose grants to signed-out or ordinary signed-in visitors', async () => {
@@ -1530,12 +1568,12 @@ describe('platform access is callable-only', () => {
         doc(
           env.unauthenticatedContext().firestore(),
           'platformRoleGrants',
-          'creator@example.org',
+          'admin@example.org',
         ),
       ),
     );
     await assertFails(
-      getDoc(doc(asApplicant(), 'platformRoleGrants', 'creator@example.org')),
+      getDoc(doc(asApplicant(), 'platformRoleGrants', 'admin@example.org')),
     );
   });
 
@@ -1543,6 +1581,7 @@ describe('platform access is callable-only', () => {
     await assertFails(getDoc(doc(asReviewer(), 'emailDomainBindings', 'domain-hash')));
     await assertFails(getDoc(doc(asReviewer(), 'config', 'emailProvider')));
     await assertFails(getDoc(doc(asReviewer(), 'config', 'platformEmail')));
+    await assertFails(getDoc(doc(asReviewer(), 'config', 'platformLimits')));
     await assertFails(
       setDoc(doc(asReviewer(), 'emailDomainBindings', 'domain-hash'), {
         cfpId: OTHER_CFP_ID,
@@ -1557,6 +1596,11 @@ describe('platform access is callable-only', () => {
     await assertFails(
       updateDoc(doc(asReviewer(), 'config', 'platformEmail'), {
         from: 'Attacker <mail@platform.example.org>',
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(asReviewer(), 'config', 'platformLimits'), {
+        organizationOwnershipDefault: 100,
       }),
     );
   });
@@ -1577,13 +1621,20 @@ describe('platform access is callable-only', () => {
       }),
     );
     await assertFails(
-      updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'creator' }),
+      updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'superadmin' }),
     );
     await assertFails(deleteDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
     await assertFails(
+      setDoc(doc(asReviewer(), 'platformUserLimits', APPLICANT), {
+        uid: APPLICANT,
+        email: 'anna@example.org',
+        organizationLimit: 20,
+      }),
+    );
+    await assertFails(
       setDoc(doc(asReviewer(), 'platformRoleGrants', 'friend@example.org'), {
         email: 'friend@example.org',
-        role: 'creator',
+        role: 'superadmin',
       }),
     );
   });

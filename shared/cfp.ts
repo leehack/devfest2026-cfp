@@ -43,8 +43,6 @@ export const CFP_LIMITS = {
   locationMax: 120,
   websiteMax: 200,
   timeZoneMax: 80,
-  /** Per approved creator account. The shared platform still needs a ceiling. */
-  perOwner: 10,
 } as const;
 
 /**

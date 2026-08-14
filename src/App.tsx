@@ -26,7 +26,7 @@ import { CfpPage } from './screens/CfpPage';
 import { SchedulePage } from './screens/SchedulePage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
 import { usePlatformAccess, useRole } from './lib/roles';
-import { navigate, usePlace, type Place } from './lib/router';
+import { goTo, navigate, usePlace, type Place } from './lib/router';
 import {
   AGENDA_RETURN_STATE,
   agendaReturnContext,
@@ -47,9 +47,11 @@ import {
 import { TextField } from './components/fields';
 import { ToastProvider } from './components/Toast';
 import { AccountMenu } from './components/AccountMenu';
-import { ThemeSwitch } from './components/ThemeSwitch';
+import { Link } from './components/Link';
+import { PreferencesMenu } from './components/PreferencesMenu';
 import { useLatest } from './lib/useLatest';
 import type { CfpRole } from '@shared/cfp';
+import { themeForeground } from '@shared/cfpTheme';
 import type { PlatformAccessStatus } from '@shared/platform';
 import type { PublishedScheduleBundle } from './lib/schedule';
 import { coSpeakerInviteQuery } from './lib/coSpeakers';
@@ -78,6 +80,16 @@ const PlatformAdminPage = lazy(() =>
     default: PlatformAdminPage,
   })),
 );
+const OrgsListPage = lazy(() =>
+  import('./screens/OrgsListPage').then(({ OrgsListPage }) => ({ default: OrgsListPage })),
+);
+const OrgWorkspacePage = lazy(() =>
+  import('./screens/OrgWorkspacePage').then(({ OrgWorkspacePage }) => ({
+    default: OrgWorkspacePage,
+  })),
+);
+
+const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
 
 export function App({
   initialPath,
@@ -120,7 +132,7 @@ export function App({
   const focusedIdentity = useRef<string | null | undefined>(undefined);
   const { route, cfpId } = place;
   currentCfpId.current = cfpId;
-  const placeKey = `${route}:${cfpId ?? ''}:${place.tab}:${place.entryId ?? ''}`;
+  const placeKey = `${route}:${cfpId ?? ''}:${place.orgId ?? ''}:${place.tab}:${place.entryId ?? ''}`;
   const [emailLink, setEmailLink] = useState(false);
   const focusedPlace = useRef(placeKey);
   const {
@@ -272,6 +284,7 @@ export function App({
         window.location.href,
       );
     }
+    window.scrollTo({ top: 0, behavior: 'auto' });
     requestAnimationFrame(() => {
       const modal = document.querySelector<HTMLElement>('[aria-modal="true"]');
       if (modal) {
@@ -306,7 +319,20 @@ export function App({
       return;
     }
     if (focusedIdentity.current === identity) return;
+    const previousIdentity = focusedIdentity.current;
     focusedIdentity.current = identity;
+    if (previousIdentity === null && identity) {
+      try {
+        const returnPath = window.sessionStorage.getItem(SIGN_IN_RETURN_PATH);
+        window.sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
+        if (returnPath?.startsWith('/') && !returnPath.startsWith('//')) {
+          goTo(returnPath);
+          return;
+        }
+      } catch {
+        // Sign-in still succeeds when session storage is unavailable.
+      }
+    }
     window.scrollTo({ top: 0, behavior: 'auto' });
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -385,6 +411,55 @@ export function App({
     };
   }, [route, cfpId, cfpAttempt]);
 
+  const themeStyle = useMemo(() => {
+    const theme = visibleCfp?.theme;
+    if (!theme?.primaryColor && !theme?.accentColor && !theme?.mastheadBg) return undefined;
+    const style: Record<string, string> = {};
+    if (theme.primaryColor) {
+      const foreground = themeForeground(theme.primaryColor);
+      style['--primary'] = theme.primaryColor;
+      style['--primary-fg'] = foreground;
+      style['--primary-hover'] = `color-mix(in srgb, ${theme.primaryColor} 82%, ${foreground})`;
+      style['--brand-color'] = theme.primaryColor;
+      if (!theme.mastheadBg) style['--masthead-bg'] = theme.primaryColor;
+    }
+    if (theme.accentColor) {
+      style['--accent'] = theme.accentColor;
+      style['--accent-fg'] = themeForeground(theme.accentColor);
+      style['--accent-soft'] = `${theme.accentColor}1f`;
+    } else if (theme.primaryColor) {
+      style['--accent'] = theme.primaryColor;
+      style['--accent-fg'] = themeForeground(theme.primaryColor);
+      style['--accent-soft'] = `${theme.primaryColor}1f`;
+    }
+    if (theme.mastheadBg) style['--masthead-bg'] = theme.mastheadBg;
+    return style as React.CSSProperties;
+  }, [visibleCfp?.theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const properties = [
+      '--primary',
+      '--primary-fg',
+      '--primary-hover',
+      '--accent',
+      '--accent-fg',
+      '--accent-soft',
+      '--masthead-bg',
+      '--brand-color',
+    ];
+    for (const property of properties) {
+      const value = themeStyle
+        ? (themeStyle as Record<string, string>)[property]
+        : undefined;
+      if (value) root.style.setProperty(property, value);
+      else root.style.removeProperty(property);
+    }
+    return () => {
+      for (const property of properties) root.style.removeProperty(property);
+    };
+  }, [themeStyle]);
+
   const i18n = useMemo(() => ({ locale, t, setLocale }), [locale, t]);
 
   return (
@@ -395,17 +470,19 @@ export function App({
         </a>
         {/* One width for the chrome, always. The measure belongs to what you read,
             not to the header above it — capping the whole page on the form routes
-            pulled the title, the language switch and the nav inwards, so they
+            pulled the title and account controls inwards, so they
             jumped every time you moved between a form and anything else. */}
-        <div className="page page--wide">
+        <div className="page page--wide" style={themeStyle}>
           <header className="header">
             <div className="header__identity">
-              <span className="brand-mark" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-                <span />
-              </span>
+              <Link to="/" className="brand-home" aria-label={t.nav.allCalls}>
+                <span className="brand-mark" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              </Link>
               <div>
                 <AppBreadcrumb
                   place={place}
@@ -418,16 +495,7 @@ export function App({
               </div>
             </div>
             <div className="header__right">
-              <div className="header__preferences">
-                <button
-                  type="button"
-                  className="btn btn--ghost locale-switch"
-                  onClick={() => setLocale(locale === 'en' ? 'fr' : 'en')}
-                >
-                  {t.switchTo}
-                </button>
-                <ThemeSwitch />
-              </div>
+              <PreferencesMenu />
               {authReady &&
                 (user ? (
                   <AccountMenu
@@ -450,6 +518,14 @@ export function App({
                       } else if (cfpId) {
                         navigate('form', { cfpId });
                       } else {
+                        try {
+                          window.sessionStorage.setItem(
+                            SIGN_IN_RETURN_PATH,
+                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                          );
+                        } catch {
+                          // The account page remains a safe fallback.
+                        }
                         navigate('me');
                       }
                     }}
@@ -629,14 +705,14 @@ function Routed({
   }
   if (route === 'new') {
     if (!user) return <SignIn cfp={null} cfpId={null} purpose="organising" />;
-    if (!platformReady) return <p className="muted">{t.app.loading}</p>;
-    if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
-    if (!platformStatus?.canCreateCfp) {
-      return <PlatformCreationRestricted onRetry={retryPlatform} />;
-    }
     return <NewCfpPage user={user} />;
   }
-  if (route === 'platform') {
+  if (
+    route === 'platform' ||
+    route === 'platformAccess' ||
+    route === 'platformLimits' ||
+    route === 'platformEmail'
+  ) {
     if (!user) return <SignIn cfp={null} cfpId={null} purpose="account" />;
     if (!platformReady) return <p className="muted">{t.app.loading}</p>;
     if (platformError) return <PlatformAccessFailure onRetry={retryPlatform} />;
@@ -655,7 +731,14 @@ function Routed({
         </div>
       );
     }
-    return <PlatformAdminPage user={user} />;
+    const section = route === 'platformAccess'
+      ? 'access'
+      : route === 'platformLimits'
+        ? 'limits'
+        : route === 'platformEmail'
+          ? 'email'
+          : 'home';
+    return <PlatformAdminPage user={user} section={section} />;
   }
   if (route === 'me') {
     return user ? (
@@ -663,6 +746,13 @@ function Routed({
     ) : (
       <SignIn cfp={null} cfpId={null} purpose="account" />
     );
+  }
+  if (route === 'orgs') {
+    if (!user) return <SignIn cfp={null} cfpId={null} purpose="account" />;
+    return <OrgsListPage user={user} />;
+  }
+  if (route === 'org') {
+    return <OrgWorkspacePage orgId={place.orgId || ''} user={user} />;
   }
 
   // Every route below is inside a CFP, and `currentPlace` will not produce one
@@ -708,7 +798,16 @@ function Routed({
   // The front page is public on purpose: it is the one screen whose audience
   // has not signed in, and being asked to before reading what the event is
   // would be asking in the wrong order.
-  if (route === 'cfp') return <CfpPage cfp={cfp} cfpId={cfpId} />;
+  if (route === 'cfp') {
+    return (
+      <CfpPage
+        cfp={cfp}
+        cfpId={cfpId}
+        user={user}
+        onRoleChanged={retryRole}
+      />
+    );
+  }
 
   if (route === 'schedule' || route === 'session') {
     const newerSharedPreview = Boolean(
@@ -823,25 +922,6 @@ function PlatformAccessFailure({ onRetry }: { onRetry: () => void }) {
       <button type="button" className="btn" onClick={onRetry}>
         {t.platformAdmin.retry}
       </button>
-    </div>
-  );
-}
-
-function PlatformCreationRestricted({ onRetry }: { onRetry: () => void }) {
-  const { t } = useI18n();
-  return (
-    <div className="panel platform-access-gate">
-      <p className="platform-admin__eyebrow">{t.platformAdmin.eyebrow}</p>
-      <h2>{t.platformAdmin.accessRequiredTitle}</h2>
-      <p>{t.platformAdmin.accessRequiredHelp}</p>
-      <div className="platform-access-gate__actions">
-        <button type="button" className="btn btn--primary" onClick={onRetry}>
-          {t.platformAdmin.checkAgain}
-        </button>
-        <button type="button" className="btn" onClick={() => navigate('home')}>
-          {t.platform.back}
-        </button>
-      </div>
     </div>
   );
 }
@@ -1107,15 +1187,32 @@ export function SignIn({
       )}
 
       {process.env.NEXT_PUBLIC_USE_EMULATORS === 'true' && (
-        <p className="muted" style={{ marginBottom: 0 }}>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={() => void import('./lib/devAuth').then((m) => m.signInAsTestSpeaker())}
-          >
-            Sign in as a test speaker (emulator only)
-          </button>
-        </p>
+        <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px dashed var(--line)' }}>
+          <p style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)' }}>
+            ⚡ Fast Role Sign-In (Emulator)
+          </p>
+          <div style={{ display: 'grid', gap: '0.5rem' }}>
+            {[
+              { id: 'owner', name: 'Olivia Owner', email: 'owner@example.org', sub: 'usr-owner', badge: '👑 Platform & CFP Owner' },
+              { id: 'admin', name: 'Alice Admin', email: 'admin@example.org', sub: 'usr-admin', badge: '🛡️ Event Admin' },
+              { id: 'reviewer', name: 'Bob Reviewer', email: 'reviewer@example.org', sub: 'usr-reviewer', badge: '⚖️ Committee Reviewer' },
+              { id: 'test-speaker', name: 'Test Speaker', email: 'test.speaker@example.org', sub: 'test-speaker', badge: '🧪 Test Speaker' },
+              { id: 'speaker', name: 'Charlie Speaker', email: 'speaker@example.org', sub: 'usr-speaker', badge: '🎤 Demo Speaker' },
+              { id: 'manager', name: 'Morgan Manager', email: 'manager@example.org', sub: 'usr-manager', badge: '🏢 Org Team Member' },
+            ].map((acc) => (
+              <button
+                key={acc.id}
+                type="button"
+                className="btn btn--secondary btn--sm"
+                style={{ justifyContent: 'space-between', width: '100%', padding: '0.45rem 0.75rem' }}
+                onClick={() => void import('./lib/devAuth').then((m) => m.signInAsTestSpeaker(acc))}
+              >
+                <span style={{ fontWeight: 650 }}>{acc.badge}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', opacity: 0.8 }}>{acc.email}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

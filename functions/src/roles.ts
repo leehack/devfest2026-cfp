@@ -4,9 +4,8 @@
  * Lives here rather than in `shared/` because it needs the Admin SDK, and
  * separate from `index.ts` so that "what granting means" is written once.
  *
- * Every function below takes a `cfpId` and touches nothing outside it. Platform
- * creator access lives in `platform.ts`; creating a CFP still writes its event
- * owner in one transaction.
+ * Every function below takes a `cfpId` and touches nothing outside it. Creating
+ * a CFP still writes its event owner in one transaction.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -19,6 +18,12 @@ import {
   type Transaction,
 } from 'firebase-admin/firestore';
 import { CFP_ROLES, type CfpRole } from '../../shared/cfp';
+import {
+  archiveOwnershipTransfer,
+  ownershipTransferExpiry,
+  ownershipTransferIsPending,
+  ownershipTransferView,
+} from './ownership';
 
 export class RoleError extends Error {
   constructor(
@@ -128,6 +133,16 @@ export async function grant(
 
     const existingGrant = await tx.get(grantRef);
     const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
+    const actorRole = actor.get('role');
+    const canonicalOwner = cfp.get('ownerUid');
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === byUid;
+    if (role === 'admin' && !actorIsOwner) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can grant admin roles.',
+        'event_owner_required',
+      );
+    }
     const membersByEmail = await tx.get(
       db.collection(`cfps/${cfpId}/members`).where('email', '==', email),
     );
@@ -176,9 +191,17 @@ export async function grant(
     if ([...relatedMembers.values()].some((member) => member.get('role') === 'owner')) {
       throw new RoleError('failed-precondition', "An owner's role cannot be changed.");
     }
+    const isTargetAdmin = [...relatedMembers.values()].some((member) => member.get('role') === 'admin');
+    if (role !== 'admin' && isTargetAdmin && !actorIsOwner) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can change an admin role.',
+        'event_owner_required',
+      );
+    }
     if (
       role !== 'admin' &&
-      [...relatedMembers.values()].some((member) => member.get('role') === 'admin')
+      isTargetAdmin
     ) {
       const admins = await tx.get(
         db.collection(`cfps/${cfpId}/members`).where('role', 'in', ['admin', 'owner']),
@@ -259,6 +282,9 @@ export async function revoke(
       throw new RoleError('failed-precondition', 'This call for proposals is being deleted.');
     }
     const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
+    const actorRole = actor.get('role');
+    const canonicalOwner = cfp.get('ownerUid');
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === byUid;
     const byEmail = await tx.get(
       db.collection(`cfps/${cfpId}/members`).where('email', '==', email),
     );
@@ -278,6 +304,13 @@ export async function revoke(
       throw new RoleError('failed-precondition', 'An owner cannot be removed.');
     }
     const removingAdmin = targets.some((member) => member.get('role') === 'admin');
+    if (removingAdmin && !actorIsOwner) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can revoke an admin.',
+        'event_owner_required',
+      );
+    }
     if (removingAdmin) {
       const admins = await tx.get(
         db.collection(`cfps/${cfpId}/members`).where('role', 'in', ['admin', 'owner']),
@@ -353,4 +386,249 @@ export async function claim(
     });
     return role;
   });
+}
+
+export async function initiateEventOwnershipTransfer(
+  db: Firestore,
+  auth: Auth,
+  {
+    cfpId,
+    email: rawEmail,
+    byUid,
+  }: { cfpId: string; email: unknown; byUid: string },
+) {
+  const email = normalizeEmail(rawEmail);
+  const targetUser = await userForEmail(auth, email);
+  if (!targetUser?.emailVerified || targetUser.disabled) {
+    throw new RoleError(
+      'failed-precondition',
+      'The successor account must be verified and enabled.',
+      'transfer_account_not_ready',
+    );
+  }
+  if (targetUser.uid === byUid) {
+    throw new RoleError(
+      'failed-precondition',
+      'You are already the event owner.',
+      'transfer_already_owner',
+    );
+  }
+
+  return await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const actorRef = memberDoc(db, cfpId, byUid);
+    const transferRef = db.doc(`cfps/${cfpId}/transfers/current`);
+    const [cfp, actor, currentTransfer] = await tx.getAll(cfpRef, actorRef, transferRef);
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('archived') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is archived.');
+    }
+    const canonicalOwner = cfp.get('ownerUid');
+    if (actor.get('role') !== 'owner' || canonicalOwner !== byUid) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can transfer ownership.',
+        'event_owner_required',
+      );
+    }
+    if (ownershipTransferIsPending(currentTransfer)) {
+      throw new RoleError(
+        'failed-precondition',
+        'An ownership transfer is already pending.',
+        'transfer_already_pending',
+      );
+    }
+
+    const transferId = randomUUID();
+    archiveOwnershipTransfer(
+      tx,
+      currentTransfer,
+      db.collection(`cfps/${cfpId}/transfers`),
+      byUid,
+    );
+    tx.set(transferRef, {
+      id: transferId,
+      scope: 'event',
+      scopeId: cfpId,
+      targetEmail: email,
+      targetUid: targetUser.uid,
+      initiatedBy: byUid,
+      initiatedAt: FieldValue.serverTimestamp(),
+      expiresAt: ownershipTransferExpiry(),
+      status: 'pending',
+    });
+    return { ok: true, transferId, targetEmail: email };
+  });
+}
+
+export async function acceptEventOwnershipTransfer(
+  db: Firestore,
+  auth: Auth,
+  { cfpId, uid, email: rawEmail }: { cfpId: string; uid: string; email: string },
+) {
+  const email = normalizeEmail(rawEmail);
+  let userRecord: UserRecord | undefined;
+  try {
+    userRecord = await auth.getUser(uid);
+  } catch (err) {
+    if ((err as { code?: string })?.code === 'auth/user-not-found') {
+      throw new RoleError('not-found', 'User account not found.', 'transfer_not_eligible');
+    }
+    throw err;
+  }
+  if (!userRecord.emailVerified || userRecord.disabled) {
+    throw new RoleError(
+      'failed-precondition',
+      'The successor account must be verified and enabled.',
+      'transfer_account_not_ready',
+    );
+  }
+
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  const transferRef = db.doc(`cfps/${cfpId}/transfers/current`);
+  const newOwnerMemberRef = memberDoc(db, cfpId, uid);
+
+  return await db.runTransaction(async (tx) => {
+    const [cfp, transferSnap, newMemberSnap] = await tx.getAll(
+      cfpRef,
+      transferRef,
+      newOwnerMemberRef,
+    );
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('deleting') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is being deleted.');
+    }
+    if (!ownershipTransferIsPending(transferSnap)) {
+      throw new RoleError(
+        'failed-precondition',
+        'No pending ownership transfer was found.',
+        'transfer_not_found',
+      );
+    }
+    const targetEmail = String(transferSnap.get('targetEmail') ?? '').toLowerCase();
+    const targetUid = transferSnap.get('targetUid');
+    if (targetUid ? targetUid !== uid : targetEmail !== email) {
+      throw new RoleError(
+        'permission-denied',
+        'This ownership transfer was not addressed to this account.',
+        'transfer_wrong_account',
+      );
+    }
+
+    const initiatedBy = String(transferSnap.get('initiatedBy') ?? '');
+    const initiatingOwner = await tx.get(memberDoc(db, cfpId, initiatedBy));
+    const ownersSnap = await tx.get(
+      db.collection(`cfps/${cfpId}/members`).where('role', '==', 'owner'),
+    );
+    const canonicalOwner = cfp.get('ownerUid');
+    if (initiatingOwner.get('role') !== 'owner' || canonicalOwner !== initiatedBy) {
+      throw new RoleError(
+        'failed-precondition',
+        'The event owner changed after this transfer was initiated.',
+        'transfer_not_found',
+      );
+    }
+    const now = FieldValue.serverTimestamp();
+
+    // Demote any existing owner to admin so exact single owner invariant holds
+    for (const doc of ownersSnap.docs) {
+      if (doc.id !== uid) {
+        tx.update(doc.ref, {
+          role: 'admin',
+          roleUpdatedAt: now,
+          roleUpdatedBy: uid,
+        });
+      }
+    }
+
+    tx.set(
+      newOwnerMemberRef,
+      {
+        cfpId,
+        uid,
+        email,
+        ...(userRecord.displayName ? { name: userRecord.displayName } : {}),
+        role: 'owner',
+        createdAt: newMemberSnap.exists ? newMemberSnap.get('createdAt') ?? now : now,
+        grantedBy: uid,
+        roleUpdatedAt: now,
+        roleUpdatedBy: uid,
+      },
+      { merge: true },
+    );
+
+    tx.update(cfpRef, {
+      ownerUid: uid,
+      updatedAt: now,
+    });
+
+    tx.update(transferRef, {
+      status: 'accepted',
+      acceptedAt: now,
+      acceptedBy: uid,
+    });
+
+    return { ok: true };
+  });
+}
+
+export async function cancelEventOwnershipTransfer(
+  db: Firestore,
+  { cfpId, byUid }: { cfpId: string; byUid: string },
+) {
+  const actorRef = memberDoc(db, cfpId, byUid);
+  const transferRef = db.doc(`cfps/${cfpId}/transfers/current`);
+
+  return await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const [cfp, actor, transferSnap] = await tx.getAll(cfpRef, actorRef, transferRef);
+    const canonicalOwner = cfp.get('ownerUid');
+    if (actor.get('role') !== 'owner' || canonicalOwner !== byUid) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can cancel an ownership transfer.',
+        'event_owner_required',
+      );
+    }
+    if (!ownershipTransferIsPending(transferSnap)) {
+      throw new RoleError(
+        'failed-precondition',
+        'No pending ownership transfer to cancel.',
+        'transfer_not_found',
+      );
+    }
+
+    tx.update(transferRef, {
+      status: 'cancelled',
+      cancelledBy: byUid,
+      cancelledAt: FieldValue.serverTimestamp(),
+    });
+
+    return { ok: true };
+  });
+}
+
+export async function getEventOwnershipTransfer(
+  db: Firestore,
+  { cfpId, byUid, email }: { cfpId: string; byUid: string; email?: string },
+) {
+  const transferRef = db.doc(`cfps/${cfpId}/transfers/current`);
+  const snap = await transferRef.get();
+  if (!ownershipTransferIsPending(snap)) return null;
+  const data = snap.data()!;
+  const targetEmail = String(data.targetEmail ?? '').toLowerCase();
+  const normalizedEmail = email ? email.toLowerCase() : '';
+  const [cfp, memberSnap] = await Promise.all([
+    db.doc(`cfps/${cfpId}`).get(),
+    byUid ? db.doc(`cfps/${cfpId}/members/${byUid}`).get() : Promise.resolve(null),
+  ]);
+  const canonicalOwner = cfp.get('ownerUid');
+  const isOwner =
+    memberSnap?.exists === true &&
+    memberSnap.get('role') === 'owner' &&
+    canonicalOwner === byUid;
+  const isTarget =
+    (normalizedEmail && targetEmail === normalizedEmail) || data.targetUid === byUid;
+  if (!isOwner && !isTarget) return null;
+  return ownershipTransferView(snap, 'event', cfpId);
 }

@@ -71,17 +71,96 @@ export function adminError(error: unknown, t: Dictionary): string {
     case 'invalid-argument':
       return t.admin.badInput;
     case 'permission-denied':
-      return t.nav.forbidden;
+      return reasonOf(error) === 'event_owner_required'
+        ? t.admin.ownerRequired
+        : t.nav.forbidden;
     default:
       return friendlyError(error, t);
   }
 }
 
+export function orgError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'resource-exhausted') {
+    if (reasonOf(error) === 'org_limit_reached') return t.orgs.createLimitHelp;
+    if (reasonOf(error) === 'org_event_limit_reached') return t.orgs.eventLimitReached;
+  }
+  if (codeOf(error) === 'failed-precondition') {
+    if (reasonOf(error) === 'org_account_not_ready') return t.orgs.errors.accountNotReady;
+    if (reasonOf(error) === 'org_owner_protected') return t.orgs.errors.ownerProtected;
+    if (reasonOf(error) === 'transfer_account_not_ready') return t.transfer.accountNotReady;
+    if (reasonOf(error) === 'transfer_already_owner') return t.transfer.alreadyOwner;
+    if (reasonOf(error) === 'transfer_already_pending') return t.transfer.alreadyPending;
+    if (reasonOf(error) === 'transfer_not_found') return t.transfer.notFound;
+    if (reasonOf(error) === 'org_has_events') return t.orgs.errors.hasEvents;
+    if (reasonOf(error) === 'org_delete_too_large') return t.orgs.errors.deleteTooLarge;
+  }
+  if (codeOf(error) === 'permission-denied') {
+    if (reasonOf(error) === 'org_owner_required') return t.orgs.errors.ownerRequired;
+    if (reasonOf(error) === 'transfer_wrong_account') return t.transfer.wrongAccount;
+    return t.nav.forbidden;
+  }
+  switch (codeOf(error)) {
+    case 'already-exists':
+      return t.orgs.errors.taken;
+    case 'invalid-argument':
+      return t.orgs.errors.badInput;
+    case 'not-found':
+      return t.orgs.errors.notFound;
+    case 'unauthenticated':
+      return t.errors.signedOut;
+    default:
+      return t.orgs.errors.generic;
+  }
+}
+
 /** Role mutations are the one admin path where the last-admin guard applies. */
 export function roleAdminError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'permission-denied' && reasonOf(error) === 'event_owner_required') {
+    return t.admin.ownerRequired;
+  }
   return codeOf(error) === 'failed-precondition' && reasonOf(error) === 'event_last_admin'
     ? t.admin.lastAdmin
     : adminError(error, t);
+}
+
+export function transferError(error: unknown, t: Dictionary): string {
+  if (codeOf(error) === 'failed-precondition') {
+    switch (reasonOf(error)) {
+      case 'transfer_account_not_ready':
+      case 'org_account_not_ready':
+        return t.transfer.accountNotReady;
+      case 'transfer_already_owner':
+        return t.transfer.alreadyOwner;
+      case 'transfer_already_pending':
+        return t.transfer.alreadyPending;
+      case 'transfer_not_found':
+        return t.transfer.notFound;
+      case 'transfer_not_eligible':
+        return t.transfer.notEligible;
+    }
+  }
+  if (codeOf(error) === 'permission-denied') {
+    switch (reasonOf(error)) {
+      case 'transfer_wrong_account':
+        return t.transfer.wrongAccount;
+      case 'platform_owner_required':
+        return t.platformAdmin.ownerRequired;
+      case 'org_owner_required':
+        return t.orgs.errors.ownerRequired;
+      case 'event_owner_required':
+        return t.admin.ownerRequired;
+      default:
+        return t.nav.forbidden;
+    }
+  }
+  switch (codeOf(error)) {
+    case 'invalid-argument':
+      return t.transfer.badInput;
+    case 'unauthenticated':
+      return t.errors.signedOut;
+    default:
+      return friendlyError(error, t);
+  }
 }
 
 export function reviewError(error: unknown, t: Dictionary): string {

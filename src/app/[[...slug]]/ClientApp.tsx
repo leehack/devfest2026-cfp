@@ -27,6 +27,15 @@ export interface InitialPublicCfp {
   archived: boolean;
   visibility: 'public' | 'private';
   state: CfpState;
+  orgId?: string;
+  theme?: {
+    primaryColor?: string;
+    accentColor?: string;
+    mastheadBg?: string;
+  };
+  features?: {
+    blindReview?: boolean;
+  };
 }
 
 function toCfpWindow(cfp: InitialPublicCfp): CfpWindow {
@@ -49,6 +58,9 @@ function toCfpWindow(cfp: InitialPublicCfp): CfpWindow {
     },
     sharedScheduleId: cfp.sharedScheduleId ?? undefined,
     publishedScheduleId: cfp.publishedScheduleId ?? undefined,
+    theme: cfp.theme,
+    features: cfp.features,
+    orgId: cfp.orgId,
   };
 }
 

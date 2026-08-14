@@ -7,7 +7,7 @@
  * trimmed to what the caller may see.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { User } from 'firebase/auth';
 
 import { formatCalendarDay, formatDay } from '../i18n';
@@ -15,14 +15,17 @@ import { useI18n } from '../i18n/context';
 import { href } from '../lib/router';
 import { Link } from '../components/Link';
 import {
+  acceptPlatformOwnershipTransfer,
   loadMyCfps,
   loadMyMemberships,
   loadMyProposalCfps,
-  loadPublicCfps,
+  loadPublicCfpPage,
+  type PublicCfpCursor,
   type CfpMembershipSummary,
   type CfpProposalActivity,
   type CfpSummary,
 } from '../lib/roles';
+import { transferError } from '../lib/errors';
 import { calendarDate } from '@shared/cfp';
 import type { ProposalStatus } from '@shared/enums';
 import type { PlatformAccessStatus } from '@shared/platform';
@@ -50,22 +53,53 @@ export function HomePage({
   const { t } = useI18n();
   const uid = user?.uid ?? null;
   const [open, setOpen] = useState<CfpSummary[] | null>(null);
+  const [publicCursor, setPublicCursor] = useState<PublicCfpCursor | null>(null);
+  const [hasMorePublic, setHasMorePublic] = useState(false);
+  const [loadingMorePublic, setLoadingMorePublic] = useState(false);
+  const [publicSearch, setPublicSearch] = useState('');
   const [accountActivity, setAccountActivity] = useState<AccountActivity | null>(null);
   const [publicFailed, setPublicFailed] = useState(false);
   const [accountLoadingUid, setAccountLoadingUid] = useState<string | null>(null);
   const [accountFailedUid, setAccountFailedUid] = useState<string | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferFailure, setTransferFailure] = useState('');
   const accountRequest = useRef(0);
 
   const loadPublic = useCallback(async () => {
     setOpen(null);
     setPublicFailed(false);
     try {
-      setOpen(await loadPublicCfps());
+      const page = await loadPublicCfpPage();
+      setOpen(page.cfps);
+      setPublicCursor(page.cursor);
+      setHasMorePublic(page.hasMore);
     } catch {
       setPublicFailed(true);
       setOpen([]);
+      setPublicCursor(null);
+      setHasMorePublic(false);
     }
   }, []);
+
+  const loadMorePublic = useCallback(async () => {
+    if (!publicCursor || loadingMorePublic) return;
+    setLoadingMorePublic(true);
+    setPublicFailed(false);
+    try {
+      const page = await loadPublicCfpPage(publicCursor);
+      setOpen((current) => {
+        const byId = new Map((current ?? []).map((cfp) => [cfp.id, cfp]));
+        for (const cfp of page.cfps) byId.set(cfp.id, cfp);
+        return [...byId.values()];
+      });
+      setPublicCursor(page.cursor);
+      setHasMorePublic(page.hasMore);
+    } catch {
+      setPublicFailed(true);
+    } finally {
+      setLoadingMorePublic(false);
+    }
+  }, [loadingMorePublic, publicCursor]);
 
   const loadAccount = useCallback(async (uid: string) => {
     const request = ++accountRequest.current;
@@ -121,9 +155,52 @@ export function HomePage({
   const owned = new Set(mine.map((cfp) => cfp.id));
   const elsewhere = helping.filter((cfp) => !owned.has(cfp.id));
   const hasActivity = proposals.length > 0 || mine.length > 0 || elsewhere.length > 0;
+  const platformTransfer = platformStatus?.pendingTransfer ?? null;
+  const visiblePublic = useMemo(() => {
+    if (!open) return [];
+    const query = publicSearch.trim().toLocaleLowerCase();
+    if (!query) return open;
+    return open.filter((cfp) =>
+      [cfp.name, cfp.id, cfp.orgId ?? '', cfp.location ?? ''].some((value) =>
+        value.toLocaleLowerCase().includes(query),
+      ),
+    );
+  }, [open, publicSearch]);
+
+  async function acceptPlatformTransfer() {
+    if (!user || transferBusy) return;
+    setTransferBusy(true);
+    setTransferFailure('');
+    try {
+      await acceptPlatformOwnershipTransfer({});
+      retryPlatform();
+    } catch (error) {
+      setTransferFailure(transferError(error, t));
+    } finally {
+      setTransferBusy(false);
+    }
+  }
 
   return (
     <div className="home-discovery">
+      {user && platformTransfer && (
+        <section className="ownership-transfer-card" aria-labelledby="platform-transfer-title">
+          <div>
+            <p className="home-activity__eyebrow">{t.transfer.acceptTitle}</p>
+            <h2 id="platform-transfer-title">{t.platformAdmin.roles.owner}</h2>
+            <p>{t.transfer.acceptBanner(t.platformAdmin.title)}</p>
+            {transferFailure && <p className="field__error" role="alert">{transferFailure}</p>}
+          </div>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={transferBusy}
+            onClick={() => void acceptPlatformTransfer()}
+          >
+            {transferBusy ? t.transfer.accepting : t.transfer.acceptButton}
+          </button>
+        </section>
+      )}
       {user && (accountLoading || accountFailed || hasActivity) && (
         <section className="home-activity" aria-labelledby="your-activity-title">
           <header className="home-activity__header">
@@ -213,17 +290,84 @@ export function HomePage({
           <p className="home-discovery__help">{t.platform.help}</p>
         </header>
 
-        <div className="home-discovery__listing" aria-busy={open === null}>
+        <div className="home-discovery__listing" aria-busy={open === null || loadingMorePublic}>
+          {open && open.length > 0 && (
+            <div className="home-directory-toolbar">
+              <div className="home-directory-search-box">
+                <div className="home-directory-search">
+                  <label className="home-directory-search__label" htmlFor="public-call-search">
+                    {t.platform.searchLabel}
+                  </label>
+                  <div className="home-directory-search__input-wrap">
+                    <span className="home-directory-search__icon" aria-hidden="true">🔍</span>
+                    <input
+                      id="public-call-search"
+                      className="field__input home-directory-search__input"
+                      type="search"
+                      value={publicSearch}
+                      placeholder={t.platform.searchPlaceholder}
+                      onChange={(event) => setPublicSearch(event.target.value)}
+                    />
+                    {publicSearch && (
+                      <button
+                        type="button"
+                        className="home-directory-search__clear"
+                        aria-label={t.platform.searchClear}
+                        onClick={() => setPublicSearch('')}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {publicSearch.trim() && (
+                <p className="home-directory-summary" aria-live="polite">
+                  {t.platform.searchSummary
+                    .replace('{shown}', String(visiblePublic.length))
+                    .replace('{loaded}', String(open.length))}
+                </p>
+              )}
+            </div>
+          )}
           {open === null ? (
-            <p className="home-discovery__empty" role="status">
-              {t.app.loading}
-            </p>
+            <div className="home-discovery__loading" role="status" aria-label={t.app.loading}>
+              <div className="skeleton-grid">
+                <div className="skeleton-card" />
+                <div className="skeleton-card" />
+                <div className="skeleton-card" />
+              </div>
+            </div>
           ) : publicFailed ? (
             <LoadFailure onRetry={loadPublic} />
           ) : open.length === 0 ? (
             <p className="home-discovery__empty">{t.platform.none}</p>
+          ) : visiblePublic.length === 0 ? (
+            <div className="home-discovery__empty" role="status">
+              <p>{t.platform.searchNoResults}</p>
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm"
+                onClick={() => setPublicSearch('')}
+              >
+                {t.platform.searchClearFilter}
+              </button>
+            </div>
           ) : (
-            <CfpList cfps={open} />
+            <CfpList cfps={visiblePublic} />
+          )}
+          {open && hasMorePublic && (
+            <div className="home-directory-more">
+              {publicSearch.trim() && <p>{t.platform.searchMoreHelp}</p>}
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={loadingMorePublic}
+                onClick={() => void loadMorePublic()}
+              >
+                {loadingMorePublic ? t.platform.loadingMore : t.platform.loadMore}
+              </button>
+            </div>
           )}
         </div>
       </section>
@@ -237,11 +381,9 @@ export function HomePage({
           <p className="organiser-callout__help">{t.platform.organiserHelp}</p>
         </div>
         <div className="organiser-callout__action">
-          {(!user || platformStatus?.canCreateCfp) && (
-            <Link className="btn" to={href({ route: 'new' })}>
-              {t.platform.create}
-            </Link>
-          )}
+          <Link className="btn" to={href({ route: 'new' })}>
+            {t.platform.create}
+          </Link>
           {platformStatus?.isPlatformAdmin && (
             <Link className="btn btn--ghost" to={href({ route: 'platform' })}>
               {t.platformAdmin.accountLink}
@@ -249,26 +391,13 @@ export function HomePage({
           )}
           {!user ? (
             <p className="organiser-callout__note">{t.platform.signInFirst}</p>
-          ) : !platformReady ? (
-            <p className="organiser-callout__note" role="status">
-              {t.app.loading}
-            </p>
-          ) : platformError ? (
+          ) : platformReady && platformError ? (
             <>
               <p className="organiser-callout__note" role="alert">
                 {t.platformAdmin.loadError}
               </p>
               <button type="button" className="btn btn--ghost" onClick={retryPlatform}>
                 {t.platformAdmin.retry}
-              </button>
-            </>
-          ) : !platformStatus?.canCreateCfp ? (
-            <>
-              <p className="organiser-callout__note">
-                {t.platformAdmin.accessRequiredHelp}
-              </p>
-              <button type="button" className="btn btn--ghost" onClick={retryPlatform}>
-                {t.platformAdmin.checkAgain}
               </button>
             </>
           ) : null}
@@ -412,7 +541,10 @@ function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
   const action = link?.action ?? t.platform.view;
 
   return (
-    <li className={`cfp-card cfp-card--${state}`}>
+    <li
+      className={`cfp-card cfp-card--${state}`}
+      style={cfp.theme?.primaryColor ? { borderTop: `3px solid ${cfp.theme.primaryColor}` } : undefined}
+    >
       <Link
         className="cfp-card__link"
         to={destination}
@@ -420,6 +552,16 @@ function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
       >
         <span className="cfp-card__topline">
           <span className={`cfp-card__status cfp-card__status--${state}`}>{stateLabel}</span>
+          {cfp.orgId && (
+            <span className="org-badge org-badge--card">
+              {cfp.orgId}
+            </span>
+          )}
+          {cfp.features?.blindReview && (
+            <span className="blind-review-badge blind-review-badge--card">
+              {t.platform.blindReviewBadge}
+            </span>
+          )}
           {cfp.visibility === 'private' && (
             <span className="cfp-card__tag">{t.platform.private}</span>
           )}

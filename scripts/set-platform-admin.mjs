@@ -77,6 +77,11 @@ try {
 }
 const member = user ? db.doc(`platformMembers/${user.uid}`) : null;
 
+if (role === 'owner' && (!user?.emailVerified || user.disabled)) {
+  console.error('A platform owner must already have a verified, enabled Auth account.');
+  await finish(1);
+}
+
 if (remove) {
   try {
     // Auth and Firestore cannot share one transaction. This preflight can race
@@ -153,10 +158,23 @@ const applied = await db.runTransaction(async (tx) => {
   const currentRole = String(current?.get('role') ?? '');
   const pendingRole = String(pending.get('role') ?? '');
   const nextRole =
-    role === 'owner' || currentRole === 'owner' || pendingRole === 'owner'
+    role === 'owner'
       ? 'owner'
-      : 'admin';
+      : currentRole === 'owner'
+        ? 'owner'
+        : 'admin';
   const now = FieldValue.serverTimestamp();
+
+  if (nextRole === 'owner') {
+    const existingOwners = await tx.get(
+      db.collection('platformMembers').where('role', '==', 'owner'),
+    );
+    for (const doc of existingOwners.docs) {
+      if (doc.id !== user.uid) {
+        tx.update(doc.ref, { role: 'admin', roleUpdatedAt: now, roleUpdatedBy: actor });
+      }
+    }
+  }
 
   if (user?.emailVerified && member) {
     const roleChanged = currentRole !== nextRole;

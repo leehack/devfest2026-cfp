@@ -145,10 +145,9 @@ the grant before the account's first visit.
 | `REVIEWER-REVOKED` | Former active reviewer whose event membership has been revoked after a shared preview exists. | protected event deep links |
 | `EVENT-ADMIN` | Active event admin; proposals in every decision state, reviewer coverage, held decision/schedule emails, and configured schedule draft. | `/c/{cfpId}/admin/{tab}`, `/c/{cfpId}/review` |
 | `EVENT-OWNER` | Active event owner and at least one other admin. Owns `CFP-DISPOSABLE`. | `/c/{cfpId}/admin/settings`, all event workspaces |
-| `PLATFORM-CREATOR-PENDING` | Verified account with an exact-email pending creator grant and no event role. | `/new`, `/` |
-| `PLATFORM-CREATOR` | Active creator grant, below the owned-CFP limit. No event role until creation. | `/new`, `/` |
-| `PLATFORM-CREATOR-TARGET` | Verified account with no platform role and existing ownership of its disposable CFP; grant target for `PLT-03`. | `/new`, `/platform`, owned event workspace |
-| `PLATFORM-ADMIN` | Active platform admin; pending and active creator grants. No event access by implication. | `/platform`, `/new` |
+| `VERIFIED-USER` | Verified account with no platform, organization, or event role. May create an organization within the default account limit. | `/orgs`, `/new`, `/` |
+| `USER-LIMIT-TARGET` | Verified account with a platform-configured organization ownership override. | `/orgs`, `/platform`, owned organization workspace |
+| `PLATFORM-ADMIN` | Active platform admin. No organization or event access by implication. | `/platform`, `/new` |
 | `PLATFORM-ADMIN-TARGET` | Verified account with no platform or event role; grant target for `PLT-04`. | `/platform` |
 | `PLATFORM-OWNER` | Active platform owner plus a second verified owner, pending admin grant, and no implied event access. | `/platform` |
 | `PLATFORM-OWNER-SECOND` | Active verified platform owner used only to prove last-owner safety. | `/platform` |
@@ -285,13 +284,13 @@ not the result of a particular run.
 | `OWN-01` | `EVENT-OWNER` | `MX` | Archive disposable CFP; attempt applicant mutation; unarchive. | Only owner can archive. It disappears from listing, freezes writes transactionally, and returns intact when restored. | archive warning; archived state; restored state | Automated — `platform.spec.ts`; `confirm.spec.ts` |
 | `OWN-02` | `EVENT-OWNER` | `MX` | Archive disposable CFP; type slug; cancel deletion; repeat and confirm. | Two distinct confirmations are required. Deletion removes event-scoped proposals, reviews, photos, and config, never unrelated tenants. | typed confirmation; final absence | Automated — `platform.spec.ts`, “deleting takes two steps, and takes the proposals and photos with it” |
 
-### Platform creator, admin, and owner
+### Verified users, platform admins, and platform owners
 
 | Flow | Persona | Budget | Steps | Expected outcome | Screenshot checkpoints | Automated coverage |
 |---|---|---:|---|---|---|---|
 | `PLT-01` | `AUTH-UNAUTHORIZED` | `M0` | Open `/new` and `/platform`; attempt direct creation callable in a dedicated backend check. | Creation and platform management are denied without exposing event or role data; access-request guidance is useful. | creation denial; platform denial | Automated — `platformAccess.spec.ts`, anonymous/unapproved test |
-| `PLT-02` | `PLATFORM-CREATOR-PENDING` → `PLATFORM-CREATOR` | `MT` | Claim pending creator grant; create `CFP-DISPOSABLE`; revisit home and admin. | Exact verified address claims access. Creator becomes event owner in the creation transaction and can resume the new CFP. Per-owner ceiling holds under races. | creator access; created event; home task card | Automated — `platformAccess.spec.ts`; `platform.spec.ts`, create flow |
-| `PLT-03` | `PLATFORM-ADMIN` + `PLATFORM-CREATOR-TARGET` | `MX` | Add pending creator; claim as target; revoke future creation; verify the target still owns its pre-existing disposable CFP; inspect an unrelated event as the platform admin. | Admin manages creators but not platform admins/owners. Revocation does not remove existing event ownership, and the platform admin role grants no access to unrelated events. | pending creator; active/revoked creator; retained ownership; unrelated-event denial | Automated — `platformAccess.spec.ts` |
+| `PLT-02` | `VERIFIED-USER` → organization/event owner | `MT` | Create an organization, then create `CFP-DISPOSABLE`; revisit home and admin. | The account becomes organization owner, and the event creator becomes event owner atomically. Organization and active-event limits hold under races. | organization creation; created event; home task card | Automated — `organizations.spec.ts`; `platform.spec.ts`, create flow |
+| `PLT-03` | `PLATFORM-ADMIN` + `USER-LIMIT-TARGET` | `MX` | Find the account, set an organization ownership override, create up to the new limit as the target, then inspect an unrelated event as the platform admin. | The override changes only future organization ownership acceptance/creation. Platform administration grants no access to unrelated organizations or events. | searched account; saved override; retained ownership; unrelated-event denial | Automated — `platformAccess.spec.ts`; `organizations.spec.ts` |
 | `PLT-04` | `PLATFORM-OWNER` + `PLATFORM-ADMIN-TARGET` | `MX` | Delegate pending platform admin; claim; revoke; exercise last-owner protections through bootstrap tests. | Owners alone manage platform admins. Owner changes remain bootstrap-only, and last active verified owner cannot be removed under concurrency. No platform role implies event access. | owner controls; pending/active admin; protected owner state | Automated — `platformAccess.spec.ts`; `platformBootstrap.spec.ts` |
 
 ### Mobile, keyboard/screen-reader, and bilingual lenses

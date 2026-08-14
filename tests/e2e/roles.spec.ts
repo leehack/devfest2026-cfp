@@ -24,6 +24,7 @@ import { at, signInAs, type Identity } from './form';
 import { LIMITS } from '@shared/enums';
 
 const ADMIN: Identity = { sub: 'admin-sub', email: 'admin@example.org', name: 'Ada' };
+const OWNER: Identity = { sub: 'owner-sub', email: 'owner@example.org', name: 'Ozzy' };
 const REVIEWER: Identity = { sub: 'reviewer-sub', email: 'reviewer@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 
@@ -59,6 +60,14 @@ async function asAdmin(page: Page, section: keyof typeof SECTIONS = 'committee')
   await inviteRole(ADMIN.email, 'admin');
   await signInAs(page, ADMIN, at(`/admin/${section}`));
   await expect(tab(page, SECTIONS[section])).toHaveAttribute('aria-current', 'page');
+}
+
+async function asOwner(page: Page, section: keyof typeof SECTIONS = 'committee') {
+  const owner = await createAccount(OWNER);
+  await seedMember(owner.uid, 'owner', CFP_ID, OWNER.email);
+  await signInAs(page, OWNER, at(`/admin/${section}`));
+  await expect(tab(page, SECTIONS[section])).toHaveAttribute('aria-current', 'page');
+  return owner;
 }
 
 test.describe('roles', () => {
@@ -128,22 +137,24 @@ test.describe('roles', () => {
   });
 
   test('a role edit racing first claim converges the grant and member on the newest role', async () => {
-    const admin = await createAccount(ADMIN);
-    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', CFP_ID, OWNER.email);
     await inviteRole(REVIEWER.email, 'reviewer');
     const reviewer = await createAccount(REVIEWER);
 
     await Promise.all([
       callAs(reviewer.idToken, 'claimRole', {}),
-      callAs(admin.idToken, 'grantRole', { email: REVIEWER.email, role: 'admin' }),
+      callAs(owner.idToken, 'grantRole', { email: REVIEWER.email, role: 'admin' }),
     ]);
 
     expect(await readMember(reviewer.uid)).toMatchObject({ role: 'admin', email: REVIEWER.email });
   });
 
-  test('concurrent removals cannot delete both remaining admins', async () => {
+  test('concurrent admins cannot remove each other', async () => {
+    const owner = await createAccount(OWNER);
     const first = await createAccount(ADMIN);
     const second = await createAccount(REVIEWER);
+    await seedMember(owner.uid, 'owner', CFP_ID, OWNER.email);
     await Promise.all([
       seedMember(first.uid, 'admin', CFP_ID, ADMIN.email),
       seedMember(second.uid, 'admin', CFP_ID, REVIEWER.email),
@@ -154,9 +165,12 @@ test.describe('roles', () => {
       callAs(second.idToken, 'revokeRole', { email: ADMIN.email }),
     ]);
 
-    expect(results.filter((result) => result.ok)).toHaveLength(1);
-    expect(results.filter((result) => !result.ok)).toHaveLength(1);
-    expect([await readMember(first.uid), await readMember(second.uid)].filter(Boolean)).toHaveLength(1);
+    expect(results).toEqual([
+      expect.objectContaining({ ok: false, code: 'PERMISSION_DENIED' }),
+      expect.objectContaining({ ok: false, code: 'PERMISSION_DENIED' }),
+    ]);
+    expect(await readMember(first.uid)).toMatchObject({ role: 'admin' });
+    expect(await readMember(second.uid)).toMatchObject({ role: 'admin' });
   });
 
   test('revocation removes a disabled account membership by its Auth email', async () => {
@@ -175,23 +189,16 @@ test.describe('roles', () => {
   });
 
   test('role changes resolve a disabled member by stored email without bypassing owner protection', async () => {
-    const admin = await createAccount(ADMIN);
     const reviewer = await createAccount(REVIEWER);
-    const ownerIdentity = {
-      sub: 'disabled-owner-sub',
-      email: 'disabled-owner@example.org',
-      name: 'Disabled Owner',
-    };
-    const owner = await createAccount(ownerIdentity);
+    const owner = await createAccount(OWNER);
     await Promise.all([
-      seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
       seedMember(reviewer.uid, 'reviewer', CFP_ID, REVIEWER.email),
-      seedMember(owner.uid, 'owner', CFP_ID, ownerIdentity.email),
+      seedMember(owner.uid, 'owner', CFP_ID, OWNER.email),
     ]);
-    await Promise.all([disableAccount(reviewer.uid), disableAccount(owner.uid)]);
+    await disableAccount(reviewer.uid);
 
     expect(
-      await callAs(admin.idToken, 'grantRole', {
+      await callAs(owner.idToken, 'grantRole', {
         email: REVIEWER.email,
         role: 'admin',
       }),
@@ -199,15 +206,15 @@ test.describe('roles', () => {
     expect(await readMember(reviewer.uid)).toMatchObject({ role: 'admin' });
 
     expect(
-      await callAs(admin.idToken, 'grantRole', {
-        email: ownerIdentity.email,
+      await callAs(owner.idToken, 'grantRole', {
+        email: OWNER.email,
         role: 'reviewer',
       }),
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
     expect(await readMember(owner.uid)).toMatchObject({ role: 'owner' });
   });
 
-  test('a disabled last admin cannot demote their stored membership', async () => {
+  test('a disabled admin cannot demote their stored membership', async () => {
     const admin = await createAccount(ADMIN);
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
     await disableAccount(admin.uid);
@@ -219,8 +226,8 @@ test.describe('roles', () => {
       }),
     ).toMatchObject({
       ok: false,
-      code: 'FAILED_PRECONDITION',
-      details: { reason: 'event_last_admin' },
+      code: 'PERMISSION_DENIED',
+      details: { reason: 'event_owner_required' },
     });
     expect(await readMember(admin.uid)).toMatchObject({ role: 'admin' });
   });
@@ -252,19 +259,18 @@ test.describe('roles', () => {
     });
   });
 
-  test('an admin cannot revoke the last admin', async ({ page }) => {
+  test('an admin is not offered controls over administrators', async ({ page }) => {
     await asAdmin(page);
-    page.once('dialog', (dialog) => dialog.accept());
-    await page.getByRole('button', { name: 'Revoke' }).click();
-
-    await expect(page.getByText(/only admin left/)).toBeVisible();
-    await expect(row(page, ADMIN.name)).toBeVisible();
+    const ownRow = row(page, ADMIN.name);
+    await expect(ownRow.getByText('Admin', { exact: true })).toBeVisible();
+    await expect(ownRow.getByRole('combobox')).toHaveCount(0);
+    await expect(ownRow.getByRole('button', { name: 'Revoke' })).toHaveCount(0);
   });
 
-  test('an admin changes a member’s role from the list', async ({ page }) => {
+  test('the owner changes a member’s role from the list', async ({ page }) => {
     const reviewer = await createAccount(REVIEWER);
     await seedMember(reviewer.uid, 'reviewer', CFP_ID, REVIEWER.email);
-    await asAdmin(page);
+    await asOwner(page);
 
     const rey = row(page, REVIEWER.email).getByRole('combobox');
     await expect(rey).toHaveValue('reviewer');
@@ -278,20 +284,17 @@ test.describe('roles', () => {
     await expect(tab(page, 'Manage event')).toBeVisible();
   });
 
-  test('the last admin cannot demote themselves', async ({ page }) => {
+  test('an admin cannot demote themselves', async ({ page }) => {
     await asAdmin(page);
-    await row(page, 'Ada').getByRole('combobox').selectOption('reviewer');
-
-    await expect(page.getByText(/only admin left/)).toBeVisible();
-    // The refusal has to reach the control as well — a select left showing
-    // "Reviewer" says the change went through.
-    await expect(row(page, 'Ada').getByRole('combobox')).toHaveValue('admin');
+    const ownRow = row(page, 'Ada');
+    await expect(ownRow.getByRole('combobox')).toHaveCount(0);
+    await expect(ownRow.getByRole('button', { name: 'Revoke' })).toHaveCount(0);
     await expect(tab(page, 'Manage event')).toBeVisible();
   });
 
   test('the owner’s row offers neither control, and the callable refuses both', async ({ page }) => {
-    const owner = await createAccount({ sub: 'owner-sub', email: 'owner@example.org', name: 'Ozzy' });
-    await seedMember(owner.uid, 'owner', CFP_ID, 'owner@example.org');
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', CFP_ID, OWNER.email);
     await asAdmin(page);
 
     const theirs = row(page, 'owner@example.org');
@@ -816,7 +819,7 @@ test.describe('reviewing', () => {
   }) => {
     await clearProposals();
     await page.reload();
-    await expect(page.getByText('no talks have been submitted')).toBeVisible();
+    await expect(page.getByText('There are no proposals waiting for your review.')).toBeVisible();
 
     await seedSubmittedProposal('p-rey', { speakerUid: reviewerUid, title: 'Rey on reviewing' });
     await page.reload();

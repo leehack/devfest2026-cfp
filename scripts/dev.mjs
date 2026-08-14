@@ -16,7 +16,7 @@ import process from 'node:process';
 import { javaEnv } from './java.mjs';
 
 const PROJECT = 'demo-devfest-cfp';
-const DATA_DIR = '.emulator-data';
+const DATA_DIR = process.env.CFP_EMULATOR_DATA_DIR || '.emulator-data';
 const FIRESTORE = '127.0.0.1:8080';
 const AUTH = '127.0.0.1:9099';
 const FUNCTIONS = '127.0.0.1:5001';
@@ -152,13 +152,6 @@ function reclaimPorts() {
   }
 }
 
-/** A window comfortably around today, so the form is open on a fresh checkout. */
-function devWindow() {
-  const day = 24 * 60 * 60 * 1000;
-  const iso = (offset) => new Date(Date.now() + offset).toISOString().slice(0, 10);
-  return { opens: iso(-30 * day), closes: iso(60 * day) };
-}
-
 /**
  * Waits for the children to actually go.
  *
@@ -216,21 +209,9 @@ run(
 
 await waitForEmulators();
 
-const { opens, closes } = devWindow();
-console.log(`\n▸ seeding cfps/${DEV_CFP} (${opens} → ${closes})\n`);
 await runToCompletion(
   'node',
-  [
-    'scripts/seed-cfp.mjs',
-    '--id',
-    DEV_CFP,
-    '--name',
-    'DevFest Montréal 2026',
-    '--opens',
-    opens,
-    '--closes',
-    closes,
-  ],
+  ['scripts/seed-demo-data.mjs'],
   {
     env: {
       ...env,

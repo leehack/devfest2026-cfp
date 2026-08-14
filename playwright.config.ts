@@ -12,6 +12,10 @@ export default defineConfig({
   tsconfig: './tsconfig.test.json',
   fullyParallel: false,
   workers: 1,
+  // A busy Firestore emulator can hold its database-clear lock while delayed
+  // triggers drain. Assertions keep their short timeouts; only the test budget
+  // allows the bounded reset retry to recover.
+  timeout: 120_000,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI

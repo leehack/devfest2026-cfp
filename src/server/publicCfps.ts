@@ -60,6 +60,15 @@ export interface PublicCfp {
   paused: boolean;
   archived: boolean;
   visibility: 'public' | 'private';
+  orgId?: string;
+  theme?: {
+    primaryColor?: string;
+    accentColor?: string;
+    mastheadBg?: string;
+  };
+  features?: {
+    blindReview?: boolean;
+  };
 }
 
 const ms = (value: unknown): number | null => {
@@ -101,6 +110,9 @@ function shape(id: string, data: Record<string, unknown>): PublicCfp {
     paused: data.paused === true,
     archived: data.archived === true,
     visibility: data.visibility === 'private' ? 'private' : 'public',
+    orgId: typeof data.orgId === 'string' ? data.orgId : undefined,
+    theme: data.theme as PublicCfp['theme'],
+    features: data.features as PublicCfp['features'],
   };
 }
 

@@ -85,7 +85,6 @@ test.describe('platform owner bootstrap', () => {
     const first = await createAccount(FIRST);
     expect(await callJson(first.idToken, 'platformAccess', {})).toMatchObject({
       role: 'admin',
-      canCreateCfp: true,
       isPlatformAdmin: true,
       isPlatformOwner: false,
     });
@@ -119,63 +118,34 @@ test.describe('platform owner bootstrap', () => {
     });
   });
 
-  test('a pending owner grant becomes active only after verified sign-in', async () => {
-    const pending = await bootstrap(FIRST.email, { role: 'owner' });
-    expect(pending.stdout).toContain(`Platform owner pending verified sign-in: ${FIRST.email}`);
-
-    const first = await createAccount(FIRST);
-    expect(await callJson(first.idToken, 'platformAccess', {})).toMatchObject({
-      role: 'owner',
-      isPlatformOwner: true,
+  test('an owner must already be a verified, enabled account', async () => {
+    await expect(bootstrap(FIRST.email, { role: 'owner' })).rejects.toMatchObject({
+      stderr: expect.stringContaining(
+        'A platform owner must already have a verified, enabled Auth account.',
+      ),
     });
   });
 
-  test('a mistyped pending owner grant can be removed before any owner is active', async () => {
-    const mistyped = {
-      sub: 'mistyped-platform-owner',
-      email: 'mistyped-platform-owner@example.org',
-      name: 'Mistyped Owner',
-    };
-    expect((await bootstrap(mistyped.email, { role: 'owner' })).stdout).toContain(
-      `Platform owner pending verified sign-in: ${mistyped.email}`,
-    );
-    expect(
-      (await bootstrap(mistyped.email, { role: 'owner', remove: true })).stdout,
-    ).toContain(`Platform owner removed: ${mistyped.email}`);
-
-    const account = await createAccount(mistyped);
-    expect(await callJson(account.idToken, 'platformAccess', {})).toMatchObject({
-      role: null,
-      isPlatformOwner: false,
+  test('an unverified account cannot be bootstrapped as owner', async () => {
+    await createUnverifiedAccount({ email: FIRST.email });
+    await expect(bootstrap(FIRST.email, { role: 'owner' })).rejects.toMatchObject({
+      stderr: expect.stringContaining(
+        'A platform owner must already have a verified, enabled Auth account.',
+      ),
     });
   });
 
-  test('a pending owner cannot replace the last active owner during removal', async () => {
-    const first = await createAccount(FIRST);
-    expect((await bootstrap(FIRST.email, { role: 'owner' })).stdout).toContain(
-      `Platform owner active: ${FIRST.email}`,
-    );
-    await bootstrap('possibly-mistyped-owner@example.org', { role: 'owner' });
-
-    await expect(
-      bootstrap(FIRST.email, { role: 'owner', remove: true }),
-    ).rejects.toMatchObject({
-      stderr: expect.stringContaining('Refusing to remove the last platform owner.'),
-    });
-    expect(await callJson(first.idToken, 'platformAccess', {})).toMatchObject({
-      role: 'owner',
-    });
-
-    const second = await createAccount(SECOND);
+  test('promoting a new owner atomically demotes the previous owner to admin', async () => {
+    const [first, second] = await Promise.all([createAccount(FIRST), createAccount(SECOND)]);
+    await bootstrap(FIRST.email, { role: 'owner' });
     await bootstrap(SECOND.email, { role: 'owner' });
-    expect(
-      (await bootstrap(FIRST.email, { role: 'owner', remove: true })).stdout,
-    ).toContain(`Platform owner removed: ${FIRST.email}`);
     expect(await callJson(first.idToken, 'platformAccess', {})).toMatchObject({
-      role: null,
+      role: 'admin',
+      isPlatformOwner: false,
     });
     expect(await callJson(second.idToken, 'platformAccess', {})).toMatchObject({
       role: 'owner',
+      isPlatformOwner: true,
     });
   });
 
@@ -250,25 +220,19 @@ test.describe('platform owner bootstrap', () => {
     });
   });
 
-  test('concurrent owner removals cannot remove both owners', async () => {
+  test('concurrent owner promotions still leave exactly one owner', async () => {
     const [first, second] = await Promise.all([createAccount(FIRST), createAccount(SECOND)]);
-    await Promise.all([
+    const promotions = await Promise.allSettled([
       bootstrap(FIRST.email, { role: 'owner' }),
       bootstrap(SECOND.email, { role: 'owner' }),
     ]);
-
-    const removals = await Promise.allSettled([
-      bootstrap(FIRST.email, { role: 'owner', remove: true }),
-      bootstrap(SECOND.email, { role: 'owner', remove: true }),
-    ]);
-    expect(removals.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
-    expect(removals.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+    expect(promotions.filter(({ status }) => status === 'fulfilled')).toHaveLength(2);
 
     const roles = await Promise.all([
       callJson(first.idToken, 'platformAccess', {}),
       callJson(second.idToken, 'platformAccess', {}),
     ]);
     expect(roles.filter(({ role }) => role === 'owner')).toHaveLength(1);
-    expect(roles.filter(({ role }) => role === null)).toHaveLength(1);
+    expect(roles.filter(({ role }) => role === 'admin')).toHaveLength(1);
   });
 });

@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 import {
   CFP_ID,
+  callJson,
   createAccount,
-  invitePlatformRole,
   inviteRole,
   reset,
   seedCfp,
@@ -184,7 +184,11 @@ test.describe('navigation by persona', () => {
   });
 
   test('the create page separates the page title from its form heading', async ({ page }) => {
-    await invitePlatformRole(SPEAKER.email, 'creator');
+    const speaker = await createAccount(SPEAKER);
+    await callJson(speaker.idToken, 'createOrg', {
+      name: 'Navigation Test Group',
+      slug: 'navigation-test-group',
+    });
     await signInAs(page, SPEAKER, '/new');
 
     await expect(

@@ -623,7 +623,7 @@ export function Email({
             className="btn email-delivery-status__action"
             href={
               source === 'platform' && canManageProvider
-                ? '/platform#email-defaults'
+                ? '/platform/email'
                 : '#email-event-override'
             }
           >
@@ -995,7 +995,7 @@ export function Email({
           keyHint={keyHint}
           keyConfigured={keyConfigured}
           canManageProvider={false}
-          platformManageHref={canManageProvider ? '/platform#email-defaults' : undefined}
+          platformManageHref={canManageProvider ? '/platform/email' : undefined}
           domainId={domainId}
           readOnly={readOnly}
           onKeySet={setKeyHint}

@@ -484,7 +484,7 @@ describe('scheduleError', () => {
 describe('platformAdminError', () => {
   const failed = (code: string) => ({ code });
 
-  it('maps creator-management failures without borrowing event-admin copy', () => {
+  it('maps platform-administration failures without borrowing event-admin copy', () => {
     expect(platformAdminError(failed('functions/invalid-argument'), en)).toBe(
       en.platformAdmin.badEmail,
     );

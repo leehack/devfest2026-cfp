@@ -57,14 +57,32 @@ export interface Speaker {
   updatedAt: unknown;
 }
 
+export interface CfpTheme {
+  primaryColor?: string;
+  accentColor?: string;
+  mastheadBg?: string;
+  logoUrl?: string;
+  bannerUrl?: string;
+}
+
+export interface CfpFeatures {
+  blindReview?: boolean;
+  attendanceModule?: boolean;
+}
+
 /**
  * `cfps/{cfpId}` — one call for proposals, and the tenant everything else
  * hangs under. The document id is the slug; see `shared/cfp.ts`.
  */
 export interface Cfp extends CfpProfile {
   name: string;
-  /** Denormalised from `members`, so "the CFPs I own" is one query. */
-  ownerUids: string[];
+  /** Optional parent organization for multi-tenant team management. */
+  orgId?: string;
+  theme?: CfpTheme;
+  features?: CfpFeatures;
+  supportedLanguages?: string[];
+  /** Canonical owner, denormalised from `members` for ownership queries. */
+  ownerUid: string;
   /** `private` means unlisted, not secret — anyone with the link can read it. */
   visibility: Visibility;
   /**
@@ -94,6 +112,22 @@ export interface Cfp extends CfpProfile {
   createdBy: string;
   createdAt: unknown;
   updatedAt: unknown;
+}
+
+export interface OwnershipTransfer {
+  id: string;
+  scope: 'platform' | 'org' | 'event';
+  scopeId?: string;
+  targetEmail: string;
+  targetUid?: string;
+  initiatedBy: string;
+  initiatedAt: unknown;
+  expiresAt?: unknown;
+  status: 'pending' | 'accepted' | 'cancelled';
+  acceptedAt?: unknown;
+  acceptedBy?: string;
+  cancelledAt?: unknown;
+  cancelledBy?: string;
 }
 
 /**

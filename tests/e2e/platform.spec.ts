@@ -2,8 +2,8 @@
  * The platform, rather than any one call for proposals.
  *
  * Two things are being proved here. That the front door works — a public CFP is
- * listed, a private one is not but is reachable by link, and an approved creator
- * can start one. And that a tenant is a boundary: an admin of one CFP is
+ * listed, a private one is not but is reachable by link, and an organization
+ * administrator can start one. And that a tenant is a boundary: an admin of one CFP is
  * nobody's admin on another, from the callables as well as from the screen.
  *
  * The second is the one worth the run time. `firestore.rules` has its own
@@ -12,14 +12,13 @@
  * is where that half is tested.
  */
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 import {
   CFP_ID,
   callAs,
   callJson,
   createAccount,
-  invitePlatformRole,
   inviteRole,
   readCfp,
   readEmailLog,
@@ -49,6 +48,12 @@ import {
   storeObjectDirect,
 } from './backend';
 import { at, signInAs } from './form';
+import {
+  openPreferences,
+  preferencesTrigger,
+  selectInterfaceTheme,
+  switchInterfaceLanguage,
+} from './preferences';
 
 const OTHER = 'someone-elses-conf';
 
@@ -62,9 +67,6 @@ const OUTSIDER = { sub: 'plat-outsider', email: 'outsider@other.test', name: 'Ot
 const SPEAKER = { sub: 'plat-speaker', email: 'speaker@example.test', name: 'Sam Speaker' };
 const THEME_KEY = 'cfp.theme';
 
-const themeToggle = (page: Page) =>
-  page.getByRole('button', { name: 'Dark theme', exact: true });
-
 test.describe('the front door', () => {
   test.beforeEach(async () => {
     await reset();
@@ -74,6 +76,8 @@ test.describe('the front door', () => {
     for (const path of ['/', at(''), at('/review'), at('/admin/proposals')]) {
       await page.goto(path);
       const header = page.locator('header.header');
+      await expect(header.locator('a.brand-home')).toHaveAttribute('href', '/');
+      await expect(header.locator('a.brand-home')).toHaveAccessibleName('All Calls');
       await expect(header.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
       await expect(header.getByRole('button', { name: 'Account' })).toHaveCount(0);
     }
@@ -86,14 +90,14 @@ test.describe('the front door', () => {
     await expect(page.locator('#sign-in')).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 844 });
-    const locale = await page.getByRole('button', { name: 'Français' }).boundingBox();
+    const preferences = await preferencesTrigger(page).boundingBox();
     const signIn = await page
       .locator('header.header')
       .getByRole('button', { name: 'Sign in', exact: true })
       .boundingBox();
-    expect(locale).not.toBeNull();
+    expect(preferences).not.toBeNull();
     expect(signIn).not.toBeNull();
-    expect(signIn!.x).toBeGreaterThan(locale!.x);
+    expect(signIn!.x).toBeGreaterThan(preferences!.x);
     expect(signIn!.x + signIn!.width).toBeLessThanOrEqual(390);
   });
 
@@ -101,7 +105,11 @@ test.describe('the front door', () => {
     await page.emulateMedia({ colorScheme: 'dark' });
     await page.goto(at(''));
 
-    await expect(themeToggle(page)).toHaveAttribute('aria-pressed', 'true');
+    await openPreferences(page);
+    await expect(page.getByRole('button', { name: 'System', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     expect(await page.evaluate((key) => localStorage.getItem(key), THEME_KEY)).toBeNull();
   });
@@ -110,15 +118,17 @@ test.describe('the front door', () => {
     await page.emulateMedia({ colorScheme: 'light' });
     await page.goto(at(''));
 
-    const toggle = themeToggle(page);
-    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    const dark = await selectInterfaceTheme(page, 'dark');
+    await expect(dark).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     expect(await page.evaluate((key) => localStorage.getItem(key), THEME_KEY)).toBe('dark');
 
     await page.reload();
-    await expect(themeToggle(page)).toHaveAttribute('aria-pressed', 'true');
+    await openPreferences(page);
+    await expect(page.getByRole('button', { name: 'Dark', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   });
 
@@ -135,30 +145,28 @@ test.describe('the front door', () => {
     await page.emulateMedia({ colorScheme: 'light' });
     await page.goto(at(''));
 
-    const toggle = themeToggle(page);
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    const dark = await selectInterfaceTheme(page, 'dark');
+    await expect(dark).toHaveAttribute('aria-pressed', 'true');
 
     await page.emulateMedia({ colorScheme: 'dark' });
     await page.emulateMedia({ colorScheme: 'light' });
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(dark).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   });
 
   test('the theme control stays labelled and contained in French on a phone', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' });
     await page.goto(at(''));
-    await themeToggle(page).click();
-
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
-    const frenchToggle = page.getByRole('button', { name: 'Thème sombre', exact: true });
-    await expect(frenchToggle).toHaveAttribute('aria-pressed', 'true');
+    await selectInterfaceTheme(page, 'dark');
+    await switchInterfaceLanguage(page, 'fr');
+    const frenchDark = page.getByRole('button', { name: 'Sombre', exact: true });
+    await expect(frenchDark).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
 
     await page.setViewportSize({ width: 390, height: 844 });
     const header = page.locator('header.header');
-    await expect(header.getByRole('button', { name: 'English', exact: true })).toBeVisible();
-    await expect(frenchToggle).toBeVisible();
+    await expect(preferencesTrigger(page, 'fr')).toBeVisible();
+    await expect(frenchDark).toBeVisible();
     await expect(
       header.getByRole('button', { name: 'Se connecter', exact: true }),
     ).toBeVisible();
@@ -175,9 +183,11 @@ test.describe('the front door', () => {
     expect(overflow.controls).toBeLessThanOrEqual(1);
 
     await page.reload();
-    await expect(
-      page.getByRole('button', { name: 'Thème sombre', exact: true }),
-    ).toHaveAttribute('aria-pressed', 'true');
+    await openPreferences(page);
+    await expect(page.getByRole('button', { name: 'Sombre', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
   });
@@ -210,7 +220,11 @@ test.describe('the front door', () => {
   });
 
   test('signing in and starting one makes you its owner', async ({ page }) => {
-    await invitePlatformRole(OWNER.email, 'creator');
+    const owner = await createAccount(OWNER);
+    await callJson(owner.idToken, 'createOrg', {
+      name: 'Test Conference Group',
+      slug: 'test-conference-group',
+    });
     await signInAs(page, OWNER, '/new');
 
     await page.getByRole('textbox', { name: /^Name/ }).fill('Test Conf 2027');
@@ -246,7 +260,11 @@ test.describe('the front door', () => {
   });
 
   test('an address already taken is refused, and says so', async ({ page }) => {
-    await invitePlatformRole(OWNER.email, 'creator');
+    const owner = await createAccount(OWNER);
+    await callJson(owner.idToken, 'createOrg', {
+      name: 'Taken Address Group',
+      slug: 'taken-address-group',
+    });
     await signInAs(page, OWNER, '/new');
 
     await page.getByRole('textbox', { name: /^Name/ }).fill('DevFest Montréal 2026');
@@ -822,19 +840,13 @@ test.describe('archiving and deleting', () => {
   });
 
   test('delete and unarchive serialize so a deletion reservation cannot be revived', async () => {
-    const [owner, secondOwner] = await Promise.all([
-      createAccount(OWNER),
-      createAccount(SECOND_OWNER),
-    ]);
-    await Promise.all([
-      seedMember(owner.uid, 'owner', undefined, OWNER.email),
-      seedMember(secondOwner.uid, 'owner', undefined, SECOND_OWNER.email),
-    ]);
+    const owner = await createAccount(OWNER);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
     await callJson(owner.idToken, 'archiveCfp', { archived: true });
 
     const [deletion, unarchive] = await Promise.all([
       callAs(owner.idToken, 'deleteCfp', { confirm: CFP_ID }),
-      callAs(secondOwner.idToken, 'archiveCfp', { archived: false }),
+      callAs(owner.idToken, 'archiveCfp', { archived: false }),
     ]);
     expect(Number(deletion.ok) + Number(unarchive.ok)).toBe(1);
 
@@ -848,14 +860,14 @@ test.describe('archiving and deleting', () => {
     }
   });
 
-  test('only the reserved owner can resume an interrupted deletion', async () => {
-    const [owner, secondOwner] = await Promise.all([
+  test('only the owner can resume an interrupted deletion', async () => {
+    const [owner, admin] = await Promise.all([
       createAccount(OWNER),
       createAccount(SECOND_OWNER),
     ]);
+    await seedMember(owner.uid, 'owner', undefined, OWNER.email);
     await Promise.all([
-      seedMember(owner.uid, 'owner', undefined, OWNER.email),
-      seedMember(secondOwner.uid, 'owner', undefined, SECOND_OWNER.email),
+      seedMember(admin.uid, 'admin', undefined, SECOND_OWNER.email),
       seedProposal('delete-race-talk', {
         speakerUid: 'delete-race-speaker',
         title: 'Delete exactly once',
@@ -864,13 +876,13 @@ test.describe('archiving and deleting', () => {
     ]);
     await reserveCfpDeletionDirect(owner.uid);
 
-    expect(await callAs(secondOwner.idToken, 'deleteCfp', { confirm: CFP_ID })).toMatchObject({
+    expect(await callAs(admin.idToken, 'deleteCfp', { confirm: CFP_ID })).toMatchObject({
       ok: false,
-      code: 'ABORTED',
+      code: 'PERMISSION_DENIED',
     });
     expect(await readCfp()).toMatchObject({ archived: true, deleting: true });
     expect(await readMember(owner.uid)).toMatchObject({ deletionReserved: true });
-    expect(await readMember(secondOwner.uid)).toMatchObject({ role: 'owner' });
+    expect(await readMember(admin.uid)).toMatchObject({ role: 'admin' });
     expect(await readProposalById('delete-race-talk')).not.toBeNull();
 
     expect(await callAs(owner.idToken, 'deleteCfp', { confirm: CFP_ID })).toMatchObject({
@@ -878,7 +890,7 @@ test.describe('archiving and deleting', () => {
     });
     expect(await readCfp()).toBeNull();
     expect(await readMember(owner.uid)).toBeNull();
-    expect(await readMember(secondOwner.uid)).toBeNull();
+    expect(await readMember(admin.uid)).toBeNull();
     expect(await readProposalById('delete-race-talk')).toBeNull();
   });
 });

@@ -28,6 +28,7 @@ export function AccountMenu({
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
+  const adminGroupTitleId = `${panelId}-administration`;
   const display = user.displayName?.trim() || user.email || t.app.account;
 
   useEffect(() => {
@@ -86,42 +87,72 @@ export function AccountMenu({
           )}
           <div className="account-menu__actions">
             {showPlatformAdmin && (
-              <>
+              <div
+                className="account-menu__group"
+                role="group"
+                aria-labelledby={adminGroupTitleId}
+              >
+                <p className="account-menu__group-title" id={adminGroupTitleId}>
+                  {t.platformAdmin.accountSection}
+                </p>
                 <Link
                   className="account-menu__action"
                   to={href({ route: 'platform' })}
                   onClick={() => setOpen(false)}
                 >
-                  {t.platformAdmin.accountLink}
+                  {t.platformAdmin.overviewNav}
                 </Link>
                 <Link
                   className="account-menu__action"
-                  to="/platform#email-defaults"
+                  to={href({ route: 'platformAccess' })}
                   onClick={() => setOpen(false)}
                 >
-                  {t.platformAdmin.emailDefaultsAccountLink}
+                  {t.platformAdmin.accessNav}
                 </Link>
-              </>
+                <Link
+                  className="account-menu__action"
+                  to={href({ route: 'platformLimits' })}
+                  onClick={() => setOpen(false)}
+                >
+                  {t.platformAdmin.limitsNav}
+                </Link>
+                <Link
+                  className="account-menu__action"
+                  to={href({ route: 'platformEmail' })}
+                  onClick={() => setOpen(false)}
+                >
+                  {t.platformAdmin.emailDefaultsNav}
+                </Link>
+              </div>
             )}
-            {showProfile && (
+            <div className="account-menu__group">
               <Link
                 className="account-menu__action"
-                to={href({ route: 'me' })}
+                to="/orgs"
                 onClick={() => setOpen(false)}
               >
-                {t.profile.link}
+                {t.orgs.accountLink}
               </Link>
-            )}
-            <button
-              type="button"
-              className="account-menu__action account-menu__action--button"
-              onClick={() => {
-                setOpen(false);
-                void onSignOut();
-              }}
-            >
-              {t.app.signOut}
-            </button>
+              {showProfile && (
+                <Link
+                  className="account-menu__action"
+                  to={href({ route: 'me' })}
+                  onClick={() => setOpen(false)}
+                >
+                  {t.profile.link}
+                </Link>
+              )}
+              <button
+                type="button"
+                className="account-menu__action account-menu__action--button"
+                onClick={() => {
+                  setOpen(false);
+                  void onSignOut();
+                }}
+              >
+                {t.app.signOut}
+              </button>
+            </div>
           </div>
         </div>
       )}

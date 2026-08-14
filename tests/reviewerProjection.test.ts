@@ -361,4 +361,20 @@ describe('reviewer proposal projection', () => {
       ),
     ).not.toHaveProperty('submittedAt');
   });
+
+  it('redacts speakerSnapshot and speakerTravel when blindReview is enabled', () => {
+    const blind = reviewerProposalProjection(
+      'proposal-one',
+      proposal,
+      false,
+      submissionFields,
+      new Map(),
+      DEFAULT_SUBMISSION_FORM,
+      true,
+    );
+    expect(blind.speakerSnapshot).toEqual([]);
+    expect(blind.speakerTravel).toBeUndefined();
+    expect(blind.title).toBe('Safe title');
+    expect(blind.abstract).toBe('Safe abstract');
+  });
 });

@@ -2,48 +2,65 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { TextField } from '../components/fields';
+import { Link } from '../components/Link';
 import { PlatformEmailDefaults } from '../components/PlatformEmailDefaults';
+import { PlatformGlobalLimits } from '../components/PlatformGlobalLimits';
+import { PlatformOrganizationLimits } from '../components/PlatformOrganizationLimits';
+import { PlatformUserOrganizationLimits } from '../components/PlatformUserOrganizationLimits';
 import { useI18n } from '../i18n/context';
-import { platformAdminError } from '../lib/errors';
+import { platformAdminError, transferError } from '../lib/errors';
 import { goTo } from '../lib/router';
 import {
-  grantCfpCreator,
+  acceptPlatformOwnershipTransfer,
+  cancelPlatformOwnershipTransfer,
   grantPlatformAdmin,
+  initiatePlatformOwnershipTransfer,
   listPlatformUsers,
-  revokeCfpCreator,
   revokePlatformAdmin,
 } from '../lib/roles';
 import { useLatest } from '../lib/useLatest';
 import type { PlatformAccessDirectory } from '@shared/platform';
 import { Result } from './admin/Result';
 
-export function PlatformAdminPage({ user }: { user: User }) {
+type PlatformAdminSection = 'home' | 'access' | 'limits' | 'email';
+
+export function PlatformAdminPage({
+  user,
+  section,
+}: {
+  user: User;
+  section: PlatformAdminSection;
+}) {
   const { t } = useI18n();
   const tRef = useLatest(t);
   const [directory, setDirectory] = useState<PlatformAccessDirectory | null>(null);
-  const [email, setEmail] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
+  const [transferEmail, setTransferEmail] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
-  const [emailDirty, setEmailDirty] = useState(false);
-  // The server cannot see a fragment. Settle it after mount so a direct
-  // `/platform#email-defaults` visit hydrates the same Access view it rendered.
-  const [section, setSection] = useState<'access' | 'email'>('access');
+  const [sectionDirty, setSectionDirty] = useState(false);
+  const [globalLimitsDirty, setGlobalLimitsDirty] = useState(false);
+  const [userLimitsDirty, setUserLimitsDirty] = useState(false);
+  const [orgLimitsDirty, setOrgLimitsDirty] = useState(false);
+  const [limitsRefreshKey, setLimitsRefreshKey] = useState(0);
   const generation = useRef(0);
   const sectionPanel = useRef<HTMLDivElement>(null);
   const sectionMounted = useRef(false);
-  const emailDirtyRef = useRef(false);
-  const allowedHashChange = useRef(false);
+  const sectionDirtyRef = useRef(false);
   const restoringHistory = useRef(false);
-  emailDirtyRef.current = emailDirty;
+  sectionDirtyRef.current = sectionDirty;
 
   const refresh = useCallback(async (reportError = true) => {
     const request = ++generation.current;
     try {
       const { data } = await listPlatformUsers({});
       if (generation.current !== request) return false;
-      setDirectory({ members: data.members, pending: data.pending });
+      setDirectory({
+        members: data.members,
+        pending: data.pending,
+        pendingTransfer: data.pendingTransfer,
+      });
       if (reportError) setError('');
       return true;
     } catch {
@@ -54,9 +71,9 @@ export function PlatformAdminPage({ user }: { user: User }) {
   }, [tRef]);
 
   useEffect(() => {
+    if (section !== 'access') return;
     generation.current += 1;
     setDirectory(null);
-    setEmail('');
     setAdminEmail('');
     setBusy('');
     setError('');
@@ -65,30 +82,20 @@ export function PlatformAdminPage({ user }: { user: User }) {
     return () => {
       generation.current += 1;
     };
-  }, [refresh, user.uid]);
+  }, [refresh, section, user.uid]);
 
   useEffect(() => {
-    let previousHash = window.location.hash;
-    const selectHash = () => {
-      const nextSection = window.location.hash === '#email-defaults' ? 'email' : 'access';
-      if (allowedHashChange.current) {
-        allowedHashChange.current = false;
-      } else if (
-        nextSection !== section &&
-        emailDirtyRef.current &&
-        !window.confirm(t.admin.unsaved)
-      ) {
-        window.history.replaceState(null, '', `/platform${previousHash || '#access'}`);
-        return;
-      }
-      previousHash = window.location.hash;
-      if (nextSection !== section) setEmailDirty(false);
-      setSection(nextSection);
-    };
-    selectHash();
-    window.addEventListener('hashchange', selectHash);
-    return () => window.removeEventListener('hashchange', selectHash);
-  }, [section, t.admin.unsaved]);
+    if (section !== 'home') return;
+    if (window.location.hash === '#email-defaults') goTo('/platform/email');
+    if (window.location.hash === '#organization-limits') goTo('/platform/limits');
+    if (window.location.hash === '#access') goTo('/platform/access');
+  }, [section]);
+
+  useEffect(() => {
+    setSectionDirty(
+      section === 'limits' && (globalLimitsDirty || userLimitsDirty || orgLimitsDirty),
+    );
+  }, [globalLimitsDirty, orgLimitsDirty, section, userLimitsDirty]);
 
   useEffect(() => {
     if (sectionMounted.current) sectionPanel.current?.focus();
@@ -97,25 +104,25 @@ export function PlatformAdminPage({ user }: { user: User }) {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!emailDirty) return;
+      if (!sectionDirty) return;
       event.preventDefault();
     };
     window.addEventListener('beforeunload', beforeUnload);
     return () => window.removeEventListener('beforeunload', beforeUnload);
-  }, [emailDirty]);
+  }, [sectionDirty]);
 
   useEffect(() => {
     const pagePath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const allowLeaving = () => {
-      emailDirtyRef.current = false;
-      setEmailDirty(false);
+      sectionDirtyRef.current = false;
+      setSectionDirty(false);
     };
     const confirmHistoryNavigation = () => {
       if (restoringHistory.current) {
         restoringHistory.current = false;
         return;
       }
-      if (!emailDirtyRef.current) return;
+      if (!sectionDirtyRef.current) return;
       if (window.confirm(t.admin.unsaved)) {
         allowLeaving();
         return;
@@ -125,7 +132,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
     };
     const confirmInternalNavigation = (event: MouseEvent) => {
       if (
-        !emailDirtyRef.current ||
+        !sectionDirtyRef.current ||
         event.defaultPrevented ||
         event.button !== 0 ||
         event.metaKey ||
@@ -161,53 +168,6 @@ export function PlatformAdminPage({ user }: { user: User }) {
       document.removeEventListener('click', confirmInternalNavigation, true);
     };
   }, [t.admin.unsaved]);
-
-  function changeSection(event: React.MouseEvent<HTMLAnchorElement>, next: 'access' | 'email') {
-    if (next === section) return;
-    if (emailDirty && !window.confirm(t.admin.unsaved)) {
-      event.preventDefault();
-      return;
-    }
-    allowedHashChange.current = true;
-    setEmailDirty(false);
-  }
-
-  async function grant() {
-    const target = email.trim();
-    setBusy(`creator:${target}`);
-    setError('');
-    setNote('');
-    try {
-      const { data } = await grantCfpCreator({ email: target });
-      setNote(
-        data.applied
-          ? tRef.current.platformAdmin.grantedActive(data.email)
-          : tRef.current.platformAdmin.grantedPending(data.email),
-      );
-      setEmail('');
-      await refresh(false);
-    } catch (caught) {
-      setError(platformAdminError(caught, tRef.current));
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function revoke(target: string) {
-    if (!window.confirm(t.platformAdmin.revokeConfirm(target))) return;
-    setBusy(`creator:${target}`);
-    setError('');
-    setNote('');
-    try {
-      const { data } = await revokeCfpCreator({ email: target });
-      setNote(tRef.current.platformAdmin.revoked(data.email));
-      await refresh(false);
-    } catch (caught) {
-      setError(platformAdminError(caught, tRef.current));
-    } finally {
-      setBusy('');
-    }
-  }
 
   async function grantAdmin() {
     const target = adminEmail.trim();
@@ -246,15 +206,67 @@ export function PlatformAdminPage({ user }: { user: User }) {
     }
   }
 
+  async function initiateTransfer() {
+    const target = transferEmail.trim();
+    if (!window.confirm(t.transfer.confirmPrompt)) return;
+    setBusy(`transfer:${target}`);
+    setError('');
+    setNote('');
+    try {
+      await initiatePlatformOwnershipTransfer({ email: target });
+      setNote(tRef.current.transfer.pendingBanner(target));
+      setTransferEmail('');
+      await refresh(false);
+    } catch (caught) {
+      setError(transferError(caught, tRef.current));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function cancelTransfer() {
+    setBusy('cancelTransfer');
+    setError('');
+    setNote('');
+    try {
+      await cancelPlatformOwnershipTransfer({});
+      setNote(tRef.current.transfer.cancelled);
+      await refresh(false);
+    } catch (caught) {
+      setError(transferError(caught, tRef.current));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function acceptTransfer() {
+    setBusy('acceptTransfer');
+    setError('');
+    setNote('');
+    try {
+      await acceptPlatformOwnershipTransfer({});
+      setNote(tRef.current.transfer.transferred);
+      await refresh(false);
+    } catch (caught) {
+      setError(transferError(caught, tRef.current));
+    } finally {
+      setBusy('');
+    }
+  }
+
   const members = directory?.members ?? [];
   const pending = directory?.pending ?? [];
+  const pendingTransfer = directory?.pendingTransfer;
   const owners = members.filter((member) => member.role === 'owner');
-  const creators = members.filter((member) => member.role === 'creator');
   const admins = members.filter((member) => member.role === 'admin');
   const pendingOwners = pending.filter((grant) => grant.role === 'owner');
-  const pendingCreators = pending.filter((grant) => grant.role === 'creator');
   const pendingAdmins = pending.filter((grant) => grant.role === 'admin');
   const isOwner = owners.some((owner) => owner.uid === user.uid);
+  const isTransferTarget =
+    pendingTransfer &&
+    ((user.email &&
+      pendingTransfer.targetEmail.toLowerCase() === user.email.toLowerCase()) ||
+      pendingTransfer.targetUid === user.uid);
 
   return (
     <div className="platform-admin">
@@ -264,26 +276,77 @@ export function PlatformAdminPage({ user }: { user: User }) {
         <p>{t.platformAdmin.intro}</p>
       </header>
 
+      {isTransferTarget && (
+        <section className="section section--highlight" style={{ marginBottom: '1.5rem' }}>
+          <h3>{t.transfer.acceptTitle}</h3>
+          <p>{t.transfer.acceptBanner(t.platformAdmin.roles.owner)}</p>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={Boolean(busy)}
+            onClick={() => void acceptTransfer()}
+          >
+            {busy === 'acceptTransfer' ? t.transfer.accepting : t.transfer.acceptButton}
+          </button>
+        </section>
+      )}
+
       <nav className="subnav platform-admin__nav" aria-label={t.platformAdmin.sections}>
-        <a
+        <Link
+          className={`subnav__tab${section === 'home' ? ' subnav__tab--on' : ''}`}
+          aria-current={section === 'home' ? 'page' : undefined}
+          to="/platform"
+        >
+          {t.platformAdmin.overviewNav}
+        </Link>
+        <Link
           className={`subnav__tab${section === 'access' ? ' subnav__tab--on' : ''}`}
           aria-current={section === 'access' ? 'page' : undefined}
-          href="#access"
-          onClick={(event) => changeSection(event, 'access')}
+          to="/platform/access"
         >
           {t.platformAdmin.accessNav}
-        </a>
-        <a
+        </Link>
+        <Link
+          className={`subnav__tab${section === 'limits' ? ' subnav__tab--on' : ''}`}
+          aria-current={section === 'limits' ? 'page' : undefined}
+          to="/platform/limits"
+        >
+          {t.platformAdmin.limitsNav}
+        </Link>
+        <Link
           className={`subnav__tab${section === 'email' ? ' subnav__tab--on' : ''}`}
           aria-current={section === 'email' ? 'page' : undefined}
-          href="#email-defaults"
-          onClick={(event) => changeSection(event, 'email')}
+          to="/platform/email"
         >
           {t.platformAdmin.emailDefaultsNav}
-        </a>
+        </Link>
       </nav>
 
-      {section === 'access' ? (
+      {section === 'home' ? (
+        <div ref={sectionPanel} className="platform-admin-hub" tabIndex={-1}>
+          <header className="platform-admin-hub__header">
+            <p className="platform-admin__eyebrow">{t.platformAdmin.overviewEyebrow}</p>
+            <h2>{t.platformAdmin.overviewTitle}</h2>
+            <p>{t.platformAdmin.overviewHelp}</p>
+          </header>
+          <div className="platform-admin-hub__cards">
+            {([
+              ['access', '/platform/access', t.platformAdmin.accessNav, t.platformAdmin.accessCardHelp],
+              ['limits', '/platform/limits', t.platformAdmin.limitsNav, t.platformAdmin.limitsCardHelp],
+              ['email', '/platform/email', t.platformAdmin.emailDefaultsNav, t.platformAdmin.emailCardHelp],
+            ] as const).map(([key, to, title, help], index) => (
+              <Link className="platform-admin-hub__card" to={to} key={key}>
+                <span className="platform-admin-hub__number" aria-hidden="true">
+                  0{index + 1}
+                </span>
+                <strong>{title}</strong>
+                <span>{help}</span>
+                <span className="platform-admin-hub__open">{t.platformAdmin.openSection} →</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      ) : section === 'access' ? (
         <>
           <h2 id="platform-access-title" className="platform-admin__section-title">
             {t.platformAdmin.accessTitle}
@@ -298,6 +361,14 @@ export function PlatformAdminPage({ user }: { user: User }) {
             <section className="section platform-admin__directory">
               <h3>{t.platformAdmin.activeTitle}</h3>
               <p className="section__help">{t.platformAdmin.activeHelp}</p>
+              <dl className="platform-role-guide">
+                {(['owner', 'admin'] as const).map((role) => (
+                  <div className="platform-role-guide__item" key={role}>
+                    <dt>{t.platformAdmin.roles[role]}</dt>
+                    <dd>{t.platformAdmin.roleHelp[role]}</dd>
+                  </div>
+                ))}
+              </dl>
 
           {directory === null ? (
             error ? (
@@ -309,11 +380,11 @@ export function PlatformAdminPage({ user }: { user: User }) {
                 {t.app.loading}
               </p>
             )
-          ) : owners.length + admins.length + creators.length + pending.length === 0 ? (
+          ) : owners.length + admins.length + pending.length === 0 ? (
             <p className="muted">{t.platformAdmin.empty}</p>
           ) : (
             <ul className="people">
-              {[...owners, ...admins, ...creators].map((person) => (
+              {[...owners, ...admins].map((person) => (
                 <li key={person.uid} className="people__row">
                   <span>
                     <strong>{person.name || person.email}</strong>
@@ -326,18 +397,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
                     <span className="people__meta people__meta--plain">
                       {t.platformAdmin.roles[person.role]}
                     </span>
-                    {person.role === 'creator' ? (
-                      <button
-                        type="button"
-                        className="btn btn--ghost"
-                        disabled={Boolean(busy)}
-                        onClick={() => void revoke(person.email)}
-                      >
-                        {busy === `creator:${person.email}`
-                          ? t.platformAdmin.revoking
-                          : t.platformAdmin.revoke}
-                      </button>
-                    ) : person.role === 'admin' && isOwner ? (
+                    {person.role === 'admin' && isOwner ? (
                       <button
                         type="button"
                         className="btn btn--ghost"
@@ -352,7 +412,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
                   </span>
                 </li>
               ))}
-              {[...pendingOwners, ...pendingAdmins, ...pendingCreators].map((grant) => (
+              {[...pendingOwners, ...pendingAdmins].map((grant) => (
                 <li key={grant.email} className="people__row">
                   <span>
                     <strong>{grant.email}</strong>
@@ -362,18 +422,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
                     <span className="people__meta people__meta--plain">
                       {t.platformAdmin.roles[grant.role]}
                     </span>
-                    {grant.role === 'creator' ? (
-                      <button
-                        type="button"
-                        className="btn btn--ghost"
-                        disabled={Boolean(busy)}
-                        onClick={() => void revoke(grant.email)}
-                      >
-                        {busy === `creator:${grant.email}`
-                          ? t.platformAdmin.revoking
-                          : t.platformAdmin.revoke}
-                      </button>
-                    ) : grant.role === 'admin' && isOwner ? (
+                    {grant.role === 'admin' && isOwner ? (
                       <button
                         type="button"
                         className="btn btn--ghost"
@@ -393,64 +442,83 @@ export function PlatformAdminPage({ user }: { user: User }) {
             </section>
 
             <div className="platform-admin__controls">
+          {isOwner && (
+            <>
               <section className="section platform-admin__grant">
-            <h3>{t.platformAdmin.addTitle}</h3>
-            <p className="section__help">{t.platformAdmin.addHelp}</p>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void grant();
-              }}
-            >
-              <TextField
-                label={t.platformAdmin.emailLabel}
-                type="email"
-                value={email}
-                onChange={setEmail}
-                required
-                disabled={Boolean(busy) || directory === null}
-              />
-              <button
-                type="submit"
-                className="btn btn--primary"
-                disabled={Boolean(busy) || directory === null || !email.trim()}
-              >
-                {busy === `creator:${email.trim()}`
-                  ? t.platformAdmin.granting
-                  : t.platformAdmin.grant}
-              </button>
-            </form>
+                <h3>{t.platformAdmin.adminAddTitle}</h3>
+                <p className="section__help">{t.platformAdmin.adminAddHelp}</p>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void grantAdmin();
+                  }}
+                >
+                  <TextField
+                    label={t.platformAdmin.adminEmailLabel}
+                    type="email"
+                    value={adminEmail}
+                    onChange={setAdminEmail}
+                    required
+                    disabled={Boolean(busy) || directory === null}
+                  />
+                  <button
+                    type="submit"
+                    className="btn btn--primary"
+                    disabled={Boolean(busy) || directory === null || !adminEmail.trim()}
+                  >
+                    {busy === `admin:${adminEmail.trim()}`
+                      ? t.platformAdmin.adminGranting
+                      : t.platformAdmin.adminGrant}
+                  </button>
+                </form>
               </section>
 
-          {isOwner && (
-            <section className="section platform-admin__grant">
-              <h3>{t.platformAdmin.adminAddTitle}</h3>
-              <p className="section__help">{t.platformAdmin.adminAddHelp}</p>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void grantAdmin();
-                }}
-              >
-                <TextField
-                  label={t.platformAdmin.adminEmailLabel}
-                  type="email"
-                  value={adminEmail}
-                  onChange={setAdminEmail}
-                  required
-                  disabled={Boolean(busy) || directory === null}
-                />
-                <button
-                  type="submit"
-                  className="btn btn--primary"
-                  disabled={Boolean(busy) || directory === null || !adminEmail.trim()}
-                >
-                  {busy === `admin:${adminEmail.trim()}`
-                    ? t.platformAdmin.adminGranting
-                    : t.platformAdmin.adminGrant}
-                </button>
-              </form>
-            </section>
+              <section className="section platform-admin__grant">
+                <h3>{t.platformAdmin.transferTitle}</h3>
+                <p className="section__help">{t.platformAdmin.transferHelp}</p>
+
+                {pendingTransfer ? (
+                  <div className="pending-transfer-notice">
+                    <p>{t.transfer.pendingBanner(pendingTransfer.targetEmail)}</p>
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      disabled={Boolean(busy)}
+                      onClick={() => void cancelTransfer()}
+                    >
+                      {busy === 'cancelTransfer'
+                        ? t.transfer.cancelling
+                        : t.transfer.cancelButton}
+                    </button>
+                  </div>
+                ) : (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void initiateTransfer();
+                    }}
+                  >
+                    <TextField
+                      label={t.transfer.emailLabel}
+                      type="email"
+                      value={transferEmail}
+                      onChange={setTransferEmail}
+                      required
+                      disabled={Boolean(busy) || directory === null}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn--primary"
+                      disabled={Boolean(busy) || directory === null || !transferEmail.trim()}
+                    >
+                      {busy === `transfer:${transferEmail.trim()}`
+                        ? t.transfer.initiating
+                        : t.transfer.initiateButton}
+                    </button>
+                  </form>
+                )}
+              </section>
+            </>
           )}
             </div>
           </div>
@@ -458,6 +526,22 @@ export function PlatformAdminPage({ user }: { user: User }) {
           <p className="platform-admin__boundary">{t.platformAdmin.accessHelp}</p>
           <Result ok={note} error={error} />
         </>
+      ) : section === 'limits' ? (
+        <div ref={sectionPanel} className="platform-limits-page" tabIndex={-1}>
+          <header className="platform-limits-page__header">
+            <h2>{t.platformAdmin.limitsTitle}</h2>
+            <p>{t.platformAdmin.limitsHelp}</p>
+          </header>
+          <PlatformGlobalLimits
+            onDirtyChange={setGlobalLimitsDirty}
+            onSaved={() => setLimitsRefreshKey((current) => current + 1)}
+          />
+          <PlatformUserOrganizationLimits
+            onDirtyChange={setUserLimitsDirty}
+            refreshKey={limitsRefreshKey}
+          />
+          <PlatformOrganizationLimits onDirtyChange={setOrgLimitsDirty} />
+        </div>
       ) : (
         <div
           id="email-defaults"
@@ -465,7 +549,7 @@ export function PlatformAdminPage({ user }: { user: User }) {
           tabIndex={-1}
           aria-labelledby="platform-email-defaults-title"
         >
-          <PlatformEmailDefaults onDirtyChange={setEmailDirty} />
+          <PlatformEmailDefaults onDirtyChange={setSectionDirty} />
         </div>
       )}
     </div>
