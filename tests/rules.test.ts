@@ -48,7 +48,7 @@ const OTHER_CFP = `cfps/${OTHER_CFP_ID}`;
 
 const CFP_BASE = {
   name: 'DevFest Montréal 2026',
-  ownerUids: ['owner-olive'],
+  ownerUid: 'owner-olive',
   visibility: 'public',
   archived: false,
 };
@@ -1478,16 +1478,16 @@ describe('finding a CFP', () => {
   });
 
   it('lets an owner list their own, private and archived alike', async () => {
-    await setCfp({ ownerUids: [APPLICANT], archived: true, archivedAt: new Date() }, OTHER_CFP);
+    await setCfp({ ownerUid: APPLICANT, archived: true, archivedAt: new Date() }, OTHER_CFP);
     const snap = await assertSucceeds(
-      getDocs(query(collection(asApplicant(), 'cfps'), where('ownerUids', 'array-contains', APPLICANT))),
+      getDocs(query(collection(asApplicant(), 'cfps'), where('ownerUid', '==', APPLICANT))),
     );
     expect(snap.docs.map((d) => d.id)).toEqual([OTHER_CFP_ID]);
   });
 
   it('lets a member find every CFP they are on, and nobody else’s', async () => {
     const mine = await assertSucceeds(
-      getDocs(query(collection(asReviewer(), 'cfps'), where('ownerUids', 'array-contains', REVIEWER))),
+      getDocs(query(collection(asReviewer(), 'cfps'), where('ownerUid', '==', REVIEWER))),
     );
     expect(mine.empty).toBe(true);
 
@@ -1507,7 +1507,7 @@ describe('finding a CFP', () => {
   });
 
   it('is not client-writable at all', async () => {
-    await assertFails(setDoc(doc(asApplicant(), 'cfps/mine'), { ...CFP_BASE, ownerUids: [APPLICANT] }));
+    await assertFails(setDoc(doc(asApplicant(), 'cfps/mine'), { ...CFP_BASE, ownerUid: APPLICANT }));
     await assertFails(updateDoc(doc(asApplicant(), CFP), { name: 'Mine now' }));
     await assertFails(deleteDoc(doc(asApplicant(), CFP)));
   });
@@ -1621,7 +1621,7 @@ describe('platform access is callable-only', () => {
       }),
     );
     await assertFails(
-      updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'creator' }),
+      updateDoc(doc(asReviewer(), 'platformMembers', REVIEWER), { role: 'superadmin' }),
     );
     await assertFails(deleteDoc(doc(asReviewer(), 'platformMembers', REVIEWER)));
     await assertFails(
@@ -1634,7 +1634,7 @@ describe('platform access is callable-only', () => {
     await assertFails(
       setDoc(doc(asReviewer(), 'platformRoleGrants', 'friend@example.org'), {
         email: 'friend@example.org',
-        role: 'creator',
+        role: 'superadmin',
       }),
     );
   });

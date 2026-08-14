@@ -31,9 +31,6 @@ function normalizePlatformRole(raw: unknown): PlatformRole {
 }
 
 function roleOf(snapshot: DocumentSnapshot): PlatformRole | null {
-  // Creator was removed from the platform model. Ignore legacy records so
-  // those accounts lose creation access without breaking sign-in.
-  if (snapshot.get('role') === 'creator') return null;
   return snapshot.exists ? normalizePlatformRole(snapshot.get('role')) : null;
 }
 
@@ -161,7 +158,6 @@ export async function listPlatformAccess(
 
   return {
     members: members.docs
-      .filter((doc) => doc.get('role') !== 'creator')
       .map((doc) => ({
         uid: doc.id,
         email: String(doc.get('email') ?? ''),
@@ -175,7 +171,6 @@ export async function listPlatformAccess(
       }))
       .sort((a, b) => a.email.localeCompare(b.email)),
     pending: grants.docs
-      .filter((doc) => doc.get('role') !== 'creator')
       .map((doc) => ({
         email: String(doc.get('email') ?? doc.id),
         role: normalizePlatformRole(doc.get('role')),

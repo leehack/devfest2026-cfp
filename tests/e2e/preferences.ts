@@ -14,8 +14,9 @@ export function preferencesTrigger(page: Page, locale: 'en' | 'fr' = 'en'): Loca
   return page.getByRole('button', { name: triggerLabels[locale], exact: true });
 }
 export async function openPreferences(page: Page): Promise<void> {
-  const locale = (await page.locator('html').getAttribute('lang')) === 'fr' ? 'fr' : 'en';
-  const trigger = preferencesTrigger(page, locale);
+  const trigger = page.getByRole('button', {
+    name: /^(Language and appearance preferences|Préférences de langue et d’apparence)$/,
+  });
   if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
 }
 

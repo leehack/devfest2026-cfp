@@ -152,13 +152,6 @@ function reclaimPorts() {
   }
 }
 
-/** A window comfortably around today, so the form is open on a fresh checkout. */
-function devWindow() {
-  const day = 24 * 60 * 60 * 1000;
-  const iso = (offset) => new Date(Date.now() + offset).toISOString().slice(0, 10);
-  return { opens: iso(-30 * day), closes: iso(60 * day) };
-}
-
 /**
  * Waits for the children to actually go.
  *
@@ -215,31 +208,6 @@ run(
 ).on('exit', (code) => void shutdown(code ?? 0));
 
 await waitForEmulators();
-
-const { opens, closes } = devWindow();
-console.log(`\n▸ seeding cfps/${DEV_CFP} (${opens} → ${closes})\n`);
-await runToCompletion(
-  'node',
-  [
-    'scripts/seed-cfp.mjs',
-    '--id',
-    DEV_CFP,
-    '--name',
-    'DevFest Montréal 2026',
-    '--opens',
-    opens,
-    '--closes',
-    closes,
-  ],
-  {
-    env: {
-      ...env,
-      FIRESTORE_EMULATOR_HOST: FIRESTORE,
-      FIREBASE_AUTH_EMULATOR_HOST: AUTH,
-      GCLOUD_PROJECT: PROJECT,
-    },
-  },
-);
 
 await runToCompletion(
   'node',

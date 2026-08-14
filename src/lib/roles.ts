@@ -738,7 +738,7 @@ export async function loadPublicCfpPage(cursor?: PublicCfpCursor): Promise<{
 /** The CFPs this account owns — including private and archived ones. */
 export async function loadMyCfps(uid: string): Promise<CfpSummary[]> {
   const snap = await getDocs(
-    query(collection(db, 'cfps'), where('ownerUids', 'array-contains', uid)),
+    query(collection(db, 'cfps'), where('ownerUid', '==', uid)),
   );
   return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Cfp) }));
 }

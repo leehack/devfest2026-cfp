@@ -135,9 +135,7 @@ export async function grant(
     const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
     const actorRole = actor.get('role');
     const canonicalOwner = cfp.get('ownerUid');
-    const actorIsOwner =
-      actorRole === 'owner' &&
-      (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === byUid);
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === byUid;
     if (role === 'admin' && !actorIsOwner) {
       throw new RoleError(
         'permission-denied',
@@ -286,9 +284,7 @@ export async function revoke(
     const actor = await assertAdminInTransaction(tx, db, cfpId, byUid);
     const actorRole = actor.get('role');
     const canonicalOwner = cfp.get('ownerUid');
-    const actorIsOwner =
-      actorRole === 'owner' &&
-      (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === byUid);
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === byUid;
     const byEmail = await tx.get(
       db.collection(`cfps/${cfpId}/members`).where('email', '==', email),
     );
@@ -428,10 +424,7 @@ export async function initiateEventOwnershipTransfer(
       throw new RoleError('failed-precondition', 'This call for proposals is archived.');
     }
     const canonicalOwner = cfp.get('ownerUid');
-    if (
-      actor.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== byUid)
-    ) {
+    if (actor.get('role') !== 'owner' || canonicalOwner !== byUid) {
       throw new RoleError(
         'permission-denied',
         'Only an event owner can transfer ownership.',
@@ -528,10 +521,7 @@ export async function acceptEventOwnershipTransfer(
       db.collection(`cfps/${cfpId}/members`).where('role', '==', 'owner'),
     );
     const canonicalOwner = cfp.get('ownerUid');
-    if (
-      initiatingOwner.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== initiatedBy)
-    ) {
+    if (initiatingOwner.get('role') !== 'owner' || canonicalOwner !== initiatedBy) {
       throw new RoleError(
         'failed-precondition',
         'The event owner changed after this transfer was initiated.',
@@ -569,7 +559,6 @@ export async function acceptEventOwnershipTransfer(
 
     tx.update(cfpRef, {
       ownerUid: uid,
-      ownerUids: [uid],
       updatedAt: now,
     });
 
@@ -594,10 +583,7 @@ export async function cancelEventOwnershipTransfer(
     const cfpRef = db.doc(`cfps/${cfpId}`);
     const [cfp, actor, transferSnap] = await tx.getAll(cfpRef, actorRef, transferRef);
     const canonicalOwner = cfp.get('ownerUid');
-    if (
-      actor.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== byUid)
-    ) {
+    if (actor.get('role') !== 'owner' || canonicalOwner !== byUid) {
       throw new RoleError(
         'permission-denied',
         'Only an event owner can cancel an ownership transfer.',
@@ -640,7 +626,7 @@ export async function getEventOwnershipTransfer(
   const isOwner =
     memberSnap?.exists === true &&
     memberSnap.get('role') === 'owner' &&
-    (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === byUid);
+    canonicalOwner === byUid;
   const isTarget =
     (normalizedEmail && targetEmail === normalizedEmail) || data.targetUid === byUid;
   if (!isOwner && !isTarget) return null;

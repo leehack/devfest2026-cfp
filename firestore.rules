@@ -108,10 +108,10 @@ service cloud.firestore {
       // client bring one.
       //
       // The second clause is the same bargain for an owner finding their own,
-      // including the private and archived: `where('ownerUids','array-contains',uid)`.
+      // including the private and archived: `where('ownerUid','==',uid)`.
       allow list: if (resource.data.visibility == 'public'
                       && resource.data.archived == false)
-        || (signedIn() && uid() in resource.data.ownerUids);
+        || (signedIn() && resource.data.ownerUid == uid());
 
       // Created, renamed, archived and deleted through callables. A client that
       // could write here could make itself an owner, which is the root of every
@@ -477,9 +477,9 @@ service cloud.firestore {
 
     // ------------------------------------------------------ platform access
 
-    // Global creator access is not a global directory. Even a platform admin
-    // reaches it through narrowly scoped callables, so no browser can enumerate
-    // verified addresses or promote itself by writing a membership.
+    // Platform access is not a global directory. Even a platform admin reaches
+    // it through narrowly scoped callables, so no browser can enumerate verified
+    // addresses or promote itself by writing a membership.
     match /platformMembers/{memberUid} {
       allow read, write: if false;
     }

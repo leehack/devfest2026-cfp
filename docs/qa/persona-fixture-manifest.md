@@ -69,7 +69,7 @@ has not been supplied.
 ## Stable synthetic identities
 
 State IDs that describe the same transition deliberately reuse one identity.
-For example, `PLATFORM-CREATOR-PENDING` becomes `PLATFORM-CREATOR` after claim.
+For example, `VERIFIED-USER` becomes an organization owner after creating one.
 
 | Persona/state ID | `sub` | Email | Display name |
 |---|---|---|---|
@@ -92,8 +92,8 @@ For example, `PLATFORM-CREATOR-PENDING` becomes `PLATFORM-CREATOR` after claim.
 | `EVENT-ADMIN` | `qa-event-admin` | `qa-event-admin@example.org` | Ari Admin |
 | `EVENT-ADMIN-NOTIFIED` | `qa-event-admin-notified` | `qa-event-admin-notified@example.org` | Noel Admin |
 | `EVENT-OWNER` | `qa-event-owner` | `qa-event-owner@example.org` | Oak Owner |
-| `PLATFORM-CREATOR-PENDING` / `PLATFORM-CREATOR` | `qa-platform-creator` | `qa-platform-creator@example.org` | Chris Creator |
-| `PLATFORM-CREATOR-TARGET` | `qa-platform-creator-target` | `qa-platform-creator-target@example.org` | Taylor Creator |
+| `VERIFIED-USER` | `qa-verified-user` | `qa-verified-user@example.org` | Chris Member |
+| `USER-LIMIT-TARGET` | `qa-user-limit-target` | `qa-user-limit-target@example.org` | Taylor Member |
 | `PLATFORM-ADMIN` | `qa-platform-admin` | `qa-platform-admin@example.org` | Parker Admin |
 | `PLATFORM-ADMIN-TARGET` | `qa-platform-admin-target` | `qa-platform-admin-target@example.org` | Morgan Admin |
 | `PLATFORM-OWNER` | `qa-platform-owner` | `qa-platform-owner@example.org` | Olive Owner |
@@ -126,10 +126,10 @@ before the first browser opens:
   the pending grant's invitation id and its deterministic notification id;
   changing the pending role keeps both ids, revoking makes the row stale, and
   re-inviting creates fresh ids.
-- Platform target identities start verified and platform-role-free. The creator
-  target already owns its disposable event so revocation can prove that event
-  ownership survives; the admin target has no event role. Seed a pending global
-  grant only when the flow says it already exists.
+- Platform target identities start verified and platform-role-free. The user
+  limit target receives only an organization ownership override; the admin
+  target has no event role. Seed a pending global admin grant only when the flow
+  says it already exists.
 - The schedule draft, shared preview, and public programme are separate states.
   Record the draft revision plus `sharedScheduleId` and `publishedScheduleId`
   independently. A shared snapshot contains confirmed talks and public-safe

@@ -194,9 +194,6 @@ export async function seedCfp(
     visibility: { stringValue: visibility },
     archived: { booleanValue: archived },
     reviewsVisible: { booleanValue: false },
-    ownerUids: {
-      arrayValue: { values: ownerUid ? [{ stringValue: ownerUid }] : [] },
-    },
     ...(ownerUid ? { ownerUid: { stringValue: ownerUid } } : {}),
     ...(theme
       ? {
@@ -295,7 +292,6 @@ export async function seedMember(
   if (role === 'owner') {
     await patch(`cfps/${cfpId}`, {
       ownerUid: { stringValue: uid },
-      ownerUids: { arrayValue: { values: [{ stringValue: uid }] } },
     });
   }
 }

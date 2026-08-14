@@ -450,9 +450,11 @@ are bearer credentials. Move it with `scripts/set-platform.mjs`.
 Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
 window and organisers are managed from `/admin`. An organization owner or
 admin's `createCfp` flow checks its quota and writes the CFP and its owner in one transaction;
-`scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment. If
-`--owner` is supplied, that organiser must already have a verified, enabled Auth
-account; the script refuses instead of creating a pending owner grant.
+`scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment. It
+requires `--org` and `--owner`, creates the organization when absent, and links
+the event without bypassing the single-owner model. The organiser must already
+have a verified, enabled Auth account; the script refuses instead of creating a
+pending owner grant.
 `scripts/set-platform-admin.mjs` bootstraps global owners or administrators, and
 `scripts/set-platform.mjs` sets the platform-wide public origin.
 

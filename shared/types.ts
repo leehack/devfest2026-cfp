@@ -81,10 +81,8 @@ export interface Cfp extends CfpProfile {
   theme?: CfpTheme;
   features?: CfpFeatures;
   supportedLanguages?: string[];
-  /** Canonical singular owner UID for this CFP. */
-  ownerUid?: string;
-  /** Denormalised from `members`, so "the CFPs I own" is one query. */
-  ownerUids: string[];
+  /** Canonical owner, denormalised from `members` for ownership queries. */
+  ownerUid: string;
   /** `private` means unlisted, not secret — anyone with the link can read it. */
   visibility: Visibility;
   /**

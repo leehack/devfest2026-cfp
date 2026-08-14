@@ -3,17 +3,18 @@
  *
  * The app has a create form and it is the ordinary route. This exists for the
  * two cases the form cannot serve: seeding a local emulator on every `npm start`,
- * and standing a CFP up in production for an existing verified organiser who
- * is not the person running the command.
+ * and standing an organization plus CFP up in production for an existing
+ * verified organiser who is not the person running the command.
  *
  * Emulator:
  *   FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
  *     GCLOUD_PROJECT=demo-devfest-cfp \
  *     node scripts/seed-cfp.mjs --id devfest-mtl-2026 --name "DevFest Montréal 2026" \
+ *       --org gdg-montreal --org-name "GDG Montréal" --owner owner@example.org \
  *       --opens 2026-10-01 --closes 2026-11-21
  *
  * Production (needs application-default credentials):
- *   GCLOUD_PROJECT=<project-id> node scripts/seed-cfp.mjs --id … --owner you@example.org
+ *   GCLOUD_PROJECT=<project-id> node scripts/seed-cfp.mjs --id … --org … --owner you@example.org
  */
 
 import { initializeApp } from 'firebase-admin/app';
@@ -29,20 +30,26 @@ const id = arg('id');
 const name = arg('name') ?? id;
 const opens = arg('opens');
 const closes = arg('closes');
+const orgId = String(arg('org') ?? '').trim().toLowerCase();
+const orgName = String(arg('org-name') ?? orgId).trim();
 const owner = String(arg('owner') ?? '').trim().toLowerCase();
 const visibility = arg('visibility') ?? 'public';
 
-if (!id || !opens || !closes) {
+if (!id || !opens || !closes || !orgId || !owner) {
   console.error(
-    'Usage: node scripts/seed-cfp.mjs --id <slug> [--name "…"] --opens YYYY-MM-DD --closes YYYY-MM-DD [--owner email] [--visibility public|private]',
+    'Usage: node scripts/seed-cfp.mjs --id <slug> [--name "…"] --org <slug> [--org-name "…"] --owner <email> --opens YYYY-MM-DD --closes YYYY-MM-DD [--visibility public|private]',
   );
   process.exit(1);
 }
-if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id)) {
-  console.error('The id must be lower case letters, digits and single hyphens.');
+if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id) || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(orgId)) {
+  console.error('The event and organization ids must use lower case letters, digits and single hyphens.');
   process.exit(1);
 }
-if (owner && !/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(owner)) {
+if (!orgName || orgName.length > 120) {
+  console.error('The organization name is required and must fit within 120 characters.');
+  process.exit(1);
+}
+if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(owner)) {
   console.error('The owner must be a usable email address.');
   process.exit(1);
 }
@@ -229,51 +236,121 @@ const genericSubmissionForm = {
   },
 };
 
-let ownerUid;
-if (owner) {
-  try {
-    const user = await getAuth().getUserByEmail(owner);
-    if (!user.emailVerified || user.disabled) {
-      console.error('The owner must already have a verified, enabled account.');
-      process.exit(1);
-    }
-    ownerUid = user.uid;
-  } catch (error) {
-    if (error?.code !== 'auth/user-not-found') throw error;
-    console.error('The owner must sign in and verify their account before this script is run.');
+let ownerAccount;
+try {
+  ownerAccount = await getAuth().getUserByEmail(owner);
+  if (!ownerAccount.emailVerified || ownerAccount.disabled) {
+    console.error('The owner must already have a verified, enabled account.');
     process.exit(1);
   }
+} catch (error) {
+  if (error?.code !== 'auth/user-not-found') throw error;
+  console.error('The owner must sign in and verify their account before this script is run.');
+  process.exit(1);
 }
+const ownerUid = ownerAccount.uid;
 
-// Merged, so re-running this against a live CFP moves the window rather than
-// wiping the ownership and visibility somebody has since changed.
-await db.doc(`cfps/${id}`).set(
-  {
-    name,
-    visibility,
-    archived: false,
-    opensAt: Timestamp.fromDate(opensAt),
-    closesAt: Timestamp.fromDate(closesAt),
-    paused: false,
-    // Reviewers cannot see each other's scores until this flips (§7, anchoring).
-    reviewsVisible: false,
-    ...(ownerUid ? { ownerUid, ownerUids: FieldValue.arrayUnion(ownerUid) } : {}),
-    createdBy: ownerUid ?? 'script',
-    updatedAt: FieldValue.serverTimestamp(),
-  },
-  { merge: true },
-);
-
-// Preserve an organiser's form on rerun. A brand-new seeded event starts with
-// event-neutral logistics disabled, matching in-app CFP creation.
+const orgRef = db.doc(`orgs/${orgId}`);
+const orgMemberRef = db.doc(`orgs/${orgId}/members/${ownerUid}`);
+const cfpRef = db.doc(`cfps/${id}`);
+const cfpMemberRef = db.doc(`cfps/${id}/members/${ownerUid}`);
 const submissionFormRef = db.doc(`cfps/${id}/config/submissionForm`);
-await db.runTransaction(async (tx) => {
-  const current = await tx.get(submissionFormRef);
-  if (!current.exists) tx.create(submissionFormRef, genericSubmissionForm);
-});
+const orgEventsQuery = db.collection('cfps').where('orgId', '==', orgId);
 
-if (owner) {
-  await db.doc(`cfps/${id}/members/${ownerUid}`).set(
+// Re-running may move the window, but never changes either scope's owner or
+// reparents an event. Ownership changes use the same explicit transfer flow as
+// the app.
+await db.runTransaction(async (tx) => {
+  const [org, orgMember, cfp, form] = await tx.getAll(
+    orgRef,
+    orgMemberRef,
+    cfpRef,
+    submissionFormRef,
+  );
+  const orgEvents = await tx.get(orgEventsQuery);
+
+  if (org.exists) {
+    const role = orgMember.get('role');
+    if (org.get('ownerUid') !== ownerUid && role !== 'admin') {
+      throw new Error('The supplied owner must own or administer the existing organization.');
+    }
+    if (org.get('ownerUid') === ownerUid) {
+      tx.set(
+        orgMemberRef,
+        {
+          orgId,
+          uid: ownerUid,
+          role: 'owner',
+          email: owner,
+          ...(ownerAccount.displayName ? { name: ownerAccount.displayName } : {}),
+          joinedAt: orgMember.exists
+            ? orgMember.get('joinedAt') ?? FieldValue.serverTimestamp()
+            : FieldValue.serverTimestamp(),
+          grantedBy: ownerUid,
+        },
+        { merge: true },
+      );
+    }
+  } else {
+    tx.create(orgRef, {
+      name: orgName,
+      slug: orgId,
+      ownerUid,
+      plan: 'community',
+      activeEventLimit: 1,
+      createdBy: ownerUid,
+      billingEmail: owner,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.create(orgMemberRef, {
+      orgId,
+      uid: ownerUid,
+      role: 'owner',
+      email: owner,
+      ...(ownerAccount.displayName ? { name: ownerAccount.displayName } : {}),
+      joinedAt: FieldValue.serverTimestamp(),
+      grantedBy: ownerUid,
+    });
+  }
+
+  if (cfp.exists) {
+    if (cfp.get('orgId') !== orgId) {
+      throw new Error('The existing event belongs to a different organization.');
+    }
+    if (cfp.get('ownerUid') !== ownerUid) {
+      throw new Error('The existing event belongs to a different owner.');
+    }
+  } else {
+    const configuredLimit = org.exists ? org.get('activeEventLimit') : 1;
+    const activeEventLimit =
+      Number.isInteger(configuredLimit) && configuredLimit >= 0 ? configuredLimit : 1;
+    const activeEventCount = orgEvents.docs.filter((event) => event.get('archived') !== true).length;
+    if (activeEventCount >= activeEventLimit) {
+      throw new Error(`The organization already uses its ${activeEventLimit} active event slot(s).`);
+    }
+  }
+
+  tx.set(
+    cfpRef,
+    {
+      name,
+      orgId,
+      ownerUid,
+      visibility,
+      archived: false,
+      opensAt: Timestamp.fromDate(opensAt),
+      closesAt: Timestamp.fromDate(closesAt),
+      paused: false,
+      reviewsVisible: false,
+      ...(cfp.exists ? {} : { createdBy: ownerUid, createdAt: FieldValue.serverTimestamp() }),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  tx.set(
+    cfpMemberRef,
     {
       cfpId: id,
       uid: ownerUid,
@@ -284,10 +361,12 @@ if (owner) {
     },
     { merge: true },
   );
-}
+
+  if (!form.exists) tx.create(submissionFormRef, genericSubmissionForm);
+});
 
 console.log(
   `cfps/${id} written — open ${opensAt.toISOString()} to ${closesAt.toISOString()}` +
-    (owner ? `, owner ${owner}` : ''),
+    `, organization ${orgId}, owner ${owner}`,
 );
 process.exit(0);

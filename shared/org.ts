@@ -65,9 +65,7 @@ export interface Org {
   id: string;
   name: string;
   slug: string;
-  ownerUid?: string;
-  /** Legacy query field retained while existing organization data is migrated. */
-  ownerUids?: string[];
+  ownerUid: string;
   description?: string;
   websiteUrl?: string;
   logoUrl?: string;

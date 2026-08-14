@@ -78,7 +78,7 @@ describe('staff email validity', () => {
     ).toBe(false);
     expect(
       staffMemberIsActive(
-        { cfpId: 'event-a', uid: 'reviewer', role: 'creator' },
+        { cfpId: 'event-a', uid: 'reviewer', role: 'member' },
         'event-a',
         'reviewer',
       ),

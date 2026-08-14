@@ -21,7 +21,7 @@ keeping `workers: 1` inside every shard because each test resets shared emulator
 state. The live Sessionize probe runs separately and does not gate a merge.
 
 ```bash
-node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --opens 2027-01-01 --closes 2027-02-01
+node scripts/seed-cfp.mjs --id my-conf --name "My Conf" --org my-org --org-name "My Org" --owner owner@example.org --opens 2027-01-01 --closes 2027-02-01
 node scripts/set-platform.mjs --url https://cfp.example.org
 GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email admin@example.org
 GCLOUD_PROJECT=my-project node scripts/set-platform-admin.mjs --email owner@example.org --role owner
@@ -84,8 +84,8 @@ function for its meta tags; everything under it stays a static file.
 Access control hierarchy is single-owner at every scope: platform, organization,
 and event. Exactly one active owner exists per scope; multiple owners are not
 supported. Canonical `ownerUid` is recorded on organizations and events (with
-`ownerUids` array retained for security rules / legacy compatibility). Admins
-operate; owners control authority and permanence.
+the matching membership maintained in the same transaction). Admins operate;
+owners control authority and permanence.
 - Platform owner: manages platform admins and initiates platform ownership
   transfer. Platform admins configure organization event limits and shared
   email delivery, but cannot manage platform admins or transfer.

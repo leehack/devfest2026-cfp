@@ -99,6 +99,11 @@ for (const acc of ACCOUNTS) {
 }
 
 // ------------------------------------------------------------------ 2. Platform Roles
+for (const collectionName of ['platformMembers', 'platformRoleGrants']) {
+  const obsoleteCreators = await db.collection(collectionName).where('role', '==', 'creator').get();
+  await Promise.all(obsoleteCreators.docs.map((doc) => doc.ref.delete()));
+}
+
 await db.doc(`platformMembers/${uid('usr-owner')}`).set({
   role: 'owner',
   email: 'owner@example.org',
@@ -127,7 +132,7 @@ const ORGS = [
       websiteUrl: 'https://globaltechsummit.org',
       logoUrl: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=128&h=128&fit=crop',
       ownerUid: uid('usr-owner'),
-      ownerUids: [uid('usr-owner')],
+      ownerUids: FieldValue.delete(),
       activeEventLimit: 2,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -147,7 +152,7 @@ const ORGS = [
       websiteUrl: 'https://aisociety.example.org',
       logoUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=128&h=128&fit=crop',
       ownerUid: uid('usr-owner'),
-      ownerUids: [uid('usr-owner')],
+      ownerUids: FieldValue.delete(),
       activeEventLimit: 1,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -246,7 +251,7 @@ const CFPS = [
       archived: false,
       paused: false,
       ownerUid: uid('usr-owner'),
-      ownerUids: [uid('usr-owner')],
+      ownerUids: FieldValue.delete(),
       opensAt: Timestamp.fromMillis(now - 30 * day),
       closesAt: Timestamp.fromMillis(now + 60 * day),
       reviewsVisible: true,
@@ -280,7 +285,7 @@ const CFPS = [
       archived: false,
       paused: false,
       ownerUid: uid('usr-owner'),
-      ownerUids: [uid('usr-owner')],
+      ownerUids: FieldValue.delete(),
       opensAt: Timestamp.fromMillis(now - 15 * day),
       closesAt: Timestamp.fromMillis(now + 45 * day),
       reviewsVisible: false,
@@ -322,7 +327,7 @@ const CFPS = [
       archived: false,
       paused: false,
       ownerUid: uid('usr-owner'),
-      ownerUids: [uid('usr-owner')],
+      ownerUids: FieldValue.delete(),
       opensAt: Timestamp.fromMillis(now - 10 * day),
       closesAt: Timestamp.fromMillis(now + 80 * day),
       theme: {

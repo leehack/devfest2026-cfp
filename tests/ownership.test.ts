@@ -162,9 +162,8 @@ describe('Single-Owner Access Control & Ownership Transfers', () => {
     });
   });
 
-  describe('Single-owner data invariant and legacy compatibility fallback', () => {
-    it('reads canonical singular ownerUid on event with fallback to legacy ownerUids', () => {
-      // Canonical format
+  describe('Single-owner data invariant', () => {
+    it('uses one canonical ownerUid on events and organizations', () => {
       const modernCfp: Partial<Cfp> = {
         name: 'DevFest 2026',
         visibility: 'public',
@@ -172,27 +171,8 @@ describe('Single-Owner Access Control & Ownership Transfers', () => {
         opensAt: '2026-09-01T00:00:00Z',
         closesAt: '2026-10-01T00:00:00Z',
         ownerUid: 'uid-owner-1',
-        ownerUids: ['uid-owner-1'],
         createdBy: 'uid-owner-1',
       };
-      const effectiveOwner = modernCfp.ownerUid ?? modernCfp.ownerUids?.[0];
-      expect(effectiveOwner).toBe('uid-owner-1');
-
-      // Legacy seeded record without ownerUid field
-      const legacyCfp: Partial<Cfp> = {
-        name: 'Legacy Conf',
-        visibility: 'public',
-        archived: false,
-        opensAt: '2026-09-01T00:00:00Z',
-        closesAt: '2026-10-01T00:00:00Z',
-        ownerUids: ['legacy-owner-uid'],
-        createdBy: 'legacy-owner-uid',
-      };
-      const legacyEffectiveOwner = legacyCfp.ownerUid ?? legacyCfp.ownerUids?.[0];
-      expect(legacyEffectiveOwner).toBe('legacy-owner-uid');
-    });
-
-    it('reads canonical singular ownerUid on organization with fallback to legacy structure', () => {
       const modernOrg: Partial<Org> = {
         id: 'tech-corp',
         name: 'Tech Corp',
@@ -200,6 +180,7 @@ describe('Single-Owner Access Control & Ownership Transfers', () => {
         ownerUid: 'uid-org-owner',
         createdAt: '2026-01-01T00:00:00Z',
       };
+      expect(modernCfp.ownerUid).toBe('uid-owner-1');
       expect(modernOrg.ownerUid).toBe('uid-org-owner');
     });
 

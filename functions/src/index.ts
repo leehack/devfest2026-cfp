@@ -81,7 +81,6 @@ import {
   type SpeakerProfilePhoto,
 } from '../../shared/confirmForm';
 import {
-  CFP_LIMITS,
   calendarDate,
   validateCfp,
   validateCfpId,
@@ -412,8 +411,7 @@ function assertMutationActor(
 ): void {
   const actual = member.get('role');
   const canonicalOwner = cfp?.get('ownerUid');
-  const canonicalOwnerMatches =
-    typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === member.id;
+  const canonicalOwnerMatches = canonicalOwner === member.id;
   const allowed = role === 'owner'
     ? actual === 'owner' && canonicalOwnerMatches
     : actual === 'owner' || actual === 'admin';
@@ -582,10 +580,7 @@ async function requireOwner(
     db.doc(`cfps/${cfpId}/members/${uid}`),
   );
   const canonicalOwner = cfp.get('ownerUid');
-  if (
-    member.get('role') !== 'owner' ||
-    (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
-  ) {
+  if (member.get('role') !== 'owner' || canonicalOwner !== uid) {
     throw new HttpsError('permission-denied', `Only an owner can ${action}.`);
   }
   return uid;
@@ -4179,20 +4174,12 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     throw new HttpsError('invalid-argument', 'The window closes before it opens.');
   }
 
-  const mine = db
-    .collection('cfps')
-    .where('ownerUids', 'array-contains', uid)
-    .limit(CFP_LIMITS.perOwner);
-
   const ref = db.doc(`cfps/${input.id}`);
   const orgRef = db.doc(`orgs/${orgId}`);
   const orgMemberRef = db.doc(`orgs/${orgId}/members/${uid}`);
   const orgEvents = db.collection('cfps').where('orgId', '==', orgId);
   await db.runTransaction(async (tx) => {
-    // Keep the ceiling in this transaction. A count done before it lets two
-    // simultaneous tenth calls both pass and commit.
-    const [owned, orgSnap, orgMemberSnap, existing, events] = await Promise.all([
-      tx.get(mine),
+    const [orgSnap, orgMemberSnap, existing, events] = await Promise.all([
       tx.get(orgRef),
       tx.get(orgMemberRef),
       tx.get(ref),
@@ -4217,12 +4204,6 @@ export const createCfp = onCall(CALLABLE, async (request) => {
         { reason: 'org_event_limit_reached', limit: activeEventLimit },
       );
     }
-    if (owned.size >= CFP_LIMITS.perOwner) {
-      throw new HttpsError(
-        'resource-exhausted',
-        'You have reached the limit on calls for proposals.',
-      );
-    }
     if (existing.exists) {
       throw new HttpsError('already-exists', 'That address is taken.');
     }
@@ -4230,7 +4211,6 @@ export const createCfp = onCall(CALLABLE, async (request) => {
       name: input.name,
       visibility: input.visibility,
       ownerUid: uid,
-      ownerUids: [uid],
       orgId,
       archived: false,
       opensAt,
@@ -4272,26 +4252,8 @@ function requireOrgId(data: Record<string, unknown>): string {
   return orgId;
 }
 
-async function resolvedOrgOwnerUid(
-  orgId: string,
-  data: Record<string, unknown>,
-): Promise<string | undefined> {
-  if (typeof data.ownerUid === 'string' && data.ownerUid) return data.ownerUid;
-  const legacyOwners = Array.isArray(data.ownerUids)
-    ? [...new Set(data.ownerUids.filter((uid): uid is string => typeof uid === 'string' && Boolean(uid)))]
-    : [];
-  if (legacyOwners.length === 1) return legacyOwners[0];
-
-  const owners = await db
-    .collection(`orgs/${orgId}/members`)
-    .where('role', '==', 'owner')
-    .limit(2)
-    .get();
-  if (owners.size === 1) return owners.docs[0].id;
-
-  // Last-resort compatibility for the oldest organization records, where the
-  // creator was the owner and no denormalized owner field existed yet.
-  return typeof data.createdBy === 'string' && data.createdBy ? data.createdBy : undefined;
+function orgOwnerUid(data: Record<string, unknown>): string | undefined {
+  return typeof data.ownerUid === 'string' && data.ownerUid ? data.ownerUid : undefined;
 }
 
 function readThemeColors(value: unknown): CfpTheme | undefined {
@@ -4348,7 +4310,7 @@ export const createOrg = onCall(CALLABLE, async (request) => {
   const defaultsRef = db.doc('config/platformLimits');
   const ownedOrgs = db
     .collection('orgs')
-    .where('ownerUids', 'array-contains', uid)
+    .where('ownerUid', '==', uid)
     .limit(ORG_LIMITS.perOwnerMax + 1);
 
   await db.runTransaction(async (tx) => {
@@ -4380,7 +4342,6 @@ export const createOrg = onCall(CALLABLE, async (request) => {
       name,
       slug,
       ownerUid: uid,
-      ownerUids: [uid],
       plan: 'community',
       activeEventLimit: ORG_LIMITS.activeEventsDefault,
       createdAt: FieldValue.serverTimestamp(),
@@ -4419,7 +4380,7 @@ export const getOrg = onCall(CALLABLE, async (request) => {
   const role = memberSnap?.exists ? (memberSnap.get('role') as string) : null;
 
   const orgData = orgSnap.data()!;
-  const ownerUid = await resolvedOrgOwnerUid(orgId, orgData);
+  const ownerUid = orgOwnerUid(orgData);
 
   const transferSnap = await db.doc(`orgs/${orgId}/transfers/current`).get();
   let pendingTransfer = null;
@@ -4490,7 +4451,7 @@ export const listMyOrgs = onCall(CALLABLE, async (request) => {
         id: d.id,
         name: data.name,
         slug: data.slug,
-        ownerUid: await resolvedOrgOwnerUid(d.id, data),
+        ownerUid: orgOwnerUid(data),
         description: data.description,
         logoUrl: data.logoUrl,
         websiteUrl: data.websiteUrl || data.website,
@@ -4543,7 +4504,7 @@ function pageSize(value: unknown, fallback = 5): number {
 }
 
 async function ownedOrganizationCount(uid: string): Promise<number> {
-  const owned = await db.collection('orgs').where('ownerUids', 'array-contains', uid).get();
+  const owned = await db.collection('orgs').where('ownerUid', '==', uid).get();
   return owned.size;
 }
 
@@ -4695,7 +4656,7 @@ export const setUserOrgLimit = onCall(CALLABLE, async (request) => {
       updatedBy: actorUid,
     });
   });
-  const owned = await db.collection('orgs').where('ownerUids', 'array-contains', account.uid).get();
+  const owned = await db.collection('orgs').where('ownerUid', '==', account.uid).get();
   logger.info('user organization limit changed', { targetUid: account.uid, limit, byUid: actorUid });
   return {
     ok: true,
@@ -4961,9 +4922,7 @@ export const grantOrgRole = onCall(CALLABLE, async (request) => {
       throw new HttpsError('permission-denied', 'Only organization admins and owners can grant roles.');
     }
     const canonicalOwner = org.get('ownerUid');
-    const actorIsOwner =
-      actorRole === 'owner' &&
-      (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === uid);
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === uid;
     if (role === 'admin' && !actorIsOwner) {
       throw new HttpsError('permission-denied', 'Only an organization owner can grant admin roles.', {
         reason: 'org_owner_required',
@@ -5026,9 +4985,7 @@ export const revokeOrgRole = onCall(CALLABLE, async (request) => {
       });
     }
     const canonicalOwner = org.get('ownerUid');
-    const actorIsOwner =
-      actorRole === 'owner' &&
-      (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === uid);
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === uid;
     if (target.get('role') === 'admin' && !actorIsOwner) {
       throw new HttpsError('permission-denied', 'Only an organization owner can revoke an admin.', {
         reason: 'org_owner_required',
@@ -5079,10 +5036,7 @@ export const initiateOrgOwnershipTransfer = onCall(CALLABLE, async (request) => 
     );
     if (!orgSnap.exists) throw new HttpsError('not-found', 'Organization not found.');
     const canonicalOwner = orgSnap.get('ownerUid');
-    if (
-      actorSnap.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
-    ) {
+    if (actorSnap.get('role') !== 'owner' || canonicalOwner !== uid) {
       throw new HttpsError(
         'permission-denied',
         'Only the organization owner can transfer ownership.',
@@ -5133,7 +5087,7 @@ export const acceptOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
   const defaultsRef = db.doc('config/platformLimits');
   const alreadyOwned = db
     .collection('orgs')
-    .where('ownerUids', 'array-contains', uid)
+    .where('ownerUid', '==', uid)
     .limit(ORG_LIMITS.perOwnerMax + 1);
 
   await db.runTransaction(async (tx) => {
@@ -5183,10 +5137,7 @@ export const acceptOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
       db.collection(`orgs/${orgId}/members`).where('role', '==', 'owner'),
     );
     const canonicalOwner = orgSnap.get('ownerUid');
-    if (
-      initiatingOwner.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== initiatedBy)
-    ) {
+    if (initiatingOwner.get('role') !== 'owner' || canonicalOwner !== initiatedBy) {
       throw new HttpsError(
         'failed-precondition',
         'The organization owner changed after this transfer was initiated.',
@@ -5224,7 +5175,6 @@ export const acceptOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
 
     tx.update(orgRef, {
       ownerUid: uid,
-      ownerUids: [uid],
       updatedAt: now,
     });
 
@@ -5251,10 +5201,7 @@ export const cancelOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
   await db.runTransaction(async (tx) => {
     const [orgSnap, actorSnap, transferSnap] = await tx.getAll(orgRef, actorRef, transferRef);
     const canonicalOwner = orgSnap.get('ownerUid');
-    if (
-      actorSnap.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
-    ) {
+    if (actorSnap.get('role') !== 'owner' || canonicalOwner !== uid) {
       throw new HttpsError(
         'permission-denied',
         'Only the organization owner can cancel an ownership transfer.',
@@ -5294,9 +5241,7 @@ export const getOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
     uid ? db.doc(`orgs/${orgId}/members/${uid}`).get() : Promise.resolve(null),
   ]);
   const canonicalOwner = orgSnap.get('ownerUid');
-  const isOwner =
-    memberSnap?.get('role') === 'owner' &&
-    (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === uid);
+  const isOwner = memberSnap?.get('role') === 'owner' && canonicalOwner === uid;
   const isTarget =
     (userEmail && String(tData.targetEmail ?? '').toLowerCase() === userEmail) ||
     (uid && tData.targetUid === uid);
@@ -5325,10 +5270,7 @@ export const deleteOrg = onCall(CALLABLE, async (request) => {
     const [orgSnap, actorSnap] = await tx.getAll(orgRef, actorRef);
     if (!orgSnap.exists) throw new HttpsError('not-found', 'Organization not found.');
     const canonicalOwner = orgSnap.get('ownerUid');
-    if (
-      actorSnap.get('role') !== 'owner' ||
-      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
-    ) {
+    if (actorSnap.get('role') !== 'owner' || canonicalOwner !== uid) {
       throw new HttpsError(
         'permission-denied',
         'Only the organization owner can delete the organization.',

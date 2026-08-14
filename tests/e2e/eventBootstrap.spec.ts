@@ -9,6 +9,7 @@ import {
   disableAccount,
   readCfp,
   readMember,
+  readOrgMember,
   readSubmissionFormDirect,
   reset,
   setSubmissionFormDirect,
@@ -17,7 +18,7 @@ import {
 const run = promisify(execFile);
 const PROJECT = 'demo-devfest-cfp';
 
-function seed(id: string, owner: string) {
+function seed(id: string, owner: string, orgId = `${id}-org`) {
   return run(
     process.execPath,
     [
@@ -26,6 +27,10 @@ function seed(id: string, owner: string) {
       id,
       '--name',
       'Bootstrap test',
+      '--org',
+      orgId,
+      '--org-name',
+      'Bootstrap organization',
       '--opens',
       '2027-01-01',
       '--closes',
@@ -87,7 +92,16 @@ test.describe('event owner bootstrap', () => {
     await expect(seed('verified-owner-cfp', identity.email)).resolves.toMatchObject({
       stdout: expect.stringContaining(`owner ${identity.email}`),
     });
-    expect(await readCfp('verified-owner-cfp')).toMatchObject({ ownerUids: [owner.uid] });
+    const seededCfp = await readCfp('verified-owner-cfp');
+    expect(seededCfp).toMatchObject({
+      orgId: 'verified-owner-cfp-org',
+      ownerUid: owner.uid,
+    });
+    expect(seededCfp).not.toHaveProperty('ownerUids');
+    expect(await readOrgMember('verified-owner-cfp-org', owner.uid)).toMatchObject({
+      role: 'owner',
+      email: identity.email,
+    });
     expect(await readMember(owner.uid, 'verified-owner-cfp')).toMatchObject({
       role: 'owner',
       email: identity.email,
@@ -111,5 +125,20 @@ test.describe('event owner bootstrap', () => {
     expect(await readSubmissionFormDirect('verified-owner-cfp')).toMatchObject({
       attendance: { enabled: true, marker: 'organiser-copy' },
     });
+  });
+
+  test('respects the organization active-event limit', async () => {
+    const identity = {
+      sub: 'quota-event-owner',
+      email: 'quota-event-owner@example.org',
+      name: 'Quota Event Owner',
+    };
+    await createAccount(identity);
+
+    await seed('quota-event-one', identity.email, 'quota-organization');
+    await expect(seed('quota-event-two', identity.email, 'quota-organization')).rejects.toMatchObject({
+      stderr: expect.stringContaining('already uses its 1 active event slot'),
+    });
+    expect(await readCfp('quota-event-two')).toBeNull();
   });
 });

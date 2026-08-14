@@ -43,8 +43,6 @@ export const CFP_LIMITS = {
   locationMax: 120,
   websiteMax: 200,
   timeZoneMax: 80,
-  /** Defense-in-depth ceiling across all events an account owns. */
-  perOwner: 10,
 } as const;
 
 /**

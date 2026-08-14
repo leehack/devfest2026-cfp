@@ -38,7 +38,7 @@ test.describe('platform administration', () => {
     await reset();
   });
 
-  test('ordinary verified accounts need an organization, not platform creator access', async ({ page }) => {
+  test('ordinary verified accounts need organization ownership before creating an event', async ({ page }) => {
     const outsider = await createAccount(OUTSIDER);
     expect(await callJson(outsider.idToken, 'platformAccess', {})).toMatchObject({
       role: null,

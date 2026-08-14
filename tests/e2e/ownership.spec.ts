@@ -121,7 +121,6 @@ test.describe('single-owner transfer boundaries', () => {
     });
     expect(await readCfp()).toMatchObject({
       ownerUid: successor.uid,
-      ownerUids: [successor.uid],
     });
     expect(await readMember(successor.uid)).toMatchObject({ role: 'owner' });
     expect(await readMember(owner.uid)).toMatchObject({ role: 'admin' });
