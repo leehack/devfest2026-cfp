@@ -16,7 +16,7 @@ const STORAGE = 'http://127.0.0.1:9199';
 const BUCKET = 'demo-devfest-cfp.appspot.com';
 const REGION = 'northamerica-northeast1';
 const DOCS = `${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents`;
-const FIRESTORE_CLEAR_RETRY_DELAYS_MS = [100, 250, 500] as const;
+const FIRESTORE_CLEAR_RETRY_DELAYS_MS = [1_000, 3_000, 5_000, 8_000, 13_000, 21_000] as const;
 
 const day = 24 * 60 * 60 * 1000;
 

@@ -83,6 +83,6 @@ describe('Firestore emulator reset', () => {
     await vi.runAllTimersAsync();
 
     await assertion;
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 });
