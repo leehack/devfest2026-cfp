@@ -16,7 +16,7 @@ import process from 'node:process';
 import { javaEnv } from './java.mjs';
 
 const PROJECT = 'demo-devfest-cfp';
-const DATA_DIR = '.emulator-data';
+const DATA_DIR = process.env.CFP_EMULATOR_DATA_DIR || '.emulator-data';
 const FIRESTORE = '127.0.0.1:8080';
 const AUTH = '127.0.0.1:9099';
 const FUNCTIONS = '127.0.0.1:5001';
@@ -231,6 +231,19 @@ await runToCompletion(
     '--closes',
     closes,
   ],
+  {
+    env: {
+      ...env,
+      FIRESTORE_EMULATOR_HOST: FIRESTORE,
+      FIREBASE_AUTH_EMULATOR_HOST: AUTH,
+      GCLOUD_PROJECT: PROJECT,
+    },
+  },
+);
+
+await runToCompletion(
+  'node',
+  ['scripts/seed-demo-data.mjs'],
   {
     env: {
       ...env,

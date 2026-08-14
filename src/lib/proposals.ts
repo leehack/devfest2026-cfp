@@ -61,6 +61,9 @@ export interface CfpWindow {
   visibility: Visibility;
   sharedScheduleId?: string;
   publishedScheduleId?: string;
+  theme?: Cfp['theme'];
+  features?: Cfp['features'];
+  orgId?: string;
 }
 
 /**
@@ -107,6 +110,9 @@ export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
     },
     sharedScheduleId: data.sharedScheduleId,
     publishedScheduleId: data.publishedScheduleId,
+    theme: data.theme,
+    features: data.features,
+    orgId: data.orgId,
   };
 }
 

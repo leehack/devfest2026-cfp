@@ -11,18 +11,39 @@
  * rather than as the app's generic title.
  */
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { User } from 'firebase/auth';
 
 import { formatCalendarDay, formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { href } from '../lib/router';
 import { Link } from '../components/Link';
+import { transferError } from '../lib/errors';
+import {
+  acceptEventOwnershipTransfer,
+  getEventOwnershipTransfer,
+} from '../lib/roles';
 import type { CfpWindow } from '../lib/proposals';
 import { calendarDate } from '@shared/cfp';
 import { localised } from '@shared/confirmForm';
+import type { OwnershipTransfer } from '@shared/types';
 
-export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
+export function CfpPage({
+  cfp,
+  cfpId,
+  user,
+  onRoleChanged,
+}: {
+  cfp: CfpWindow;
+  cfpId: string;
+  user: User | null;
+  onRoleChanged: () => void;
+}) {
   const { t, locale } = useI18n();
+  const [transfer, setTransfer] = useState<OwnershipTransfer | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferFailure, setTransferFailure] = useState('');
+  const [transferAccepted, setTransferAccepted] = useState(false);
   const { description, eventDate, eventStartDate, eventEndDate, venue, location, website } =
     cfp.profile;
 
@@ -31,6 +52,38 @@ export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
   const ends = eventEndDate ?? starts;
   const day = starts ? calendarDate(starts) : null;
   const endDay = ends && ends !== starts ? calendarDate(ends) : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setTransfer(null);
+    setTransferFailure('');
+    setTransferAccepted(false);
+    if (!user) return () => { cancelled = true; };
+    void getEventOwnershipTransfer({ cfpId })
+      .then(({ data }) => {
+        if (!cancelled) setTransfer(data.transfer ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setTransfer(null);
+      });
+    return () => { cancelled = true; };
+  }, [cfpId, user]);
+
+  async function acceptTransfer() {
+    if (!transfer || transferBusy) return;
+    setTransferBusy(true);
+    setTransferFailure('');
+    try {
+      await acceptEventOwnershipTransfer({ cfpId });
+      setTransfer(null);
+      setTransferAccepted(true);
+      onRoleChanged();
+    } catch (error) {
+      setTransferFailure(transferError(error, t));
+    } finally {
+      setTransferBusy(false);
+    }
+  }
 
   const facts: { label: string; value: ReactNode }[] = [];
   // `formatCalendarDay`, not `formatDate`: this is a day, and the deadline below
@@ -72,16 +125,51 @@ export function CfpPage({ cfp, cfpId }: { cfp: CfpWindow; cfpId: string }) {
 
   return (
     <div className="cfp-landing">
+      {(transfer || transferAccepted) && (
+        <section className="ownership-transfer-card" aria-labelledby="event-transfer-title">
+          <div>
+            <p className="home-activity__eyebrow">{t.transfer.acceptTitle}</p>
+            <h2 id="event-transfer-title">{cfp.name}</h2>
+            <p>
+              {transferAccepted
+                ? t.transfer.transferred
+                : t.transfer.acceptBanner(cfp.name)}
+            </p>
+            {transferFailure && <p className="field__error" role="alert">{transferFailure}</p>}
+          </div>
+          {transfer && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={transferBusy}
+              onClick={() => void acceptTransfer()}
+            >
+              {transferBusy ? t.transfer.accepting : t.transfer.acceptButton}
+            </button>
+          )}
+        </section>
+      )}
       <div className="cfp-hero">
-        <div className="cfp-hero__accent" aria-hidden="true">
-          <span className="cfp-hero__accent-blue" />
-          <span className="cfp-hero__accent-red" />
-          <span className="cfp-hero__accent-yellow" />
-          <span className="cfp-hero__accent-green" />
-        </div>
+        <div className="cfp-hero__accent" aria-hidden="true" style={{ background: 'var(--masthead-bg, var(--primary))' }} />
 
         <div className="cfp-hero__topline">
-          <p className="cfp-hero__eyebrow">{t.cfpPage.eyebrow}</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+            <p className="cfp-hero__eyebrow" style={{ margin: 0 }}>{t.cfpPage.eyebrow}</p>
+            {cfp.orgId && (
+              <Link
+                to={`/orgs/${cfp.orgId}`}
+                className="org-badge"
+                style={{ textDecoration: 'none', fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}
+              >
+                🏢 {cfp.orgId}
+              </Link>
+            )}
+            {cfp.features?.blindReview && (
+              <span className="blind-review-badge" style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}>
+                🛡️ Blind Review
+              </span>
+            )}
+          </div>
           <div className="cfp-hero__actions">
             <span className={`cfp-hero__status cfp-hero__status--${cfp.state}`}>
               {stateLabel}

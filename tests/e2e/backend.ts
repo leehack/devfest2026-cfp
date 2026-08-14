@@ -177,12 +177,16 @@ export async function seedCfp(
     visibility = 'public',
     archived = false,
     ownerUid,
+    theme,
+    features,
     ...window
   }: Window & {
     name?: string;
     visibility?: 'public' | 'private';
     archived?: boolean;
     ownerUid?: string;
+    theme?: Record<string, string>;
+    features?: Record<string, boolean>;
   } = {},
 ) {
   await patch(`cfps/${cfpId}`, {
@@ -193,6 +197,29 @@ export async function seedCfp(
     ownerUids: {
       arrayValue: { values: ownerUid ? [{ stringValue: ownerUid }] : [] },
     },
+    ...(ownerUid ? { ownerUid: { stringValue: ownerUid } } : {}),
+    ...(theme
+      ? {
+          theme: {
+            mapValue: {
+              fields: Object.fromEntries(
+                Object.entries(theme).map(([k, v]) => [k, { stringValue: v }]),
+              ),
+            },
+          },
+        }
+      : {}),
+    ...(features
+      ? {
+          features: {
+            mapValue: {
+              fields: Object.fromEntries(
+                Object.entries(features).map(([k, v]) => [k, { booleanValue: v }]),
+              ),
+            },
+          },
+        }
+      : {}),
   });
   await setCfpWindow(window, cfpId);
 }
@@ -267,6 +294,7 @@ export async function seedMember(
   });
   if (role === 'owner') {
     await patch(`cfps/${cfpId}`, {
+      ownerUid: { stringValue: uid },
       ownerUids: { arrayValue: { values: [{ stringValue: uid }] } },
     });
   }
@@ -275,7 +303,7 @@ export async function seedMember(
 /** Platform access is independent from every CFP membership. */
 export async function seedPlatformMember(
   uid: string,
-  role: 'owner' | 'admin' | 'creator',
+  role: 'owner' | 'admin',
   email = `${uid}@example.org`,
   name = '',
 ) {
@@ -291,7 +319,7 @@ export async function seedPlatformMember(
 /** Waits for a verified account to claim platform access on its first check. */
 export async function invitePlatformRole(
   email: string,
-  role: 'owner' | 'admin' | 'creator',
+  role: 'owner' | 'admin',
 ) {
   await patch(`platformRoleGrants/${email.toLowerCase()}`, {
     email: { stringValue: email.toLowerCase() },
@@ -461,6 +489,16 @@ export async function callPublic(
   });
   const body = await response.json().catch(() => ({}));
   return { ok: response.ok, code: body?.error?.status ?? String(response.status) };
+}
+
+export async function callPublicJson(name: string, data: unknown): Promise<any> {
+  const response = await fetch(`${FUNCTIONS}/${PROJECT}/${REGION}/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ data: withCfp(data) }),
+  });
+  await expectOk(response, `${name} public call`);
+  return (await response.json())?.result ?? {};
 }
 
 /** `callAs` for the cases that assert on the payload rather than the refusal. */
@@ -1471,6 +1509,45 @@ export async function readCfp(cfpId = CFP_ID): Promise<Record<string, any> | nul
   await expectOk(response, 'readCfp');
   const { fields } = await response.json();
   return unwrap(fields ?? {});
+}
+
+export async function readOrgMember(
+  orgId: string,
+  uid: string,
+): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/orgs/${orgId}/members/${uid}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readOrgMember');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+export async function readPlatformMember(uid: string): Promise<Record<string, any> | null> {
+  const response = await fetch(`${DOCS}/platformMembers/${uid}`, {
+    headers: { authorization: 'Bearer owner' },
+  });
+  if (response.status === 404) return null;
+  await expectOk(response, 'readPlatformMember');
+  const { fields } = await response.json();
+  return unwrap(fields ?? {});
+}
+
+export async function seedOrgEvent(
+  orgId: string,
+  cfpId: string,
+  visibility: 'public' | 'private',
+  archived = false,
+) {
+  await patch(`cfps/${cfpId}`, {
+    name: { stringValue: cfpId },
+    orgId: { stringValue: orgId },
+    visibility: { stringValue: visibility },
+    archived: { booleanValue: archived },
+    opensAt: { timestampValue: new Date(Date.now() - day).toISOString() },
+    closesAt: { timestampValue: new Date(Date.now() + day).toISOString() },
+  });
 }
 
 export async function readMember(

@@ -1,12 +1,6 @@
-/**
- * Platform roles answer who may create CFPs and who may delegate that access.
- *
- * They never imply a role on a CFP. Platform owners and admins cannot read an
- * event's proposals, speakers, reviews or email unless that event separately
- * grants them access.
- */
+import { randomUUID } from 'node:crypto';
 
-import type { Auth } from 'firebase-admin/auth';
+import type { Auth, UserRecord } from 'firebase-admin/auth';
 import {
   FieldValue,
   type DocumentSnapshot,
@@ -14,11 +8,19 @@ import {
 } from 'firebase-admin/firestore';
 
 import { PLATFORM_ROLES, type PlatformRole } from '../../shared/platform';
+import type { OwnershipTransfer } from '../../shared/types';
+import {
+  archiveOwnershipTransfer,
+  ownershipTransferExpiry,
+  ownershipTransferIsPending,
+  ownershipTransferView,
+} from './ownership';
 import { normalizeEmail, RoleError } from './roles';
 
 const memberDoc = (db: Firestore, uid: string) => db.doc(`platformMembers/${uid}`);
 const grantDoc = (db: Firestore, email: string) => db.doc(`platformRoleGrants/${email}`);
-const roleRank: Record<PlatformRole, number> = { creator: 0, admin: 1, owner: 2 };
+const transferDoc = (db: Firestore) => db.doc('config/platformOwnershipTransfer');
+const roleRank: Record<PlatformRole, number> = { admin: 1, owner: 2 };
 
 function normalizePlatformRole(raw: unknown): PlatformRole {
   const role = String(raw ?? '');
@@ -29,6 +31,9 @@ function normalizePlatformRole(raw: unknown): PlatformRole {
 }
 
 function roleOf(snapshot: DocumentSnapshot): PlatformRole | null {
+  // Creator was removed from the platform model. Ignore legacy records so
+  // those accounts lose creation access without breaking sign-in.
+  if (snapshot.get('role') === 'creator') return null;
   return snapshot.exists ? normalizePlatformRole(snapshot.get('role')) : null;
 }
 
@@ -42,7 +47,7 @@ function strongestRole(roles: Array<PlatformRole | null>): PlatformRole | null {
 
 function refuseHigherRole(
   roles: Array<PlatformRole | null>,
-  requested: 'admin' | 'creator',
+  requested: 'admin',
 ): void {
   const strongest = strongestRole(roles);
   if (strongest && roleRank[strongest] > roleRank[requested]) {
@@ -85,6 +90,9 @@ export async function claimPlatformRole(
     if (!pendingRole) return currentRole;
 
     const role = strongestRole([currentRole, pendingRole])!;
+    const existingOwners = role === 'owner'
+      ? await tx.get(db.collection('platformMembers').where('role', '==', 'owner'))
+      : null;
     const now = FieldValue.serverTimestamp();
     const roleChanged = currentRole !== role;
     const createdBy = String(
@@ -99,6 +107,15 @@ export async function claimPlatformRole(
         : (current.get('roleUpdatedBy') ?? current.get('grantedBy') ?? createdBy),
     );
 
+    for (const owner of existingOwners?.docs ?? []) {
+      if (owner.id !== uid) {
+        tx.update(owner.ref, {
+          role: 'admin',
+          roleUpdatedAt: now,
+          roleUpdatedBy,
+        });
+      }
+    }
     tx.set(
       member,
       {
@@ -122,13 +139,29 @@ export async function claimPlatformRole(
   });
 }
 
-export async function listPlatformAccess(db: Firestore) {
-  const [members, grants] = await Promise.all([
+export async function listPlatformAccess(
+  db: Firestore,
+  user?: { uid: string; email?: string },
+) {
+  const [members, grants, transferSnap] = await Promise.all([
     db.collection('platformMembers').get(),
     db.collection('platformRoleGrants').get(),
+    transferDoc(db).get(),
   ]);
+
+  let pendingTransfer: OwnershipTransfer | null = null;
+  if (ownershipTransferIsPending(transferSnap)) {
+    const data = transferSnap.data()!;
+    const isOwner = user?.uid && members.docs.some((d) => d.id === user.uid && d.get('role') === 'owner');
+    const isTarget = user && ((user.email && user.email.toLowerCase() === String(data.targetEmail ?? '').toLowerCase()) || user.uid === data.targetUid);
+    if (isOwner || isTarget) {
+      pendingTransfer = ownershipTransferView(transferSnap, 'platform');
+    }
+  }
+
   return {
     members: members.docs
+      .filter((doc) => doc.get('role') !== 'creator')
       .map((doc) => ({
         uid: doc.id,
         email: String(doc.get('email') ?? ''),
@@ -142,6 +175,7 @@ export async function listPlatformAccess(db: Firestore) {
       }))
       .sort((a, b) => a.email.localeCompare(b.email)),
     pending: grants.docs
+      .filter((doc) => doc.get('role') !== 'creator')
       .map((doc) => ({
         email: String(doc.get('email') ?? doc.id),
         role: normalizePlatformRole(doc.get('role')),
@@ -151,6 +185,7 @@ export async function listPlatformAccess(db: Firestore) {
         roleUpdatedBy: String(doc.get('roleUpdatedBy') ?? doc.get('createdBy') ?? ''),
       }))
       .sort((a, b) => a.email.localeCompare(b.email)),
+    pendingTransfer,
   };
 }
 
@@ -163,7 +198,7 @@ async function grantPlatformRole(
     byUid,
   }: {
     email: unknown;
-    role: 'admin' | 'creator';
+    role: 'admin';
     byUid: string;
   },
 ): Promise<{ email: string; applied: boolean }> {
@@ -174,6 +209,15 @@ async function grantPlatformRole(
   const matches = db.collection('platformMembers').where('email', '==', email);
 
   return await db.runTransaction(async (tx) => {
+    const actorSnap = await tx.get(memberDoc(db, byUid));
+    const actorRole = roleOf(actorSnap);
+    if (role === 'admin' && actorRole !== 'owner') {
+      throw new RoleError(
+        'permission-denied',
+        'Only a platform owner can grant administrator access.',
+        'platform_owner_required',
+      );
+    }
     const matching = await tx.get(matches);
     const current =
       member && !matching.docs.some((snapshot) => snapshot.ref.path === member.path)
@@ -232,15 +276,6 @@ async function grantPlatformRole(
   });
 }
 
-/** Platform owners and admins may grant creator access. */
-export async function grantCfpCreator(
-  db: Firestore,
-  auth: Auth,
-  input: { email: unknown; byUid: string },
-) {
-  return await grantPlatformRole(db, auth, { ...input, role: 'creator' });
-}
-
 /** Platform owners may delegate platform administration. */
 export async function grantPlatformAdmin(
   db: Firestore,
@@ -259,7 +294,7 @@ async function revokePlatformRole(
     byUid,
   }: {
     email: unknown;
-    role: 'admin' | 'creator';
+    role: 'admin';
     byUid: string;
   },
 ): Promise<{ email: string }> {
@@ -270,6 +305,15 @@ async function revokePlatformRole(
   const matches = db.collection('platformMembers').where('email', '==', email);
 
   await db.runTransaction(async (tx) => {
+    const actorSnap = await tx.get(memberDoc(db, byUid));
+    const actorRole = roleOf(actorSnap);
+    if (role === 'admin' && actorRole !== 'owner') {
+      throw new RoleError(
+        'permission-denied',
+        'Only a platform owner can revoke administrator access.',
+        'platform_owner_required',
+      );
+    }
     const matching = await tx.get(matches);
     const current: DocumentSnapshot[] = [...matching.docs];
     if (target && !current.some((snapshot) => snapshot.ref.path === target.path)) {
@@ -290,15 +334,6 @@ async function revokePlatformRole(
   return { email };
 }
 
-/** Revocation stops future creation; CFPs the person already owns stay theirs. */
-export async function revokeCfpCreator(
-  db: Firestore,
-  auth: Auth,
-  input: { email: unknown; byUid: string },
-) {
-  return await revokePlatformRole(db, auth, { ...input, role: 'creator' });
-}
-
 /** Only owners call this; owner records remain bootstrap-managed. */
 export async function revokePlatformAdmin(
   db: Firestore,
@@ -306,4 +341,215 @@ export async function revokePlatformAdmin(
   input: { email: unknown; byUid: string },
 ) {
   return await revokePlatformRole(db, auth, { ...input, role: 'admin' });
+}
+
+export async function initiatePlatformOwnershipTransfer(
+  db: Firestore,
+  auth: Auth,
+  { email: rawEmail, byUid }: { email: unknown; byUid: string },
+) {
+  const email = normalizeEmail(rawEmail);
+  const targetUser = await userForEmail(auth, email);
+  if (!targetUser?.emailVerified || targetUser.disabled) {
+    throw new RoleError(
+      'failed-precondition',
+      'The successor account must be verified and enabled.',
+      'transfer_account_not_ready',
+    );
+  }
+  if (targetUser.uid === byUid) {
+    throw new RoleError(
+      'failed-precondition',
+      'You are already the platform owner.',
+      'transfer_already_owner',
+    );
+  }
+
+  const transferRef = transferDoc(db);
+  const actorRef = memberDoc(db, byUid);
+  const history = db.collection('platformOwnershipTransfers');
+
+  return await db.runTransaction(async (tx) => {
+    const [actorSnap, currentTransfer] = await tx.getAll(actorRef, transferRef);
+    if (roleOf(actorSnap) !== 'owner') {
+      throw new RoleError(
+        'permission-denied',
+        'Only the platform owner can transfer ownership.',
+        'platform_owner_required',
+      );
+    }
+    if (ownershipTransferIsPending(currentTransfer)) {
+      throw new RoleError(
+        'failed-precondition',
+        'An ownership transfer is already pending.',
+        'transfer_already_pending',
+      );
+    }
+    const transferId = randomUUID();
+    archiveOwnershipTransfer(tx, currentTransfer, history, byUid);
+    tx.set(transferRef, {
+      id: transferId,
+      scope: 'platform',
+      targetEmail: email,
+      targetUid: targetUser.uid,
+      initiatedBy: byUid,
+      initiatedAt: FieldValue.serverTimestamp(),
+      expiresAt: ownershipTransferExpiry(),
+      status: 'pending',
+    });
+    return { ok: true, transferId, targetEmail: email };
+  });
+}
+
+export async function acceptPlatformOwnershipTransfer(
+  db: Firestore,
+  auth: Auth,
+  { uid, email: rawEmail }: { uid: string; email: string },
+) {
+  const email = normalizeEmail(rawEmail);
+  let userRecord: UserRecord | undefined;
+  try {
+    userRecord = await auth.getUser(uid);
+  } catch (err) {
+    if ((err as { code?: string })?.code === 'auth/user-not-found') {
+      throw new RoleError('not-found', 'User account not found.', 'transfer_not_eligible');
+    }
+    throw err;
+  }
+  if (!userRecord.emailVerified || userRecord.disabled) {
+    throw new RoleError(
+      'failed-precondition',
+      'The successor account must be verified and enabled.',
+      'transfer_account_not_ready',
+    );
+  }
+
+  const transferRef = transferDoc(db);
+  const newOwnerRef = memberDoc(db, uid);
+
+  return await db.runTransaction(async (tx) => {
+    const transferSnap = await tx.get(transferRef);
+    if (!ownershipTransferIsPending(transferSnap)) {
+      throw new RoleError(
+        'failed-precondition',
+        'No pending ownership transfer was found.',
+        'transfer_not_found',
+      );
+    }
+    const targetEmail = String(transferSnap.get('targetEmail') ?? '').toLowerCase();
+    const targetUid = transferSnap.get('targetUid');
+    if (targetUid ? targetUid !== uid : targetEmail !== email) {
+      throw new RoleError(
+        'permission-denied',
+        'This ownership transfer was not addressed to this account.',
+        'transfer_wrong_account',
+      );
+    }
+
+    const initiatedBy = String(transferSnap.get('initiatedBy') ?? '');
+    const [currentMemberSnap, initiatingOwner] = await tx.getAll(
+      newOwnerRef,
+      memberDoc(db, initiatedBy),
+    );
+    const ownersSnap = await tx.get(
+      db.collection('platformMembers').where('role', '==', 'owner'),
+    );
+    if (roleOf(initiatingOwner) !== 'owner') {
+      throw new RoleError(
+        'failed-precondition',
+        'The platform owner changed after this transfer was initiated.',
+        'transfer_not_found',
+      );
+    }
+    const now = FieldValue.serverTimestamp();
+
+    // Demote all other platform owners to admin so single owner invariant holds
+    for (const doc of ownersSnap.docs) {
+      if (doc.id !== uid) {
+        tx.update(doc.ref, {
+          role: 'admin',
+          roleUpdatedAt: now,
+          roleUpdatedBy: uid,
+        });
+      }
+    }
+
+    tx.set(
+      newOwnerRef,
+      {
+        uid,
+        email,
+        ...(userRecord.displayName ? { name: userRecord.displayName } : {}),
+        role: 'owner',
+        createdAt: currentMemberSnap.exists ? currentMemberSnap.get('createdAt') ?? now : now,
+        createdBy: currentMemberSnap.exists
+          ? currentMemberSnap.get('createdBy') ?? uid
+          : (transferSnap.get('initiatedBy') ?? uid),
+        grantedBy: uid,
+        roleUpdatedAt: now,
+        roleUpdatedBy: uid,
+      },
+      { merge: true },
+    );
+
+    tx.update(transferRef, {
+      status: 'accepted',
+      acceptedAt: now,
+      acceptedBy: uid,
+    });
+
+    return { ok: true };
+  });
+}
+
+export async function cancelPlatformOwnershipTransfer(
+  db: Firestore,
+  { byUid }: { byUid: string },
+) {
+  const transferRef = transferDoc(db);
+  const actorRef = memberDoc(db, byUid);
+
+  return await db.runTransaction(async (tx) => {
+    const [actorSnap, transferSnap] = await tx.getAll(actorRef, transferRef);
+    if (roleOf(actorSnap) !== 'owner') {
+      throw new RoleError(
+        'permission-denied',
+        'Only the platform owner can cancel an ownership transfer.',
+        'platform_owner_required',
+      );
+    }
+    if (!ownershipTransferIsPending(transferSnap)) {
+      throw new RoleError(
+        'failed-precondition',
+        'No pending ownership transfer to cancel.',
+        'transfer_not_found',
+      );
+    }
+
+    tx.update(transferRef, {
+      status: 'cancelled',
+      cancelledBy: byUid,
+      cancelledAt: FieldValue.serverTimestamp(),
+    });
+
+    return { ok: true };
+  });
+}
+
+export async function getPlatformOwnershipTransfer(
+  db: Firestore,
+  { byUid, email }: { byUid: string; email?: string },
+) {
+  const transferRef = transferDoc(db);
+  const snap = await transferRef.get();
+  if (!ownershipTransferIsPending(snap)) return null;
+  const data = snap.data()!;
+  const targetEmail = String(data.targetEmail ?? '').toLowerCase();
+  const normalizedEmail = email ? email.toLowerCase() : '';
+  const memberSnap = byUid ? await db.doc(`platformMembers/${byUid}`).get() : null;
+  const isOwner = memberSnap?.exists === true && memberSnap.get('role') === 'owner';
+  const isTarget =
+    (normalizedEmail && targetEmail === normalizedEmail) || data.targetUid === byUid;
+  if (!isOwner && !isTarget) return null;
+  return ownershipTransferView(snap, 'platform');
 }

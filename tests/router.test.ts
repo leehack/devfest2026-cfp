@@ -66,6 +66,17 @@ describe('reading a path', () => {
   it('reads /platform as the global administration workspace', () => {
     expect(placeOf('/platform')).toMatchObject({ route: 'platform', cfpId: null });
   });
+
+  it('reads organization routes without treating them as CFPs', () => {
+    expect(placeOf('/orgs')).toMatchObject({ route: 'orgs', orgId: null });
+    expect(placeOf('/orgs/community')).toMatchObject({ route: 'org', orgId: 'community' });
+  });
+
+  it('reads dedicated platform administration pages', () => {
+    expect(placeOf('/platform/access')).toMatchObject({ route: 'platformAccess' });
+    expect(placeOf('/platform/limits')).toMatchObject({ route: 'platformLimits' });
+    expect(placeOf('/platform/email')).toMatchObject({ route: 'platformEmail' });
+  });
 });
 
 describe('writing a path', () => {
@@ -74,6 +85,11 @@ describe('writing a path', () => {
       { route: 'home' as const, cfpId: null },
       { route: 'new' as const, cfpId: null },
       { route: 'platform' as const, cfpId: null },
+      { route: 'platformAccess' as const, cfpId: null },
+      { route: 'platformLimits' as const, cfpId: null },
+      { route: 'platformEmail' as const, cfpId: null },
+      { route: 'orgs' as const, cfpId: null },
+      { route: 'org' as const, cfpId: null, orgId: 'community' },
       { route: 'cfp' as const, cfpId: 'devfest-mtl-2026' },
       { route: 'form' as const, cfpId: 'devfest-mtl-2026' },
       { route: 'review' as const, cfpId: 'devfest-mtl-2026' },

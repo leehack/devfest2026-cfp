@@ -8,6 +8,7 @@ export interface ThemeStorageReader {
 
 export interface ThemeStorageWriter {
   setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
 }
 
 const THEME_COLORS: Record<Theme, string> = {
@@ -58,6 +59,16 @@ export function setThemePreference(
     storage?.setItem(THEME_KEY, theme);
   } catch {
     // The selection still applies for this page; only persistence is unavailable.
+  }
+}
+
+export function clearThemePreference(
+  storage: ThemeStorageWriter | null = browserStorage(),
+): void {
+  try {
+    storage?.removeItem?.(THEME_KEY);
+  } catch {
+    // The system preference still applies for this page; only persistence is unavailable.
   }
 }
 

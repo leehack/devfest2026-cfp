@@ -1,8 +1,11 @@
 # A call-for-proposals platform
 
-An approved creator starts a call for proposals and owns it. Platform owners
-delegate administrators, and administrators control creator access, without
-either inheriting access to an event. Submission form, Firestore write path,
+Any verified user can create and own one organization by default. Platform
+administrators may set a per-account ownership override without changing existing
+ownership. Organization owners and admins create events, and the creator owns
+that event. Each organization starts
+with one active event slot; platform administrators may change that limit without
+inheriting access to the organization or event. Submission form, Firestore write path,
 security rules. `SPEC.md` is the design;
 [`AGENTS.md`](AGENTS.md) is the working conventions.
 
@@ -28,8 +31,10 @@ one call. The document id being the slug means creating one *is* the uniqueness
 check: there is no second index to keep honest, and no window in which two people
 both believe they hold the name. Only `speakers/{uid}` (a profile belongs to the
 account, not to any one talk), `platformMembers/{uid}` and
-`platformRoleGrants/{email}` (global creator access), `signInLinks` (hashed
-address/network throttles and a platform circuit breaker),
+`platformRoleGrants/{email}` (platform administration invitations),
+`platformUserLimits/{uid}` (callable-only organization ownership overrides),
+`config/platformLimits` (callable-only global organization ownership default),
+`signInLinks` (hashed address/network throttles and a platform circuit breaker),
 `speakerInvitationLimits` (hashed invitation-rate limits), `config/platform`
 (public platform identity and link origin), `config/platformEmail` (platform
 email defaults), `config/emailProvider` (provider key hint) and
@@ -37,7 +42,8 @@ email defaults), `config/emailProvider` (provider key hint) and
 ownership) sit outside.
 
 Screens behind one path router: `/` lists the public calls, `/new` starts one,
-`/platform` manages administrators and approved creators, and then `/c/{cfpId}` is that call's
+`/platform` is the administration overview, with dedicated `/platform/access`,
+`/platform/limits`, and `/platform/email` pages, and then `/c/{cfpId}` is that call's
 public page, `/submit` the form, `/review` for anyone holding a role on it and
 `/schedule` the published agenda or an authenticated committee preview,
 `/schedule/{entryId}` a session, and
@@ -123,7 +129,7 @@ env -u FIRESTORE_EMULATOR_HOST \
 ```
 
 Owners delegate administrators from `/platform`; owners and administrators
-manage CFP creators there. Owner changes stay out of band, and the script
+manage organization event limits there. Owner changes stay out of band, and the script
 transactionally refuses to remove the last active owner. Disabled, deleted and
 unverified accounts do not count as a safe replacement; have the replacement
 open `/platform` successfully before removing the previous owner. Deploy the web
@@ -232,10 +238,13 @@ revoking it makes an unsent row stale. People whose verified account already
 exists receive the role immediately and join the active notification audience.
 
 **Platform access is separate from event roles.** `platformMembers` answers who
-may delegate access and create a new CFP; a platform owner or admin cannot read
+may administer shared platform settings; a platform owner or admin cannot read
 or administer an event unless that CFP separately grants them a role. Owners
-delegate admins, and owners or admins approve creators, from `/platform`. The
-two global collections are unreadable and unwritable from every browser, so the
+delegate admins from `/platform/access`. Any verified user may own one organization
+by default; platform administrators can change that global default or set
+per-account overrides from `/platform/limits`, and
+organization owners or admins create events within its active-event limit. These
+global access and limit documents are unreadable and unwritable from every browser, so the
 directory and every change go through verified, role-checked callables. The
 first platform owner is deliberately bootstrapped out of band with
 `scripts/set-platform-admin.mjs --role owner`.
@@ -439,8 +448,8 @@ the app — it is where every mailed link points, sign-in links included, and th
 are bearer credentials. Move it with `scripts/set-platform.mjs`.
 
 Google sign-in is enabled and the live CFP is `cfps/devfest-mtl-2026`. Its
-window and organisers are managed from `/admin`. An approved creator's
-`createCfp` flow writes the CFP and its owner in one transaction;
+window and organisers are managed from `/admin`. An organization owner or
+admin's `createCfp` flow checks its quota and writes the CFP and its owner in one transaction;
 `scripts/seed-cfp.mjs` is the outside-the-app option for a fresh environment. If
 `--owner` is supplied, that organiser must already have a verified, enabled Auth
 account; the script refuses instead of creating a pending owner grant.
@@ -605,11 +614,11 @@ readable. The rules suite exercises every boundary and is mutation-checked.
   caller's role for that CFP server-side. `createCfp` writes its owner in the
   creation transaction. `claimRole` trusts only the verified auth token's email,
   and requires `email_verified === true` rather than merely "not false".
-- **Creator access cannot be self-served either.** `platformMembers` and
-  `platformRoleGrants` are closed to every client. `createCfp` rechecks the
-  caller's platform role in its creation transaction, so a stale screen or a
-  concurrent revocation cannot bypass it. Owners may delegate admins; owners
-  and admins may delegate creators. Owner changes stay with the guarded
+- **Platform administration cannot be self-served.** `platformMembers` and
+  `platformRoleGrants` are closed to every client. `createOrg` enforces the
+  per-owner organization limit, and `createCfp` rechecks the organization role
+  and active-event quota in its creation transaction. Owners may delegate
+  platform admins. Owner changes stay with the guarded
   bootstrap script, and nobody may remove their own platform access.
 - **Every callable authorises before it acts** — `requireUid`, `requireAdmin`, or
   ownership via `readOwnProposal`, which reports `not-found` for someone else's

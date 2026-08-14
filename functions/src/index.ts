@@ -8,9 +8,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import { initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
+import { getAuth, type UserRecord } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
 import {
+  FieldPath,
   FieldValue,
   getFirestore,
   Timestamp,
@@ -88,16 +89,41 @@ import {
   type CfpProfile,
   type CfpRole,
 } from '../../shared/cfp';
-import type { SpeakerSnapshot } from '../../shared/types';
-import type { PlatformRole } from '../../shared/platform';
-import { claim, grant, revoke, RoleError } from './roles';
+import type { CfpTheme, SpeakerSnapshot } from '../../shared/types';
+import {
+  ORG_LIMITS,
+  effectiveActiveEventLimit,
+  effectiveOrgOwnershipLimit,
+  validateOrgSlug,
+  type OrgRole,
+} from '../../shared/org';
+import { normaliseThemeColor } from '../../shared/cfpTheme';
+import {
+  archiveOwnershipTransfer,
+  ownershipTransferExpiry,
+  ownershipTransferIsPending,
+  ownershipTransferView,
+} from './ownership';
+import {
+  claim,
+  grant,
+  normalizeEmail,
+  revoke,
+  RoleError,
+  initiateEventOwnershipTransfer as initiateEventOwnershipTransferImpl,
+  acceptEventOwnershipTransfer as acceptEventOwnershipTransferImpl,
+  cancelEventOwnershipTransfer as cancelEventOwnershipTransferImpl,
+  getEventOwnershipTransfer as getEventOwnershipTransferImpl,
+} from './roles';
 import {
   claimPlatformRole,
-  grantCfpCreator as grantPlatformCreator,
   grantPlatformAdmin as grantPlatformAdministrator,
   listPlatformAccess,
-  revokeCfpCreator as revokePlatformCreator,
   revokePlatformAdmin as revokePlatformAdministrator,
+  initiatePlatformOwnershipTransfer as initiatePlatformOwnershipTransferImpl,
+  acceptPlatformOwnershipTransfer as acceptPlatformOwnershipTransferImpl,
+  cancelPlatformOwnershipTransfer as cancelPlatformOwnershipTransferImpl,
+  getPlatformOwnershipTransfer as getPlatformOwnershipTransferImpl,
 } from './platform';
 import {
   cfpUrl,
@@ -382,9 +408,15 @@ function activeMutationLease(snap: DocumentSnapshot, now = Date.now()): boolean 
 function assertMutationActor(
   member: DocumentSnapshot,
   role: 'admin' | 'owner',
+  cfp?: DocumentSnapshot,
 ): void {
   const actual = member.get('role');
-  const allowed = role === 'owner' ? actual === 'owner' : actual === 'owner' || actual === 'admin';
+  const canonicalOwner = cfp?.get('ownerUid');
+  const canonicalOwnerMatches =
+    typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === member.id;
+  const allowed = role === 'owner'
+    ? actual === 'owner' && canonicalOwnerMatches
+    : actual === 'owner' || actual === 'admin';
   if (!allowed) {
     throw new HttpsError(
       'permission-denied',
@@ -545,7 +577,15 @@ async function requireOwner(
   action: string,
 ): Promise<string> {
   const uid = requireUid(request, action);
-  if ((await roleOn(cfpId, uid)) !== 'owner') {
+  const [cfp, member] = await db.getAll(
+    db.doc(`cfps/${cfpId}`),
+    db.doc(`cfps/${cfpId}/members/${uid}`),
+  );
+  const canonicalOwner = cfp.get('ownerUid');
+  if (
+    member.get('role') !== 'owner' ||
+    (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
+  ) {
     throw new HttpsError('permission-denied', `Only an owner can ${action}.`);
   }
   return uid;
@@ -3471,6 +3511,7 @@ export const reviewQueue = onCall(CALLABLE, async (request) => {
         submissionFields,
         participantByProposal.get(proposal.id),
         resolvedSubmissionForm,
+        cfp.get('features.blindReview') === true || cfp.get('blindReview') === true,
       ),
     ),
   };
@@ -3993,11 +4034,15 @@ export const platformAccess = onCall(CALLABLE, async (request) => {
   const identity = requireVerifiedPlatformIdentity(request, 'check platform access');
   try {
     const role = await claimPlatformRole(db, identity);
+    const pendingTransfer = await getPlatformOwnershipTransferImpl(db, {
+      byUid: identity.uid,
+      email: identity.email,
+    });
     return {
       role,
-      canCreateCfp: role === 'owner' || role === 'admin' || role === 'creator',
       isPlatformAdmin: role === 'owner' || role === 'admin',
       isPlatformOwner: role === 'owner',
+      pendingTransfer,
     };
   } catch (error) {
     throw asHttpsError(error);
@@ -4006,40 +4051,8 @@ export const platformAccess = onCall(CALLABLE, async (request) => {
 
 /** Platform administrators see delegated access, not the Firebase Auth directory. */
 export const listPlatformUsers = onCall(CALLABLE, async (request) => {
-  await requirePlatformAdmin(request, 'list CFP creators');
-  return { ok: true, ...(await listPlatformAccess(db)) };
-});
-
-/** Platform owners and admins grant creator access. */
-export const grantCfpCreator = onCall(CALLABLE, async (request) => {
-  const { uid } = await requirePlatformAdmin(request, 'grant CFP creator access');
-  const data = (request.data ?? {}) as { email?: unknown };
-  try {
-    const result = await grantPlatformCreator(db, getAuth(), {
-      email: data.email,
-      byUid: uid,
-    });
-    logger.info('CFP creator access granted', { ...result, byUid: uid });
-    return result;
-  } catch (error) {
-    throw asHttpsError(error);
-  }
-});
-
-/** Revocation affects future CFP creation, never ownership of existing CFPs. */
-export const revokeCfpCreator = onCall(CALLABLE, async (request) => {
-  const { uid } = await requirePlatformAdmin(request, 'revoke CFP creator access');
-  const data = (request.data ?? {}) as { email?: unknown };
-  try {
-    const result = await revokePlatformCreator(db, getAuth(), {
-      email: data.email,
-      byUid: uid,
-    });
-    logger.info('CFP creator access revoked', { ...result, byUid: uid });
-    return result;
-  } catch (error) {
-    throw asHttpsError(error);
-  }
+  const identity = await requirePlatformAdmin(request, 'list platform administrators');
+  return { ok: true, ...(await listPlatformAccess(db, identity)) };
 });
 
 /** Platform owners may delegate administration without delegating ownership. */
@@ -4074,6 +4087,60 @@ export const revokePlatformAdmin = onCall(CALLABLE, async (request) => {
   }
 });
 
+export const initiatePlatformOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformOwner(request, 'transfer platform ownership');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  try {
+    const result = await initiatePlatformOwnershipTransferImpl(db, getAuth(), {
+      email: data.email,
+      byUid: uid,
+    });
+    logger.info('platform ownership transfer initiated', { ...result, byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const acceptPlatformOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const identity = requireVerifiedPlatformIdentity(request, 'accept platform ownership transfer');
+  try {
+    const result = await acceptPlatformOwnershipTransferImpl(db, getAuth(), {
+      uid: identity.uid,
+      email: identity.email,
+    });
+    logger.info('platform ownership transfer accepted', { uid: identity.uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const cancelPlatformOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformOwner(request, 'cancel platform ownership transfer');
+  try {
+    const result = await cancelPlatformOwnershipTransferImpl(db, { byUid: uid });
+    logger.info('platform ownership transfer cancelled', { byUid: uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const getPlatformOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const uid = request.auth?.token?.email_verified === true ? request.auth.uid : '';
+  const email = request.auth?.token?.email ? String(request.auth.token.email) : undefined;
+  try {
+    const transfer = await getPlatformOwnershipTransferImpl(db, {
+      byUid: uid,
+      email,
+    });
+    return { ok: true, transfer };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
 // ------------------------------------------------------------------- the CFP
 
 /**
@@ -4084,32 +4151,20 @@ export const revokePlatformAdmin = onCall(CALLABLE, async (request) => {
  * which both believe they hold it. That is why this is a transaction with an
  * existence check rather than a `set`.
  *
- * The creator is written as owner in the same transaction. That is what
+ * The organization owner or admin who creates it is written as owner. That is what
  * replaced the bootstrap script — there is no moment when a CFP exists with
  * nobody able to administer it.
  */
 export const createCfp = onCall(CALLABLE, async (request) => {
   const identity = requireVerifiedPlatformIdentity(request, 'create a call for proposals');
   const { uid } = identity;
-  let creatorRole: PlatformRole | null;
-  try {
-    creatorRole = await claimPlatformRole(db, identity);
-  } catch (error) {
-    throw asHttpsError(error);
-  }
-  if (
-    creatorRole !== 'owner' &&
-    creatorRole !== 'admin' &&
-    creatorRole !== 'creator'
-  ) {
-    throw new HttpsError(
-      'permission-denied',
-      'A platform admin must grant creator access first.',
-    );
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = String(data.orgId ?? '').trim().toLowerCase();
+  if (validateOrgSlug(orgId)) {
+    throw new HttpsError('invalid-argument', 'Organization id is required and must be usable.');
   }
   const token = request.auth!.token;
 
-  const data = (request.data ?? {}) as Record<string, unknown>;
   const input = {
     id: String(data.cfpId ?? ''),
     name: String(data.name ?? '').trim(),
@@ -4130,21 +4185,36 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     .limit(CFP_LIMITS.perOwner);
 
   const ref = db.doc(`cfps/${input.id}`);
-  const platformMemberRef = db.doc(`platformMembers/${uid}`);
+  const orgRef = db.doc(`orgs/${orgId}`);
+  const orgMemberRef = db.doc(`orgs/${orgId}/members/${uid}`);
+  const orgEvents = db.collection('cfps').where('orgId', '==', orgId);
   await db.runTransaction(async (tx) => {
     // Keep the ceiling in this transaction. A count done before it lets two
     // simultaneous tenth calls both pass and commit.
-    const owned = await tx.get(mine);
-    const member = await tx.get(platformMemberRef);
-    const currentRole = member.get('role');
-    if (
-      currentRole !== 'owner' &&
-      currentRole !== 'admin' &&
-      currentRole !== 'creator'
-    ) {
+    const [owned, orgSnap, orgMemberSnap, existing, events] = await Promise.all([
+      tx.get(mine),
+      tx.get(orgRef),
+      tx.get(orgMemberRef),
+      tx.get(ref),
+      tx.get(orgEvents),
+    ]);
+    if (!orgSnap.exists) {
+      throw new HttpsError('not-found', 'Organization not found.');
+    }
+    const orgRole = orgMemberSnap.exists ? orgMemberSnap.get('role') : null;
+    if (orgRole !== 'owner' && orgRole !== 'admin') {
       throw new HttpsError(
         'permission-denied',
-        'A platform admin must grant creator access first.',
+        'You must be an admin or owner of the organization to create events for it.',
+      );
+    }
+    const activeEventLimit = effectiveActiveEventLimit(orgSnap.get('activeEventLimit'));
+    const activeEventCount = events.docs.filter((event) => event.get('archived') !== true).length;
+    if (activeEventCount >= activeEventLimit) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'This organization has reached its active event limit.',
+        { reason: 'org_event_limit_reached', limit: activeEventLimit },
       );
     }
     if (owned.size >= CFP_LIMITS.perOwner) {
@@ -4153,14 +4223,15 @@ export const createCfp = onCall(CALLABLE, async (request) => {
         'You have reached the limit on calls for proposals.',
       );
     }
-    const existing = await tx.get(ref);
     if (existing.exists) {
       throw new HttpsError('already-exists', 'That address is taken.');
     }
     tx.set(ref, {
       name: input.name,
       visibility: input.visibility,
+      ownerUid: uid,
       ownerUids: [uid],
+      orgId,
       archived: false,
       opensAt,
       closesAt,
@@ -4187,8 +4258,1174 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     });
   });
 
-  logger.info('cfp created', { cfpId: input.id, uid });
+  logger.info('cfp created', { cfpId: input.id, uid, orgId });
   return { ok: true, cfpId: input.id };
+});
+
+// ------------------------------------------------------------- organizations
+
+function requireOrgId(data: Record<string, unknown>): string {
+  const orgId = String(data.orgId ?? '').trim().toLowerCase();
+  if (validateOrgSlug(orgId)) {
+    throw new HttpsError('invalid-argument', 'Organization id is required and must be usable.');
+  }
+  return orgId;
+}
+
+async function resolvedOrgOwnerUid(
+  orgId: string,
+  data: Record<string, unknown>,
+): Promise<string | undefined> {
+  if (typeof data.ownerUid === 'string' && data.ownerUid) return data.ownerUid;
+  const legacyOwners = Array.isArray(data.ownerUids)
+    ? [...new Set(data.ownerUids.filter((uid): uid is string => typeof uid === 'string' && Boolean(uid)))]
+    : [];
+  if (legacyOwners.length === 1) return legacyOwners[0];
+
+  const owners = await db
+    .collection(`orgs/${orgId}/members`)
+    .where('role', '==', 'owner')
+    .limit(2)
+    .get();
+  if (owners.size === 1) return owners.docs[0].id;
+
+  // Last-resort compatibility for the oldest organization records, where the
+  // creator was the owner and no denormalized owner field existed yet.
+  return typeof data.createdBy === 'string' && data.createdBy ? data.createdBy : undefined;
+}
+
+function readThemeColors(value: unknown): CfpTheme | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpsError('invalid-argument', 'Theme must be an object.');
+  }
+  const source = value as Record<string, unknown>;
+  const theme: CfpTheme = {};
+  for (const key of ['primaryColor', 'accentColor', 'mastheadBg'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const color = normaliseThemeColor(source[key]);
+    if (color === null) {
+      throw new HttpsError('invalid-argument', 'Theme colors must use six-digit hex values.');
+    }
+    if (color) theme[key] = color;
+  }
+  return theme;
+}
+
+function readCfpTheme(value: unknown): CfpTheme | undefined {
+  const theme = readThemeColors(value);
+  if (theme === undefined) return undefined;
+  const source = value as Record<string, unknown>;
+  for (const key of ['logoUrl', 'bannerUrl'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const url = typeof source[key] === 'string' ? source[key].trim() : '';
+    if (url && (url.length > 500 || !/^https:\/\//i.test(url))) {
+      throw new HttpsError('invalid-argument', 'Theme asset URLs must use https and fit the field.');
+    }
+    if (url) theme[key] = url;
+  }
+  return theme;
+}
+
+export const createOrg = onCall(CALLABLE, async (request) => {
+  const identity = requireVerifiedPlatformIdentity(request, 'create an organization');
+  const { uid, email } = identity;
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const name = String(data.name ?? '').trim();
+  const slug = String(data.slug ?? '').trim().toLowerCase();
+
+  const slugFault = validateOrgSlug(slug);
+  if (slugFault) throw new HttpsError('invalid-argument', slugFault);
+  if (!name || name.length > ORG_LIMITS.nameMax) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Organization name is required (max ${ORG_LIMITS.nameMax} chars).`,
+    );
+  }
+  const orgRef = db.doc(`orgs/${slug}`);
+  const memberRef = db.doc(`orgs/${slug}/members/${uid}`);
+  const limitRef = db.doc(`platformUserLimits/${uid}`);
+  const defaultsRef = db.doc('config/platformLimits');
+  const ownedOrgs = db
+    .collection('orgs')
+    .where('ownerUids', 'array-contains', uid)
+    .limit(ORG_LIMITS.perOwnerMax + 1);
+
+  await db.runTransaction(async (tx) => {
+    const [existing, owned, limitSnap, defaultsSnap] = await Promise.all([
+      tx.get(orgRef),
+      tx.get(ownedOrgs),
+      tx.get(limitRef),
+      tx.get(defaultsRef),
+    ]);
+    const ownershipDefault = effectiveOrgOwnershipLimit(
+      defaultsSnap.get('organizationOwnershipDefault'),
+    );
+    const ownershipLimit = effectiveOrgOwnershipLimit(
+      limitSnap.get('organizationLimit'),
+      ownershipDefault,
+    );
+    if (existing.exists) {
+      throw new HttpsError('already-exists', 'That organization slug is already in use.');
+    }
+    if (owned.size >= ownershipLimit) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'You have reached the organization ownership limit.',
+        { reason: 'org_limit_reached', limit: ownershipLimit },
+      );
+    }
+
+    tx.set(orgRef, {
+      name,
+      slug,
+      ownerUid: uid,
+      ownerUids: [uid],
+      plan: 'community',
+      activeEventLimit: ORG_LIMITS.activeEventsDefault,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      createdBy: uid,
+      billingEmail: email,
+    });
+
+    tx.set(memberRef, {
+      orgId: slug,
+      uid,
+      role: 'owner',
+      email,
+      ...(identity.name ? { name: identity.name } : {}),
+      joinedAt: FieldValue.serverTimestamp(),
+      grantedBy: uid,
+    });
+  });
+
+  logger.info('organization created', { orgId: slug, ownerUid: uid });
+  return { ok: true, orgId: slug };
+});
+
+export const getOrg = onCall(CALLABLE, async (request) => {
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+
+  const orgSnap = await db.doc(`orgs/${orgId}`).get();
+  if (!orgSnap.exists) throw new HttpsError('not-found', 'Organization not found');
+
+  const uid = request.auth?.token?.email_verified === true ? request.auth.uid : null;
+  const userEmail = request.auth?.token?.email ? String(request.auth.token.email).toLowerCase() : null;
+  const memberSnap = uid
+    ? await db.doc(`orgs/${orgId}/members/${uid}`).get()
+    : null;
+  const role = memberSnap?.exists ? (memberSnap.get('role') as string) : null;
+
+  const orgData = orgSnap.data()!;
+  const ownerUid = await resolvedOrgOwnerUid(orgId, orgData);
+
+  const transferSnap = await db.doc(`orgs/${orgId}/transfers/current`).get();
+  let pendingTransfer = null;
+  if (ownershipTransferIsPending(transferSnap)) {
+    const tData = transferSnap.data()!;
+    const isOwner = role === 'owner';
+    const isTarget =
+      (userEmail && String(tData.targetEmail ?? '').toLowerCase() === userEmail) ||
+      (uid && tData.targetUid === uid);
+    if (isOwner || isTarget) {
+      pendingTransfer = ownershipTransferView(transferSnap, 'org', orgId);
+    }
+  }
+
+  return {
+    org: {
+      id: orgSnap.id,
+      name: orgData.name,
+      slug: orgData.slug,
+      ...(role ? { ownerUid } : {}),
+      description: orgData.description,
+      logoUrl: orgData.logoUrl,
+      websiteUrl: orgData.websiteUrl || orgData.website,
+      plan: orgData.plan,
+      activeEventLimit: effectiveActiveEventLimit(orgData.activeEventLimit),
+      theme: orgData.theme || orgData.defaultTheme,
+    },
+    role,
+    pendingTransfer,
+  };
+});
+
+export const listMyOrgs = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'list organizations');
+  const [memberships, limitSnap, defaultsSnap] = await Promise.all([
+    db.collectionGroup('members').where('uid', '==', uid).get(),
+    db.doc(`platformUserLimits/${uid}`).get(),
+    db.doc('config/platformLimits').get(),
+  ]);
+  const ownershipDefault = effectiveOrgOwnershipLimit(
+    defaultsSnap.get('organizationOwnershipDefault'),
+  );
+  const ownershipLimit = effectiveOrgOwnershipLimit(
+    limitSnap.get('organizationLimit'),
+    ownershipDefault,
+  );
+
+  const orgRoles = new Map<string, OrgRole>();
+  for (const doc of memberships.docs) {
+    const parts = doc.ref.path.split('/');
+    if (parts[0] === 'orgs' && parts[1]) {
+      orgRoles.set(parts[1], doc.get('role') as OrgRole);
+    }
+  }
+
+  if (orgRoles.size === 0) {
+    return { orgs: [], canCreateOrg: ownershipLimit > 0, ownershipLimit };
+  }
+
+  const orgDocs = await Promise.all(
+    Array.from(orgRoles).map(([id]) => db.doc(`orgs/${id}`).get()),
+  );
+  const orgs = await Promise.all(orgDocs
+    .filter((d) => d.exists)
+    .map(async (d) => {
+      const data = d.data()!;
+      return {
+        id: d.id,
+        name: data.name,
+        slug: data.slug,
+        ownerUid: await resolvedOrgOwnerUid(d.id, data),
+        description: data.description,
+        logoUrl: data.logoUrl,
+        websiteUrl: data.websiteUrl || data.website,
+        plan: data.plan,
+        activeEventLimit: effectiveActiveEventLimit(data.activeEventLimit),
+        theme: data.theme || data.defaultTheme,
+        membershipRole: orgRoles.get(d.id),
+      };
+    }));
+
+  return {
+    orgs,
+    canCreateOrg:
+      orgs.filter((org) => org.membershipRole === 'owner').length < ownershipLimit,
+    ownershipLimit,
+  };
+});
+
+async function platformUserLimitSummary(
+  uid: string,
+  ownedOrganizationCount: number,
+  override: FirebaseFirestore.DocumentSnapshot | undefined,
+  ownershipDefault: number,
+  knownAccount?: UserRecord,
+) {
+  let account = knownAccount;
+  if (!account) {
+    try {
+      account = await getAuth().getUser(uid);
+    } catch (error) {
+      if ((error as { code?: string })?.code !== 'auth/user-not-found') throw error;
+    }
+  }
+  return {
+    uid,
+    email: account?.email ?? String(override?.get('email') ?? ''),
+    name: account?.displayName ?? String(override?.get('name') ?? ''),
+    ownedOrganizationCount,
+    organizationLimit: effectiveOrgOwnershipLimit(
+      override?.get('organizationLimit'),
+      ownershipDefault,
+    ),
+    hasOverride: override?.exists === true,
+  };
+}
+
+function pageSize(value: unknown, fallback = 5): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 20 ? parsed : fallback;
+}
+
+async function ownedOrganizationCount(uid: string): Promise<number> {
+  const owned = await db.collection('orgs').where('ownerUids', 'array-contains', uid).get();
+  return owned.size;
+}
+
+/** A bounded page of verified accounts from Auth, including people who own no organizations. */
+export const listUserOrgLimits = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'list user organization limits');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const requestedSize = pageSize(data.pageSize);
+  const pageToken = typeof data.pageToken === 'string' && data.pageToken ? data.pageToken : undefined;
+  const [accounts, defaultsSnap] = await Promise.all([
+    getAuth().listUsers(requestedSize, pageToken),
+    db.doc('config/platformLimits').get(),
+  ]);
+  const ownershipDefault = effectiveOrgOwnershipLimit(
+    defaultsSnap.get('organizationOwnershipDefault'),
+  );
+  const visibleAccounts = accounts.users.filter((account) => account.emailVerified && !account.disabled);
+  const users = await Promise.all(
+    visibleAccounts.map(async (account) =>
+      platformUserLimitSummary(account.uid, await ownedOrganizationCount(account.uid),
+        await db.doc(`platformUserLimits/${account.uid}`).get(), ownershipDefault, account),
+    ),
+  );
+  return {
+    users: users.sort((a, b) => (a.name || a.email || a.uid).localeCompare(b.name || b.email || b.uid)),
+    nextPageToken: accounts.pageToken ?? null,
+  };
+});
+
+/** Exact-email lookup for configuring an account outside the current directory page. */
+export const findUserOrgLimit = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'find a user organization limit');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  let email: string;
+  try {
+    email = normalizeEmail(data.email);
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+  let account: UserRecord;
+  try {
+    account = await getAuth().getUserByEmail(email);
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'auth/user-not-found') {
+      throw new HttpsError('not-found', 'No verified account uses that email address.');
+    }
+    throw error;
+  }
+  if (!account.emailVerified || account.disabled) {
+    throw new HttpsError('failed-precondition', 'The account must be verified and enabled.');
+  }
+  const [override, defaults] = await Promise.all([
+    db.doc(`platformUserLimits/${account.uid}`).get(),
+    db.doc('config/platformLimits').get(),
+  ]);
+  return {
+    user: await platformUserLimitSummary(
+      account.uid,
+      await ownedOrganizationCount(account.uid),
+      override,
+      effectiveOrgOwnershipLimit(defaults.get('organizationOwnershipDefault')),
+      account,
+    ),
+  };
+});
+
+export const getPlatformLimitsConfiguration = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'view platform limit defaults');
+  const defaults = await db.doc('config/platformLimits').get();
+  return {
+    organizationOwnershipDefault: effectiveOrgOwnershipLimit(
+      defaults.get('organizationOwnershipDefault'),
+    ),
+  };
+});
+
+export const setPlatformLimitsConfiguration = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformAdmin(request, 'change platform limit defaults');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const organizationOwnershipDefault = Number(data.organizationOwnershipDefault);
+  if (
+    !Number.isInteger(organizationOwnershipDefault) ||
+    organizationOwnershipDefault < 0 ||
+    organizationOwnershipDefault > ORG_LIMITS.perOwnerMax
+  ) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Default organization limit must be an integer from 0 to ${ORG_LIMITS.perOwnerMax}.`,
+    );
+  }
+  const defaultsRef = db.doc('config/platformLimits');
+  const memberRef = db.doc(`platformMembers/${uid}`);
+  await db.runTransaction(async (tx) => {
+    const member = await tx.get(memberRef);
+    if (member.get('role') !== 'owner' && member.get('role') !== 'admin') {
+      throw new HttpsError('permission-denied', 'Platform administrator access is required.');
+    }
+    tx.set(defaultsRef, {
+      organizationOwnershipDefault,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: uid,
+    }, { merge: true });
+  });
+  logger.info('platform limit defaults changed', { organizationOwnershipDefault, byUid: uid });
+  return { ok: true, organizationOwnershipDefault };
+});
+
+export const setUserOrgLimit = onCall(CALLABLE, async (request) => {
+  const { uid: actorUid } = await requirePlatformAdmin(request, 'change a user organization limit');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  let email: string;
+  try {
+    email = normalizeEmail(data.email);
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+  const limit = Number(data.limit);
+  if (!Number.isInteger(limit) || limit < 0 || limit > ORG_LIMITS.perOwnerMax) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Organization limit must be an integer from 0 to ${ORG_LIMITS.perOwnerMax}.`,
+    );
+  }
+  let account: UserRecord;
+  try {
+    account = await getAuth().getUserByEmail(email);
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'auth/user-not-found') {
+      throw new HttpsError('failed-precondition', 'The account must exist and be verified.');
+    }
+    throw error;
+  }
+  if (!account.emailVerified || account.disabled) {
+    throw new HttpsError('failed-precondition', 'The account must be verified and enabled.');
+  }
+  const limitRef = db.doc(`platformUserLimits/${account.uid}`);
+  const actorRef = db.doc(`platformMembers/${actorUid}`);
+  await db.runTransaction(async (tx) => {
+    const actor = await tx.get(actorRef);
+    if (actor.get('role') !== 'owner' && actor.get('role') !== 'admin') {
+      throw new HttpsError('permission-denied', 'Platform administrator access is required.');
+    }
+    tx.set(limitRef, {
+      uid: account.uid,
+      email,
+      ...(account.displayName ? { name: account.displayName } : {}),
+      organizationLimit: limit,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: actorUid,
+    });
+  });
+  const owned = await db.collection('orgs').where('ownerUids', 'array-contains', account.uid).get();
+  logger.info('user organization limit changed', { targetUid: account.uid, limit, byUid: actorUid });
+  return {
+    ok: true,
+    user: await platformUserLimitSummary(
+      account.uid,
+      owned.size,
+      await limitRef.get(),
+      effectiveOrgOwnershipLimit(
+        (await db.doc('config/platformLimits').get()).get('organizationOwnershipDefault'),
+      ),
+    ),
+  };
+});
+
+export const resetUserOrgLimit = onCall(CALLABLE, async (request) => {
+  const { uid: actorUid } = await requirePlatformAdmin(request, 'reset a user organization limit');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const targetUid = String(data.uid ?? '').trim();
+  if (!targetUid) throw new HttpsError('invalid-argument', 'uid is required.');
+  const limitRef = db.doc(`platformUserLimits/${targetUid}`);
+  const actorRef = db.doc(`platformMembers/${actorUid}`);
+  const defaultsRef = db.doc('config/platformLimits');
+  let ownershipDefault: number = ORG_LIMITS.perOwner;
+  await db.runTransaction(async (tx) => {
+    const [actor, defaults] = await Promise.all([tx.get(actorRef), tx.get(defaultsRef)]);
+    if (actor.get('role') !== 'owner' && actor.get('role') !== 'admin') {
+      throw new HttpsError('permission-denied', 'Platform administrator access is required.');
+    }
+    ownershipDefault = effectiveOrgOwnershipLimit(defaults.get('organizationOwnershipDefault'));
+    tx.delete(limitRef);
+  });
+  logger.info('user organization limit reset', { targetUid, byUid: actorUid });
+  return { ok: true, uid: targetUid, limit: ownershipDefault };
+});
+
+/** Platform administrators can see and tune only organization event quotas. */
+export const listOrgLimits = onCall(CALLABLE, async (request) => {
+  await requirePlatformAdmin(request, 'list organization limits');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const requestedSize = pageSize(data.pageSize);
+  const cursor = typeof data.cursor === 'string' ? data.cursor.trim().toLowerCase() : '';
+  const search = typeof data.query === 'string' ? data.query.trim().toLowerCase() : '';
+  let orgQuery = db.collection('orgs').orderBy(FieldPath.documentId()).limit(requestedSize + 1);
+  if (search) {
+    if (validateOrgSlug(search)) {
+      throw new HttpsError('invalid-argument', 'Search with the beginning of an organization slug.');
+    }
+    orgQuery = db.collection('orgs')
+      .orderBy(FieldPath.documentId())
+      .startAt(search)
+      .endAt(`${search}\uf8ff`)
+      .limit(requestedSize + 1);
+  } else if (cursor) {
+    orgQuery = orgQuery.startAfter(cursor);
+  }
+  const orgs = await orgQuery.get();
+  const visible = orgs.docs.slice(0, requestedSize);
+  const activeCounts = await Promise.all(visible.map(async (org) => {
+    const aggregate = await db.collection('cfps')
+      .where('orgId', '==', org.id)
+      .where('archived', '==', false)
+      .count()
+      .get();
+    return aggregate.data().count;
+  }));
+  return {
+    organizations: visible
+      .map((org, index) => ({
+        id: org.id,
+        name: String(org.get('name') ?? org.id),
+        activeEventLimit: effectiveActiveEventLimit(org.get('activeEventLimit')),
+        activeEventCount: activeCounts[index] ?? 0,
+      })),
+    nextCursor: orgs.size > requestedSize ? visible.at(-1)?.id ?? null : null,
+  };
+});
+
+export const setOrgActiveEventLimit = onCall(CALLABLE, async (request) => {
+  const { uid } = await requirePlatformAdmin(request, 'change an organization event limit');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const limit = Number(data.limit);
+  if (!Number.isInteger(limit) || limit < 0 || limit > ORG_LIMITS.activeEventsMax) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Active event limit must be an integer from 0 to ${ORG_LIMITS.activeEventsMax}.`,
+    );
+  }
+  const orgRef = db.doc(`orgs/${orgId}`);
+  const platformMemberRef = db.doc(`platformMembers/${uid}`);
+  await db.runTransaction(async (tx) => {
+    const [org, member] = await tx.getAll(orgRef, platformMemberRef);
+    if (!org.exists) throw new HttpsError('not-found', 'Organization not found.');
+    if (member.get('role') !== 'owner' && member.get('role') !== 'admin') {
+      throw new HttpsError('permission-denied', 'Platform administrator access is required.');
+    }
+    tx.update(orgRef, {
+      activeEventLimit: limit,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  logger.info('organization active event limit changed', { orgId, limit, byUid: uid });
+  return { ok: true, orgId, limit };
+});
+
+export const listOrgMembers = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'list organization members');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const actor = await db.doc(`orgs/${orgId}/members/${uid}`).get();
+  if (!actor.exists) {
+    throw new HttpsError('permission-denied', 'Only organization members can view the team.');
+  }
+
+  const snapshot = await db.collection(`orgs/${orgId}/members`).get();
+  const rank = { owner: 0, admin: 1, member: 2 } as Record<string, number>;
+  const members = snapshot.docs
+    .map((doc) => {
+      const member = doc.data();
+      return {
+        uid: doc.id,
+        email: String(member.email ?? ''),
+        name: String(member.name ?? ''),
+        role: String(member.role ?? 'member'),
+        joinedAt: member.joinedAt?.toDate?.()?.toISOString?.() ?? null,
+      };
+    })
+    .sort((a, b) =>
+      (rank[a.role] ?? 9) - (rank[b.role] ?? 9) ||
+      (a.name || a.email).localeCompare(b.name || b.email),
+    );
+
+  return { members };
+});
+
+export const updateOrg = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'update organization settings');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+
+  const name = String(data.name ?? '').trim();
+  const description = data.description !== undefined ? String(data.description).trim() : undefined;
+  const logoUrl = data.logoUrl !== undefined ? String(data.logoUrl).trim() : undefined;
+  const websiteUrl = data.websiteUrl !== undefined ? String(data.websiteUrl).trim() : undefined;
+  if (name && name.length > ORG_LIMITS.nameMax) {
+    throw new HttpsError('invalid-argument', 'Organization name is too long.');
+  }
+  if (description !== undefined && description.length > ORG_LIMITS.descriptionMax) {
+    throw new HttpsError('invalid-argument', 'Organization description is too long.');
+  }
+  if (
+    [logoUrl, websiteUrl].some(
+      (url) => url !== undefined && (url.length > ORG_LIMITS.websiteMax || (url && !/^https:\/\//i.test(url))),
+    )
+  ) {
+    throw new HttpsError('invalid-argument', 'Organization URLs must use https and fit the field.');
+  }
+  const theme = readThemeColors(data.theme);
+
+  const update: Record<string, unknown> = {
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  if (name) update.name = name;
+  if (description !== undefined) update.description = description || FieldValue.delete();
+  if (logoUrl !== undefined) update.logoUrl = logoUrl || FieldValue.delete();
+  if (websiteUrl !== undefined) update.websiteUrl = websiteUrl || FieldValue.delete();
+  if (theme) update.theme = theme;
+
+  const orgRef = db.doc(`orgs/${orgId}`);
+  const memberRef = db.doc(`orgs/${orgId}/members/${uid}`);
+  await db.runTransaction(async (tx) => {
+    const [org, member] = await tx.getAll(orgRef, memberRef);
+    if (!org.exists) throw new HttpsError('not-found', 'Organization not found.');
+    const role = member.exists ? member.get('role') : null;
+    if (role !== 'owner' && role !== 'admin') {
+      throw new HttpsError(
+        'permission-denied',
+        'Only organization admins and owners can update settings.',
+      );
+    }
+    tx.update(orgRef, update);
+  });
+  logger.info('organization updated', { orgId, uid });
+  return { ok: true };
+});
+
+export const listOrgEvents = onCall(CALLABLE, async (request) => {
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+
+  const uid = request.auth?.token?.email_verified === true ? request.auth.uid : null;
+  const memberSnap = uid ? await db.doc(`orgs/${orgId}/members/${uid}`).get() : null;
+  const isMember = memberSnap?.exists === true;
+
+  const cfpsSnap = await db.collection('cfps').where('orgId', '==', orgId).get();
+  const visibleDocs = cfpsSnap.docs.filter((d) => {
+    const data = d.data();
+    return isMember || (data.visibility === 'public' && data.archived !== true);
+  });
+  const eventRoles = uid
+    ? await Promise.all(visibleDocs.map((d) => db.doc(`cfps/${d.id}/members/${uid}`).get()))
+    : [];
+  const events = visibleDocs.map((d, index) => {
+    const data = d.data();
+    const eventRole = eventRoles[index]?.get('role');
+    return {
+      id: d.id,
+      name: data.name,
+      visibility: data.visibility,
+      archived: data.archived === true,
+      opensAt: data.opensAt?.toDate?.()?.toISOString?.() ?? null,
+      closesAt: data.closesAt?.toDate?.()?.toISOString?.() ?? null,
+      theme: data.theme,
+      features: data.features,
+      canAdmin: eventRole === 'owner' || eventRole === 'admin',
+    };
+  });
+
+  return { events };
+});
+
+export const grantOrgRole = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'grant an organization role');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const role = String(data.role ?? 'member');
+
+  if (role !== 'admin' && role !== 'member') {
+    throw new HttpsError('invalid-argument', 'Only admin and member roles can be granted.');
+  }
+
+  let targetEmail: string;
+  try {
+    targetEmail = normalizeEmail(data.email);
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+
+  let userRecord: UserRecord | undefined;
+  try {
+    userRecord = await getAuth().getUserByEmail(targetEmail);
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'auth/user-not-found') throw error;
+  }
+  if (!userRecord?.emailVerified || userRecord.disabled) {
+    throw new HttpsError(
+      'failed-precondition',
+      'That person must create and verify an enabled account first.',
+      { reason: 'org_account_not_ready' },
+    );
+  }
+
+  const targetUid = userRecord.uid;
+  await db.runTransaction(async (tx) => {
+    const [org, actor, target] = await tx.getAll(
+      db.doc(`orgs/${orgId}`),
+      db.doc(`orgs/${orgId}/members/${uid}`),
+      db.doc(`orgs/${orgId}/members/${targetUid}`),
+    );
+    if (!org.exists) throw new HttpsError('not-found', 'Organization not found.');
+    const actorRole = actor.exists ? actor.get('role') : null;
+    if (actorRole !== 'owner' && actorRole !== 'admin') {
+      throw new HttpsError('permission-denied', 'Only organization admins and owners can grant roles.');
+    }
+    const canonicalOwner = org.get('ownerUid');
+    const actorIsOwner =
+      actorRole === 'owner' &&
+      (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === uid);
+    if (role === 'admin' && !actorIsOwner) {
+      throw new HttpsError('permission-denied', 'Only an organization owner can grant admin roles.', {
+        reason: 'org_owner_required',
+      });
+    }
+    if (target.exists && target.get('role') === 'owner') {
+      throw new HttpsError('failed-precondition', "An owner's role cannot be changed.", {
+        reason: 'org_owner_protected',
+      });
+    }
+    if (target.exists && target.get('role') === 'admin' && role !== 'admin' && !actorIsOwner) {
+      throw new HttpsError('permission-denied', 'Only an organization owner can change an admin role.', {
+        reason: 'org_owner_required',
+      });
+    }
+    tx.set(
+      target.ref,
+      {
+        orgId,
+        uid: targetUid,
+        role,
+        email: targetEmail,
+        ...(userRecord.displayName ? { name: userRecord.displayName } : {}),
+        joinedAt: target.exists ? target.get('joinedAt') ?? FieldValue.serverTimestamp() : FieldValue.serverTimestamp(),
+        grantedBy: uid,
+        roleUpdatedAt: FieldValue.serverTimestamp(),
+        roleUpdatedBy: uid,
+      },
+      { merge: true },
+    );
+  });
+
+  logger.info('org role granted', { orgId, email: targetEmail, role, byUid: uid });
+  return { ok: true };
+});
+
+export const revokeOrgRole = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'revoke an organization role');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const targetUid = String(data.targetUid ?? '').trim();
+
+  if (!targetUid) throw new HttpsError('invalid-argument', 'targetUid is required');
+
+  await db.runTransaction(async (tx) => {
+    const [org, actor, target] = await tx.getAll(
+      db.doc(`orgs/${orgId}`),
+      db.doc(`orgs/${orgId}/members/${uid}`),
+      db.doc(`orgs/${orgId}/members/${targetUid}`),
+    );
+    if (!org.exists) throw new HttpsError('not-found', 'Organization not found.');
+    const actorRole = actor.exists ? actor.get('role') : null;
+    if (actorRole !== 'owner' && actorRole !== 'admin') {
+      throw new HttpsError('permission-denied', 'Only organization admins and owners can revoke roles.');
+    }
+    if (!target.exists) throw new HttpsError('not-found', 'Member not found.');
+    if (target.get('role') === 'owner') {
+      throw new HttpsError('failed-precondition', 'Organization owners cannot be removed here.', {
+        reason: 'org_owner_protected',
+      });
+    }
+    const canonicalOwner = org.get('ownerUid');
+    const actorIsOwner =
+      actorRole === 'owner' &&
+      (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === uid);
+    if (target.get('role') === 'admin' && !actorIsOwner) {
+      throw new HttpsError('permission-denied', 'Only an organization owner can revoke an admin.', {
+        reason: 'org_owner_required',
+      });
+    }
+    tx.delete(target.ref);
+  });
+  logger.info('org role revoked', { orgId, targetUid, byUid: uid });
+  return { ok: true };
+});
+
+export const initiateOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'initiate organization ownership transfer');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const targetEmail = normalizeEmail(data.email);
+
+  let targetUser: UserRecord | undefined;
+  try {
+    targetUser = await getAuth().getUserByEmail(targetEmail);
+  } catch (error) {
+    if ((error as { code?: string })?.code !== 'auth/user-not-found') throw error;
+  }
+  if (!targetUser?.emailVerified || targetUser.disabled) {
+    throw new HttpsError(
+      'failed-precondition',
+      'The successor account must be verified and enabled.',
+      { reason: 'transfer_account_not_ready' },
+    );
+  }
+  if (targetUser.uid === uid) {
+    throw new HttpsError(
+      'failed-precondition',
+      'You are already the organization owner.',
+      { reason: 'transfer_already_owner' },
+    );
+  }
+
+  const transferRef = db.doc(`orgs/${orgId}/transfers/current`);
+  const actorRef = db.doc(`orgs/${orgId}/members/${uid}`);
+  const orgRef = db.doc(`orgs/${orgId}`);
+
+  await db.runTransaction(async (tx) => {
+    const [orgSnap, actorSnap, currentTransfer] = await tx.getAll(
+      orgRef,
+      actorRef,
+      transferRef,
+    );
+    if (!orgSnap.exists) throw new HttpsError('not-found', 'Organization not found.');
+    const canonicalOwner = orgSnap.get('ownerUid');
+    if (
+      actorSnap.get('role') !== 'owner' ||
+      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
+    ) {
+      throw new HttpsError(
+        'permission-denied',
+        'Only the organization owner can transfer ownership.',
+        { reason: 'org_owner_required' },
+      );
+    }
+    if (ownershipTransferIsPending(currentTransfer)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'An ownership transfer is already pending.',
+        { reason: 'transfer_already_pending' },
+      );
+    }
+    const transferId = randomUUID();
+    archiveOwnershipTransfer(
+      tx,
+      currentTransfer,
+      db.collection(`orgs/${orgId}/transfers`),
+      uid,
+    );
+    tx.set(transferRef, {
+      id: transferId,
+      scope: 'org',
+      scopeId: orgId,
+      targetEmail,
+      targetUid: targetUser!.uid,
+      initiatedBy: uid,
+      initiatedAt: FieldValue.serverTimestamp(),
+      expiresAt: ownershipTransferExpiry(),
+      status: 'pending',
+    });
+  });
+
+  logger.info('org ownership transfer initiated', { orgId, targetEmail, byUid: uid });
+  return { ok: true };
+});
+
+export const acceptOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const identity = requireVerifiedPlatformIdentity(request, 'accept organization ownership transfer');
+  const { uid, email } = identity;
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+
+  const orgRef = db.doc(`orgs/${orgId}`);
+  const transferRef = db.doc(`orgs/${orgId}/transfers/current`);
+  const newOwnerMemberRef = db.doc(`orgs/${orgId}/members/${uid}`);
+  const limitRef = db.doc(`platformUserLimits/${uid}`);
+  const defaultsRef = db.doc('config/platformLimits');
+  const alreadyOwned = db
+    .collection('orgs')
+    .where('ownerUids', 'array-contains', uid)
+    .limit(ORG_LIMITS.perOwnerMax + 1);
+
+  await db.runTransaction(async (tx) => {
+    const [owned, orgSnap, transferSnap, newMemberSnap, limitSnap, defaultsSnap] = await Promise.all([
+      tx.get(alreadyOwned),
+      tx.get(orgRef),
+      tx.get(transferRef),
+      tx.get(newOwnerMemberRef),
+      tx.get(limitRef),
+      tx.get(defaultsRef),
+    ]);
+    const ownershipDefault = effectiveOrgOwnershipLimit(
+      defaultsSnap.get('organizationOwnershipDefault'),
+    );
+    const ownershipLimit = effectiveOrgOwnershipLimit(
+      limitSnap.get('organizationLimit'),
+      ownershipDefault,
+    );
+    if (!orgSnap.exists) throw new HttpsError('not-found', 'Organization not found.');
+    if (!ownershipTransferIsPending(transferSnap)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'No pending ownership transfer was found.',
+        { reason: 'transfer_not_found' },
+      );
+    }
+    const targetEmail = String(transferSnap.get('targetEmail') ?? '').toLowerCase();
+    const targetUid = transferSnap.get('targetUid');
+    if (targetUid ? targetUid !== uid : targetEmail !== email.toLowerCase()) {
+      throw new HttpsError(
+        'permission-denied',
+        'This ownership transfer was not addressed to this account.',
+        { reason: 'transfer_wrong_account' },
+      );
+    }
+    if (owned.docs.filter((ownedOrg) => ownedOrg.id !== orgId).length >= ownershipLimit) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'You already own an organization.',
+        { reason: 'org_limit_reached', limit: ownershipLimit },
+      );
+    }
+
+    const initiatedBy = String(transferSnap.get('initiatedBy') ?? '');
+    const initiatingOwner = await tx.get(db.doc(`orgs/${orgId}/members/${initiatedBy}`));
+    const membersSnap = await tx.get(
+      db.collection(`orgs/${orgId}/members`).where('role', '==', 'owner'),
+    );
+    const canonicalOwner = orgSnap.get('ownerUid');
+    if (
+      initiatingOwner.get('role') !== 'owner' ||
+      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== initiatedBy)
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The organization owner changed after this transfer was initiated.',
+        { reason: 'transfer_not_found' },
+      );
+    }
+    const now = FieldValue.serverTimestamp();
+
+    // Demote all existing owners to admin
+    for (const doc of membersSnap.docs) {
+      if (doc.id !== uid) {
+        tx.update(doc.ref, {
+          role: 'admin',
+          roleUpdatedAt: now,
+          roleUpdatedBy: uid,
+        });
+      }
+    }
+
+    tx.set(
+      newOwnerMemberRef,
+      {
+        orgId,
+        uid,
+        email,
+        ...(identity.name ? { name: identity.name } : {}),
+        role: 'owner',
+        joinedAt: newMemberSnap.exists ? newMemberSnap.get('joinedAt') ?? now : now,
+        grantedBy: uid,
+        roleUpdatedAt: now,
+        roleUpdatedBy: uid,
+      },
+      { merge: true },
+    );
+
+    tx.update(orgRef, {
+      ownerUid: uid,
+      ownerUids: [uid],
+      updatedAt: now,
+    });
+
+    tx.update(transferRef, {
+      status: 'accepted',
+      acceptedAt: now,
+      acceptedBy: uid,
+    });
+  });
+
+  logger.info('org ownership transfer accepted', { orgId, newOwnerUid: uid });
+  return { ok: true };
+});
+
+export const cancelOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'cancel organization ownership transfer');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+
+  const actorRef = db.doc(`orgs/${orgId}/members/${uid}`);
+  const transferRef = db.doc(`orgs/${orgId}/transfers/current`);
+  const orgRef = db.doc(`orgs/${orgId}`);
+
+  await db.runTransaction(async (tx) => {
+    const [orgSnap, actorSnap, transferSnap] = await tx.getAll(orgRef, actorRef, transferRef);
+    const canonicalOwner = orgSnap.get('ownerUid');
+    if (
+      actorSnap.get('role') !== 'owner' ||
+      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
+    ) {
+      throw new HttpsError(
+        'permission-denied',
+        'Only the organization owner can cancel an ownership transfer.',
+        { reason: 'org_owner_required' },
+      );
+    }
+    if (!ownershipTransferIsPending(transferSnap)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'No pending ownership transfer to cancel.',
+        { reason: 'transfer_not_found' },
+      );
+    }
+    tx.update(transferRef, {
+      status: 'cancelled',
+      cancelledBy: uid,
+      cancelledAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  logger.info('org ownership transfer cancelled', { orgId, byUid: uid });
+  return { ok: true };
+});
+
+export const getOrgOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const uid = request.auth?.token?.email_verified === true ? request.auth.uid : null;
+  const userEmail = request.auth?.token?.email ? String(request.auth.token.email).toLowerCase() : null;
+
+  const transferSnap = await db.doc(`orgs/${orgId}/transfers/current`).get();
+  if (!ownershipTransferIsPending(transferSnap)) return { ok: true, transfer: null };
+  const tData = transferSnap.data()!;
+
+  const [orgSnap, memberSnap] = await Promise.all([
+    db.doc(`orgs/${orgId}`).get(),
+    uid ? db.doc(`orgs/${orgId}/members/${uid}`).get() : Promise.resolve(null),
+  ]);
+  const canonicalOwner = orgSnap.get('ownerUid');
+  const isOwner =
+    memberSnap?.get('role') === 'owner' &&
+    (typeof canonicalOwner !== 'string' || !canonicalOwner || canonicalOwner === uid);
+  const isTarget =
+    (userEmail && String(tData.targetEmail ?? '').toLowerCase() === userEmail) ||
+    (uid && tData.targetUid === uid);
+  if (!isOwner && !isTarget) return { ok: true, transfer: null };
+
+  return {
+    ok: true,
+    transfer: ownershipTransferView(transferSnap, 'org', orgId),
+  };
+});
+
+export const deleteOrg = onCall(CALLABLE, async (request) => {
+  const uid = requireVerifiedUid(request, 'delete organization');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = requireOrgId(data);
+  const confirm = String(data.confirm ?? '').trim().toLowerCase();
+
+  if (confirm !== orgId) {
+    throw new HttpsError('invalid-argument', 'Confirmation name does not match organization slug.');
+  }
+
+  const orgRef = db.doc(`orgs/${orgId}`);
+  const actorRef = db.doc(`orgs/${orgId}/members/${uid}`);
+
+  await db.runTransaction(async (tx) => {
+    const [orgSnap, actorSnap] = await tx.getAll(orgRef, actorRef);
+    if (!orgSnap.exists) throw new HttpsError('not-found', 'Organization not found.');
+    const canonicalOwner = orgSnap.get('ownerUid');
+    if (
+      actorSnap.get('role') !== 'owner' ||
+      (typeof canonicalOwner === 'string' && canonicalOwner && canonicalOwner !== uid)
+    ) {
+      throw new HttpsError(
+        'permission-denied',
+        'Only the organization owner can delete the organization.',
+        { reason: 'org_owner_required' },
+      );
+    }
+
+    const [events, members, transfers] = await Promise.all([
+      tx.get(db.collection('cfps').where('orgId', '==', orgId).limit(1)),
+      tx.get(db.collection(`orgs/${orgId}/members`).limit(401)),
+      tx.get(db.collection(`orgs/${orgId}/transfers`).limit(51)),
+    ]);
+    if (!events.empty) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Move or delete every event before deleting this organization.',
+        { reason: 'org_has_events' },
+      );
+    }
+    if (members.size > 400 || transfers.size > 50) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This organization is too large for self-service deletion.',
+        { reason: 'org_delete_too_large' },
+      );
+    }
+    for (const member of members.docs) tx.delete(member.ref);
+    for (const transfer of transfers.docs) tx.delete(transfer.ref);
+    tx.delete(orgRef);
+  });
+
+  logger.info('organization deleted', { orgId, byUid: uid });
+  return { ok: true };
+});
+
+export const initiateEventOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = requireVerifiedUid(request, 'transfer event ownership');
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  try {
+    const result = await initiateEventOwnershipTransferImpl(db, getAuth(), {
+      cfpId,
+      email: data.email,
+      byUid,
+    });
+    logger.info('event ownership transfer initiated', { cfpId, ...result, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const acceptEventOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const identity = requireVerifiedPlatformIdentity(request, 'accept event ownership transfer');
+  try {
+    const result = await acceptEventOwnershipTransferImpl(db, getAuth(), {
+      cfpId,
+      uid: identity.uid,
+      email: identity.email,
+    });
+    logger.info('event ownership transfer accepted', { cfpId, uid: identity.uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const cancelEventOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = requireVerifiedUid(request, 'cancel event ownership transfer');
+  try {
+    const result = await cancelEventOwnershipTransferImpl(db, {
+      cfpId,
+      byUid,
+    });
+    logger.info('event ownership transfer cancelled', { cfpId, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const getEventOwnershipTransfer = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = request.auth?.token?.email_verified === true ? request.auth.uid : '';
+  const email = request.auth?.token?.email ? String(request.auth.token.email) : undefined;
+  try {
+    const transfer = await getEventOwnershipTransferImpl(db, {
+      cfpId,
+      byUid: uid,
+      email,
+    });
+    return { ok: true, transfer };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
 });
 
 /** Trims what arrived and keeps only the shape `validateProfile` knows about. */
@@ -4247,6 +5484,15 @@ export const updateCfp = onCall(CALLABLE, async (request) => {
   const profileFault = validateProfile(profile);
   if (profileFault) throw new HttpsError('invalid-argument', profileFault);
 
+  const theme = readCfpTheme(data.theme);
+
+  const features =
+    data.features && typeof data.features === 'object' && !Array.isArray(data.features)
+      ? {
+          blindReview: (data.features as Record<string, unknown>).blindReview === true,
+        }
+      : undefined;
+
   await db.runTransaction(async (tx) => {
     const ref = db.doc(`cfps/${cfpId}`);
     await assertCfpNotArchived(tx, cfpId);
@@ -4254,6 +5500,8 @@ export const updateCfp = onCall(CALLABLE, async (request) => {
       name,
       visibility,
       ...writableProfile(profile),
+      ...(theme !== undefined ? { theme } : {}),
+      ...(features !== undefined ? { features } : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
   });
@@ -4284,7 +5532,7 @@ export const archiveCfp = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => 
         memberRef,
       );
       if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
-      assertMutationActor(member, 'owner');
+      assertMutationActor(member, 'owner', cfp);
       if (cfp.get('deleting') === true) {
         throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
       }
@@ -4306,7 +5554,7 @@ export const archiveCfp = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => 
         memberRef,
       );
       if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
-      assertMutationActor(member, 'owner');
+      assertMutationActor(member, 'owner', cfp);
       if (cfp.get('deleting') === true) {
         throw new HttpsError('failed-precondition', 'This call for proposals is being deleted.');
       }
@@ -4319,12 +5567,14 @@ export const archiveCfp = onCall(EXTERNAL_MUTATION_CALLABLE, async (request) => 
 
     if (!alreadyArchived) {
       const leaseId = await acquireCfpMutation(cfpId, 'archive', async (tx) => {
-        assertMutationActor(await tx.get(memberRef), 'owner');
+        const [member, cfp] = await tx.getAll(memberRef, cfpRef);
+        assertMutationActor(member, 'owner', cfp);
       });
       try {
         await freezeLegacyHeadshots(db, getStorage().bucket(), cfpId);
         await finishCfpMutation(cfpId, leaseId, async (tx) => {
-          assertMutationActor(await tx.get(memberRef), 'owner');
+          const [member, cfp] = await tx.getAll(memberRef, cfpRef);
+          assertMutationActor(member, 'owner', cfp);
           tx.update(cfpRef, {
             archived: true,
             archivedAt: FieldValue.serverTimestamp(),
@@ -4370,7 +5620,7 @@ export const deleteCfp = onCall(CALLABLE, async (request) => {
       db.doc(`cfps/${cfpId}/config/email`),
     );
     if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
-    assertMutationActor(member, 'owner');
+    assertMutationActor(member, 'owner', cfp);
     if (cfp.get('archived') !== true) {
       throw new HttpsError('failed-precondition', 'Archive it before deleting it.');
     }
@@ -4422,7 +5672,7 @@ export const deleteCfp = onCall(CALLABLE, async (request) => {
   await db.runTransaction(async (tx) => {
     const [cfp, owner] = await tx.getAll(cfpRef, db.doc(`cfps/${cfpId}/members/${byUid}`));
     if (!cfp.exists) throw new HttpsError('not-found', 'No such call for proposals.');
-    assertMutationActor(owner, 'owner');
+    assertMutationActor(owner, 'owner', cfp);
     if (
       cfp.get('archived') !== true ||
       cfp.get('deleting') !== true ||

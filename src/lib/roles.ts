@@ -5,8 +5,12 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit as queryLimit,
   query,
+  startAfter,
   where,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
@@ -22,7 +26,14 @@ import type {
   SpeakerPhotoQuestion,
 } from '@shared/confirmForm';
 import type { SubmissionForm } from '@shared/submissionForm';
-import type { Cfp, CfpMember, Proposal, RoleGrant } from '@shared/types';
+import type {
+  Cfp,
+  CfpFeatures,
+  CfpMember,
+  CfpTheme,
+  Proposal,
+  RoleGrant,
+} from '@shared/types';
 import type {
   PlatformAccessDirectory,
   PlatformAccessStatus,
@@ -46,14 +57,6 @@ export const listPlatformUsers = httpsCallable<
   Record<string, never>,
   { ok: boolean } & PlatformAccessDirectory
 >(functions, 'listPlatformUsers');
-export const grantCfpCreator = httpsCallable<
-  { email: string },
-  { email: string; applied: boolean }
->(functions, 'grantCfpCreator');
-export const revokeCfpCreator = httpsCallable<{ email: string }, { email: string }>(
-  functions,
-  'revokeCfpCreator',
-);
 export const grantPlatformAdmin = httpsCallable<
   { email: string },
   { email: string; applied: boolean }
@@ -62,6 +65,39 @@ export const revokePlatformAdmin = httpsCallable<{ email: string }, { email: str
   functions,
   'revokePlatformAdmin',
 );
+export const initiatePlatformOwnershipTransfer = httpsCallable<
+  { email: string },
+  { ok: boolean; transferId?: string }
+>(functions, 'initiatePlatformOwnershipTransfer');
+export const acceptPlatformOwnershipTransfer = httpsCallable<
+  Record<string, never>,
+  { ok: boolean }
+>(functions, 'acceptPlatformOwnershipTransfer');
+export const cancelPlatformOwnershipTransfer = httpsCallable<
+  Record<string, never>,
+  { ok: boolean }
+>(functions, 'cancelPlatformOwnershipTransfer');
+export const getPlatformOwnershipTransfer = httpsCallable<
+  Record<string, never>,
+  { ok: boolean; transfer: import('@shared/types').OwnershipTransfer | null }
+>(functions, 'getPlatformOwnershipTransfer');
+
+export const initiateEventOwnershipTransfer = httpsCallable<
+  In<{ email: string }>,
+  { ok: boolean; transferId?: string }
+>(functions, 'initiateEventOwnershipTransfer');
+export const acceptEventOwnershipTransfer = httpsCallable<
+  Just,
+  { ok: boolean }
+>(functions, 'acceptEventOwnershipTransfer');
+export const cancelEventOwnershipTransfer = httpsCallable<
+  Just,
+  { ok: boolean }
+>(functions, 'cancelEventOwnershipTransfer');
+export const getEventOwnershipTransfer = httpsCallable<
+  Just,
+  { ok: boolean; transfer: import('@shared/types').OwnershipTransfer | null }
+>(functions, 'getEventOwnershipTransfer');
 
 export interface PlatformEmailConfiguration {
   ok: boolean;
@@ -176,12 +212,12 @@ export const reviewCoverage = httpsCallable<Just, ReviewCoverageResult>(
 // ------------------------------------------------------------ the CFP itself
 
 export const createCfp = httpsCallable<
-  { cfpId: string; name: string; visibility: Visibility; opensAt: string; closesAt: string },
+  { cfpId: string; name: string; visibility: Visibility; opensAt: string; closesAt: string; orgId: string },
   { ok: boolean; cfpId: string }
 >(functions, 'createCfp');
 
 export const updateCfp = httpsCallable<
-  In<{ name: string; visibility: Visibility } & CfpProfile>,
+  In<{ name: string; visibility: Visibility; theme?: CfpTheme; features?: CfpFeatures } & CfpProfile>,
   { ok: boolean }
 >(functions, 'updateCfp');
 
@@ -674,15 +710,29 @@ export interface CfpProposalActivity extends CfpSummary {
  * are not filters: the `list` rule allows exactly this query, and a listing that
  * asked for anything wider would be denied outright rather than trimmed.
  */
-export async function loadPublicCfps(): Promise<CfpSummary[]> {
+export const PUBLIC_CFP_PAGE_SIZE = 12;
+export type PublicCfpCursor = QueryDocumentSnapshot<DocumentData>;
+
+export async function loadPublicCfpPage(cursor?: PublicCfpCursor): Promise<{
+  cfps: CfpSummary[];
+  cursor: PublicCfpCursor | null;
+  hasMore: boolean;
+}> {
   const snap = await getDocs(
     query(
       collection(db, 'cfps'),
       where('visibility', '==', 'public'),
       where('archived', '==', false),
+      ...(cursor ? [startAfter(cursor)] : []),
+      queryLimit(PUBLIC_CFP_PAGE_SIZE + 1),
     ),
   );
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Cfp) }));
+  const visible = snap.docs.slice(0, PUBLIC_CFP_PAGE_SIZE);
+  return {
+    cfps: visible.map((d) => ({ id: d.id, ...(d.data() as Cfp) })),
+    cursor: snap.size > PUBLIC_CFP_PAGE_SIZE ? visible.at(-1) ?? null : null,
+    hasMore: snap.size > PUBLIC_CFP_PAGE_SIZE,
+  };
 }
 
 /** The CFPs this account owns — including private and archived ones. */

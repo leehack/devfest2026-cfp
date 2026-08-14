@@ -23,6 +23,7 @@ import {
   setSubmissionFormDirect,
 } from './backend';
 import { at, check, field, fillRequired, select, signInAs, waitForSave, type Identity } from './form';
+import { switchInterfaceLanguage } from './preferences';
 
 const SPEAKER: Identity = { sub: 'speaker-sub', email: 'speaker@example.org', name: 'Sam' };
 const ADMIN: Identity = { sub: 'admin-sub', email: 'ada@example.org', name: 'Ada' };
@@ -377,7 +378,7 @@ test.describe('the admin editor', () => {
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
     await signInAs(page, ADMIN, at('/admin/submission'));
 
-    await page.getByRole('button', { name: 'Français' }).click();
+    await switchInterfaceLanguage(page, 'fr');
     const english = page.getByRole('checkbox', { name: 'Anglais', exact: true });
     await english.uncheck();
     await english.check();

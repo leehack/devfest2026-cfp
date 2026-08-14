@@ -219,12 +219,14 @@ export function reviewerProposalProjection(
   submissionFields: SubmissionField[] = [],
   participants: ReadonlyMap<string, ReviewerParticipantSource> = new Map(),
   submissionForm: SubmissionForm = DEFAULT_SUBMISSION_FORM,
+  blindReview = false,
 ): Record<string, unknown> & { id: string } {
   const projected: Record<string, unknown> & { id: string } = { id };
   for (const field of REVIEWER_PROPOSAL_FIELDS) {
     if (
       field !== 'submittedAt' &&
       field !== 'answers' &&
+      field !== 'speakerSnapshot' &&
       Object.prototype.hasOwnProperty.call(source, field)
     ) {
       projected[field] = source[field];
@@ -232,12 +234,14 @@ export function reviewerProposalProjection(
   }
   const submittedAt = epochMillis(source.submittedAt);
   if (submittedAt !== null) projected.submittedAt = submittedAt;
-  projected.speakerSnapshot = Array.isArray(source.speakerSnapshot)
-    ? source.speakerSnapshot.flatMap((speaker) => speakerFrom(speaker) ?? [])
-    : [];
+  projected.speakerSnapshot = blindReview
+    ? []
+    : Array.isArray(source.speakerSnapshot)
+      ? source.speakerSnapshot.flatMap((speaker) => speakerFrom(speaker) ?? [])
+      : [];
   const answers = answersFrom(source.answers, submissionFields);
   if (answers) projected.answers = answers;
-  const speakerTravel = speakerTravelFrom(source, participants, submissionForm);
+  const speakerTravel = blindReview ? [] : speakerTravelFrom(source, participants, submissionForm);
   if (speakerTravel.length > 0) projected.speakerTravel = speakerTravel;
   const aggregate = includeAggregate ? aggregateFrom(source.aggregate) : null;
   if (aggregate) projected.aggregate = aggregate;

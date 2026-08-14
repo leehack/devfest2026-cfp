@@ -11,6 +11,7 @@ import {
   seedSpeaker,
 } from './backend';
 import { at, signInAs, waitForAppHydration, type Identity } from './form';
+import { preferencesTrigger, switchInterfaceLanguage } from './preferences';
 
 const ADMIN: Identity = {
   sub: 'schedule-ux-admin',
@@ -1065,8 +1066,8 @@ test('custom speaker rows stay aligned and contained across desktop, tablet, mob
   for (const scenario of scenarios) {
     await page.setViewportSize({ width: scenario.width, height: scenario.height });
     if (scenario.locale !== locale) {
-      await page.getByRole('button', { name: 'Français', exact: true }).click();
-      await expect(page.getByRole('button', { name: 'English', exact: true })).toBeVisible();
+      await switchInterfaceLanguage(page, 'fr');
+      await expect(preferencesTrigger(page, 'fr')).toBeVisible();
       locale = 'fr';
     }
 

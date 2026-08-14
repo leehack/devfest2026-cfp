@@ -36,6 +36,7 @@ import {
   waitForEmail,
 } from './backend';
 import { at, signInAs } from './form';
+import { switchInterfaceLanguage } from './preferences';
 
 const admin = { sub: 'email-admin', email: 'chair@devfest.test', name: 'Chair' };
 const speaker = { sub: 'email-speaker', email: 'ada@example.test', name: 'Ada Lovelace' };
@@ -1463,7 +1464,7 @@ test.describe('email pipeline', () => {
     await subject.fill('A bilingual-safe draft for {event}');
     await body.fill('This sentence must survive the interface language switch.');
 
-    await page.getByRole('button', { name: 'Français' }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(subject).toHaveValue('A bilingual-safe draft for {event}');
     await expect(body).toHaveValue('This sentence must survive the interface language switch.');
     await expect(page.locator('.email-editor').getByLabel('Langue')).toHaveValue('en');
@@ -1806,7 +1807,7 @@ test.describe('a message to one speaker', () => {
     await signInAs(page, admin, at('/admin/committee'));
     // Finish the role and committee reads before isolating the composer's
     // proposal query; otherwise the outage would stop the admin page itself.
-    await expect(page.getByRole('combobox', { name: `Role for ${admin.name}` })).toBeVisible();
+    await expect(page.locator('.people__row', { hasText: admin.name })).toBeVisible();
     let unavailable = true;
     await page.route('http://127.0.0.1:8080/**', (route) => {
       const proposalQuery = (route.request().postData() ?? '').includes(

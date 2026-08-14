@@ -1,4 +1,6 @@
-export const PLATFORM_ROLES = ['owner', 'admin', 'creator'] as const;
+import type { OwnershipTransfer } from './types';
+
+export const PLATFORM_ROLES = ['owner', 'admin'] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
 export interface PlatformMember {
@@ -24,12 +26,13 @@ export interface PlatformRoleGrant {
 
 export interface PlatformAccessStatus {
   role: PlatformRole | null;
-  canCreateCfp: boolean;
   isPlatformAdmin: boolean;
   isPlatformOwner: boolean;
+  pendingTransfer?: OwnershipTransfer | null;
 }
 
 export interface PlatformAccessDirectory {
   members: PlatformMember[];
   pending: PlatformRoleGrant[];
+  pendingTransfer?: OwnershipTransfer | null;
 }

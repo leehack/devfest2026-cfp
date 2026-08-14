@@ -3,11 +3,20 @@ import type { User } from 'firebase/auth';
 
 import { SelectField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
-import { adminError, roleAdminError } from '../../lib/errors';
-import { grantRole, loadCommittee, revokeRole, type Person } from '../../lib/roles';
+import { adminError, roleAdminError, transferError } from '../../lib/errors';
+import {
+  acceptEventOwnershipTransfer,
+  cancelEventOwnershipTransfer,
+  getEventOwnershipTransfer,
+  grantRole,
+  initiateEventOwnershipTransfer,
+  loadCommittee,
+  revokeRole,
+  type Person,
+} from '../../lib/roles';
 import { useLatest } from '../../lib/useLatest';
 import { GRANTABLE_ROLES, type GrantableRole } from '@shared/cfp';
-import type { RoleGrant } from '@shared/types';
+import type { OwnershipTransfer, RoleGrant } from '@shared/types';
 import { Result } from './Result';
 
 /**
@@ -22,11 +31,13 @@ function RoleSelect({
   value,
   onChange,
   disabled,
+  options = GRANTABLE_ROLES,
 }: {
   who: string;
   value: GrantableRole;
   onChange: (next: GrantableRole) => void;
   disabled: boolean;
+  options?: readonly GrantableRole[];
 }) {
   const { t } = useI18n();
   return (
@@ -37,7 +48,7 @@ function RoleSelect({
       disabled={disabled}
       onChange={(e) => onChange(e.target.value as GrantableRole)}
     >
-      {GRANTABLE_ROLES.map((r) => (
+      {options.map((r) => (
         <option key={r} value={r}>
           {t.enums.role[r]}
         </option>
@@ -59,11 +70,14 @@ export function Committee({
   const tRef = useLatest(t);
   const [people, setPeople] = useState<Person[]>([]);
   const [pending, setPending] = useState<RoleGrant[]>([]);
+  const [pendingTransfer, setPendingTransfer] = useState<OwnershipTransfer | null>(null);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<GrantableRole>('reviewer');
+  const [transferEmail, setTransferEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [transferring, setTransferring] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [loadedCfp, setLoadedCfp] = useState('');
@@ -71,16 +85,27 @@ export function Committee({
   const generation = useRef(0);
   activeCfp.current = cfpId;
 
+  const isOwner = people.some((p) => p.uid === user.uid && p.role === 'owner');
+  const isTransferTarget =
+    pendingTransfer &&
+    ((user.email &&
+      pendingTransfer.targetEmail.toLowerCase() === user.email.toLowerCase()) ||
+      pendingTransfer.targetUid === user.uid);
+
   const refresh = useCallback(async (reportError = true) => {
     const scope = cfpId;
     const request = ++generation.current;
     const current = () =>
       activeCfp.current === scope && generation.current === request;
     try {
-      const committee = await loadCommittee(cfpId);
+      const [committee, transferRes] = await Promise.all([
+        loadCommittee(cfpId),
+        getEventOwnershipTransfer({ cfpId }).catch(() => ({ data: { ok: true, transfer: null } })),
+      ]);
       if (!current()) return false;
       setPeople(committee.people);
       setPending(committee.pending);
+      setPendingTransfer(transferRes.data.transfer ?? null);
       setLoadedCfp(scope);
       setLoadFailed(false);
       if (reportError) setError('');
@@ -114,11 +139,14 @@ export function Committee({
     generation.current += 1;
     setPeople([]);
     setPending([]);
+    setPendingTransfer(null);
     setEmail('');
+    setTransferEmail('');
     setRole('reviewer');
     setLoadedCfp('');
     setLoadFailed(false);
     setBusy(false);
+    setTransferring(false);
     setNote('');
     setError('');
     void reload();
@@ -180,7 +208,7 @@ export function Committee({
   }
 
   async function remove(target: string) {
-    if (busy) return;
+    if (busy || readOnly) return;
     if (!window.confirm(t.admin.revokeConfirm(target))) return;
     const scope = cfpId;
     setBusy(true);
@@ -198,8 +226,74 @@ export function Committee({
     }
   }
 
+  async function initiateTransfer() {
+    const target = transferEmail.trim();
+    if (!window.confirm(t.transfer.confirmPrompt)) return;
+    setTransferring(true);
+    setNote('');
+    setError('');
+    try {
+      await initiateEventOwnershipTransfer({ cfpId, email: target });
+      setNote(tRef.current.transfer.pendingBanner(target));
+      setTransferEmail('');
+      await refresh(false);
+    } catch (e) {
+      setError(transferError(e, tRef.current));
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  async function cancelTransfer() {
+    setTransferring(true);
+    setNote('');
+    setError('');
+    try {
+      await cancelEventOwnershipTransfer({ cfpId });
+      setNote(tRef.current.transfer.cancelled);
+      await refresh(false);
+    } catch (e) {
+      setError(transferError(e, tRef.current));
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  async function acceptTransfer() {
+    setTransferring(true);
+    setNote('');
+    setError('');
+    try {
+      await acceptEventOwnershipTransfer({ cfpId });
+      setNote(tRef.current.transfer.transferred);
+      await refresh(false);
+    } catch (e) {
+      setError(transferError(e, tRef.current));
+    } finally {
+      setTransferring(false);
+    }
+  }
+
   return (
     <section className="section">
+      {isTransferTarget && (
+        <section
+          className="section section--highlight"
+          style={{ marginBottom: '1.5rem', padding: '1.5rem', border: '1.5px solid var(--accent)' }}
+        >
+          <h3>{t.transfer.acceptTitle}</h3>
+          <p>{t.transfer.acceptBanner(t.enums.role.owner)}</p>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={transferring}
+            onClick={() => void acceptTransfer()}
+          >
+            {transferring ? t.transfer.accepting : t.transfer.acceptButton}
+          </button>
+        </section>
+      )}
+
       <h2>{t.admin.people}</h2>
       <p className="section__help">{t.admin.peopleHelp}</p>
 
@@ -214,60 +308,115 @@ export function Committee({
         <p className="muted">{t.admin.noPeople}</p>
       ) : (
         <ul className="people">
-          {people.map((person) => (
-            <li key={person.uid} className="people__row">
-              <span>
-                <strong>{person.name ?? person.email}</strong>
-                {person.uid === user.uid && <span className="people__meta">{t.admin.isYou}</span>}
-              </span>
-              {/* The owner's row is read-only, because the server refuses both
-                  controls on it — showing them would only offer two errors. */}
-              {person.role === 'owner' ? (
-                <span className="people__meta people__meta--plain">{t.enums.role.owner}</span>
-              ) : (
-                <span className="people__actions">
-                  <RoleSelect
-                    who={person.name ?? person.email}
-                    value={person.role}
-                    onChange={(next) => changeRole(person.email, next)}
-                    disabled={busy || readOnly}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn--ghost"
-                    disabled={busy}
-                    onClick={() => remove(person.email)}
-                  >
-                    {t.admin.revoke}
-                  </button>
+          {people.map((person) => {
+            const isSelf = person.uid === user.uid;
+            const canEditPerson = isOwner && person.role !== 'owner';
+            const canAdminEditPerson = !isOwner && person.role === 'reviewer';
+            return (
+              <li key={person.uid} className="people__row">
+                <span>
+                  <strong>{person.name ?? person.email}</strong>
+                  {isSelf && <span className="people__meta">{t.admin.isYou}</span>}
                 </span>
-              )}
-            </li>
-          ))}
-          {pending.map((grant) => (
-            <li key={grant.email} className="people__row">
-              <span>
-                <strong>{grant.email}</strong>
-                <span className="people__meta">{t.admin.awaitingSignIn}</span>
-              </span>
-              <span className="people__actions">
-                <RoleSelect
-                  who={grant.email}
-                  value={grant.role}
-                  onChange={(next) => changeRole(grant.email, next)}
-                  disabled={busy || readOnly}
-                />
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  disabled={busy}
-                  onClick={() => remove(grant.email)}
-                >
-                  {t.admin.revoke}
-                </button>
-              </span>
-            </li>
-          ))}
+                {person.role === 'owner' ? (
+                  <span className="people__meta people__meta--plain">{t.enums.role.owner}</span>
+                ) : canEditPerson ? (
+                  <span className="people__actions">
+                    <RoleSelect
+                      who={person.name ?? person.email}
+                      value={person.role}
+                      options={GRANTABLE_ROLES}
+                      onChange={(next) => changeRole(person.email, next)}
+                      disabled={busy || readOnly}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      disabled={busy || readOnly}
+                      onClick={() => remove(person.email)}
+                    >
+                      {t.admin.revoke}
+                    </button>
+                  </span>
+                ) : canAdminEditPerson ? (
+                  <span className="people__actions">
+                    <RoleSelect
+                      who={person.name ?? person.email}
+                      value={person.role}
+                      options={['reviewer']}
+                      onChange={(next) => changeRole(person.email, next)}
+                      disabled={busy || readOnly}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      disabled={busy || readOnly}
+                      onClick={() => remove(person.email)}
+                    >
+                      {t.admin.revoke}
+                    </button>
+                  </span>
+                ) : (
+                  <span className="people__meta people__meta--plain">
+                    {t.enums.role[person.role] ?? person.role}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+          {pending.map((grant) => {
+            const canEditGrant = isOwner;
+            const canAdminEditGrant = !isOwner && grant.role === 'reviewer';
+            return (
+              <li key={grant.email} className="people__row">
+                <span>
+                  <strong>{grant.email}</strong>
+                  <span className="people__meta">{t.admin.awaitingSignIn}</span>
+                </span>
+                {canEditGrant ? (
+                  <span className="people__actions">
+                    <RoleSelect
+                      who={grant.email}
+                      value={grant.role}
+                      options={GRANTABLE_ROLES}
+                      onChange={(next) => changeRole(grant.email, next)}
+                      disabled={busy || readOnly}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      disabled={busy || readOnly}
+                      onClick={() => remove(grant.email)}
+                    >
+                      {t.admin.revoke}
+                    </button>
+                  </span>
+                ) : canAdminEditGrant ? (
+                  <span className="people__actions">
+                    <RoleSelect
+                      who={grant.email}
+                      value={grant.role}
+                      options={['reviewer']}
+                      onChange={(next) => changeRole(grant.email, next)}
+                      disabled={busy || readOnly}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      disabled={busy || readOnly}
+                      onClick={() => remove(grant.email)}
+                    >
+                      {t.admin.revoke}
+                    </button>
+                  </span>
+                ) : (
+                  <span className="people__meta people__meta--plain">
+                    {t.enums.role[grant.role] ?? grant.role}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -283,7 +432,11 @@ export function Committee({
         <SelectField
           label={t.admin.roleLabel}
           value={role}
-          options={GRANTABLE_ROLES.map((r) => ({ value: r, label: t.enums.role[r] }))}
+          options={
+            isOwner
+              ? GRANTABLE_ROLES.map((r) => ({ value: r, label: t.enums.role[r] }))
+              : [{ value: 'reviewer', label: t.enums.role.reviewer }]
+          }
           onChange={setRole}
           required
           disabled={busy || loadFailed || readOnly}
@@ -297,6 +450,50 @@ export function Committee({
       >
         {busy ? t.admin.inviting : t.admin.invite}
       </button>
+
+      {isOwner && (
+        <section style={{ marginTop: '2.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+          <h3>{t.transfer.title}</h3>
+          <p className="section__help">
+            {t.transfer.initiateHelp.replace('{scope}', t.admin.ownershipScope)}
+          </p>
+          {pendingTransfer ? (
+            <div>
+              <p><strong>{t.transfer.pendingBanner(pendingTransfer.targetEmail)}</strong></p>
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={transferring || readOnly}
+                onClick={() => void cancelTransfer()}
+              >
+                {transferring ? t.transfer.cancelling : t.transfer.cancelButton}
+              </button>
+            </div>
+          ) : (
+            <div style={{ maxWidth: '30rem' }}>
+              <div style={{ marginBottom: '1rem' }}>
+                <TextField
+                  label={t.transfer.emailLabel}
+                  help={t.transfer.emailHelp}
+                  type="email"
+                  value={transferEmail}
+                  onChange={setTransferEmail}
+                  required
+                  disabled={transferring || readOnly}
+                />
+              </div>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={transferring || readOnly || !transferEmail.trim()}
+                onClick={() => void initiateTransfer()}
+              >
+                {transferring ? t.transfer.initiating : t.transfer.initiateButton}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
       <Result ok={note} error={error} />
     </section>

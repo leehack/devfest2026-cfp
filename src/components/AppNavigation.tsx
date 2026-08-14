@@ -9,7 +9,12 @@ type EventRoute = Extract<Route, 'cfp' | 'form' | 'schedule' | 'review' | 'admin
 function taskLabel(place: Place, t: Dictionary): string {
   if (place.route === 'new') return t.platform.createTitle;
   if (place.route === 'platform') return t.platformAdmin.title;
+  if (place.route === 'platformAccess') return t.platformAdmin.accessTitle;
+  if (place.route === 'platformLimits') return t.platformAdmin.limitsTitle;
+  if (place.route === 'platformEmail') return t.platformAdmin.emailDefaultsTitle;
   if (place.route === 'me') return t.profile.title;
+  if (place.route === 'orgs') return t.orgs.title;
+  if (place.route === 'org') return t.orgs.workspaceTitle;
   if (place.route === 'cfp') return t.nav.cfp;
   if (place.route === 'form') return t.nav.form;
   if (place.route === 'schedule' || place.route === 'session') return t.nav.schedule;
@@ -54,6 +59,10 @@ export function AppBreadcrumb({
   if (place.route === 'home') return null;
 
   const insideCfp = Boolean(place.cfpId && cfpName);
+  const insidePlatformSection =
+    place.route === 'platformAccess' ||
+    place.route === 'platformLimits' ||
+    place.route === 'platformEmail';
   return (
     <nav className="breadcrumb" aria-label={t.nav.breadcrumb}>
       <ol className="breadcrumb__list">
@@ -63,6 +72,16 @@ export function AppBreadcrumb({
         {insideCfp && place.route !== 'cfp' && (
           <li>
             <Link to={href({ route: 'cfp', cfpId: place.cfpId! })}>{cfpName}</Link>
+          </li>
+        )}
+        {insidePlatformSection && (
+          <li>
+            <Link to={href({ route: 'platform' })}>{t.platformAdmin.title}</Link>
+          </li>
+        )}
+        {place.route === 'org' && (
+          <li>
+            <Link to="/orgs">{t.orgs.title}</Link>
           </li>
         )}
         {insideCfp && canAccessAdmin && place.route === 'admin' && place.tab !== 'overview' && (

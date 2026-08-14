@@ -135,6 +135,11 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // Ownership transfers are strictly managed via callables.
+      match /transfers/{transferId} {
+        allow read, write: if false;
+      }
+
       // ------------------------------------------------------------- config
 
       // `confirmForm` is the set of questions an accepted speaker is about to
@@ -481,6 +486,32 @@ service cloud.firestore {
 
     match /platformRoleGrants/{email} {
       allow read, write: if false;
+    }
+
+    // Per-account organization ownership overrides are also callable-only.
+    // The admin page projects only organization owners and explicit overrides.
+    match /platformUserLimits/{memberUid} {
+      allow read, write: if false;
+    }
+
+    // --------------------------------------------------------- organizations
+
+    match /orgs/{orgId} {
+      // Organizations and their address-bearing team directory are projected
+      // by callables; no browser query can enumerate another tenant's people.
+      allow read, write: if false;
+
+      match /members/{memberUid} {
+        allow read, write: if false;
+      }
+
+      match /roleGrants/{email} {
+        allow read, write: if false;
+      }
+
+      match /transfers/{transferId} {
+        allow read, write: if false;
+      }
     }
 
     // Platform-wide ownership of a Resend domain. Event callables expose only

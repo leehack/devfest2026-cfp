@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readProposal, reset, setCfpWindow } from './backend';
 import { COMPLETE, field, fillRequired, signIn, waitForSave, alerts } from './form';
+import { switchInterfaceLanguage } from './preferences';
 
 test.beforeEach(async () => {
   await reset();
@@ -31,7 +32,7 @@ test.describe('validation', () => {
     await page.getByRole('button', { name: 'Submit proposal' }).click();
     await expect(page.getByText('This one is required.').first()).toBeVisible();
 
-    await page.getByRole('button', { name: 'Français' }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(page.getByText('Ce champ est obligatoire.').first()).toBeVisible();
     await expect(page.getByText('This one is required.')).toHaveCount(0);
   });

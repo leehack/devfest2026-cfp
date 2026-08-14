@@ -10,6 +10,7 @@ import {
   seedSpeaker,
 } from './backend';
 import { at, signInAs, type Identity } from './form';
+import { switchInterfaceLanguage } from './preferences';
 
 const ADMIN: Identity = {
   sub: 'schedule-metadata-admin',
@@ -492,7 +493,7 @@ test('the selected-session inspector stays aligned and complete from desktop thr
   await expect(picker.locator('option:checked')).toContainText(TALK_TITLE);
 
   await page.setViewportSize({ width: 390, height: 900 });
-  await page.getByRole('button', { name: 'Français', exact: true }).click();
+  await switchInterfaceLanguage(page, 'fr');
   await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
   const frenchInspector = page.locator('.schedule-resize-inspector');
   const frenchField = frenchInspector.locator('.schedule-resize-inspector__field');
@@ -603,7 +604,7 @@ test('the public agenda and detail expose frozen taxonomy and full speaker detai
     detail.getByText('Frozen biography for the published programme.', { exact: true }),
   ).toBeVisible();
 
-  await page.getByRole('button', { name: 'Français', exact: true }).click();
+  await switchInterfaceLanguage(page, 'fr');
   await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
   detail = page.getByRole('article');
   facts = detail.locator('dl.session-detail__facts');

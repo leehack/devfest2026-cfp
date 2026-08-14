@@ -13,6 +13,8 @@ import {
   applySessionizeProfile,
   applySessionizeSession,
   emptyForm,
+  fromDocuments,
+  toDocuments,
   type FormState,
 } from '../src/lib/formState';
 
@@ -40,6 +42,29 @@ const session = (over: Partial<SessionizeSession> = {}): SessionizeSession => ({
 });
 
 const form = (over: Partial<FormState> = {}): FormState => ({ ...emptyForm, ...over });
+
+describe('stored social links', () => {
+  it('rehydrates legacy name/value rows without crashing the form', () => {
+    expect(
+      fromDocuments(undefined, {
+        socials: [
+          { name: 'GitHub', value: 'https://github.com/legacy-speaker' },
+          { name: 'LinkedIn', value: 'https://linkedin.com/in/legacy-speaker' },
+        ],
+      }).socials,
+    ).toEqual([
+      { platform: 'github', handle: 'https://github.com/legacy-speaker' },
+      { platform: 'linkedin', handle: 'https://linkedin.com/in/legacy-speaker' },
+    ]);
+  });
+
+  it('ignores malformed rows at the write boundary', () => {
+    const malformed = form({
+      socials: [{ platform: 'github' } as FormState['socials'][number]],
+    });
+    expect(toDocuments(malformed).speakerDoc.socials).toEqual([]);
+  });
+});
 
 describe('filling blank fields', () => {
   it('fills everything on an empty form', () => {

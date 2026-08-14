@@ -39,6 +39,9 @@ export function Settings({
   const [venue, setVenue] = useState('');
   const [place, setPlace] = useState('');
   const [website, setWebsite] = useState('');
+  const [primaryColor, setPrimaryColor] = useState('');
+  const [accentColor, setAccentColor] = useState('');
+  const [blindReview, setBlindReview] = useState(false);
   const [archived, setArchived] = useState(false);
   const [opensAt, setOpensAt] = useState('');
   const [closesAt, setClosesAt] = useState('');
@@ -73,6 +76,9 @@ export function Settings({
     venue,
     place,
     website,
+    primaryColor,
+    accentColor,
+    blindReview,
   ]);
   const windowState = JSON.stringify([opensAt, closesAt, paused, reviewsVisible]);
   const dirty =
@@ -114,6 +120,9 @@ export function Settings({
       const nextVenue = cfp.venue ?? '';
       const nextPlace = cfp.location ?? '';
       const nextWebsite = cfp.website ?? '';
+      const nextPrimaryColor = cfp.theme?.primaryColor ?? '';
+      const nextAccentColor = cfp.theme?.accentColor ?? '';
+      const nextBlindReview = cfp.features?.blindReview === true;
       const nextOpensAt = toZonedDateTimeInput(toDate(cfp.opensAt), nextEventTimeZone);
       const nextClosesAt = toZonedDateTimeInput(toDate(cfp.closesAt), nextEventTimeZone);
 
@@ -128,6 +137,9 @@ export function Settings({
       setVenue(nextVenue);
       setPlace(nextPlace);
       setWebsite(nextWebsite);
+      setPrimaryColor(nextPrimaryColor);
+      setAccentColor(nextAccentColor);
+      setBlindReview(nextBlindReview);
       setArchived(cfp.archived === true);
       setOpensAt(nextOpensAt);
       setClosesAt(nextClosesAt);
@@ -146,6 +158,9 @@ export function Settings({
           nextVenue,
           nextPlace,
           nextWebsite,
+          nextPrimaryColor,
+          nextAccentColor,
+          nextBlindReview,
         ]),
       );
       setWindowBaseline(
@@ -251,6 +266,13 @@ export function Settings({
           venue: next.venue,
           location: next.place,
           website: next.website,
+          theme: {
+            ...(primaryColor.trim() ? { primaryColor: primaryColor.trim() } : {}),
+            ...(accentColor.trim() ? { accentColor: accentColor.trim() } : {}),
+          },
+          features: {
+            blindReview,
+          },
         })),
       t.admin.identitySaved,
       () => {
@@ -289,6 +311,9 @@ export function Settings({
         setVenue(next.venue);
         setPlace(next.place);
         setWebsite(next.website);
+        setPrimaryColor(primaryColor);
+        setAccentColor(accentColor);
+        setBlindReview(blindReview);
         setIdentityBaseline(
           JSON.stringify([
             next.name,
@@ -301,6 +326,9 @@ export function Settings({
             next.venue,
             next.place,
             next.website,
+            primaryColor,
+            accentColor,
+            blindReview,
           ]),
         );
       },
@@ -483,6 +511,36 @@ export function Settings({
             value={place}
             onChange={setPlace}
             maxLength={CFP_LIMITS.locationMax}
+            disabled={busy || archived}
+          />
+        </div>
+
+        <h3 className="card__subtitle">{t.admin.themeTitle}</h3>
+        <p className="field__help">{t.admin.themeHelp}</p>
+
+        <Checkbox
+          label={t.admin.blindReview}
+          help={t.admin.blindReviewHelp}
+          checked={blindReview}
+          onChange={setBlindReview}
+          disabled={busy || archived}
+        />
+
+        <div className="grid grid--2 grid--align-controls">
+          <TextField
+            label={t.admin.primaryColor}
+            value={primaryColor}
+            onChange={setPrimaryColor}
+            placeholder="#1a73e8"
+            maxLength={7}
+            disabled={busy || archived}
+          />
+          <TextField
+            label={t.admin.accentColor}
+            value={accentColor}
+            onChange={setAccentColor}
+            placeholder="#1769d2"
+            maxLength={7}
             disabled={busy || archived}
           />
         </div>

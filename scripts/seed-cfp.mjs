@@ -257,7 +257,7 @@ await db.doc(`cfps/${id}`).set(
     paused: false,
     // Reviewers cannot see each other's scores until this flips (§7, anchoring).
     reviewsVisible: false,
-    ...(ownerUid ? { ownerUids: FieldValue.arrayUnion(ownerUid) } : {}),
+    ...(ownerUid ? { ownerUid, ownerUids: FieldValue.arrayUnion(ownerUid) } : {}),
     createdBy: ownerUid ?? 'script',
     updatedAt: FieldValue.serverTimestamp(),
   },

@@ -66,6 +66,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [mine, setMine] = useState<Map<string, Review>>(new Map());
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
+  const [blindReview, setBlindReview] = useState(false);
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [index, setIndex] = useState(0);
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
@@ -146,6 +147,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setMine(reviews);
       setDrafts(loadedDrafts);
       setReviewsVisible(visible);
+      setBlindReview(Boolean(cfp?.features?.blindReview));
       setIntakeOpen(open);
       setShape(form);
       setIndex(0);
@@ -427,13 +429,20 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       )}
 
       <div className="deck__bar">
-        <p className="deck__progress">
-          <strong>{t.review.position(displayIndex + 1, filteredOrder.length)}</strong>
-          <span className="muted">
-            {' '}
-            · {t.review.progress(filteredHandled, filteredOrder.length)}
-          </span>
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <p className="deck__progress" style={{ margin: 0 }}>
+            <strong>{t.review.position(displayIndex + 1, filteredOrder.length)}</strong>
+            <span className="muted">
+              {' '}
+              · {t.review.progress(filteredHandled, filteredOrder.length)}
+            </span>
+          </p>
+          {blindReview && (
+            <span className="blind-review-badge">
+              🛡️ {t.review.blindReviewActive}
+            </span>
+          )}
+        </div>
         <div className="deck__nav">
           <button
             type="button"
@@ -808,24 +817,6 @@ function ReviewCard({
         </ol>
       </aside>
 
-      <p className="scores__label" id={`score-${proposal.id}`}>
-        {t.review.scoreLabel}
-      </p>
-      <div className="scores" role="group" aria-labelledby={`score-${proposal.id}`}>
-        {SCORES.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className={`btn score${draft.score === s ? ' score--on' : ''}`}
-            aria-pressed={draft.score === s}
-            disabled={saving || draft.conflictOfInterest}
-            onClick={() => onScore(s)}
-          >
-            {t.review.scores[s]}
-          </button>
-        ))}
-      </div>
-
       <Checkbox
         label={t.review.conflict}
         help={t.review.conflictHelp}
@@ -847,6 +838,25 @@ function ReviewCard({
         rows={3}
         disabled={saving}
       />
+
+      <p className="scores__label" id={`score-${proposal.id}`}>
+        {t.review.scoreLabel}
+      </p>
+      <p className="muted">{t.review.scoreHelp}</p>
+      <div className="scores" role="group" aria-labelledby={`score-${proposal.id}`}>
+        {SCORES.map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={`btn score${draft.score === s ? ' score--on' : ''}`}
+            aria-pressed={draft.score === s}
+            disabled={saving || draft.conflictOfInterest}
+            onClick={() => onScore(s)}
+          >
+            {t.review.scores[s]}
+          </button>
+        ))}
+      </div>
 
       <div className="card__actions">
         <button

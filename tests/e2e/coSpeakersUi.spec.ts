@@ -14,6 +14,7 @@ import {
   waitForEmail,
 } from './backend';
 import { at, field, signInAs } from './form';
+import { switchInterfaceLanguage } from './preferences';
 
 const LEAD = { sub: 'ui-lead', email: 'lead-ui@example.org', name: 'Taylor Lead' };
 const GUEST = { sub: 'ui-guest', email: 'guest-ui@example.org', name: 'Morgan Guest' };
@@ -103,7 +104,7 @@ test.describe('co-speaker UI', () => {
     await expect(invitation).not.toContainText(LEAD.name);
     await expectContainedOnMobile(page, invitation);
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
     await expect(
       page.getByRole('heading', { name: 'Cette invitation appartient à un autre compte' }),
@@ -152,12 +153,12 @@ test.describe('co-speaker UI', () => {
     ).toBeVisible();
     await expectContainedOnMobile(page, invitation);
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(invitation).toContainText('IA et apprentissage automatique');
     await expect(invitation).toContainText('Session — 40 minutes');
     await expect(invitation).toContainText('Intermédiaire');
     await expect(invitation).toContainText('Anglais');
-    await page.getByRole('button', { name: 'English', exact: true }).click();
+    await switchInterfaceLanguage(page, 'en');
     await page.getByRole('button', { name: 'Save profile and join' }).click();
 
     const talkHeading = page.getByRole('heading', { name: 'Your talk' });
@@ -236,7 +237,7 @@ test.describe('co-speaker UI', () => {
     expect((await inviteEmail.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     await expectContainedOnMobile(page, roster);
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(page.locator('html')).toHaveAttribute('lang', 'fr');
     await expect(page.getByText('Invitation en attente', { exact: true })).toHaveCount(2);
     await expect(
@@ -264,14 +265,14 @@ test.describe('co-speaker UI', () => {
     });
     await expect(retry).toBeVisible();
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(row.getByText('Courriel non livré', { exact: true })).toBeVisible();
     await expect(
       row.getByRole('button', {
         name: `Réessayer l’envoi de l’invitation à ${GUEST.email}`,
       }),
     ).toBeVisible();
-    await page.getByRole('button', { name: 'English', exact: true }).click();
+    await switchInterfaceLanguage(page, 'en');
     await retry.click();
 
     await expect(
@@ -561,7 +562,7 @@ test.describe('co-speaker UI', () => {
     await expect(dialog).toBeHidden();
     await expect(manage).toBeFocused();
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     const manageFr = page.getByRole('button', {
       name: /Ouvrir la liste des conférenciers pour/,
     }).first();

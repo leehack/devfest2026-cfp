@@ -24,6 +24,7 @@ import {
   setSubmissionFormDirect,
 } from './backend';
 import { alerts, at, signInAs, type Identity } from './form';
+import { switchInterfaceLanguage } from './preferences';
 
 const REVIEWER: Identity = { sub: 'deck-reviewer', email: 'rey@example.org', name: 'Rey' };
 const SPEAKER: Identity = { sub: 'deck-speaker', email: 'sam@example.org', name: 'Sam' };
@@ -182,7 +183,7 @@ test.describe('the review deck', () => {
       await expect(page.getByText(privateValue, { exact: false })).toHaveCount(0);
     }
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(
       page.getByRole('heading', {
         name: 'Renseignements supplémentaires sur la conférence',
@@ -265,7 +266,7 @@ test.describe('the review deck', () => {
     await expect(page.getByText('French preferred')).toBeVisible();
     await expect(page.getByText('Submitted')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(heading(page, 'Détails de la soumission')).toBeVisible();
     await expect(heading(page, 'Venir sur place')).toHaveCount(0);
     await expect(page.getByText('Préférence de langue')).toBeVisible();
@@ -610,7 +611,7 @@ test.describe('the review deck', () => {
     }
     await expect(page.getByText('French if the room is up for it.')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Français', exact: true }).click();
+    await switchInterfaceLanguage(page, 'fr');
     await expect(
       page.getByRole('region', { name: 'Venir à Montréal — Sam Lead' }),
     ).toBeVisible();

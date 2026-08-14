@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ADMIN_TABS, isAdminTab, type AdminTab } from './adminTabs';
 import { paths } from './paths';
 import { validateCfpId } from '@shared/cfp';
+import { validateOrgSlug } from '@shared/org';
 
 // Re-exported so the 20-odd existing importers do not all have to move at once.
 export { ADMIN_TABS };
@@ -28,7 +29,12 @@ export type Route =
   | 'home'
   | 'new'
   | 'platform'
+  | 'platformAccess'
+  | 'platformLimits'
+  | 'platformEmail'
   | 'me'
+  | 'orgs'
+  | 'org'
   | 'cfp'
   | 'form'
   | 'admin'
@@ -45,12 +51,13 @@ export interface Place {
    * the ordinary case, not an edge one.
    */
   cfpId: string | null;
+  orgId?: string | null;
   /** Only meaningful on `admin`; the first tab is the default. */
   tab: AdminTab;
   entryId?: string | null;
 }
 
-const HOME: Place = { route: 'home', cfpId: null, tab: ADMIN_TABS[0], entryId: null };
+const HOME: Place = { route: 'home', cfpId: null, orgId: null, tab: ADMIN_TABS[0], entryId: null };
 
 /**
  * Anything unrecognised reads as home rather than as a blank screen, because a
@@ -61,7 +68,18 @@ export function placeOf(path: string): Place {
   if (!trimmed) return HOME;
   if (trimmed === 'new') return { ...HOME, route: 'new' };
   if (trimmed === 'platform') return { ...HOME, route: 'platform' };
+  if (trimmed === 'platform/access') return { ...HOME, route: 'platformAccess' };
+  if (trimmed === 'platform/limits') return { ...HOME, route: 'platformLimits' };
+  if (trimmed === 'platform/email') return { ...HOME, route: 'platformEmail' };
   if (trimmed === 'me') return { ...HOME, route: 'me' };
+  if (trimmed === 'orgs') return { ...HOME, route: 'orgs' };
+
+  if (trimmed.startsWith('orgs/')) {
+    const [, orgId = ''] = trimmed.split('/');
+    if (validateOrgSlug(orgId) === null) {
+      return { ...HOME, route: 'org', orgId };
+    }
+  }
 
   const [prefix, cfpId = '', section = '', detail = ''] = trimmed.split('/');
   if (prefix !== 'c' || validateCfpId(cfpId) !== null) return HOME;
@@ -83,6 +101,7 @@ export function placeOf(path: string): Place {
   return {
     route,
     cfpId,
+    orgId: null,
     tab: section === 'admin' && isAdminTab(detail) ? detail : ADMIN_TABS[0],
     entryId: route === 'session' ? decodeURIComponent(detail) : null,
   };
@@ -102,13 +121,19 @@ export function currentPlace(): Place {
 export function href(place: {
   route: Route;
   cfpId?: string | null;
+  orgId?: string | null;
   tab?: AdminTab;
   entryId?: string;
 }): string {
   if (place.route === 'home') return paths.home();
   if (place.route === 'new') return paths.new();
   if (place.route === 'platform') return paths.platform();
+  if (place.route === 'platformAccess') return paths.platformAccess();
+  if (place.route === 'platformLimits') return paths.platformLimits();
+  if (place.route === 'platformEmail') return paths.platformEmail();
   if (place.route === 'me') return paths.me();
+  if (place.route === 'orgs') return paths.orgs();
+  if (place.route === 'org') return paths.org(place.orgId ?? '');
   const cfpId = place.cfpId ?? '';
   if (place.route === 'cfp') return paths.cfp(cfpId);
   if (place.route === 'form') return paths.submit(cfpId);
@@ -129,7 +154,7 @@ export function goTo(path: string, state: unknown = null): void {
 
 export function navigate(
   route: Route,
-  options: { cfpId?: string | null; tab?: AdminTab; entryId?: string } = {},
+  options: { cfpId?: string | null; orgId?: string | null; tab?: AdminTab; entryId?: string } = {},
 ): void {
   goTo(href({ route, ...options }));
 }
@@ -155,6 +180,7 @@ export function usePlace(initialPath?: string): Place {
     setPlace((was) =>
       was.route === now.route &&
       was.cfpId === now.cfpId &&
+      was.orgId === now.orgId &&
       was.tab === now.tab &&
       was.entryId === now.entryId
         ? was

@@ -1,5 +1,5 @@
-import { LIMITS } from '@shared/enums';
-import type { AttendanceStatus } from '@shared/enums';
+import { LIMITS, SOCIAL_PLATFORMS } from '@shared/enums';
+import type { AttendanceStatus, SocialPlatform } from '@shared/enums';
 import type { Answers } from '@shared/confirmForm';
 import type { Social } from '@shared/types';
 import type { SubmissionInput } from '@shared/schema';
@@ -106,6 +106,30 @@ export const emptyForm: FormState = {
   needsVisa: false,
 };
 
+const legacySocialPlatform = (value: unknown): SocialPlatform => {
+  const key = String(value ?? '').trim().toLowerCase();
+  if (SOCIAL_PLATFORMS.includes(key as SocialPlatform)) return key as SocialPlatform;
+  if (key === 'twitter') return 'x';
+  return 'other';
+};
+
+/** Keeps old profile rows usable after the social-link schema changed. */
+function readSocials(value: unknown): Social[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const row = entry as Record<string, unknown>;
+      const handle = String(row.handle ?? row.value ?? '').trim();
+      if (!handle) return [];
+      return [{
+        platform: legacySocialPlatform(row.platform ?? row.name),
+        handle,
+      }];
+    })
+    .slice(0, LIMITS.maxSocials);
+}
+
 /**
  * Splits the form into its two documents.
  *
@@ -146,7 +170,9 @@ export function toDocuments(form: FormState) {
     basedIn: form.basedIn.trim(),
     pastTalks: form.pastTalks.trim(),
     email: form.email.trim(),
-    socials: form.socials.filter((s) => s.handle.trim() !== ''),
+    socials: form.socials.filter(
+      (social) => typeof social?.handle === 'string' && social.handle.trim() !== '',
+    ),
     isGde: form.isGde,
     sessionizeUrl: form.sessionizeUrl.trim(),
   };
@@ -351,7 +377,7 @@ export function fromDocuments(
     company: s.company ?? '',
     jobTitle: s.jobTitle ?? '',
     basedIn: s.basedIn ?? '',
-    socials: s.socials ?? [],
+    socials: readSocials(s.socials),
     isGde: s.isGde ?? false,
     pastTalks: s.pastTalks ?? '',
     email: s.email ?? '',

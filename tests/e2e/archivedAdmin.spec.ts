@@ -59,7 +59,7 @@ test('an archived admin workspace keeps records readable without offering writes
   await open(page, 'committee');
   const pastAdmin = page.locator('.people__row', { hasText: 'past-admin@example.org' });
   await expect(pastAdmin.getByRole('combobox')).toBeDisabled();
-  await expect(pastAdmin.getByRole('button', { name: 'Revoke' })).toBeEnabled();
+  await expect(pastAdmin.getByRole('button', { name: 'Revoke' })).toBeDisabled();
   const invite = page.locator('.grid--2');
   await expect(invite.getByRole('textbox', { name: /^Email/ })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Invite' })).toBeDisabled();
