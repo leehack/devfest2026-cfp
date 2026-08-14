@@ -98,6 +98,27 @@ for (const acc of ACCOUNTS) {
   await Promise.all(staleReviews.flatMap((snapshot) => snapshot.docs.map((doc) => doc.ref.delete())));
 }
 
+for (const collectionName of ['orgs', 'cfps']) {
+  const snapshot = await db.collection(collectionName).get();
+  for (const document of snapshot.docs) {
+    const legacyOwnerUids = document.get('ownerUids');
+    if (!Array.isArray(legacyOwnerUids)) continue;
+
+    const existingOwnerUid = document.get('ownerUid');
+    const ownerUid =
+      typeof existingOwnerUid === 'string' && existingOwnerUid
+        ? existingOwnerUid
+        : legacyOwnerUids.length === 1 && typeof legacyOwnerUids[0] === 'string'
+          ? legacyOwnerUids[0]
+          : undefined;
+    if (!ownerUid) {
+      console.warn(`  ! Skipped ambiguous legacy ownership on ${document.ref.path}`);
+      continue;
+    }
+    await document.ref.update({ ownerUid, ownerUids: FieldValue.delete() });
+  }
+}
+
 // ------------------------------------------------------------------ 2. Platform Roles
 for (const collectionName of ['platformMembers', 'platformRoleGrants']) {
   const obsoleteCreators = await db.collection(collectionName).where('role', '==', 'creator').get();
@@ -132,7 +153,6 @@ const ORGS = [
       websiteUrl: 'https://globaltechsummit.org',
       logoUrl: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=128&h=128&fit=crop',
       ownerUid: uid('usr-owner'),
-      ownerUids: FieldValue.delete(),
       activeEventLimit: 2,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -152,7 +172,6 @@ const ORGS = [
       websiteUrl: 'https://aisociety.example.org',
       logoUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=128&h=128&fit=crop',
       ownerUid: uid('usr-owner'),
-      ownerUids: FieldValue.delete(),
       activeEventLimit: 1,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -251,7 +270,6 @@ const CFPS = [
       archived: false,
       paused: false,
       ownerUid: uid('usr-owner'),
-      ownerUids: FieldValue.delete(),
       opensAt: Timestamp.fromMillis(now - 30 * day),
       closesAt: Timestamp.fromMillis(now + 60 * day),
       reviewsVisible: true,
@@ -285,7 +303,6 @@ const CFPS = [
       archived: false,
       paused: false,
       ownerUid: uid('usr-owner'),
-      ownerUids: FieldValue.delete(),
       opensAt: Timestamp.fromMillis(now - 15 * day),
       closesAt: Timestamp.fromMillis(now + 45 * day),
       reviewsVisible: false,
@@ -327,7 +344,6 @@ const CFPS = [
       archived: false,
       paused: false,
       ownerUid: uid('usr-owner'),
-      ownerUids: FieldValue.delete(),
       opensAt: Timestamp.fromMillis(now - 10 * day),
       closesAt: Timestamp.fromMillis(now + 80 * day),
       theme: {
