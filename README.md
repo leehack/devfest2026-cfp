@@ -384,6 +384,50 @@ replaced by redirects to the canonical origin; see
 [hosting-redirect/](hosting-redirect/README.md), which explains why disabling the
 site is not the same thing.
 
+### Moving a legacy CFP into an organization
+
+`scripts/migrate-single-cfp-to-org.mjs` preserves every CFP subcollection,
+Auth account and Storage object. It is dry-run by default and has two phases so
+the old release never loses its owner while the new release is rolling out.
+Take and verify a Firestore backup before applying either phase.
+
+```bash
+# 1. Inspect, then add orgId/ownerUid while retaining legacy ownerUids.
+npm run migrate:organization -- \
+  --project devfest-mtl-2026-cfp \
+  --cfp devfest-mtl-2026 \
+  --org your-organization \
+  --org-name "Your Organization"
+
+# Repeat with writes explicitly confirmed.
+npm run migrate:organization -- \
+  --project devfest-mtl-2026-cfp \
+  --cfp devfest-mtl-2026 \
+  --org your-organization \
+  --org-name "Your Organization" \
+  --apply --confirm-project devfest-mtl-2026-cfp
+```
+
+Deploy Functions, the app, and rules in the order below, verify the owner can
+open both the organization and event workspaces, then dry-run and apply the
+cleanup phase:
+
+```bash
+npm run migrate:organization -- \
+  --project devfest-mtl-2026-cfp \
+  --cfp devfest-mtl-2026 \
+  --org your-organization \
+  --phase finalize
+
+# Add only after reviewing the dry-run output:
+# --apply --confirm-project devfest-mtl-2026-cfp
+```
+
+Prepare refuses ambiguous or mismatched event ownership, an unusable Auth
+owner, or an organization owned by somebody else. Finalize refuses to run until
+the organization, canonical owner and owner membership agree; it then removes
+the legacy owner array and obsolete platform `creator` records.
+
 ```bash
 npm run verify                                  # lint, types, build, bundle gates, 3 suites
 npm run deploy:functions                        # new callables first

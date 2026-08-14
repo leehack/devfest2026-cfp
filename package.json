@@ -18,6 +18,7 @@
     "test": "vitest run --project unit",
     "test:rules": "node scripts/with-java.mjs npx firebase emulators:exec --only firestore,storage --project demo-devfest-cfp \"vitest run --project rules\"",
     "lint": "eslint .",
+    "migrate:organization": "node scripts/migrate-single-cfp-to-org.mjs",
     "smoke:production": "node scripts/smoke-production.mjs",
     "verify": "npm run lint && npm run typecheck && npm run build && npm run check:bundle && npm test && npm run test:rules && npm run test:e2e",
     "start": "node scripts/dev.mjs",
