@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   CFP_ID,
   callAs,
+  callJson,
   callWithErrorDetails,
   clearProposals,
   createAccount,
@@ -38,7 +39,7 @@ const row = (page: Page, who: string) => page.locator('.people__row', { hasText:
  * The invite form's Role select. Scoped rather than found by name: every row in
  * the list carries a role select of its own now, so "Role" is ambiguous.
  */
-const inviteRoleField = (page: Page) => page.locator('.grid--2').getByRole('combobox');
+const inviteRoleField = (page: Page) => page.locator('.grid--2').first().getByRole('combobox');
 
 /** The label on each admin sub-tab, so a test can say where it means to land. */
 const SECTIONS = {
@@ -866,12 +867,12 @@ test.describe('reviewing', () => {
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
 
     // Grab the token via backend call
-    const linksRes = await callAs(admin.idToken, 'createRoleInviteLink', {
+    const linksRes = await callJson(admin.idToken, 'createRoleInviteLink', {
       role: 'reviewer',
       label: 'Direct Link',
       maxClaims: 2,
     });
-    const token = (linksRes as any).link.id;
+    const token = linksRes.link.id;
 
     // Navigate as the new user to the join URL
     await signInAs(page, newReviewer, at(`/join?invite=${token}`));
@@ -896,15 +897,15 @@ test.describe('reviewing', () => {
     const admin = await createAccount(ADMIN);
     await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
 
-    const linksRes = await callAs(admin.idToken, 'createRoleInviteLink', {
+    const linksRes = await callJson(admin.idToken, 'createRoleInviteLink', {
       role: 'reviewer',
       label: 'To be revoked',
       maxClaims: 1,
     });
-    const token = (linksRes as any).link.id;
+    const token = linksRes.link.id;
 
     // Revoke link
-    await callAs(admin.idToken, 'revokeRoleInviteLink', { token });
+    await callJson(admin.idToken, 'revokeRoleInviteLink', { token });
 
     const invitee: Identity = {
       sub: 'revoked-invitee-sub',

@@ -550,7 +550,7 @@ export async function loadInviteLinks(
   isOwner = false,
 ): Promise<import('@shared/types').RoleInviteLink[]> {
   const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
-  const q = isOwner ? col : query(col, where('role', '!=', 'admin'));
+  const q = isOwner ? col : query(col, where('role', '==', 'reviewer'));
   const snap = await getDocs(q);
   const links: import('@shared/types').RoleInviteLink[] = [];
   snap.forEach((d) => {
@@ -579,7 +579,7 @@ export async function loadCommittee(
 
   const people = members.docs.map((d) => ({ ...(d.data() as CfpMember), uid: d.id }));
   const linksSnap = await getDocs(col).catch(async () => {
-    return getDocs(query(col, where('role', '!=', 'admin'))).catch(() => ({ docs: [] }));
+    return getDocs(query(col, where('role', '==', 'reviewer'))).catch(() => ({ docs: [] }));
   });
 
   const inviteLinks: import('@shared/types').RoleInviteLink[] = linksSnap.docs.map((d) => ({
