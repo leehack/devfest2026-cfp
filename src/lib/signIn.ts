@@ -19,7 +19,7 @@ import { proposalSelectionQuery } from './proposalLinks';
 
 const PENDING = 'cfp.signInEmail';
 
-export type SignInDestination = 'submit' | 'review' | 'schedule' | `admin/${AdminTab}`;
+export type SignInDestination = 'submit' | 'join' | 'review' | 'schedule' | `admin/${AdminTab}`;
 
 /**
  * `cfpId` is optional and decides only who the message comes from and where the
@@ -33,6 +33,7 @@ export const requestSignInLink = httpsCallable<
     destination?: SignInDestination;
     proposalId?: string;
     speakerInvitationId?: string;
+    roleInviteToken?: string;
   },
   { ok: boolean }
 >(functions, 'requestSignInLink');
@@ -89,6 +90,7 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
     const proposalId = source.searchParams.get('proposal');
     const invitationId = source.searchParams.get('speakerInvite');
     const selectedProposalId = proposalSelectionQuery(source.search);
+    const invite = source.searchParams.get('invite');
     await signInWithEmailLink(auth, address, window.location.href);
     forgetPendingEmail();
     // The code is spent and the URL is now a confusing thing to bookmark or
@@ -99,6 +101,8 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
       retained.set('speakerInvite', invitationId);
     } else if (selectedProposalId) {
       retained.set('proposal', selectedProposalId);
+    } else if (invite) {
+      retained.set('invite', invite);
     }
     history.replaceState(
       null,

@@ -87,6 +87,10 @@ service cloud.firestore {
       return isReviewer(cfpId) && roleOn(cfpId) in ['admin', 'owner'];
     }
 
+    function isOwner(cfpId) {
+      return isReviewer(cfpId) && roleOn(cfpId) == 'owner';
+    }
+
     // ------------------------------------------------------------------ cfps
 
     match /cfps/{cfpId} {
@@ -132,6 +136,12 @@ service cloud.firestore {
       // the person has ever signed in. Holds addresses, so admins only.
       match /roleGrants/{email} {
         allow get, list: if isAdmin(cfpId);
+        allow write: if false;
+      }
+
+      // Shareable role invitation links, managed and viewable by admins.
+      match /roleInviteLinks/{linkId} {
+        allow get, list: if isOwner(cfpId) || (isAdmin(cfpId) && resource.data.role != 'admin');
         allow write: if false;
       }
 
@@ -506,6 +516,10 @@ service cloud.firestore {
       }
 
       match /roleGrants/{email} {
+        allow read, write: if false;
+      }
+
+      match /roleInviteLinks/{linkId} {
         allow read, write: if false;
       }
 

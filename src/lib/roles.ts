@@ -177,6 +177,31 @@ export const revokeRole = httpsCallable<In<{ email: string }>, { email: string }
   functions,
   'revokeRole',
 );
+
+export const createRoleInviteLink = httpsCallable<
+  In<{
+    role: CfpRole;
+    label?: string;
+    maxClaims?: number | null;
+    expiresAt?: string | number | null;
+  }>,
+  { ok: boolean; link: import('@shared/types').RoleInviteLink }
+>(functions, 'createRoleInviteLink');
+
+export const revokeRoleInviteLink = httpsCallable<
+  In<{ token: string }>,
+  { ok: boolean; token: string }
+>(functions, 'revokeRoleInviteLink');
+
+export const getRoleInviteLinkInfo = httpsCallable<
+  In<{ token: string }>,
+  import('@shared/types').RoleInviteLinkPublicInfo
+>(functions, 'getRoleInviteLinkInfo');
+
+export const claimRoleInviteLink = httpsCallable<
+  In<{ token: string }>,
+  { ok: boolean; role: CfpRole; cfpId: string; alreadyMember?: boolean }
+>(functions, 'claimRoleInviteLink');
 export const setCfpWindow = httpsCallable<
   In<{ opensAt?: string; closesAt?: string; paused?: boolean; reviewsVisible?: boolean }>,
   { ok: boolean }
@@ -520,20 +545,60 @@ export interface Person extends CfpMember {
   uid: string;
 }
 
+export async function loadInviteLinks(
+  cfpId: string,
+  isOwner = false,
+): Promise<import('@shared/types').RoleInviteLink[]> {
+  const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
+  const q = isOwner ? col : query(col, where('role', '!=', 'admin'));
+  const snap = await getDocs(q);
+  const links: import('@shared/types').RoleInviteLink[] = [];
+  snap.forEach((d) => {
+    links.push({ id: d.id, ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>) });
+  });
+  links.sort((a, b) => {
+    const aTime = (a.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
+    const bTime = (b.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
+    return bTime - aTime;
+  });
+  return links;
+}
+
 export async function loadCommittee(
   cfpId: string,
-): Promise<{ people: Person[]; pending: RoleGrant[] }> {
+): Promise<{
+  people: Person[];
+  pending: RoleGrant[];
+  inviteLinks: import('@shared/types').RoleInviteLink[];
+}> {
+  const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
   const [members, grants] = await Promise.all([
     getDocs(collection(db, 'cfps', cfpId, 'members')),
     getDocs(collection(db, 'cfps', cfpId, 'roleGrants')),
   ]);
 
+  const people = members.docs.map((d) => ({ ...(d.data() as CfpMember), uid: d.id }));
+  const linksSnap = await getDocs(col).catch(async () => {
+    return getDocs(query(col, where('role', '!=', 'admin'))).catch(() => ({ docs: [] }));
+  });
+
+  const inviteLinks: import('@shared/types').RoleInviteLink[] = linksSnap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>),
+  }));
+  inviteLinks.sort((a, b) => {
+    const aTime = (a.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
+    const bTime = (b.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
+    return bTime - aTime;
+  });
+
   return {
-    people: members.docs.map((d) => ({ ...(d.data() as CfpMember), uid: d.id })),
+    people,
     // Only the ones still waiting — a claimed grant is already a person above.
     pending: grants.docs
       .map((d) => d.data() as RoleGrant)
       .filter((g) => !g.claimedBy),
+    inviteLinks,
   };
 }
 

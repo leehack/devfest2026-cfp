@@ -22,6 +22,8 @@ export const paths = {
   review: (cfpId: string) => `/c/${cfpId}/review`,
   schedule: (cfpId: string) => `/c/${cfpId}/schedule`,
   session: (cfpId: string, entryId: string) => `/c/${cfpId}/schedule/${entryId}`,
+  join: (cfpId: string, inviteToken?: string) =>
+    inviteToken ? `/c/${cfpId}/join?invite=${encodeURIComponent(inviteToken)}` : `/c/${cfpId}/join`,
   /** No tab means the bare `/admin`, which the nav links to and the app defaults. */
   admin: (cfpId: string, tab?: AdminTab) =>
     tab ? `/c/${cfpId}/admin/${tab}` : `/c/${cfpId}/admin`,

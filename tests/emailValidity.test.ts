@@ -123,7 +123,7 @@ describe('staff email validity', () => {
     ).toBe(false);
   });
 
-  it('keeps only the exact unclaimed role invitation sendable', () => {
+  it('keeps only the exact role invitation sendable', () => {
     const pending = {
       cfpId: 'event-a',
       email: 'reviewer@example.org',
@@ -147,7 +147,7 @@ describe('staff email validity', () => {
         'reviewer@example.org',
         snapshot({ ...pending, claimedBy: 'reviewer' }),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       roleInvitationStillTrue(
         'committee_role_invited',

@@ -410,3 +410,42 @@ test('a shared preview notifies current staff once per release while publish sen
   ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   expect((await readEmailLog()).map((row) => row.id).sort()).toEqual(beforeSecondPublish);
 });
+
+const EXISTING_USER: Identity = {
+  sub: 'staff-existing-user',
+  email: 'staff-existing-user@example.org',
+  name: 'Existing User',
+};
+
+test('inviting an existing verified account directly queues an invitation email', async () => {
+  const [owner] = await Promise.all([
+    createAccount(OWNER),
+    createAccount(EXISTING_USER),
+  ]);
+  await seedMember(owner.uid, 'owner', undefined, OWNER.email);
+
+  const grant = await callJson(owner.idToken, 'grantRole', {
+    email: EXISTING_USER.email,
+    role: 'reviewer',
+  });
+  expect(grant).toMatchObject({
+    email: EXISTING_USER.email,
+    role: 'reviewer',
+    applied: true,
+  });
+  expect(grant.invitationId).toEqual(expect.any(String));
+
+  const logId = `committee_role_invited__${grant.invitationId}`;
+  const rows = await waitForEmail(
+    (current) => current.some((row) => row.id === logId && row.status === 'dry_run'),
+    'the invitation email for an existing verified account',
+  );
+  const invite = rows.find((row) => row.id === logId);
+  expect(invite).toMatchObject({
+    kind: 'committee_role_invited',
+    proposalId: grant.invitationId,
+    grantEmail: EXISTING_USER.email,
+    to: EXISTING_USER.email,
+    status: 'dry_run',
+  });
+});

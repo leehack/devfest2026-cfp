@@ -359,6 +359,39 @@ export interface RoleGrant {
 }
 
 /**
+ * `cfps/{cfpId}/roleInviteLinks/{token}` — a shareable link that automatically
+ * assigns a committee role upon sign-in/up.
+ */
+export interface RoleInviteLink {
+  id: string;
+  cfpId: string;
+  role: GrantableRole;
+  label?: string;
+  maxClaims: number | null;
+  claimedCount: number;
+  claimedUids?: Record<string, { email: string; name?: string; claimedAt: unknown }>;
+  expiresAt: unknown | null;
+  createdAt: unknown;
+  createdBy: string;
+  revokedAt?: unknown | null;
+  revokedBy?: string | null;
+}
+
+export interface RoleInviteLinkPublicInfo {
+  cfpId: string;
+  eventName: string;
+  role: GrantableRole;
+  label?: string | null;
+  maxClaims: number | null;
+  claimedCount: number;
+  expiresAt: string | null;
+  isRevoked: boolean;
+  isExpired: boolean;
+  isExhausted: boolean;
+  isValid: boolean;
+}
+
+/**
  * `cfps/{cfpId}/proposals/{id}/reviews/{reviewerUid}` — one per reviewer per
  * proposal.
  *

@@ -109,6 +109,10 @@ import {
   normalizeEmail,
   revoke,
   RoleError,
+  createInviteLink,
+  revokeInviteLink,
+  getInviteLinkInfo,
+  claimInviteLink,
   initiateEventOwnershipTransfer as initiateEventOwnershipTransferImpl,
   acceptEventOwnershipTransfer as acceptEventOwnershipTransferImpl,
   cancelEventOwnershipTransfer as cancelEventOwnershipTransferImpl,
@@ -5701,7 +5705,7 @@ export const notifyCommitteeRoleInvite = onDocumentWritten(
   },
   async (event) => {
     const after = event.data?.after;
-    if (!after?.exists || after.get('claimedBy')) return;
+    if (!after?.exists) return;
     const invitationId = String(after.get('invitationId') ?? '');
     const beforeInvitationId = event.data?.before.exists
       ? String(event.data.before.get('invitationId') ?? '')
@@ -5753,6 +5757,88 @@ export const revokeRole = onCall(CALLABLE, async (request) => {
   try {
     const result = await revoke(db, getAuth(), { cfpId, email: data.email, byUid });
     logger.info('role revoked', { ...result, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const createRoleInviteLink = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'create invitation link');
+  const data = (request.data ?? {}) as {
+    role?: unknown;
+    label?: unknown;
+    maxClaims?: unknown;
+    expiresAt?: unknown;
+  };
+
+  try {
+    const link = await createInviteLink(db, {
+      cfpId,
+      role: data.role,
+      label: data.label,
+      maxClaims: data.maxClaims,
+      expiresAt: data.expiresAt,
+      byUid,
+    });
+    logger.info('role invite link created', { cfpId, linkId: link.id, role: link.role, byUid });
+    return { ok: true, link };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const revokeRoleInviteLink = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'revoke invitation link');
+  const data = (request.data ?? {}) as { token?: unknown };
+
+  try {
+    const result = await revokeInviteLink(db, {
+      cfpId,
+      token: data.token,
+      byUid,
+    });
+    logger.info('role invite link revoked', { cfpId, token: data.token, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const getRoleInviteLinkInfo = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const data = (request.data ?? {}) as { token?: unknown };
+
+  try {
+    const info = await getInviteLinkInfo(db, {
+      cfpId,
+      token: data.token,
+    });
+    return info;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const claimRoleInviteLink = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = requireVerifiedUid(request, 'claim invitation link');
+  const token = request.auth!.token;
+  const email = token.email as string;
+  const name = token.name as string | undefined;
+  const data = (request.data ?? {}) as { token?: unknown };
+
+  try {
+    const result = await claimInviteLink(db, {
+      cfpId,
+      token: data.token,
+      uid,
+      email,
+      name,
+    });
+    logger.info('role invite link claimed', { cfpId, role: result.role, uid });
     return result;
   } catch (error) {
     throw asHttpsError(error);
@@ -6483,9 +6569,12 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+\.[^\s@]+$/;
 const SIGN_IN_PROPOSAL_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SIGN_IN_SPEAKER_INVITATION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SIGN_IN_ROLE_INVITE_TOKEN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const SIGN_IN_DESTINATIONS = new Set([
   'submit',
+  'join',
   'review',
   'schedule',
   'admin/overview',
@@ -6545,11 +6634,7 @@ async function takeLinkAllowance(
 }
 
 /**
- * Mails a sign-in link. Public: asking for one is how you get an account.
- *
- * The answer is the same whether or not the address has ever been seen. A
- * different reply for a known address turns this into a way to test whether
- * someone submitted to the CFP, which is not ours to disclose.
+ * Mint a sign-in link via Firebase Auth and hand it to Resend.
  *
  * The link never touches `emailLog`. Anyone holding it is signed in as its
  * owner, so it is rendered and handed to Resend in this one request and not
@@ -6568,6 +6653,7 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     destination?: unknown;
     proposalId?: unknown;
     speakerInvitationId?: unknown;
+    roleInviteToken?: unknown;
   };
   const email = String(data.email ?? '').trim().toLowerCase();
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
@@ -6589,6 +6675,8 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     typeof data.speakerInvitationId === 'string' ? data.speakerInvitationId : '';
   const hasSpeakerInvitation = Boolean(speakerInvitationId);
   const hasProposalSelection = Boolean(proposalId);
+  const roleInviteToken = typeof data.roleInviteToken === 'string' ? data.roleInviteToken : '';
+  const hasRoleInviteToken = Boolean(roleInviteToken);
 
   if (
     speakerInvitationProvided &&
@@ -6605,6 +6693,12 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     (!cfpId || destination !== 'submit' || !SIGN_IN_PROPOSAL_ID.test(proposalId))
   ) {
     throw new HttpsError('invalid-argument', 'A valid proposal selection is required.');
+  }
+  if (
+    hasRoleInviteToken &&
+    (!cfpId || destination !== 'join' || !SIGN_IN_ROLE_INVITE_TOKEN.test(roleInviteToken))
+  ) {
+    throw new HttpsError('invalid-argument', 'A valid invitation token is required.');
   }
 
   if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
@@ -6679,6 +6773,12 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
                 proposal: proposalId,
               }).toString()}`
           : cfpUrl(platform.publicUrl, cfpId)
+        : destination === 'join'
+          ? hasRoleInviteToken
+            ? `${platform.publicUrl}/c/${cfpId}/join?${new URLSearchParams({
+                invite: roleInviteToken,
+              }).toString()}`
+            : `${platform.publicUrl}/c/${cfpId}/join`
         : `${platform.publicUrl}/c/${cfpId}/${destination}`
       : `${platform.publicUrl}/`,
     handleCodeInApp: true,

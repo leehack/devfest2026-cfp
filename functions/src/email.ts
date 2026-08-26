@@ -449,8 +449,7 @@ export function roleInvitationStillTrue(
     grant.get('cfpId') === cfpId &&
     grant.get('email') === grantEmail &&
     ['admin', 'reviewer'].includes(String(grant.get('role') ?? '')) &&
-    grant.get('invitationId') === invitationId &&
-    !grant.get('claimedBy')
+    grant.get('invitationId') === invitationId
   );
 }
 

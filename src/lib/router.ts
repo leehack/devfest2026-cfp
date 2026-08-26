@@ -40,7 +40,8 @@ export type Route =
   | 'admin'
   | 'review'
   | 'schedule'
-  | 'session';
+  | 'session'
+  | 'join';
 
 export interface Place {
   route: Route;
@@ -97,7 +98,9 @@ export function placeOf(path: string): Place {
         ? 'review'
         : section === 'submit'
           ? 'form'
-          : 'cfp';
+          : section === 'join' || section === 'invite'
+            ? 'join'
+            : 'cfp';
   return {
     route,
     cfpId,
@@ -139,6 +142,7 @@ export function href(place: {
   if (place.route === 'form') return paths.submit(cfpId);
   if (place.route === 'schedule') return paths.schedule(cfpId);
   if (place.route === 'session') return paths.session(cfpId, place.entryId ?? '');
+  if (place.route === 'join') return paths.join(cfpId);
   if (place.route === 'admin') return paths.admin(cfpId, place.tab);
   return paths.review(cfpId);
 }

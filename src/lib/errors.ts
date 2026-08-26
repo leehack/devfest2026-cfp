@@ -123,6 +123,17 @@ export function roleAdminError(error: unknown, t: Dictionary): string {
     : adminError(error, t);
 }
 
+export function roleInviteError(error: unknown, t: Dictionary): string {
+  const reason = reasonOf(error);
+  if (codeOf(error) === 'failed-precondition') {
+    if (reason === 'invite_link_revoked') return t.join.revokedHelp;
+    if (reason === 'invite_link_expired') return t.join.expiredHelp;
+    if (reason === 'invite_link_exhausted') return t.join.exhaustedHelp;
+  }
+  if (codeOf(error) === 'not-found') return t.join.invalidHelp;
+  return friendlyError(error, t);
+}
+
 export function transferError(error: unknown, t: Dictionary): string {
   if (codeOf(error) === 'failed-precondition') {
     switch (reasonOf(error)) {

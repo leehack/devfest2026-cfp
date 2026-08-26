@@ -13,11 +13,13 @@ import { randomUUID } from 'node:crypto';
 import type { Auth, UserRecord } from 'firebase-admin/auth';
 import {
   FieldValue,
+  Timestamp,
   type DocumentSnapshot,
   type Firestore,
   type Transaction,
 } from 'firebase-admin/firestore';
-import { CFP_ROLES, type CfpRole } from '../../shared/cfp';
+import { CFP_ROLES, ROLE_INVITE_LINK_LIMITS, type CfpRole } from '../../shared/cfp';
+import type { RoleInviteLink, RoleInviteLinkPublicInfo } from '../../shared/types';
 import {
   archiveOwnershipTransfer,
   ownershipTransferExpiry,
@@ -216,13 +218,13 @@ export async function grant(
       }
     }
 
+    const invitationId = String(existingGrant.get('invitationId') ?? randomUUID());
     if (uid) {
-      // Replace the grant shape so a formerly pending invitation cannot remain
-      // deliverable after its membership has been applied.
       tx.set(grantRef, {
         cfpId,
         email,
         role,
+        invitationId,
         createdAt: FieldValue.serverTimestamp(),
         createdBy: byUid,
         claimedBy: uid,
@@ -242,10 +244,9 @@ export async function grant(
         },
         { merge: true },
       );
-      return { applied: true as const };
+      return { applied: true as const, invitationId };
     }
 
-    const invitationId = String(existingGrant.get('invitationId') ?? randomUUID());
     tx.set(grantRef, {
       cfpId,
       email,
@@ -631,4 +632,334 @@ export async function getEventOwnershipTransfer(
     (normalizedEmail && targetEmail === normalizedEmail) || data.targetUid === byUid;
   if (!isOwner && !isTarget) return null;
   return ownershipTransferView(snap, 'event', cfpId);
+}
+
+const inviteLinkDoc = (db: Firestore, cfpId: string, token: string) =>
+  db.doc(`cfps/${cfpId}/roleInviteLinks/${token}`);
+
+export function normalizeInviteToken(raw: unknown): string {
+  const token = String(raw ?? '').trim();
+  if (!ROLE_INVITE_LINK_LIMITS.tokenRegex.test(token)) {
+    throw new RoleError('invalid-argument', 'Invalid invitation token.');
+  }
+  return token;
+}
+
+export async function createInviteLink(
+  db: Firestore,
+  {
+    cfpId,
+    role: rawRole,
+    label: rawLabel,
+    maxClaims: rawMaxClaims,
+    expiresAt: rawExpiresAt,
+    byUid,
+  }: {
+    cfpId: string;
+    role: unknown;
+    label?: unknown;
+    maxClaims?: unknown;
+    expiresAt?: unknown;
+    byUid: string;
+  },
+): Promise<RoleInviteLink> {
+  const role = normalizeRole(rawRole);
+  if (role === 'owner') {
+    throw new RoleError('invalid-argument', 'Owner role cannot be invited via link.');
+  }
+
+  let label: string | undefined;
+  if (rawLabel !== undefined && rawLabel !== null && typeof rawLabel === 'string') {
+    const trimmed = rawLabel.trim();
+    if (trimmed.length > ROLE_INVITE_LINK_LIMITS.labelMax) {
+      throw new RoleError(
+        'invalid-argument',
+        `Label must be at most ${ROLE_INVITE_LINK_LIMITS.labelMax} characters.`,
+      );
+    }
+    if (trimmed) label = trimmed;
+  }
+
+  let maxClaims: number | null = null;
+  if (rawMaxClaims !== undefined && rawMaxClaims !== null && rawMaxClaims !== '') {
+    const parsed = Number(rawMaxClaims);
+    if (
+      !Number.isSafeInteger(parsed) ||
+      parsed < ROLE_INVITE_LINK_LIMITS.maxClaimsMin ||
+      parsed > ROLE_INVITE_LINK_LIMITS.maxClaimsMax
+    ) {
+      throw new RoleError(
+        'invalid-argument',
+        `Max claims must be between ${ROLE_INVITE_LINK_LIMITS.maxClaimsMin} and ${ROLE_INVITE_LINK_LIMITS.maxClaimsMax}.`,
+      );
+    }
+    maxClaims = parsed;
+  }
+
+  let expiresAtTimestamp: Timestamp | null = null;
+  if (rawExpiresAt !== undefined && rawExpiresAt !== null && rawExpiresAt !== '') {
+    const date = new Date(rawExpiresAt as string | number);
+    if (isNaN(date.getTime())) {
+      throw new RoleError('invalid-argument', 'Invalid expiration date.');
+    }
+    if (date.getTime() <= Date.now()) {
+      throw new RoleError('invalid-argument', 'Expiration date must be in the future.');
+    }
+    expiresAtTimestamp = Timestamp.fromDate(date);
+  }
+
+  const token = randomUUID();
+  const linkRef = inviteLinkDoc(db, cfpId, token);
+
+  return await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const [cfp, actor] = await tx.getAll(cfpRef, memberDoc(db, cfpId, byUid));
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('archived') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is archived.');
+    }
+    if (!actor.exists) {
+      throw new RoleError('permission-denied', 'Only an admin or owner can create invitation links.');
+    }
+    const actorRole = actor.get('role');
+    if (actorRole !== 'admin' && actorRole !== 'owner') {
+      throw new RoleError('permission-denied', 'Only an admin or owner can create invitation links.');
+    }
+    const canonicalOwner = cfp.get('ownerUid');
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === byUid;
+    if (role === 'admin' && !actorIsOwner) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can create admin invitation links.',
+        'event_owner_required',
+      );
+    }
+
+    const newLink: RoleInviteLink = {
+      id: token,
+      cfpId,
+      role,
+      ...(label ? { label } : {}),
+      maxClaims,
+      claimedCount: 0,
+      claimedUids: {},
+      expiresAt: expiresAtTimestamp,
+      createdAt: FieldValue.serverTimestamp(),
+      createdBy: byUid,
+    };
+
+    tx.set(linkRef, newLink);
+    return newLink;
+  });
+}
+
+export async function revokeInviteLink(
+  db: Firestore,
+  {
+    cfpId,
+    token: rawToken,
+    byUid,
+  }: {
+    cfpId: string;
+    token: unknown;
+    byUid: string;
+  },
+): Promise<{ ok: true; token: string }> {
+  const token = normalizeInviteToken(rawToken);
+  const linkRef = inviteLinkDoc(db, cfpId, token);
+
+  return await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const [cfp, actor, link] = await tx.getAll(cfpRef, memberDoc(db, cfpId, byUid), linkRef);
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (!link.exists) throw new RoleError('not-found', 'Invitation link not found.');
+    if (!actor.exists) {
+      throw new RoleError('permission-denied', 'Only an admin or owner can revoke invitation links.');
+    }
+    const actorRole = actor.get('role');
+    if (actorRole !== 'admin' && actorRole !== 'owner') {
+      throw new RoleError('permission-denied', 'Only an admin or owner can revoke invitation links.');
+    }
+    const canonicalOwner = cfp.get('ownerUid');
+    const actorIsOwner = actorRole === 'owner' && canonicalOwner === byUid;
+    if (link.get('role') === 'admin' && !actorIsOwner) {
+      throw new RoleError(
+        'permission-denied',
+        'Only an event owner can revoke admin invitation links.',
+        'event_owner_required',
+      );
+    }
+
+    if (link.get('revokedAt')) {
+      return { ok: true as const, token };
+    }
+
+    tx.update(linkRef, {
+      revokedAt: FieldValue.serverTimestamp(),
+      revokedBy: byUid,
+    });
+
+    return { ok: true as const, token };
+  });
+}
+
+export async function getInviteLinkInfo(
+  db: Firestore,
+  {
+    cfpId,
+    token: rawToken,
+  }: {
+    cfpId: string;
+    token: unknown;
+  },
+): Promise<RoleInviteLinkPublicInfo> {
+  const token = normalizeInviteToken(rawToken);
+  const cfpRef = db.doc(`cfps/${cfpId}`);
+  const linkRef = inviteLinkDoc(db, cfpId, token);
+
+  const [cfp, link] = await Promise.all([cfpRef.get(), linkRef.get()]);
+  if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+  if (!link.exists) throw new RoleError('not-found', 'Invitation link not found.');
+
+  const expiresAt = link.get('expiresAt') as Timestamp | null;
+  const maxClaims = (link.get('maxClaims') as number | null) ?? null;
+  const claimedCount = Number(link.get('claimedCount') ?? 0);
+  const isRevoked = Boolean(link.get('revokedAt'));
+  const isExpired = expiresAt ? expiresAt.toMillis() <= Date.now() : false;
+  const isExhausted = maxClaims !== null && claimedCount >= maxClaims;
+  const isArchived = cfp.get('archived') === true;
+  const isValid = !isRevoked && !isExpired && !isExhausted && !isArchived;
+
+  return {
+    cfpId,
+    eventName: String(cfp.get('name') ?? cfpId),
+    role: link.get('role'),
+    label: (link.get('label') as string | undefined) ?? null,
+    maxClaims,
+    claimedCount,
+    expiresAt: expiresAt ? expiresAt.toDate().toISOString() : null,
+    isRevoked,
+    isExpired,
+    isExhausted,
+    isValid,
+  };
+}
+
+export async function claimInviteLink(
+  db: Firestore,
+  {
+    cfpId,
+    token: rawToken,
+    uid,
+    email: rawEmail,
+    name,
+  }: {
+    cfpId: string;
+    token: unknown;
+    uid: string;
+    email: string;
+    name?: string;
+  },
+): Promise<{ ok: true; role: CfpRole; cfpId: string; alreadyMember?: boolean }> {
+  const token = normalizeInviteToken(rawToken);
+  const email = normalizeEmail(rawEmail);
+  const memberRef = memberDoc(db, cfpId, uid);
+  const linkRef = inviteLinkDoc(db, cfpId, token);
+  const grantRef = grantDoc(db, cfpId, email);
+
+  return await db.runTransaction(async (tx) => {
+    const cfpRef = db.doc(`cfps/${cfpId}`);
+    const [cfp, link, member, grant] = await tx.getAll(cfpRef, linkRef, memberRef, grantRef);
+    if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
+    if (cfp.get('archived') === true) {
+      throw new RoleError('failed-precondition', 'This call for proposals is archived.');
+    }
+    if (!link.exists) throw new RoleError('not-found', 'Invitation link not found.');
+
+    if (link.get('revokedAt')) {
+      throw new RoleError(
+        'failed-precondition',
+        'This invitation link has been revoked.',
+        'invite_link_revoked',
+      );
+    }
+
+    const expiresAt = link.get('expiresAt') as Timestamp | null;
+    if (expiresAt && expiresAt.toMillis() <= Date.now()) {
+      throw new RoleError(
+        'failed-precondition',
+        'This invitation link has expired.',
+        'invite_link_expired',
+      );
+    }
+
+    const claimedUids = (link.get('claimedUids') ?? {}) as Record<string, unknown>;
+    const alreadyClaimedByThisUser = Boolean(claimedUids[uid]);
+    const maxClaims = (link.get('maxClaims') as number | null) ?? null;
+    const currentClaimedCount = Number(link.get('claimedCount') ?? 0);
+
+    const targetRole = normalizeRole(link.get('role'));
+    const currentRole = member.exists ? (member.get('role') as CfpRole) : null;
+
+    if (currentRole === 'owner') {
+      return { ok: true as const, role: 'owner' as const, cfpId, alreadyMember: true };
+    }
+    if (currentRole === 'admin' && targetRole === 'reviewer') {
+      return { ok: true as const, role: 'admin' as const, cfpId, alreadyMember: true };
+    }
+    if (currentRole === targetRole) {
+      return { ok: true as const, role: targetRole, cfpId, alreadyMember: true };
+    }
+
+    if (!alreadyClaimedByThisUser && maxClaims !== null && currentClaimedCount >= maxClaims) {
+      throw new RoleError(
+        'failed-precondition',
+        'This invitation link has reached its maximum number of claims.',
+        'invite_link_exhausted',
+      );
+    }
+
+    if (!alreadyClaimedByThisUser) {
+      tx.update(linkRef, {
+        claimedCount: FieldValue.increment(1),
+        [`claimedUids.${uid}`]: {
+          email,
+          ...(name ? { name } : {}),
+          claimedAt: FieldValue.serverTimestamp(),
+        },
+      });
+    }
+
+    tx.set(
+      memberRef,
+      {
+        cfpId,
+        uid,
+        role: targetRole,
+        email,
+        ...(name ? { name } : {}),
+        createdAt: member.exists ? member.get('createdAt') : FieldValue.serverTimestamp(),
+        grantedBy: `invite_link:${token}`,
+        inviteLinkId: token,
+        roleUpdatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    tx.set(
+      grantRef,
+      {
+        cfpId,
+        email,
+        role: targetRole,
+        createdAt: grant.exists ? grant.get('createdAt') : FieldValue.serverTimestamp(),
+        createdBy: `invite_link:${token}`,
+        claimedBy: uid,
+        claimedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    return { ok: true as const, role: targetRole, cfpId };
+  });
 }
