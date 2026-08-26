@@ -3557,13 +3557,11 @@ export const saveReview = onCall(CALLABLE, async (request) => {
  * document yet, so a report that implied partitioned panels would manufacture
  * obligations the data model cannot represent.
  *
- * Only completion metadata leaves this callable. Scores and comments do not,
- * and an admin who is also a speaker gets no coverage metadata at all for their
- * own proposal — the same privacy boundary enforced by Firestore rules.
+ * Only completion metadata leaves this callable. Scores and comments do not.
  */
 export const reviewCoverage = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
-  const requesterUid = await requireAdmin(request, cfpId, 'view review coverage');
+  await requireAdmin(request, cfpId, 'view review coverage');
 
   const [members, proposalSnaps, reviewSnaps] = await Promise.all([
     db.collection(`cfps/${cfpId}/members`).get(),
@@ -3574,26 +3572,19 @@ export const reviewCoverage = onCall(CALLABLE, async (request) => {
     db.collectionGroup('reviews').where('cfpId', '==', cfpId).get(),
   ]);
 
-  const current = proposalSnaps.docs.map((proposal) => ({
-    id: proposal.id,
-    title: String(proposal.get('title') ?? ''),
-    speakerIds: ((proposal.get('speakerIds') as unknown[]) ?? []).filter(
-      (uid): uid is string => typeof uid === 'string',
-    ),
-    formerSpeakerIds: ((proposal.get('formerSpeakerIds') as unknown[]) ?? []).filter(
-      (uid): uid is string => typeof uid === 'string',
-    ),
-  }));
-  const hiddenOwnProposalCount = current.filter((proposal) =>
-    [...proposal.speakerIds, ...proposal.formerSpeakerIds].includes(requesterUid),
-  ).length;
-  const visible = current
-    .filter(
-      (proposal) =>
-        ![...proposal.speakerIds, ...proposal.formerSpeakerIds].includes(requesterUid),
-    )
+  const current = proposalSnaps.docs
+    .map((proposal) => ({
+      id: proposal.id,
+      title: String(proposal.get('title') ?? ''),
+      speakerIds: ((proposal.get('speakerIds') as unknown[]) ?? []).filter(
+        (uid): uid is string => typeof uid === 'string',
+      ),
+      formerSpeakerIds: ((proposal.get('formerSpeakerIds') as unknown[]) ?? []).filter(
+        (uid): uid is string => typeof uid === 'string',
+      ),
+    }))
     .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
-  const visibleIds = new Set(visible.map((proposal) => proposal.id));
+  const allProposalIds = new Set(current.map((proposal) => proposal.id));
   const activeReviewerIds = new Set(members.docs.map((member) => member.id));
 
   const reviewByPair = new Map<
@@ -3602,7 +3593,7 @@ export const reviewCoverage = onCall(CALLABLE, async (request) => {
   >();
   for (const review of reviewSnaps.docs) {
     const proposalId = review.ref.parent.parent?.id;
-    if (!proposalId || !visibleIds.has(proposalId) || !activeReviewerIds.has(review.id)) continue;
+    if (!proposalId || !allProposalIds.has(proposalId) || !activeReviewerIds.has(review.id)) continue;
     reviewByPair.set(`${proposalId}:${review.id}`, {
       score: review.get('score'),
       conflictOfInterest: review.get('conflictOfInterest') === true,
@@ -3612,7 +3603,7 @@ export const reviewCoverage = onCall(CALLABLE, async (request) => {
   const reviewers = members.docs
     .map((member) => {
       const data = member.data();
-      const eligible = visible.filter(
+      const eligible = current.filter(
         (proposal) =>
           ![...proposal.speakerIds, ...proposal.formerSpeakerIds].includes(member.id),
       );
@@ -3652,8 +3643,8 @@ export const reviewCoverage = onCall(CALLABLE, async (request) => {
 
   return {
     ok: true,
-    hiddenOwnProposalCount,
-    proposals: visible.map(({ id, title }) => ({ id, title })),
+    hiddenOwnProposalCount: 0,
+    proposals: current.map(({ id, title }) => ({ id, title })),
     reviewers,
   };
 });

@@ -74,8 +74,9 @@ test.describe('review backend operations', () => {
     const coverage = await callJson(admin.idToken, 'reviewCoverage', {});
     expect(coverage).toMatchObject({
       ok: true,
-      hiddenOwnProposalCount: 1,
+      hiddenOwnProposalCount: 0,
       proposals: [
+        { id: 'admin-own', title: 'Admin’s private coverage' },
         { id: 'first-own', title: 'First reviewer’s talk' },
         { id: 'general', title: 'General talk' },
       ],
@@ -85,16 +86,16 @@ test.describe('review backend operations', () => {
       coverage.reviewers.map((reviewer: { uid: string }) => [reviewer.uid, reviewer]),
     );
     expect(byUid.get(first.uid)).toMatchObject({
-      eligibleCount: 1,
-      scoredProposalIds: ['general'],
+      eligibleCount: 2,
+      scoredProposalIds: ['admin-own', 'general'],
       conflictProposalIds: [],
       missingProposalIds: [],
     });
     expect(byUid.get(second.uid)).toMatchObject({
-      eligibleCount: 2,
+      eligibleCount: 3,
       scoredProposalIds: ['first-own'],
       conflictProposalIds: ['general'],
-      missingProposalIds: [],
+      missingProposalIds: ['admin-own'],
     });
     expect(byUid.get(admin.uid)).toMatchObject({
       eligibleCount: 2,
