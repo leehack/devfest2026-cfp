@@ -1154,6 +1154,87 @@ describe('role grants are readable only by admins', () => {
   });
 });
 
+describe('roleInviteLinks', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `${CFP}/roleInviteLinks`, 'test-token'), {
+        cfpId: CFP_ID,
+        role: 'reviewer',
+        label: 'Test link',
+        maxClaims: 10,
+        claimedCount: 0,
+        createdBy: OWNER,
+      });
+    });
+  });
+
+  it('denies an unauthenticated user or applicant reading invite links', async () => {
+    await assertFails(getDocs(collection(asApplicant(), `${CFP}/roleInviteLinks`)));
+    await assertFails(getDoc(doc(asApplicant(), `${CFP}/roleInviteLinks`, 'test-token')));
+  });
+
+  it('denies a plain reviewer reading invite links', async () => {
+    await assertFails(getDocs(collection(asReviewer(), `${CFP}/roleInviteLinks`)));
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/roleInviteLinks`, 'test-token')));
+  });
+
+  it('allows an event admin to list and read reviewer invite links', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `${CFP}/members`, REVIEWER), {
+        cfpId: CFP_ID,
+        uid: REVIEWER,
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    await assertSucceeds(getDoc(doc(asReviewer(), `${CFP}/roleInviteLinks`, 'test-token')));
+  });
+
+  it('denies an event admin reading an admin-role invite link, but allows event owner', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `${CFP}/roleInviteLinks`, 'admin-token'), {
+        cfpId: CFP_ID,
+        role: 'admin',
+        label: 'Admin link',
+        maxClaims: 1,
+        claimedCount: 0,
+        createdBy: OWNER,
+      });
+      await setDoc(doc(ctx.firestore(), `${CFP}/members`, REVIEWER), {
+        cfpId: CFP_ID,
+        uid: REVIEWER,
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    // Admin reading admin-role link is denied
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/roleInviteLinks`, 'admin-token')));
+    // Owner reading admin-role link is allowed
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/roleInviteLinks`, 'admin-token')));
+  });
+
+  it('denies even an admin writing one directly — invite links are callable-only', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `${CFP}/members`, REVIEWER), {
+        cfpId: CFP_ID,
+        uid: REVIEWER,
+        name: 'Chen',
+        email: 'chen@example.org',
+        role: 'admin',
+      });
+    });
+    await assertFails(
+      setDoc(doc(asReviewer(), `${CFP}/roleInviteLinks`, 'new-token'), {
+        cfpId: CFP_ID,
+        role: 'reviewer',
+        createdBy: REVIEWER,
+      }),
+    );
+  });
+});
+
 /**
  * Enabling email sign-in also enables email+password signup, which verifies
  * nothing. An account that has not proved its address must not be able to act

@@ -88,6 +88,11 @@ const OrgWorkspacePage = lazy(() =>
     default: OrgWorkspacePage,
   })),
 );
+const JoinCommitteePage = lazy(() =>
+  import('./screens/JoinCommitteePage').then(({ JoinCommitteePage }) => ({
+    default: JoinCommitteePage,
+  })),
+);
 
 const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
 
@@ -809,6 +814,32 @@ function Routed({
     );
   }
 
+  if (route === 'join') {
+    const inviteToken =
+      typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('invite') ?? undefined
+        : undefined;
+    return (
+      <JoinCommitteePage
+        user={user}
+        cfp={cfp}
+        cfpId={cfpId}
+        onRoleChanged={retryRole}
+        signInSlot={
+          !user ? (
+            <SignIn
+              cfp={cfp}
+              cfpId={cfpId}
+              purpose="committee"
+              destination="join"
+              roleInviteToken={inviteToken}
+            />
+          ) : undefined
+        }
+      />
+    );
+  }
+
   if (route === 'schedule' || route === 'session') {
     const newerSharedPreview = Boolean(
       cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId,
@@ -994,11 +1025,13 @@ export function SignIn({
   cfpId,
   purpose = 'speaker',
   destination = 'submit',
+  roleInviteToken,
 }: {
   cfp: CfpWindow | null;
   cfpId: string | null;
   purpose?: 'speaker' | 'committee' | 'account' | 'organising';
   destination?: SignInDestination;
+  roleInviteToken?: string;
 }) {
   const { t, locale } = useI18n();
   const tRef = useLatest(t);
@@ -1049,10 +1082,18 @@ export function SignIn({
         destination === 'submit' && !invite
           ? proposalSelectionQuery(window.location.search)
           : null;
+      const roleInvite =
+        destination === 'join'
+          ? roleInviteToken ??
+            (typeof window !== 'undefined'
+              ? new URLSearchParams(window.location.search).get('invite') ?? undefined
+              : undefined)
+          : undefined;
       await requestSignInLink({
         email: email.trim(),
         locale,
         ...(cfpId ? { cfpId, destination } : {}),
+        ...(roleInvite ? { roleInviteToken: roleInvite } : {}),
         ...(invite
           ? {
               proposalId: invite.proposalId,

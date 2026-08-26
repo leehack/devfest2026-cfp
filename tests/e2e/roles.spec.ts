@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   CFP_ID,
   callAs,
+  callJson,
   callWithErrorDetails,
   clearProposals,
   createAccount,
@@ -38,7 +39,7 @@ const row = (page: Page, who: string) => page.locator('.people__row', { hasText:
  * The invite form's Role select. Scoped rather than found by name: every row in
  * the list carries a role select of its own now, so "Role" is ambiguous.
  */
-const inviteRoleField = (page: Page) => page.locator('.grid--2').getByRole('combobox');
+const inviteRoleField = (page: Page) => page.locator('.grid--2').first().getByRole('combobox');
 
 /** The label on each admin sub-tab, so a test can say where it means to land. */
 const SECTIONS = {
@@ -838,5 +839,82 @@ test.describe('reviewing', () => {
 
     await expect(page.getByText(/scores stay hidden/)).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Committee scores' })).toBeVisible();
+  });
+
+  test('admin can create a shareable invite link and a new user can join the committee with it', async ({
+    page,
+  }) => {
+    await asAdmin(page);
+
+    // Create an invite link with a label and max claims limit
+    await page.getByPlaceholder('e.g. Discord reviewers').fill('Discord Team');
+    await page.getByPlaceholder('Leave empty for unlimited').fill('5');
+    await page.getByRole('button', { name: 'Create link' }).click();
+
+    await expect(page.getByText('Discord Team')).toBeVisible();
+    await expect(page.getByText('0 / 5 claims')).toBeVisible();
+    await expect(page.getByText('Active', { exact: true })).toBeVisible();
+
+    // Create a new user identity to claim the invite link
+    const newReviewer: Identity = {
+      sub: 'link-reviewer-sub',
+      email: 'link-reviewer@example.org',
+      name: 'Robin Link Reviewer',
+    };
+    const newReviewerAccount = await createAccount(newReviewer);
+
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+
+    // Grab the token via backend call
+    const linksRes = await callJson(admin.idToken, 'createRoleInviteLink', {
+      role: 'reviewer',
+      label: 'Direct Link',
+      maxClaims: 2,
+    });
+    const token = linksRes.link.id;
+
+    // Navigate as the new user to the join URL
+    await signInAs(page, newReviewer, at(`/join?invite=${token}`));
+
+    await expect(page.getByRole('heading', { name: /Join .* as a Reviewer/i })).toBeVisible();
+    await expect(page.getByText('“Direct Link”')).toBeVisible();
+
+    await page.getByRole('button', { name: /Accept & Join as Reviewer/i }).click();
+
+    // Verify redirected to review talks
+    await expect(page).toHaveURL(at('/review'));
+
+    // Check member was created
+    const member = await readMember(newReviewerAccount.uid);
+    expect(member).toMatchObject({
+      role: 'reviewer',
+      email: 'link-reviewer@example.org',
+    });
+  });
+
+  test('revoked or exhausted invite link refuses new claims', async ({ page }) => {
+    const admin = await createAccount(ADMIN);
+    await seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email);
+
+    const linksRes = await callJson(admin.idToken, 'createRoleInviteLink', {
+      role: 'reviewer',
+      label: 'To be revoked',
+      maxClaims: 1,
+    });
+    const token = linksRes.link.id;
+
+    // Revoke link
+    await callJson(admin.idToken, 'revokeRoleInviteLink', { token });
+
+    const invitee: Identity = {
+      sub: 'revoked-invitee-sub',
+      email: 'revoked-invitee@example.org',
+      name: 'Revoked Invitee',
+    };
+
+    await signInAs(page, invitee, at(`/join?invite=${token}`));
+    await expect(page.getByText('Invitation revoked')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Accept & Join/i })).toHaveCount(0);
   });
 });

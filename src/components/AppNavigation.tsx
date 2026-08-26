@@ -20,6 +20,7 @@ function taskLabel(place: Place, t: Dictionary): string {
   if (place.route === 'schedule' || place.route === 'session') return t.nav.schedule;
   if (place.route === 'review') return t.nav.review;
   if (place.route === 'admin') return t.admin.tabs[place.tab];
+  if (place.route === 'join') return t.join.title;
   return t.app.title;
 }
 

@@ -7,16 +7,18 @@ import { adminError, roleAdminError, transferError } from '../../lib/errors';
 import {
   acceptEventOwnershipTransfer,
   cancelEventOwnershipTransfer,
+  createRoleInviteLink,
   getEventOwnershipTransfer,
   grantRole,
   initiateEventOwnershipTransfer,
   loadCommittee,
   revokeRole,
+  revokeRoleInviteLink,
   type Person,
 } from '../../lib/roles';
 import { useLatest } from '../../lib/useLatest';
 import { GRANTABLE_ROLES, type GrantableRole } from '@shared/cfp';
-import type { OwnershipTransfer, RoleGrant } from '@shared/types';
+import type { OwnershipTransfer, RoleGrant, RoleInviteLink } from '@shared/types';
 import { Result } from './Result';
 
 /**
@@ -70,9 +72,17 @@ export function Committee({
   const tRef = useLatest(t);
   const [people, setPeople] = useState<Person[]>([]);
   const [pending, setPending] = useState<RoleGrant[]>([]);
+  const [inviteLinks, setInviteLinks] = useState<RoleInviteLink[]>([]);
   const [pendingTransfer, setPendingTransfer] = useState<OwnershipTransfer | null>(null);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<GrantableRole>('reviewer');
+  const [linkRole, setLinkRole] = useState<GrantableRole>('reviewer');
+  const [linkLabel, setLinkLabel] = useState('');
+  const [linkMaxClaims, setLinkMaxClaims] = useState('');
+  const [linkExpiryOption, setLinkExpiryOption] = useState<'never' | '7d' | '14d' | '30d' | 'custom'>('7d');
+  const [linkCustomDate, setLinkCustomDate] = useState('');
+  const [creatingLink, setCreatingLink] = useState(false);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [transferEmail, setTransferEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -105,6 +115,7 @@ export function Committee({
       if (!current()) return false;
       setPeople(committee.people);
       setPending(committee.pending);
+      setInviteLinks(committee.inviteLinks ?? []);
       setPendingTransfer(transferRes.data.transfer ?? null);
       setLoadedCfp(scope);
       setLoadFailed(false);
@@ -139,10 +150,18 @@ export function Committee({
     generation.current += 1;
     setPeople([]);
     setPending([]);
+    setInviteLinks([]);
     setPendingTransfer(null);
     setEmail('');
+    setLinkLabel('');
+    setLinkMaxClaims('');
+    setLinkExpiryOption('7d');
+    setLinkCustomDate('');
+    setCreatingLink(false);
+    setCopiedLinkId(null);
     setTransferEmail('');
     setRole('reviewer');
+    setLinkRole('reviewer');
     setLoadedCfp('');
     setLoadFailed(false);
     setBusy(false);
@@ -272,6 +291,98 @@ export function Committee({
     } finally {
       setTransferring(false);
     }
+  }
+
+  async function generateInviteLink() {
+    if (readOnly) return;
+    const scope = cfpId;
+    setCreatingLink(true);
+    setError('');
+    setNote('');
+    try {
+      let expiresAt: string | null = null;
+      const now = Date.now();
+      if (linkExpiryOption === '7d') {
+        expiresAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+      } else if (linkExpiryOption === '14d') {
+        expiresAt = new Date(now + 14 * 24 * 60 * 60 * 1000).toISOString();
+      } else if (linkExpiryOption === '30d') {
+        expiresAt = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+      } else if (linkExpiryOption === 'custom' && linkCustomDate.trim()) {
+        const [year, month, day] = linkCustomDate.trim().split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day, 23, 59, 59, 999);
+        expiresAt = dateObj.toISOString();
+      }
+
+      const parsedMaxClaims = linkMaxClaims.trim() ? Number(linkMaxClaims.trim()) : null;
+
+      const { data } = await createRoleInviteLink({
+        cfpId,
+        role: linkRole,
+        label: linkLabel.trim() || undefined,
+        maxClaims: parsedMaxClaims,
+        expiresAt,
+      });
+      if (activeCfp.current !== scope) return;
+      setNote(tRef.current.admin.inviteLinkGenerated);
+      setLinkLabel('');
+      setLinkMaxClaims('');
+      setLinkExpiryOption('7d');
+      setLinkCustomDate('');
+
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        const fullUrl = `${window.location.origin}/c/${cfpId}/join?invite=${data.link.id}`;
+        void navigator.clipboard.writeText(fullUrl).then(() => {
+          setCopiedLinkId(data.link.id);
+          setTimeout(() => setCopiedLinkId(null), 3000);
+        });
+      }
+
+      await refresh(false);
+    } catch (e) {
+      if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
+    } finally {
+      if (activeCfp.current === scope) setCreatingLink(false);
+    }
+  }
+
+  async function revokeLink(token: string) {
+    if (readOnly) return;
+    if (!window.confirm(t.admin.inviteLinkRevokeConfirm)) return;
+    const scope = cfpId;
+    setBusy(true);
+    setError('');
+    setNote('');
+    try {
+      await revokeRoleInviteLink({ cfpId, token });
+      if (activeCfp.current !== scope) return;
+      setNote(tRef.current.admin.inviteLinkRevoked);
+      await refresh(false);
+    } catch (e) {
+      if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
+    } finally {
+      if (activeCfp.current === scope) setBusy(false);
+    }
+  }
+
+  function copyLinkUrl(token: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      const fullUrl = `${window.location.origin}/c/${cfpId}/join?invite=${token}`;
+      void navigator.clipboard.writeText(fullUrl).then(() => {
+        setCopiedLinkId(token);
+        setTimeout(() => setCopiedLinkId(null), 3000);
+      });
+    }
+  }
+
+  function getLinkStatus(link: RoleInviteLink): 'revoked' | 'expired' | 'exhausted' | 'active' {
+    if (link.revokedAt) return 'revoked';
+    const expiresAt =
+      (link.expiresAt as { toMillis?: () => number })?.toMillis?.() ??
+      (typeof link.expiresAt === 'string' ? new Date(link.expiresAt).getTime() : null);
+    if (expiresAt && expiresAt <= Date.now()) return 'expired';
+    if (link.maxClaims !== null && link.claimedCount >= link.maxClaims) return 'exhausted';
+    return 'active';
   }
 
   return (
@@ -450,6 +561,147 @@ export function Committee({
       >
         {busy ? t.admin.inviting : t.admin.invite}
       </button>
+
+      <section style={{ marginTop: '2.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+        <h3>{t.admin.inviteLinks}</h3>
+        <p className="section__help">{t.admin.inviteLinksHelp}</p>
+
+        {inviteLinks.length > 0 && (
+          <ul className="people" style={{ marginBottom: '1.5rem' }}>
+            {inviteLinks.map((link) => {
+              const status = getLinkStatus(link);
+              const isCopied = copiedLinkId === link.id;
+              const canRevoke = status === 'active' && (isOwner || link.role === 'reviewer');
+              const expiresDate = link.expiresAt
+                ? new Date(
+                    (link.expiresAt as any)?.toMillis
+                      ? (link.expiresAt as any).toMillis()
+                      : (link.expiresAt as any),
+                  ).toLocaleDateString()
+                : null;
+              return (
+                <li key={link.id} className="people__row" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <strong>{link.label || t.enums.role[link.role]}</strong>
+                      <span className="people__meta people__meta--plain">
+                        {t.enums.role[link.role]}
+                      </span>
+                      <span
+                        className={`chip chip--${status === 'active' ? 'success' : status === 'revoked' ? 'danger' : 'muted'}`}
+                        style={{ fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}
+                      >
+                        {t.admin.inviteLinkStatus[status]}
+                      </span>
+                    </div>
+                    <span className="people__meta">
+                      {t.admin.inviteLinkClaims(link.claimedCount, link.maxClaims)}
+                      {expiresDate && (
+                        <> · {t.admin.inviteLinkCustomDate} {expiresDate}</>
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="people__actions">
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => copyLinkUrl(link.id)}
+                    >
+                      {isCopied ? t.admin.inviteLinkCopied : t.admin.inviteLinkCopy}
+                    </button>
+                    {canRevoke && (
+                      <button
+                        type="button"
+                        className="btn btn--ghost"
+                        disabled={busy || readOnly}
+                        onClick={() => void revokeLink(link.id)}
+                      >
+                        {t.admin.inviteLinkRevoke}
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div className="grid grid--2" style={{ marginBottom: '1rem' }}>
+          <TextField
+            label={t.admin.inviteLinkLabel}
+            placeholder={t.admin.inviteLinkLabelPlaceholder}
+            value={linkLabel}
+            onChange={setLinkLabel}
+            disabled={creatingLink || busy || loadFailed || readOnly}
+          />
+          <SelectField
+            label={t.admin.roleLabel}
+            value={linkRole}
+            options={
+              isOwner
+                ? GRANTABLE_ROLES.map((r) => ({ value: r, label: t.enums.role[r] }))
+                : [{ value: 'reviewer', label: t.enums.role.reviewer }]
+            }
+            onChange={setLinkRole}
+            required
+            disabled={creatingLink || busy || loadFailed || readOnly}
+          />
+        </div>
+
+        <div className="grid grid--2" style={{ marginBottom: '1rem' }}>
+          <TextField
+            label={t.admin.inviteLinkMaxClaims}
+            placeholder={t.admin.inviteLinkMaxClaimsPlaceholder}
+            type="number"
+            value={linkMaxClaims}
+            onChange={setLinkMaxClaims}
+            disabled={creatingLink || busy || loadFailed || readOnly}
+          />
+          <SelectField
+            label={t.admin.inviteLinkExpiry}
+            value={linkExpiryOption}
+            options={[
+              { value: '7d', label: t.admin.inviteLinkExpiry7d },
+              { value: '14d', label: t.admin.inviteLinkExpiry14d },
+              { value: '30d', label: t.admin.inviteLinkExpiry30d },
+              { value: 'never', label: t.admin.inviteLinkExpiryNever },
+              { value: 'custom', label: t.admin.inviteLinkExpiryCustom },
+            ]}
+            onChange={(val) => setLinkExpiryOption(val as any)}
+            required
+            disabled={creatingLink || busy || loadFailed || readOnly}
+          />
+        </div>
+
+        {linkExpiryOption === 'custom' && (
+          <div style={{ marginBottom: '1rem', maxWidth: '15rem' }}>
+            <TextField
+              label={t.admin.inviteLinkCustomDate}
+              type="date"
+              value={linkCustomDate}
+              onChange={setLinkCustomDate}
+              required
+              disabled={creatingLink || busy || loadFailed || readOnly}
+            />
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="btn btn--secondary"
+          disabled={
+            creatingLink ||
+            busy ||
+            loadFailed ||
+            readOnly ||
+            (linkExpiryOption === 'custom' && !linkCustomDate.trim())
+          }
+          onClick={() => void generateInviteLink()}
+        >
+          {creatingLink ? t.admin.creatingInviteLink : t.admin.createInviteLink}
+        </button>
+      </section>
 
       {isOwner && (
         <section style={{ marginTop: '2.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>

@@ -45,6 +45,13 @@ export const CFP_LIMITS = {
   timeZoneMax: 80,
 } as const;
 
+export const ROLE_INVITE_LINK_LIMITS = {
+  labelMax: 120,
+  maxClaimsMin: 1,
+  maxClaimsMax: 1000,
+  tokenRegex: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+} as const;
+
 /**
  * What the call is and where the event is — the half of a CFP that is for the
  * people reading it rather than for the machinery.
