@@ -1,0 +1,65 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Component to deploy'
+        required: true
+        default: 'app'
+        type: choice
+        options:
+          - app
+          - functions
+          - rules
+          - all
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: deploy to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - run: npm ci
+      - run: npm ci --prefix functions
+
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY || secrets.FIREBASE_SERVICE_ACCOUNT_DEVFEST_MTL_2026_CFP }}
+
+      # Deploy in compatibility order: Functions first, App Hosting second, Rules third.
+      - name: Deploy Cloud Functions
+        if: inputs.target == 'functions' || inputs.target == 'all'
+        run: npm run deploy:functions
+
+      - name: Deploy App Hosting
+        if: github.event_name == 'push' || inputs.target == 'app' || inputs.target == 'all'
+        run: npm run deploy:app
+
+      - name: Deploy Security Rules & Indexes
+        if: inputs.target == 'rules' || inputs.target == 'all'
+        run: npm run deploy:rules
+
+      - name: Verify Live Production Health
+        run: npm run smoke:production
