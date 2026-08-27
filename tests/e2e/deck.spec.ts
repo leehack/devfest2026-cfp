@@ -415,44 +415,44 @@ test.describe('the review deck', () => {
     expect(await readReviews('deck-0')).toHaveLength(0);
   });
 
-  test('a conflict can be saved without choosing a numeric score', async ({ page }) => {
+  test('a conflict can be saved with 0 — Conflict button and shortcut 0', async ({ page }) => {
     await stage(page);
 
-    await page.getByRole('checkbox', { name: 'I have a conflict of interest' }).check();
-    const save = page.getByRole('button', { name: 'Save review', exact: true });
-    await expect(save).toBeEnabled();
-    await save.click();
-    await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '0 — Conflict' }).click();
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
 
     const reviews = await readReviews('deck-0');
     expect(reviews).toHaveLength(1);
     expect(reviews[0]).toMatchObject({ conflictOfInterest: true });
-    await page.reload();
-    await expect(heading(page, TITLES[1])).toBeVisible();
-    await page.keyboard.press('ArrowRight');
-    await page.keyboard.press('ArrowRight');
+
+    await page.getByRole('button', { name: /All proposals/ }).click();
     await expect(heading(page, TITLES[0])).toBeVisible();
-    await expect(page.getByRole('checkbox', { name: 'I have a conflict of interest' })).toBeChecked();
+    await expect(page.getByRole('button', { name: '0 — Conflict' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     for (const name of ['1 — Pass', '2 — Maybe', '3 — Yes', '4 — Strong yes']) {
       await expect(page.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
     }
 
     await page.keyboard.press('3');
-    await expect(heading(page, TITLES[0])).toBeVisible();
-    expect((await readReviews('deck-0'))[0]).toMatchObject({
-      conflictOfInterest: true,
-      score: 1,
-    });
+    await expect(heading(page, TITLES[1])).toBeVisible();
+    await expect
+      .poll(async () => (await readReviews('deck-0'))[0])
+      .toMatchObject({
+        conflictOfInterest: false,
+        score: 3,
+      });
   });
 
   test('the shortcut list can be opened from the keyboard', async ({ page }) => {
     await stage(page);
 
-    await expect(page.getByText('Score, and move to the next one')).toHaveCount(0);
+    await expect(page.getByText(/Score \(1–4\) or conflict \(0\)/)).toHaveCount(0);
     await page.keyboard.press('?');
-    await expect(page.getByText('Score, and move to the next one')).toBeVisible();
+    await expect(page.getByText(/Score \(1–4\) or conflict \(0\)/)).toBeVisible();
     await page.keyboard.press('?');
-    await expect(page.getByText('Score, and move to the next one')).toHaveCount(0);
+    await expect(page.getByText(/Score \(1–4\) or conflict \(0\)/)).toHaveCount(0);
   });
 
   test('the queue can jump back to any named proposal and shows its review state', async ({
@@ -504,6 +504,8 @@ test.describe('the review deck', () => {
       await expect(page.getByText(`${count} of 3 responded`)).toBeVisible();
     }
     await expect(page.getByText('Every proposal in this view has a response.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'You’re all caught up!' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Browse all proposals' })).toBeVisible();
   });
 
   test('the card keeps each active speaker’s projected travel details separate', async ({
@@ -633,4 +635,62 @@ test.describe('the review deck', () => {
     await expect(page.getByText(/code of conduct/i)).toHaveCount(0);
     await expect(page.getByText(SPEAKER.email)).toHaveCount(0);
   });
+
+  test('Save & next button saves a written review note and advances', async ({ page }) => {
+    await stage(page);
+
+    await page
+      .getByRole('textbox', { name: /^Notes for the committee/ })
+      .fill('Strong candidate for keynote.');
+    await page.getByRole('button', { name: '4 — Strong yes' }).click();
+
+    // Re-visit the first proposal via All proposals filter
+    await page.getByRole('button', { name: /All proposals/ }).click();
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await page
+      .getByRole('textbox', { name: /^Notes for the committee/ })
+      .fill('Updated keynote note.');
+    await page.getByRole('button', { name: 'Save & next' }).click();
+
+    await expect(heading(page, TITLES[1])).toBeVisible();
+    await expect
+      .poll(async () => (await readReviews('deck-0'))[0])
+      .toMatchObject({
+        score: 4,
+        comment: 'Updated keynote note.',
+      });
+  });
+
+  test('default filter shows unreviewed proposals and toggles to all proposals', async ({
+    page,
+  }) => {
+    await stage(page);
+
+    // Initial state: Needs response filter is active (3 items)
+    await expect(page.getByRole('button', { name: /Needs response \(3\)/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(page.getByRole('button', { name: /All proposals \(3\)/ })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+
+    // Score proposal 0 with shortcut '0' (conflict)
+    await page.keyboard.press('0');
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
+
+    // Toggle to All proposals filter
+    await page.getByRole('button', { name: /All proposals/ }).click();
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await expect(page.getByRole('button', { name: '0 — Conflict' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    // Toggle back to Needs response filter
+    await page.getByRole('button', { name: /Needs response/ }).click();
+    await expect(heading(page, TITLES[1])).toBeVisible();
+  });
 });
+

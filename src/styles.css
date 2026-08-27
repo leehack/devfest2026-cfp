@@ -3434,6 +3434,56 @@ button.deck-queue__item:hover {
   margin: 0 0 var(--s-4);
 }
 
+.review-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-4);
+}
+
+.deck-complete-card {
+  text-align: center;
+  padding: var(--s-6) var(--s-5);
+}
+
+.deck-complete-card__header {
+  margin-bottom: var(--s-4);
+}
+
+.deck-complete-card__icon {
+  display: block;
+  font-size: 2.5rem;
+  margin-bottom: var(--s-2);
+}
+
+.deck-complete-card__header h2 {
+  margin: 0 0 var(--s-2);
+}
+
+.deck-complete-card__header p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.deck-complete-card__stats {
+  display: flex;
+  justify-content: center;
+  gap: var(--s-6);
+  margin: var(--s-5) 0;
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.deck-complete-card__actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-5);
+}
+
 .shortcuts {
   display: grid;
   gap: var(--s-2) var(--s-4);
@@ -3476,9 +3526,9 @@ button.deck-queue__item:hover {
   margin-bottom: var(--s-5);
 }
 
-@media (min-width: 40rem) {
+@media (min-width: 32rem) {
   .scores {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
   }
 }
 

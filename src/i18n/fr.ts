@@ -1995,13 +1995,19 @@ export const fr: Dictionary = {
     scoresVisibleDuringIntake:
       'Les notes du comité sont visibles pendant que les propositions sont ouvertes. Pour une ronde tardive indépendante, demandez à l’organisation de masquer les notes avant de continuer.',
     allCategories: 'Toutes les catégories',
+    filterNeedsResponse: 'À évaluer',
+    filterAll: 'Toutes les propositions',
+    deckCompletedTitle: 'Vous êtes à jour !',
+    deckCompletedHelp: 'Chaque proposition de cette vue a une réponse.',
+    browseAllProposals: 'Parcourir toutes les propositions',
     empty: 'Aucune proposition n’attend votre évaluation.',
     onlyYours: 'Rien à évaluer pour l’instant. Vous ne pouvez pas noter votre propre conférence, et c’est la seule soumise jusqu’ici.',
     progress: (handled: number, total: number) => `${handled} sur ${total} avec réponse`,
     scoreLabel: 'Noter cette proposition',
     scoreHelp:
-      'Choisir une note enregistre cette évaluation et passe à la proposition suivante.',
+      'Choisir une note (1–4) ou déclarer un conflit (0) enregistre cette évaluation et passe à la proposition suivante.',
     scores: {
+      0: '0 — Conflit',
       1: '1 — Non',
       2: '2 — Peut-être',
       3: '3 — Oui',
@@ -2011,6 +2017,7 @@ export const fr: Dictionary = {
     rubricHelp:
       'Jugez la proposition devant vous, et non sa place par rapport à la file actuelle.',
     rubric: {
+      0: 'Récusation : lien personnel ou professionnel. Exclu des totaux et du calibrage.',
       1: 'Ne pas programmer : valeur floue, lacunes importantes ou préparation insuffisante.',
       2: 'À discuter : du potentiel, mais des questions importantes demeurent.',
       3: 'À programmer : valeur claire et présentation crédible.',
@@ -2030,7 +2037,7 @@ export const fr: Dictionary = {
     queueWaiting: 'Réponse requise',
     complete: 'Chaque proposition de cette vue a une réponse.',
     shortcuts: 'Raccourcis',
-    shortcutScore: 'Noter, puis passer à la suivante',
+    shortcutScore: 'Noter (1–4) ou conflit (0), puis passer à la suivante',
     shortcutMove: 'Reculer et avancer sans noter',
     shortcutHelp: 'Afficher ou masquer ceci',
     submissionAnswers: 'Renseignements supplémentaires sur la conférence',
@@ -2057,6 +2064,7 @@ export const fr: Dictionary = {
     conflictHelp: 'Exclue des totaux, y compris de votre propre calibrage.',
     comment: 'Notes pour le comité',
     save: 'Enregistrer',
+    saveAndNext: 'Enregistrer et suivant',
     saving: 'Enregistrement…',
     saved: 'Enregistré',
     notScored: 'Aucune réponse pour l’instant',
