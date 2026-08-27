@@ -758,10 +758,11 @@ test.describe('reviewing', () => {
     await page.getByRole('button', { name: '3 — Yes' }).click();
     await expect(page.getByText('1 of 1 responded')).toBeVisible();
 
+    await page.getByRole('button', { name: 'Browse all proposals' }).click();
     await page
       .getByRole('textbox', { name: /^Notes for the committee/ })
       .fill('Solid, wants a tighter close.');
-    await page.getByRole('button', { name: 'Save review' }).click();
+    await page.getByRole('button', { name: 'Save & next' }).click();
     // Waiting on "Saved" would prove nothing — the score already put it there.
     await expect
       .poll(async () => (await readReviews('p-sam'))[0]?.comment)

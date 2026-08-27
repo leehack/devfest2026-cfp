@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { Checkbox, TextAreaField } from '../components/fields';
+import { TextAreaField } from '../components/fields';
 import { formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
@@ -79,6 +79,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [queueOpen, setQueueOpen] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'unreviewed' | 'all'>('unreviewed');
+  const [filterEpoch, setFilterEpoch] = useState(0);
   const loadGeneration = useRef(0);
   const draftsRef = useRef(drafts);
   const scopeKey = `${cfpId}:${user.uid}`;
@@ -152,6 +154,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setShape(form);
       setIndex(0);
       setFailures(new Map());
+      setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
+      setFilterEpoch((e) => e + 1);
       setLoadedFor(scopeKey);
     } catch (e) {
       if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
@@ -184,27 +188,51 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     [loadedFor, order, scopeKey],
   );
   const categories = Array.from(new Set(scopedOrder.map((p) => p.category).filter(Boolean)));
-  const filteredOrder = selectedCategory
-    ? scopedOrder.filter((p) => p.category === selectedCategory)
-    : scopedOrder;
-  const current = filteredOrder[index] ?? filteredOrder[0];
-  const displayIndex = current ? filteredOrder.indexOf(current) : 0;
-  const filteredHandled = filteredOrder.filter((proposal) => mine.has(proposal.id)).length;
-  const unscored = filteredOrder
+
+  const categoryOrder = useMemo(
+    () =>
+      selectedCategory
+        ? scopedOrder.filter((p) => p.category === selectedCategory)
+        : scopedOrder,
+    [scopedOrder, selectedCategory],
+  );
+
+  const deckOrder = useMemo(() => {
+    return statusFilter === 'unreviewed'
+      ? categoryOrder.filter((p) => !mine.has(p.id))
+      : categoryOrder;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryOrder, statusFilter, filterEpoch]);
+
+  const isComplete = deckOrder.length === 0 || index >= deckOrder.length;
+  const current = !isComplete ? deckOrder[index] : null;
+  const displayIndex = current ? index : deckOrder.length;
+
+  const handled = categoryOrder.filter((proposal) => mine.has(proposal.id)).length;
+  const conflicts = categoryOrder.filter(
+    (proposal) => mine.get(proposal.id)?.conflictOfInterest,
+  ).length;
+  const remaining = Math.max(categoryOrder.length - handled, 0);
+
+  const unscored = deckOrder
     .map((proposal, proposalIndex) => ({ proposal, proposalIndex }))
     .filter(({ proposal }) => !mine.has(proposal.id));
   const nextUnscored =
     unscored.find(({ proposalIndex }) => proposalIndex > displayIndex) ?? unscored[0];
 
-  // Clamped rather than wrapping: the ends are ends, so a held-down arrow does
-  // not quietly loop back to the start.
+  // Manual arrow navigation is clamped to [0, deckOrder.length - 1] so arrowing does not trigger false completion.
   const go = useCallback(
     (delta: number) => {
-      setIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(filteredOrder.length - 1, 0)));
+      setIndex((i) => Math.min(Math.max(i + delta, 0), Math.max(deckOrder.length - 1, 0)));
       setSavedId('');
     },
-    [filteredOrder.length],
+    [deckOrder.length],
   );
+
+  const advance = useCallback(() => {
+    setIndex((i) => Math.min(i + 1, deckOrder.length));
+    setSavedId('');
+  }, [deckOrder.length]);
 
   const patch = useCallback((id: string, part: Partial<Draft>) => {
     const draft = { ...draftOf(), ...draftsRef.current.get(id), ...part };
@@ -283,7 +311,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     [cfpId, scopeKey, t, user.uid],
   );
 
-  /** The whole point of the redesign: one key scores and moves on. */
+  /** One key scores and moves on. */
   const scoreAndAdvance = useCallback(
     (score: Score) => {
       if (!current || savingIds.has(current.id)) return;
@@ -291,23 +319,48 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         ...draftOf(mine.get(current.id)),
         ...drafts.get(current.id),
       };
-      if (currentDraft.conflictOfInterest) return;
-      const draft = {
+      const draft: Draft = {
         ...currentDraft,
         score,
         conflictOfInterest: false,
       };
       patch(current.id, { score, conflictOfInterest: false });
       void persist(current.id, draft, current.title || t.review.untitled);
-      // Navigation does not wait for the write. The save carries its own id, so
-      // landing on the next card cannot misattribute it.
-      go(1);
+      advance();
     },
-    [current, drafts, mine, patch, persist, go, savingIds, t.review.untitled],
+    [current, drafts, mine, patch, persist, advance, savingIds, t.review.untitled],
   );
+
+  /** 0 records conflict of interest and moves on. */
+  const conflictAndAdvance = useCallback(() => {
+    if (!current || savingIds.has(current.id)) return;
+    const currentDraft = {
+      ...draftOf(mine.get(current.id)),
+      ...drafts.get(current.id),
+    };
+    const draft: Draft = {
+      ...currentDraft,
+      score: null,
+      conflictOfInterest: true,
+    };
+    patch(current.id, { score: null, conflictOfInterest: true });
+    void persist(current.id, draft, current.title || t.review.untitled);
+    advance();
+  }, [current, drafts, mine, patch, persist, advance, savingIds, t.review.untitled]);
+
+  /** Save and advance on button click. */
+  const saveAndAdvance = useCallback(() => {
+    if (!current || savingIds.has(current.id)) return;
+    const currentDraft = drafts.get(current.id) ?? draftOf(mine.get(current.id));
+    if (currentDraft.score === null && !currentDraft.conflictOfInterest) return;
+    void persist(current.id, currentDraft, current.title || t.review.untitled);
+    advance();
+  }, [current, drafts, mine, persist, advance, savingIds, t.review.untitled]);
 
   const showFailure = useCallback(
     (id: string) => {
+      setStatusFilter('all');
+      setFilterEpoch((e) => e + 1);
       const failedIndex = scopedOrder.findIndex((proposal) => proposal.id === id);
       if (failedIndex < 0) return;
       setSelectedCategory(null);
@@ -337,6 +390,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setActiveKey(key);
       setTimeout(() => setActiveKey(null), 250);
 
+      if (event.key === '0') {
+        event.preventDefault();
+        conflictAndAdvance();
+        return;
+      }
       if (event.key >= '1' && event.key <= '4') {
         event.preventDefault();
         scoreAndAdvance(Number(event.key) as Score);
@@ -360,7 +418,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [scoreAndAdvance, go]);
+  }, [scoreAndAdvance, conflictAndAdvance, go]);
 
   if (loadedFor !== scopeKey || loading) return <p className="muted">{t.app.loading}</p>;
   if (error && order.length === 0) {
@@ -388,14 +446,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       </section>
     );
   }
-  if (!current) return null;
 
-  const draft = drafts.get(current.id) ?? draftOf(mine.get(current.id));
-  const handled = filteredHandled;
-  const conflicts = filteredOrder.filter(
-    (proposal) => mine.get(proposal.id)?.conflictOfInterest,
-  ).length;
-  const remaining = Math.max(filteredOrder.length - handled, 0);
+  const draft = current ? (drafts.get(current.id) ?? draftOf(mine.get(current.id))) : draftOf();
 
   return (
     <div className="deck">
@@ -428,13 +480,89 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         </p>
       )}
 
+      <div className="review-filters">
+        <div className="filter-bar" role="group" aria-label={t.review.queue}>
+          <button
+            type="button"
+            className={`filter-pill${statusFilter === 'unreviewed' ? ' filter-pill--active' : ''}`}
+            aria-pressed={statusFilter === 'unreviewed'}
+            onClick={() => {
+              setStatusFilter('unreviewed');
+              setFilterEpoch((e) => e + 1);
+              setIndex(0);
+              setQueueOpen(false);
+              setSavedId('');
+            }}
+          >
+            {t.review.filterNeedsResponse} ({remaining})
+          </button>
+          <button
+            type="button"
+            className={`filter-pill${statusFilter === 'all' ? ' filter-pill--active' : ''}`}
+            aria-pressed={statusFilter === 'all'}
+            onClick={() => {
+              setStatusFilter('all');
+              setFilterEpoch((e) => e + 1);
+              setIndex(0);
+              setQueueOpen(false);
+              setSavedId('');
+            }}
+          >
+            {t.review.filterAll} ({categoryOrder.length})
+          </button>
+        </div>
+
+        {categories.length > 1 && (
+          <div className="filter-bar" role="group" aria-label={t.proposal.category}>
+            <button
+              type="button"
+              className={`filter-pill${selectedCategory === null ? ' filter-pill--active' : ''}`}
+              aria-pressed={selectedCategory === null}
+              onClick={() => {
+                setSelectedCategory(null);
+                setFilterEpoch((e) => e + 1);
+                setIndex(0);
+                setQueueOpen(false);
+                setSavedId('');
+              }}
+            >
+              {t.review.allCategories} ({scopedOrder.length})
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                className={`filter-pill${selectedCategory === cat ? ' filter-pill--active' : ''}`}
+                aria-pressed={selectedCategory === cat}
+                onClick={() => {
+                  setSelectedCategory(cat);
+                  setFilterEpoch((e) => e + 1);
+                  setIndex(0);
+                  setQueueOpen(false);
+                  setSavedId('');
+                }}
+              >
+                {labelOf(shape.category, cat, locale)} (
+                {scopedOrder.filter((proposal) => proposal.category === cat).length})
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="deck__bar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <p className="deck__progress" style={{ margin: 0 }}>
-            <strong>{t.review.position(displayIndex + 1, filteredOrder.length)}</strong>
+            <strong>
+              {deckOrder.length === 0
+                ? t.review.position(0, 0)
+                : current
+                  ? t.review.position(displayIndex + 1, deckOrder.length)
+                  : t.review.position(deckOrder.length, deckOrder.length)}
+            </strong>
             <span className="muted">
               {' '}
-              · {t.review.progress(filteredHandled, filteredOrder.length)}
+              · {t.review.progress(handled, categoryOrder.length)}
             </span>
           </p>
           {blindReview && (
@@ -447,7 +575,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={displayIndex === 0}
+            disabled={displayIndex === 0 && current !== null}
             onClick={() => go(-1)}
             aria-label={t.review.previous}
           >
@@ -456,7 +584,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={displayIndex >= filteredOrder.length - 1}
+            disabled={!current || displayIndex >= deckOrder.length - 1}
             onClick={() => go(1)}
             aria-label={t.review.next}
           >
@@ -486,11 +614,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       {/* Dots rather than a bar: at forty proposals the shape of what is left
           is more useful than a percentage. */}
       <ol className="deck__dots" aria-hidden="true">
-        {filteredOrder.map((p, i) => (
+        {deckOrder.map((p, i) => (
           <li
             key={p.id}
             className={`deck__dot${mine.has(p.id) ? ' deck__dot--done' : ''}${
-              i === displayIndex ? ' deck__dot--here' : ''
+              current && i === displayIndex ? ' deck__dot--here' : ''
             }`}
           />
         ))}
@@ -507,7 +635,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
               <h2 id="review-queue-title">{t.review.queue}</h2>
               <p>{t.review.queueHelp}</p>
             </div>
-            {nextUnscored && nextUnscored.proposalIndex !== displayIndex && (
+            {nextUnscored && (
               <button
                 type="button"
                 className="btn"
@@ -522,8 +650,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             )}
           </header>
           <ol className="deck-queue__list">
-            {filteredOrder.map((proposal, proposalIndex) => {
-              const currentProposal = proposalIndex === displayIndex;
+            {deckOrder.map((proposal, proposalIndex) => {
+              const currentProposal = current && proposalIndex === displayIndex;
               const review = mine.get(proposal.id);
               const scored = Boolean(review);
               const reviewState = review?.conflictOfInterest
@@ -575,49 +703,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         </section>
       )}
 
-      {filteredHandled === filteredOrder.length && (
+      {current && remaining === 0 && (
         <p className="note deck__complete" role="status">
           {t.review.complete}
         </p>
       )}
 
-      {categories.length > 1 && (
-        <div className="filter-bar">
-          <button
-            type="button"
-            className={`filter-pill${selectedCategory === null ? ' filter-pill--active' : ''}`}
-            aria-pressed={selectedCategory === null}
-            onClick={() => {
-              setSelectedCategory(null);
-              setIndex(0);
-              setQueueOpen(false);
-            }}
-          >
-            {t.review.allCategories} ({scopedOrder.length})
-          </button>
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              type="button"
-              className={`filter-pill${selectedCategory === cat ? ' filter-pill--active' : ''}`}
-              aria-pressed={selectedCategory === cat}
-              onClick={() => {
-                setSelectedCategory(cat);
-                setIndex(0);
-                setQueueOpen(false);
-              }}
-            >
-              {labelOf(shape.category, cat, locale)} (
-              {scopedOrder.filter((proposal) => proposal.category === cat).length})
-            </button>
-          ))}
-        </div>
-      )}
-
       {help && (
         <dl className="shortcuts" id="review-shortcuts">
           <div>
-            <dt><span className={`kbd-badge${['1', '2', '3', '4'].includes(activeKey ?? '') ? ' kbd-badge--active' : ''}`}>1 – 4</span></dt>
+            <dt><span className={`kbd-badge${['0', '1', '2', '3', '4'].includes(activeKey ?? '') ? ' kbd-badge--active' : ''}`}>0 – 4</span></dt>
             <dd>{t.review.shortcutScore}</dd>
           </div>
           <div>
@@ -677,21 +772,136 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         </section>
       )}
 
-      <ReviewCard
-        shape={shape}
-        key={current.id}
-        cfpId={cfpId}
-        proposal={current}
-        draft={draft}
-        existing={mine.get(current.id)}
-        reviewsVisible={reviewsVisible}
-        saving={savingIds.has(current.id)}
-        saved={savedId === current.id}
-        onPatch={(part) => patch(current.id, part)}
-        onScore={scoreAndAdvance}
-        onSave={() => persist(current.id, draft, current.title || t.review.untitled)}
-      />
+      {current ? (
+        <ReviewCard
+          shape={shape}
+          key={current.id}
+          cfpId={cfpId}
+          proposal={current}
+          draft={draft}
+          existing={mine.get(current.id)}
+          reviewsVisible={reviewsVisible}
+          saving={savingIds.has(current.id)}
+          saved={savedId === current.id}
+          onPatch={(part) => patch(current.id, part)}
+          onScore={scoreAndAdvance}
+          onConflict={conflictAndAdvance}
+          onSave={saveAndAdvance}
+        />
+      ) : (
+        <DeckCompleted
+          handled={handled}
+          conflicts={conflicts}
+          remaining={remaining}
+          statusFilter={statusFilter}
+          hasProposals={scopedOrder.length > 0}
+          nextUnscoredIndex={nextUnscored?.proposalIndex}
+          onJumpToUnscored={(idx) => {
+            setIndex(idx);
+            setSavedId('');
+          }}
+          onBrowseAll={() => {
+            setStatusFilter('all');
+            setFilterEpoch((e) => e + 1);
+            setIndex(0);
+            setQueueOpen(false);
+            setSavedId('');
+          }}
+          onOpenQueue={() => setQueueOpen(true)}
+          onRefresh={() => void load()}
+          refreshDisabled={savingIds.size > 0}
+        />
+      )}
     </div>
+  );
+}
+
+function DeckCompleted({
+  handled,
+  conflicts,
+  remaining,
+  statusFilter,
+  hasProposals,
+  nextUnscoredIndex,
+  onJumpToUnscored,
+  onBrowseAll,
+  onOpenQueue,
+  onRefresh,
+  refreshDisabled,
+}: {
+  handled: number;
+  conflicts: number;
+  remaining: number;
+  statusFilter: 'unreviewed' | 'all';
+  hasProposals: boolean;
+  nextUnscoredIndex?: number;
+  onJumpToUnscored: (index: number) => void;
+  onBrowseAll: () => void;
+  onOpenQueue: () => void;
+  onRefresh: () => void;
+  refreshDisabled: boolean;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <section className="section card deck-complete-card" aria-labelledby="deck-complete-title">
+      <div className="deck-complete-card__header">
+        <span className="deck-complete-card__icon" aria-hidden="true">
+          {remaining === 0 ? '🎉' : '📋'}
+        </span>
+        <h2 id="deck-complete-title">
+          {remaining === 0 ? t.review.deckCompletedTitle : t.review.remainingTitle(remaining)}
+        </h2>
+        <p className="card__text">
+          {remaining === 0 ? t.review.deckCompletedHelp : t.review.queueHelp}
+        </p>
+      </div>
+
+      <dl className="review-workload__stats deck-complete-card__stats">
+        <div>
+          <dt>{t.review.responses}</dt>
+          <dd>{handled}</dd>
+        </div>
+        <div>
+          <dt>{t.review.conflicts}</dt>
+          <dd>{conflicts}</dd>
+        </div>
+        <div>
+          <dt>{t.review.remaining}</dt>
+          <dd>{remaining}</dd>
+        </div>
+      </dl>
+
+      <div className="deck-complete-card__actions">
+        {remaining > 0 && nextUnscoredIndex !== undefined ? (
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => onJumpToUnscored(nextUnscoredIndex)}
+          >
+            {t.review.nextUnscored}
+          </button>
+        ) : (
+          statusFilter === 'unreviewed' &&
+          hasProposals && (
+            <button type="button" className="btn btn--primary" onClick={onBrowseAll}>
+              {t.review.browseAllProposals}
+            </button>
+          )
+        )}
+        <button type="button" className="btn btn--ghost" onClick={onOpenQueue}>
+          {t.review.queue}
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          disabled={refreshDisabled}
+          onClick={onRefresh}
+        >
+          {t.review.refresh}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -706,6 +916,7 @@ interface CardProps {
   saved: boolean;
   onPatch: (part: Partial<Draft>) => void;
   onScore: (score: Score) => void;
+  onConflict: () => void;
   onSave: () => void;
 }
 
@@ -720,6 +931,7 @@ function ReviewCard({
   saved,
   onPatch,
   onScore,
+  onConflict,
   onSave,
 }: CardProps) {
   const { t, locale } = useI18n();
@@ -808,6 +1020,10 @@ function ReviewCard({
           <p>{t.review.rubricHelp}</p>
         </div>
         <ol className="review-rubric__scale">
+          <li>
+            <strong>{t.review.scores[0]}</strong>
+            <span>{t.review.rubric[0]}</span>
+          </li>
           {SCORES.map((score) => (
             <li key={score}>
               <strong>{t.review.scores[score]}</strong>
@@ -816,19 +1032,6 @@ function ReviewCard({
           ))}
         </ol>
       </aside>
-
-      <Checkbox
-        label={t.review.conflict}
-        help={t.review.conflictHelp}
-        checked={draft.conflictOfInterest}
-        onChange={(conflictOfInterest) =>
-          onPatch({
-            conflictOfInterest,
-            ...(conflictOfInterest ? { score: null } : {}),
-          })
-        }
-        disabled={saving}
-      />
 
       <TextAreaField
         label={t.review.comment}
@@ -844,13 +1047,22 @@ function ReviewCard({
       </p>
       <p className="muted">{t.review.scoreHelp}</p>
       <div className="scores" role="group" aria-labelledby={`score-${proposal.id}`}>
+        <button
+          type="button"
+          className={`btn score score--conflict${draft.conflictOfInterest ? ' score--on' : ''}`}
+          aria-pressed={draft.conflictOfInterest}
+          disabled={saving}
+          onClick={onConflict}
+        >
+          {t.review.scores[0]}
+        </button>
         {SCORES.map((s) => (
           <button
             key={s}
             type="button"
-            className={`btn score${draft.score === s ? ' score--on' : ''}`}
-            aria-pressed={draft.score === s}
-            disabled={saving || draft.conflictOfInterest}
+            className={`btn score${!draft.conflictOfInterest && draft.score === s ? ' score--on' : ''}`}
+            aria-pressed={!draft.conflictOfInterest && draft.score === s}
+            disabled={saving}
             onClick={() => onScore(s)}
           >
             {t.review.scores[s]}
@@ -865,7 +1077,7 @@ function ReviewCard({
           disabled={saving || (draft.score === null && !draft.conflictOfInterest)}
           onClick={onSave}
         >
-          {saving ? t.review.saving : t.review.save}
+          {saving ? t.review.saving : t.review.saveAndNext}
         </button>
         <span className="muted" aria-live="polite">
           {saved ? t.review.saved : existing ? '' : t.review.notScored}
