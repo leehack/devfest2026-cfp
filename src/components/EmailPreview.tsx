@@ -165,6 +165,7 @@ export function EmailPreview({
   // From the draft, not from storage: the point is to see an edit before saving.
   const sampleData = {
     speakerName: t.admin.emailPreviewSample.speakerName,
+    reviewerName: t.admin.emailPreviewSample.speakerName,
     title: t.admin.emailPreviewSample.title,
     proposalUrl: `${sampleOrigin}/c/${cfpId}/submit`,
     // The real name, because {event} appears in every subject line and a
@@ -176,6 +177,8 @@ export function EmailPreview({
     scheduleRoom: t.admin.emailPreviewSample.scheduleRoom,
     scheduleUrl: `${sampleOrigin}/c/${cfpId}/${kind === 'committee_schedule_shared' ? 'schedule' : 'submit'}`,
     reviewUrl: `${sampleOrigin}/c/${cfpId}/review`,
+    pendingCount: 3,
+    queueCount: 12,
   };
   const email =
     bilingual && bilingualEligible

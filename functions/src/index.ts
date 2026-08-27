@@ -1780,6 +1780,29 @@ async function queueStaffNotifications(
   const recipients = await activeStaffRecipients(cfpId, excludedUids);
   let eligible = 0;
 
+  let activeProposals: FirebaseFirestore.DocumentSnapshot[] = [];
+  const validReviewsByPair = new Set<string>();
+  if (kind === 'committee_proposal_submitted') {
+    const [proposalsSnap, reviewsSnap] = await Promise.all([
+      db
+        .collection(`cfps/${cfpId}/proposals`)
+        .where('status', 'in', [...STATUS_SETS.reviewQueue])
+        .get(),
+      db.collectionGroup('reviews').where('cfpId', '==', cfpId).get(),
+    ]);
+    activeProposals = proposalsSnap.docs;
+    for (const snap of reviewsSnap.docs) {
+      const data = snap.data();
+      if (data.conflictOfInterest === true || isKnownScore(data.score)) {
+        const proposalId = snap.ref.parent.parent?.id;
+        const reviewerUid = snap.id;
+        if (proposalId && reviewerUid) {
+          validReviewsByPair.add(`${proposalId}:${reviewerUid}`);
+        }
+      }
+    }
+  }
+
   for (let index = 0; index < recipients.length; index += 10) {
     const results = await Promise.all(
       recipients.slice(index, index + 10).map((recipient) =>
@@ -1804,6 +1827,25 @@ async function queueStaffNotifications(
           ) {
             return false;
           }
+
+          let pendingCount = 0;
+          let queueCount = 0;
+          if (kind === 'committee_proposal_submitted') {
+            const visibleProposals = activeProposals.filter((proposalDoc) => {
+              const speakerIds = (proposalDoc.get('speakerIds') ?? []) as string[];
+              const formerSpeakerIds = (proposalDoc.get('formerSpeakerIds') ?? []) as string[];
+              return (
+                !speakerIds.includes(recipient.uid) &&
+                !formerSpeakerIds.includes(recipient.uid)
+              );
+            });
+            const reviewedCount = visibleProposals.filter((proposalDoc) =>
+              validReviewsByPair.has(`${proposalDoc.id}:${recipient.uid}`),
+            ).length;
+            pendingCount = Math.max(0, visibleProposals.length - reviewedCount);
+            queueCount = visibleProposals.length;
+          }
+
           await queueEmail(db, tx, cfpId, {
             kind,
             proposalId: subjectId,
@@ -1814,7 +1856,14 @@ async function queueStaffNotifications(
             bilingual: recipient.bilingual,
             data: {
               speakerName: recipient.name,
+              reviewerName: recipient.name,
               title: '',
+              ...(kind === 'committee_proposal_submitted'
+                ? {
+                    pendingCount: String(pendingCount),
+                    queueCount: String(queueCount),
+                  }
+                : {}),
             },
           });
           return true;
@@ -7275,8 +7324,11 @@ export const sendTestEmail = onCall(CALLABLE, async (request) => {
       to,
       data: {
         speakerName: (request.auth?.token.name as string) || to,
+        reviewerName: (request.auth?.token.name as string) || to,
         title: 'A test of the sending setup',
         needsVisa: data.needsVisa === true,
+        pendingCount: 3,
+        queueCount: 12,
       },
     },
     finalApiKey,
