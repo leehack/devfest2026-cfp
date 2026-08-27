@@ -69,6 +69,7 @@ export type LogKind = EmailKind | typeof MESSAGE_KIND;
 
 export interface EmailData {
   speakerName: string;
+  reviewerName?: string;
   title: string;
   /** Absolute, so it works from a mail client with no session. */
   proposalUrl: string;
@@ -81,6 +82,10 @@ export interface EmailData {
   scheduleRoom?: string;
   scheduleUrl?: string;
   reviewUrl?: string;
+  pendingCount?: number | string;
+  queueCount?: number | string;
+  queueStatus?: string;
+  queueSummary?: string;
 }
 
 export interface RenderedEmail {
@@ -96,6 +101,7 @@ export interface RenderedEmail {
  */
 export const PLACEHOLDERS = [
   'speakerName',
+  'reviewerName',
   'title',
   'proposalUrl',
   'event',
@@ -105,6 +111,10 @@ export const PLACEHOLDERS = [
   'scheduleRoom',
   'scheduleUrl',
   'reviewUrl',
+  'pendingCount',
+  'queueCount',
+  'queueStatus',
+  'queueSummary',
 ] as const;
 export type Placeholder = (typeof PLACEHOLDERS)[number];
 
@@ -149,9 +159,9 @@ const EN: Record<EmailKind, Template> = {
   committee_proposal_submitted: {
     subject: 'New proposal ready to review for {event}',
     body: p(
-      'Hi {speakerName},',
-      'There is a new item in the {event} review queue.',
-      'Sign in to review it:',
+      'Hi {reviewerName},',
+      'A new proposal is ready for committee review. {queueStatus}',
+      'Sign in to review:',
       '{reviewUrl}',
     ),
   },
@@ -280,9 +290,9 @@ const FR: Record<EmailKind, Template> = {
   committee_proposal_submitted: {
     subject: 'Nouvelle proposition à évaluer pour {event}',
     body: p(
-      'Bonjour {speakerName},',
-      'Un nouvel élément se trouve dans la file d’évaluation de {event}.',
-      'Connectez-vous pour le consulter :',
+      'Bonjour {reviewerName},',
+      'Une nouvelle proposition est prête à être évaluée par le comité. {queueStatus}',
+      'Connectez-vous pour l’évaluer :',
       '{reviewUrl}',
     ),
   },
@@ -484,9 +494,46 @@ function escapeHtml(value: string): string {
 
 const URL_LIKE = /^https?:\/\/\S+$/;
 
+function queueStatusText(data: EmailData, locale: EmailLocale): string {
+  const hasPending =
+    data.pendingCount !== undefined &&
+    data.pendingCount !== null &&
+    String(data.pendingCount).trim() !== '';
+  const hasQueue =
+    data.queueCount !== undefined &&
+    data.queueCount !== null &&
+    String(data.queueCount).trim() !== '';
+
+  const eventName = data.event || '{event}';
+
+  if (!hasPending || !hasQueue) {
+    return locale === 'fr'
+      ? `Un nouvel élément se trouve dans la file d’évaluation de ${eventName}.`
+      : `There is a new item in the ${eventName} review queue.`;
+  }
+
+  const pending = Number(data.pendingCount);
+  const total = Number(data.queueCount);
+  if (isNaN(pending) || isNaN(total)) {
+    return locale === 'fr'
+      ? `Un nouvel élément se trouve dans la file d’évaluation de ${eventName}.`
+      : `There is a new item in the ${eventName} review queue.`;
+  }
+
+  if (locale === 'fr') {
+    const prop = pending === 1 ? 'proposition' : 'propositions';
+    return `Vous avez ${pending} ${prop} à évaluer sur ${total} dans la file d’évaluation de ${eventName}.`;
+  }
+
+  const prop = pending === 1 ? 'proposal' : 'proposals';
+  return `You have ${pending} ${prop} to review out of ${total} in the ${eventName} review queue.`;
+}
+
 function substitute(source: string, data: EmailData, locale: EmailLocale): string {
+  const queueStatus = data.queueStatus || data.queueSummary || queueStatusText(data, locale);
   const values: Record<string, string> = {
-    speakerName: data.speakerName,
+    speakerName: data.speakerName || data.reviewerName || '',
+    reviewerName: data.reviewerName || data.speakerName || '',
     title: data.title,
     proposalUrl: data.proposalUrl,
     event: data.event,
@@ -496,6 +543,10 @@ function substitute(source: string, data: EmailData, locale: EmailLocale): strin
     scheduleRoom: data.scheduleRoom ?? '',
     scheduleUrl: data.scheduleUrl ?? '',
     reviewUrl: data.reviewUrl ?? '',
+    pendingCount: data.pendingCount !== undefined ? String(data.pendingCount) : '',
+    queueCount: data.queueCount !== undefined ? String(data.queueCount) : '',
+    queueStatus,
+    queueSummary: queueStatus,
   };
   // An unknown name is left untouched rather than blanked: validateTemplate
   // rejects them on save, and a visible `{typo}` is easier to diagnose than a

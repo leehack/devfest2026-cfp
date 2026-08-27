@@ -17,6 +17,7 @@ import {
 
 const data: EmailData = {
   speakerName: 'Ada Lovelace',
+  reviewerName: 'Ada Lovelace',
   title: 'Notes on the Analytical Engine',
   proposalUrl: 'https://cfp.example/c/devfest-mtl-2026/submit',
   // The CFP's own name, not a constant: every message on the platform is signed
@@ -24,6 +25,8 @@ const data: EmailData = {
   event: 'DevFest Montréal 2026',
   reviewUrl: 'https://cfp.example/c/devfest-mtl-2026/review',
   scheduleUrl: 'https://cfp.example/c/devfest-mtl-2026/schedule',
+  pendingCount: 3,
+  queueCount: 12,
 };
 
 describe('renderEmail', () => {
@@ -72,6 +75,7 @@ describe('renderEmail', () => {
     const privateData = {
       ...data,
       speakerName: 'Active committee recipient',
+      reviewerName: 'Active committee recipient',
       title: 'Secret proposal title',
       scheduleDate: '2026-11-14',
       scheduleTime: '10:15',
@@ -87,6 +91,66 @@ describe('renderEmail', () => {
       expect(email.text).not.toContain(privateData.scheduleTime);
       expect(email.text).not.toContain(privateData.scheduleRoom);
     }
+  });
+
+  it('renders committee_proposal_submitted with reviewer counts', () => {
+    const emailEn = renderEmail('committee_proposal_submitted', 'en', {
+      ...data,
+      reviewerName: 'Jane Reviewer',
+      pendingCount: 4,
+      queueCount: 15,
+    });
+    expect(emailEn.text).toContain('Hi Jane Reviewer,');
+    expect(emailEn.text).toContain(
+      'You have 4 proposals to review out of 15 in the DevFest Montréal 2026 review queue.',
+    );
+
+    const emailFr = renderEmail('committee_proposal_submitted', 'fr', {
+      ...data,
+      reviewerName: 'Jane Reviewer',
+      pendingCount: 4,
+      queueCount: 15,
+    });
+    expect(emailFr.text).toContain('Bonjour Jane Reviewer,');
+    expect(emailFr.text).toContain(
+      'Vous avez 4 propositions à évaluer sur 15 dans la file d’évaluation de DevFest Montréal 2026.',
+    );
+  });
+
+  it('handles singular counts for committee_proposal_submitted', () => {
+    const emailEn = renderEmail('committee_proposal_submitted', 'en', {
+      ...data,
+      reviewerName: 'Jane Reviewer',
+      pendingCount: 1,
+      queueCount: 1,
+    });
+    expect(emailEn.text).toContain(
+      'You have 1 proposal to review out of 1 in the DevFest Montréal 2026 review queue.',
+    );
+
+    const emailFr = renderEmail('committee_proposal_submitted', 'fr', {
+      ...data,
+      reviewerName: 'Jane Reviewer',
+      pendingCount: 1,
+      queueCount: 1,
+    });
+    expect(emailFr.text).toContain(
+      'Vous avez 1 proposition à évaluer sur 1 dans la file d’évaluation de DevFest Montréal 2026.',
+    );
+  });
+
+  it('falls back gracefully on legacy committee_proposal_submitted rows without counts', () => {
+    const legacyData: EmailData = {
+      ...data,
+      reviewerName: 'Jane Reviewer',
+      pendingCount: undefined,
+      queueCount: undefined,
+    };
+    const emailEn = renderEmail('committee_proposal_submitted', 'en', legacyData);
+    expect(emailEn.text).toContain('There is a new item in the DevFest Montréal 2026 review queue.');
+
+    const emailFr = renderEmail('committee_proposal_submitted', 'fr', legacyData);
+    expect(emailFr.text).toContain('Un nouvel élément se trouve dans la file d’évaluation de DevFest Montréal 2026.');
   });
 
   it.each([

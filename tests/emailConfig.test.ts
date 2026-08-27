@@ -172,8 +172,8 @@ describe('platform email inheritance', () => {
     }, contentContext);
 
     // These pins change when any built-in leaf changes, including leaves without overrides.
-    expect(builtInFingerprint).toBe('YZrbJ6YbgCocqACYOGMWuYTtWkwf5L0-qfV2KdnhQ9g');
-    expect(overrideFingerprint).toBe('FjzVYlf4hAUKdCANPrVi1LGy8boLb5z2VgE52hWgU9o');
+    expect(builtInFingerprint).toBe('Pr-V0oncBzzy8e7MfF9D1oMe9D6-XYSyFnMN_JFIXfI');
+    expect(overrideFingerprint).toBe('pzo6KVNhX0ALQDtneigxrqwX6j5n9ZoS5slwC7-QmCU');
     expect(overrideFingerprint).not.toBe(builtInFingerprint);
     expect(emailConfigurationFingerprint(configuration, contentContext)).toBe(builtInFingerprint);
   });
