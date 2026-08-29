@@ -255,6 +255,7 @@ export function Schedule({
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
   const mutationEpoch = useRef(0);
+  const scheduleApplyGeneration = useRef(0);
   const setupRef = useRef<HTMLDetailsElement>(null);
   const editingRef = useRef(editing);
   editingRef.current = editing;
@@ -277,10 +278,17 @@ export function Schedule({
       nextSubmissionForm: SubmissionForm,
       isBackgroundRevalidate = false,
     ) => {
+      const applyGen = ++scheduleApplyGeneration.current;
       const nextPublic = nextCfp?.publishedScheduleId
         ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId, { force })
         : null;
-      if (request !== generation.current || epochAtStart !== mutationEpoch.current) return;
+      if (
+        scheduleApplyGeneration.current !== applyGen ||
+        request !== generation.current ||
+        epochAtStart !== mutationEpoch.current
+      ) {
+        return;
+      }
       const next = draft.config ?? initialConfig(nextCfp);
       setCfp(nextCfp);
       setSharedPreview(nextShared);

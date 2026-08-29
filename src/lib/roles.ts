@@ -847,17 +847,10 @@ const reviewQueueCall = httpsCallable<
  */
 export async function loadReviewQueue(
   cfpId: string,
-  options: { force?: boolean; onRevalidate?: (queue: ReviewQueue) => void } = {},
+  _options: { force?: boolean; onRevalidate?: (queue: ReviewQueue) => void } = {},
 ): Promise<ReviewQueue> {
-  const uid = auth.currentUser?.uid ?? 'anon';
-  return swrFetch(
-    `reviewQueue:${cfpId}:${uid}`,
-    async () => {
-      const { data } = await reviewQueueCall({ cfpId });
-      return { proposals: data.proposals, own: data.own };
-    },
-    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
-  );
+  const { data } = await reviewQueueCall({ cfpId });
+  return { proposals: data.proposals, own: data.own };
 }
 
 /** One-shot, refreshed by the caller after a change — §2 allows no listeners. */
