@@ -331,18 +331,18 @@ export function Schedule({
     try {
       let currentDraftResult: ScheduleDraft | null = null;
       let currentProposalsResult: ProposalRow[] | null = null;
-      let revalidatedCfp: { value: Cfp | null } | null = null;
+      const revalidated = { cfp: null as { value: Cfp | null } | null };
       let currentSharedResult: SharedScheduleBundle | null = null;
       let currentFormResult: SubmissionForm | null = null;
 
-      const getEffectiveCfp = () => (revalidatedCfp ? revalidatedCfp.value : nextCfp);
+      const getEffectiveCfp = () => (revalidated.cfp ? revalidated.cfp.value : nextCfp);
 
       const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
         loadCfp(cfpId, {
           force,
           onRevalidate: (updatedCfp) => {
             if (request === generation.current) {
-              revalidatedCfp = { value: updatedCfp };
+              revalidated.cfp = { value: updatedCfp };
               if (currentDraftResult && currentProposalsResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
                   updatedCfp,
