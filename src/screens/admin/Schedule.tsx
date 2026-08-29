@@ -231,6 +231,8 @@ export function Schedule({
   onDisclosureChanged?: (stage: 'shared' | 'published' | 'offline') => void | Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   const [config, setConfig] = useState<ScheduleConfig | null>(null);
   const [workingConfig, setWorkingConfig] = useState<ScheduleConfig | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
@@ -371,7 +373,7 @@ export function Schedule({
           },
           onError: (err) => {
             if (request === generation.current) {
-              setError(adminError(err, tRef.current));
+              setError(scheduleError(err, tRef.current));
               setLoaded(false);
             }
           },
@@ -395,7 +397,7 @@ export function Schedule({
           },
           onError: (err) => {
             if (request === generation.current) {
-              setError(adminError(err, tRef.current));
+              setError(scheduleError(err, tRef.current));
               setLoaded(false);
             }
           },
