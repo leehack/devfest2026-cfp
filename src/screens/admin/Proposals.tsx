@@ -787,14 +787,6 @@ export function Proposals({
   const pendingStatuses = useRef<Map<string, ProposalStatus>>(new Map());
   activeCfp.current = cfpId;
 
-  const mergePendingStatuses = useCallback((inputRows: ProposalRow[]) => {
-    if (pendingStatuses.current.size === 0) return inputRows;
-    return inputRows.map((r) => {
-      const pendingStatus = pendingStatuses.current.get(r.id);
-      return pendingStatus ? { ...r, status: pendingStatus } : r;
-    });
-  }, []);
-
   useEffect(() => {
     const search = new URLSearchParams(window.location.search);
     const proposalId = search.get('manageSpeakers');
@@ -863,6 +855,13 @@ export function Proposals({
       pendingStatuses.current.clear();
       decisionSequence.current = 0;
     }
+    const mergePendingStatuses = (inputRows: ProposalRow[]) => {
+      if (pendingStatuses.current.size === 0) return inputRows;
+      return inputRows.map((r) => {
+        const pendingStatus = pendingStatuses.current.get(r.id);
+        return pendingStatus ? { ...r, status: pendingStatus } : r;
+      });
+    };
     let revalidatedRows: ProposalRow[] | null = null;
     try {
       const [all, form, submission, updateRequests] = await Promise.all([
