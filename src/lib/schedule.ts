@@ -118,7 +118,7 @@ export async function loadSharedSchedule(
   cfpId: string,
   options: {
     force?: boolean;
-    releaseId?: string;
+    releaseId?: string | null;
     audience?: 'committee' | 'speaker';
     onRevalidate?: (bundle: SharedScheduleBundle) => void;
   } = {},
