@@ -12,7 +12,11 @@ import {
 import { toDate } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
-import { loadScheduleDraft, loadSharedSchedule } from '../../lib/schedule';
+import {
+  loadScheduleDraft,
+  loadSharedSchedule,
+  type SharedScheduleBundle,
+} from '../../lib/schedule';
 import {
   emailQueue,
   loadAllProposals,
@@ -25,6 +29,7 @@ import { paths } from '../../lib/paths';
 import { cfpState, type CfpState } from '@shared/cfpWindow';
 import type { ConfirmForm } from '@shared/confirmForm';
 import type { EmailDeliveryProblem, EmailDeliveryReadiness } from '@shared/emailSettings';
+import type { ScheduleConfig, ScheduleEntry } from '@shared/schedule';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp } from '@shared/types';
 import { inStatusSet } from '@shared/enums';
@@ -138,15 +143,15 @@ export function Overview({ cfpId }: { cfpId: string }) {
     }
     setError('');
     let revalidatedProposals: ProposalRow[] | null = null;
-    let latestDraft: ScheduleDraft | null = null;
-    let latestShared: SharedScheduleAudienceResult | null = null;
+    let latestDraft: { config: ScheduleConfig | null; entries: ScheduleEntry[] } | null = null;
+    let latestShared: SharedScheduleBundle | null = null;
 
     const computeScheduleOverview = (
-      draft: ScheduleDraft,
-      shared: SharedScheduleAudienceResult,
+      draft: { config: ScheduleConfig | null; entries: ScheduleEntry[] },
+      shared: SharedScheduleBundle,
     ) => ({
       configured: draft.config !== null,
-      draftProposalIds: draft.entries.flatMap((entry) =>
+      draftProposalIds: draft.entries.flatMap((entry: ScheduleEntry) =>
         entry.kind === 'proposal' ? [entry.proposalId] : [],
       ),
       sharedReleaseId: shared.schedule?.id ?? '',
@@ -165,7 +170,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId, {
           onRevalidate: (updatedCfp) => {
-            if (requestGeneration.current === request) {
+            if (requestGeneration.current === request && updatedCfp) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, cfp: updatedCfp } : prev));
             }
           },

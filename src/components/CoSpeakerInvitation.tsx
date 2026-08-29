@@ -186,7 +186,7 @@ export function CoSpeakerInvitation({
 
   useEffect(() => {
     let cancelled = false;
-    let revalidatedProfile: SpeakerProfile | null | undefined;
+    let revalidatedProfile: Awaited<ReturnType<typeof loadProfile>> | undefined;
     setLoading(true);
     setLoadError('');
     Promise.all([
