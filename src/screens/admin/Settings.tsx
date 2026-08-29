@@ -16,6 +16,7 @@ import { useLatest } from '../../lib/useLatest';
 import { Result } from './Result';
 import type { CfpRole, Visibility } from '@shared/cfp';
 import { CFP_LIMITS } from '@shared/cfp';
+import type { Cfp } from '@shared/types';
 
 export function Settings({
   cfpId,

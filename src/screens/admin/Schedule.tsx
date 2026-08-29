@@ -42,6 +42,7 @@ import {
   type ScheduleRoom,
   type CustomScheduleSpeaker,
 } from '@shared/schedule';
+import type { Cfp } from '@shared/types';
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
 import { loadSubmissionForm } from '../../lib/proposals';
@@ -57,6 +58,7 @@ import {
   unpublishSchedule,
   upsertScheduleEntry,
   type PublishedScheduleBundle,
+  type ScheduleDraft,
   type SharedScheduleBundle,
 } from '../../lib/schedule';
 import { toDate } from '../../lib/dates';
@@ -279,7 +281,7 @@ export function Schedule({
       setSubmissionForm(nextSubmissionForm);
       setProposals(proposalRows);
       setSelectedDay((current) =>
-        next.days.some((day) => day.date === current) ? current : next.days[0]?.date ?? '',
+        next.days.some((day: { date: string }) => day.date === current) ? current : next.days[0]?.date ?? '',
       );
       setLoaded(true);
     };
