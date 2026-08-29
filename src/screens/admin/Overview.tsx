@@ -138,9 +138,38 @@ export function Overview({ cfpId }: { cfpId: string }) {
     }
     setError('');
     let revalidatedProposals: ProposalRow[] | null = null;
+    let latestDraft: ScheduleDraft | null = null;
+    let latestShared: SharedScheduleAudienceResult | null = null;
+
+    const computeScheduleOverview = (
+      draft: ScheduleDraft,
+      shared: SharedScheduleAudienceResult,
+    ) => ({
+      configured: draft.config !== null,
+      draftProposalIds: draft.entries.flatMap((entry) =>
+        entry.kind === 'proposal' ? [entry.proposalId] : [],
+      ),
+      sharedReleaseId: shared.schedule?.id ?? '',
+      stale: Boolean(draft.config?.needsAttention || shared.stale),
+      checkFailed: false,
+    });
+
+    const applyScheduleRevalidation = () => {
+      if (requestGeneration.current === request && latestDraft && latestShared) {
+        const nextSchedule = computeScheduleOverview(latestDraft, latestShared);
+        setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, schedule: nextSchedule } : prev));
+      }
+    };
+
     try {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
-        loadCfp(cfpId),
+        loadCfp(cfpId, {
+          onRevalidate: (updatedCfp) => {
+            if (requestGeneration.current === request) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, cfp: updatedCfp } : prev));
+            }
+          },
+        }),
         loadAllProposals(cfpId, {
           onRevalidate: (updated) => {
             if (requestGeneration.current === request) {
@@ -150,8 +179,20 @@ export function Overview({ cfpId }: { cfpId: string }) {
           },
         }),
         loadCommittee(cfpId),
-        loadSubmissionForm(cfpId),
-        loadConfirmForm(cfpId),
+        loadSubmissionForm(cfpId, {
+          onRevalidate: (updatedForm) => {
+            if (requestGeneration.current === request) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, submission: updatedForm } : prev));
+            }
+          },
+        }),
+        loadConfirmForm(cfpId, {
+          onRevalidate: (updatedForm) => {
+            if (requestGeneration.current === request) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, confirmation: updatedForm } : prev));
+            }
+          },
+        }),
         Promise.all([
           emailQueue({ cfpId, action: 'readiness' }),
           emailQueue({ cfpId, action: 'summary' }),
@@ -171,18 +212,25 @@ export function Overview({ cfpId }: { cfpId: string }) {
             checkFailed: true,
           })),
         Promise.all([
-          loadScheduleDraft(cfpId),
-          loadSharedSchedule(cfpId, { audience: 'committee' }),
+          loadScheduleDraft(cfpId, {
+            onRevalidate: (draft) => {
+              latestDraft = draft;
+              applyScheduleRevalidation();
+            },
+          }),
+          loadSharedSchedule(cfpId, {
+            audience: 'committee',
+            onRevalidate: (shared) => {
+              latestShared = shared;
+              applyScheduleRevalidation();
+            },
+          }),
         ])
-          .then(([draft, shared]) => ({
-            configured: draft.config !== null,
-            draftProposalIds: draft.entries.flatMap((entry) =>
-              entry.kind === 'proposal' ? [entry.proposalId] : [],
-            ),
-            sharedReleaseId: shared.schedule?.id ?? '',
-            stale: Boolean(draft.config?.needsAttention || shared.stale),
-            checkFailed: false,
-          }))
+          .then(([draft, shared]) => {
+            latestDraft = latestDraft ?? draft;
+            latestShared = latestShared ?? shared;
+            return computeScheduleOverview(latestDraft, latestShared);
+          })
           .catch(() => ({
             configured: false,
             draftProposalIds: [],

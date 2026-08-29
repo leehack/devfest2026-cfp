@@ -879,9 +879,10 @@ function ProposalFormPage({
       try {
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
-        // already loads two documents.
         let revalidatedFound: LoadedProposal[] | null = null;
         let revalidatedProfile: Record<string, any> | undefined;
+        let revalidatedConfirmForm: ConfirmForm | null = null;
+        let revalidatedSubmissionForm: SubmissionForm | null = null;
         const [
           { talks: found, speaker: profile },
           questions,
@@ -922,12 +923,14 @@ function ProposalFormPage({
           loadConfirmForm(cfpId, {
             force: loadAttempt > 0,
             onRevalidate: (q) => {
+              revalidatedConfirmForm = q;
               if (!cancelled) setConfirmForm(q);
             },
           }),
           loadSubmissionForm(cfpId, {
             force: loadAttempt > 0,
             onRevalidate: (s) => {
+              revalidatedSubmissionForm = s;
               if (!cancelled) setShape(s);
             },
           }),
@@ -952,6 +955,8 @@ function ProposalFormPage({
         if (cancelled) return;
         const effectiveFound = revalidatedFound ?? found;
         const effectiveProfile = revalidatedProfile ?? profile;
+        const effectiveConfirmForm = revalidatedConfirmForm ?? questions;
+        const effectiveSubmissionForm = revalidatedSubmissionForm ?? asked;
         setTalks(effectiveFound);
         talksRef.current = effectiveFound;
         setSpeaker(effectiveProfile);
@@ -966,8 +971,8 @@ function ProposalFormPage({
             talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
           ]),
         );
-        setConfirmForm(questions);
-        setShape(asked);
+        setConfirmForm(effectiveConfirmForm);
+        setShape(effectiveSubmissionForm);
         setPublishedSchedule(publishedResult.value);
         setPublishedScheduleFailed(publishedResult.failed);
         setSharedSchedule(sharedResult.value);

@@ -186,6 +186,7 @@ export function CoSpeakerInvitation({
 
   useEffect(() => {
     let cancelled = false;
+    let revalidatedProfile: SpeakerProfile | null | undefined;
     setLoading(true);
     setLoadError('');
     Promise.all([
@@ -193,6 +194,7 @@ export function CoSpeakerInvitation({
       loadProfile(user, {
         force: attempt > 0,
         onRevalidate: (profile) => {
+          revalidatedProfile = profile;
           if (!cancelled && !dirtyRef.current) {
             setForm({
               ...fromDocuments(undefined, profile),
@@ -205,13 +207,16 @@ export function CoSpeakerInvitation({
     ])
       .then(([nextSummary, profile]) => {
         if (cancelled) return;
+        const effectiveProfile = revalidatedProfile !== undefined ? revalidatedProfile : profile;
         setSummary(nextSummary);
-        setForm({
-          ...fromDocuments(undefined, profile),
-          name: profile?.name || user.displayName || '',
-          email: user.email ?? '',
-        });
-        dirtyRef.current = false;
+        if (!dirtyRef.current) {
+          setForm({
+            ...fromDocuments(undefined, effectiveProfile),
+            name: effectiveProfile?.name || user.displayName || '',
+            email: user.email ?? '',
+          });
+          dirtyRef.current = false;
+        }
       })
       .catch((error) => {
         if (!cancelled) setLoadError(friendlyError(error, tRef.current));
