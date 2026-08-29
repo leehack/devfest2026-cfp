@@ -288,13 +288,14 @@ export function Schedule({
       setSubmissionForm(nextSubmissionForm);
       setProposals(proposalRows);
 
+      const baselineConfig = configRef.current ?? initialConfig(nextCfp);
       const isSetupDirty = Boolean(
-        configRef.current &&
+        baselineConfig &&
           workingConfigRef.current &&
           JSON.stringify({
-            timeZone: configRef.current.timeZone,
-            days: configRef.current.days,
-            rooms: configRef.current.rooms,
+            timeZone: baselineConfig.timeZone,
+            days: baselineConfig.days,
+            rooms: baselineConfig.rooms,
           }) !==
             JSON.stringify({
               timeZone: workingConfigRef.current.timeZone,
@@ -513,9 +514,14 @@ export function Schedule({
   );
   const shareConflicts = scheduleConflicts(shareableEntries, speakerMap);
   const roomIdsInUse = useMemo(() => scheduleRoomIdsInUse(entries), [entries]);
+  const baselineConfig = config ?? (cfp ? initialConfig(cfp) : null);
   const setupDirty = Boolean(
-    config &&
-      JSON.stringify({ timeZone: config.timeZone, days: config.days, rooms: config.rooms }) !==
+    baselineConfig &&
+      JSON.stringify({
+        timeZone: baselineConfig.timeZone,
+        days: baselineConfig.days,
+        rooms: baselineConfig.rooms,
+      }) !==
         JSON.stringify({
           timeZone: workingConfig?.timeZone,
           days: workingConfig?.days,

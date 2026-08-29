@@ -990,33 +990,35 @@ function ProposalFormPage({
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
               currentTalks[0] ??
               effectiveFound[0]));
-        if (open) {
-          const next = fromDocuments(proposalForCurrentSpeaker(open), effectiveProfile);
-          setForm(next);
-          setSpeakerEditing(!speakerProfileComplete(next));
-          setProposalId(open.id);
-          proposalIdRef.current = open.id;
-          setStatus(open.status);
-          setSessionPhotoGeneration(sessionPhotoGenerations.current.get(open.id) ?? null);
-          const loadedAnswers = confirmationAnswersFrom(open);
-          setAnswers(loadedAnswers);
-          savedAnswersRef.current = loadedAnswers;
-          answerDirty.current = false;
-        } else {
-          // No talk here yet — but `speakers/{uid}` is global, so anyone who has
-          // submitted to another call or filled in `/me` has already written all
-          // of this. Starting them from blank was asking for it twice.
-          const next = {
-            ...fromDocuments(undefined, effectiveProfile),
-            name: effectiveProfile?.name || user.displayName || '',
-            email: user.email ?? '',
-          };
-          setForm(next);
-          setSpeakerEditing(!speakerProfileComplete(next));
-          setSessionPhotoGeneration(null);
-          setAnswers({});
-          savedAnswersRef.current = {};
-          answerDirty.current = false;
+        if (!dirty.current && !answerDirty.current) {
+          if (open) {
+            const next = fromDocuments(proposalForCurrentSpeaker(open), effectiveProfile);
+            setForm(next);
+            setSpeakerEditing(!speakerProfileComplete(next));
+            setProposalId(open.id);
+            proposalIdRef.current = open.id;
+            setStatus(open.status);
+            setSessionPhotoGeneration(sessionPhotoGenerations.current.get(open.id) ?? null);
+            const loadedAnswers = confirmationAnswersFrom(open);
+            setAnswers(loadedAnswers);
+            savedAnswersRef.current = loadedAnswers;
+            answerDirty.current = false;
+          } else {
+            // No talk here yet — but `speakers/{uid}` is global, so anyone who has
+            // submitted to another call or filled in `/me` has already written all
+            // of this. Starting them from blank was asking for it twice.
+            const next = {
+              ...fromDocuments(undefined, effectiveProfile),
+              name: effectiveProfile?.name || user.displayName || '',
+              email: user.email ?? '',
+            };
+            setForm(next);
+            setSpeakerEditing(!speakerProfileComplete(next));
+            setSessionPhotoGeneration(null);
+            setAnswers({});
+            savedAnswersRef.current = {};
+            answerDirty.current = false;
+          }
         }
       } catch (error) {
         if (!cancelled) setLoadError(friendlyError(error, tRef.current));
