@@ -1214,14 +1214,14 @@ export function Proposals({
           requests={profileRequests}
           failed={profileRequestsFailed}
           onOpen={openSpeakerManagement}
-          onRetry={() => void refresh()}
+          onRetry={() => void refresh(false, true)}
         />
       )}
       <ReviewCoverage
         coverage={coverage}
         loading={coverageLoading}
         error={coverageError}
-        onRetry={() => void refresh()}
+        onRetry={() => void refresh(false, true)}
       />
 
       <section className="section decision-panel">
