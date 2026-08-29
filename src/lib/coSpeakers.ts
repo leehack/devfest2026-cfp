@@ -6,7 +6,7 @@ import type {
   SpeakerInvitationViewState,
 } from '@shared/coSpeakers';
 
-import { db, functions } from '../firebase';
+import { functions } from '../firebase';
 import { invalidateCache } from './cache';
 
 export interface CoSpeakerInviteQuery {
