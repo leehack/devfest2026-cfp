@@ -267,7 +267,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
                 triggerRevalidationApply();
               }
             },
-            onError: (err) => {
+            onError: (_err) => {
               if (request === loadGeneration.current && activeScope.current === scopeKey) {
                 setError(tRef.current.nav.forbidden);
                 setOrder([]);
