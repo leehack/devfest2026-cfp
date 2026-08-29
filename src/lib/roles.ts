@@ -15,7 +15,7 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
-import { db, functions } from '../firebase';
+import { auth, db, functions } from '../firebase';
 import { swrFetch } from './cache';
 import { STATUS_SETS, type AttendanceStatus, type ProposalStatus } from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
@@ -577,8 +577,9 @@ export async function loadCommittee(
   pending: RoleGrant[];
   inviteLinks: import('@shared/types').RoleInviteLink[];
 }> {
+  const viewerUid = auth.currentUser?.uid ?? 'anon';
   return swrFetch(
-    `committee:${cfpId}`,
+    `committee:${cfpId}:${viewerUid}`,
     async () => {
       const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
       const [members, grants] = await Promise.all([

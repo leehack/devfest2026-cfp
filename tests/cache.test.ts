@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { getCached, invalidateCache, setCached, swrFetch } from '../src/lib/cache';
 import { prefetchByPath } from '../src/lib/prefetch';
 
@@ -68,6 +68,24 @@ describe('cache', () => {
     const forced = await swrFetch('test:cached', fetcher, { force: true });
     expect(forced).toEqual({ count: 2 });
     expect(callCount).toBe(2);
+  });
+
+  it('purges pre-existing in-flight requests on force refresh', async () => {
+    invalidateCache();
+    const slowPreWriteFetcher = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { val: 'stale-pre-write' };
+    };
+
+    // Start pre-write fetch
+    void swrFetch('test:stale', slowPreWriteFetcher);
+
+    // Force post-write fetch
+    const postWriteFetcher = async () => ({ val: 'fresh-post-write' });
+    const freshResult = await swrFetch('test:stale', postWriteFetcher, { force: true });
+
+    expect(freshResult).toEqual({ val: 'fresh-post-write' });
+    expect(getCached('test:stale')).toEqual({ val: 'fresh-post-write' });
   });
 });
 

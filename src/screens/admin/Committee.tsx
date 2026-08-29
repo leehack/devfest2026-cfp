@@ -186,7 +186,7 @@ export function Committee({
           : tRef.current.admin.invited(data.email),
       );
       setEmail('');
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {
@@ -220,7 +220,7 @@ export function Committee({
       // Refresh either way: on failure this is what puts the select back to the
       // role the server actually still holds.
       if (activeCfp.current === scope) {
-        await refresh(false);
+        await refresh(false, true);
         if (activeCfp.current === scope) setBusy(false);
       }
     }
@@ -237,7 +237,7 @@ export function Committee({
       await revokeRole({ cfpId, email: target });
       if (activeCfp.current !== scope) return;
       setNote(tRef.current.admin.revoked(target));
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {
@@ -255,7 +255,7 @@ export function Committee({
       await initiateEventOwnershipTransfer({ cfpId, email: target });
       setNote(tRef.current.transfer.pendingBanner(target));
       setTransferEmail('');
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       setError(transferError(e, tRef.current));
     } finally {
@@ -270,7 +270,7 @@ export function Committee({
     try {
       await cancelEventOwnershipTransfer({ cfpId });
       setNote(tRef.current.transfer.cancelled);
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       setError(transferError(e, tRef.current));
     } finally {
@@ -285,7 +285,7 @@ export function Committee({
     try {
       await acceptEventOwnershipTransfer({ cfpId });
       setNote(tRef.current.transfer.transferred);
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       setError(transferError(e, tRef.current));
     } finally {
@@ -338,7 +338,7 @@ export function Committee({
         }).catch(() => {});
       }
 
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {
@@ -357,7 +357,7 @@ export function Committee({
       await revokeRoleInviteLink({ cfpId, token });
       if (activeCfp.current !== scope) return;
       setNote(tRef.current.admin.inviteLinkRevoked);
-      await refresh(false);
+      await refresh(false, true);
     } catch (e) {
       if (activeCfp.current === scope) setError(roleAdminError(e, tRef.current));
     } finally {

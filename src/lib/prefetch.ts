@@ -48,7 +48,7 @@ export function prefetchByPath(path: string): void {
     void prefetchChunks.platform();
   } else if (clean === 'orgs') {
     void prefetchChunks.orgs();
-  } else if (clean.startsWith('org/')) {
+  } else if (clean.startsWith('orgs/')) {
     void prefetchChunks.org();
   } else if (parts[0] === 'c' && parts[1]) {
     const section = parts[2];

@@ -30,11 +30,17 @@ export function setCached<T>(key: string, data: T, ttlMs = DEFAULT_TTL_MS): void
 export function invalidateCache(keyOrPrefix?: string): void {
   if (!keyOrPrefix) {
     memoryStore.clear();
+    inFlightRequests.clear();
     return;
   }
   for (const key of memoryStore.keys()) {
     if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
       memoryStore.delete(key);
+    }
+  }
+  for (const key of inFlightRequests.keys()) {
+    if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
+      inFlightRequests.delete(key);
     }
   }
 }
@@ -55,7 +61,11 @@ export async function swrFetch<T>(
 ): Promise<T> {
   const { ttlMs = DEFAULT_TTL_MS, force = false, backgroundRevalidate = false } = options;
 
-  if (!force) {
+  if (force) {
+    // Purge any pre-mutation in-flight requests for this key
+    inFlightRequests.delete(key);
+    memoryStore.delete(key);
+  } else {
     const cached = getCached<T>(key);
     if (cached !== undefined) {
       if (backgroundRevalidate) {

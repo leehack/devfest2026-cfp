@@ -25,6 +25,7 @@ import {
 import { CfpPage } from './screens/CfpPage';
 import { SchedulePage } from './screens/SchedulePage';
 import { loadCfpWindow, type CfpWindow } from './lib/proposals';
+import { invalidateCache } from './lib/cache';
 import { usePlatformAccess, useRole } from './lib/roles';
 import { goTo, navigate, usePlace, type Place } from './lib/router';
 import {
@@ -316,6 +317,7 @@ export function App({
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);
     setAuthReady(true);
+    invalidateCache();
   }), []);
 
   // Signing in and out replaces the protected screen without changing its URL.
@@ -358,7 +360,7 @@ export function App({
     const id = cfpId;
     if (!id) return;
     try {
-      const next = await loadCfpWindow(id);
+      const next = await loadCfpWindow(id, { force: true });
       if (currentCfpId.current !== id) return;
       setCfp(next);
       setLoadedCfpId(id);
