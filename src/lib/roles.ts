@@ -537,8 +537,10 @@ export function useRole(
     }
     return null;
   });
-  const [attempt, setAttempt] = useState(0);
-  const retry = useCallback(() => setAttempt((current) => current + 1), []);
+  const [retryKey, setRetryKey] = useState<string | null>(null);
+  const retry = useCallback(() => {
+    if (cfpId) setRetryKey(`${cfpId}:${Date.now()}`);
+  }, [cfpId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -548,12 +550,13 @@ export function useRole(
     }
 
     const scope = { uid, cfpId };
+    const isRetrying = Boolean(retryKey && retryKey.startsWith(`${cfpId}:`));
     const cached = getCached<CfpRole | null>(`role:${cfpId}:${uid}`);
-    if (cached !== undefined && attempt === 0) {
+    if (cached !== undefined && !isRetrying) {
       setLookup({ ...scope, role: cached, ready: true, error: false });
     } else {
       setLookup((prev) =>
-        prev?.uid === uid && prev.cfpId === cfpId
+        prev?.uid === uid && prev.cfpId === cfpId && !isRetrying
           ? prev
           : { ...scope, role: null, ready: false, error: false },
       );
@@ -570,8 +573,8 @@ export function useRole(
         return data.role;
       },
       {
-        force: attempt > 0,
-        backgroundRevalidate: cached !== undefined && attempt === 0,
+        force: isRetrying,
+        backgroundRevalidate: cached !== undefined && !isRetrying,
         onRevalidate: (freshRole) => {
           if (!cancelled) {
             setLookup({ ...scope, role: freshRole, ready: true, error: false });
@@ -581,12 +584,14 @@ export function useRole(
     )
       .then((role) => {
         if (!cancelled) {
+          if (isRetrying) setRetryKey(null);
           setLookup({ ...scope, role, ready: true, error: false });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          if (cached === undefined || attempt > 0) {
+          if (isRetrying) setRetryKey(null);
+          if (cached === undefined || isRetrying) {
             setLookup({ ...scope, role: null, ready: true, error: true });
           }
         }
@@ -595,7 +600,7 @@ export function useRole(
     return () => {
       cancelled = true;
     };
-  }, [uid, cfpId, attempt]);
+  }, [uid, cfpId, retryKey]);
 
   if (!uid || !cfpId) return { role: null, ready: true, error: false, retry };
   if (!lookup || lookup.uid !== uid || lookup.cfpId !== cfpId) {

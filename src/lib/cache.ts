@@ -41,6 +41,9 @@ export function setCached<T>(key: string, data: T, ttlMs = DEFAULT_TTL_MS): void
 export function invalidateCache(keyOrPrefix?: string): void {
   if (!keyOrPrefix) {
     memoryStore.clear();
+    for (const req of inFlightRequests.values()) {
+      (req as any).isSuperseded = true;
+    }
     inFlightRequests.clear();
     for (const key of requestGenerations.keys()) {
       requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
@@ -52,8 +55,9 @@ export function invalidateCache(keyOrPrefix?: string): void {
       memoryStore.delete(key);
     }
   }
-  for (const key of inFlightRequests.keys()) {
+  for (const [key, req] of inFlightRequests.entries()) {
     if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
+      (req as any).isSuperseded = true;
       inFlightRequests.delete(key);
       requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
     }
@@ -85,8 +89,12 @@ export async function swrFetch<T>(
   } = options;
 
   if (force) {
+    const existing = inFlightRequests.get(key);
+    if (existing) {
+      (existing as any).isSuperseded = true;
+      inFlightRequests.delete(key);
+    }
     requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
-    inFlightRequests.delete(key);
     memoryStore.delete(key);
   } else {
     if (hasCached(key)) {
@@ -114,7 +122,7 @@ async function runFetcher<T>(
     if (onRevalidate) {
       void existing
         .then((res) => {
-          if (requestGenerations.get(key) === boundGen) {
+          if (requestGenerations.get(key) === boundGen && !(existing as any).isSuperseded) {
             onRevalidate(res);
           }
         })
@@ -122,7 +130,9 @@ async function runFetcher<T>(
     }
     if (onError) {
       void existing.catch((err) => {
-        onError(err);
+        if (requestGenerations.get(key) === boundGen && !(existing as any).isSuperseded) {
+          onError(err);
+        }
       });
     }
     return existing;
@@ -135,7 +145,7 @@ async function runFetcher<T>(
   const promise = (async () => {
     try {
       const result = await fetcher();
-      if (requestGenerations.get(key) === currentGen) {
+      if (requestGenerations.get(key) === currentGen && !(holder.promise as any)?.isSuperseded) {
         setCached(key, result, ttlMs);
         onRevalidate?.(result);
         return result;
@@ -145,7 +155,8 @@ async function runFetcher<T>(
       }
       return await swrFetch(key, fetcher, { ttlMs, onRevalidate, onError });
     } catch (fetchError) {
-      const isCurrent = requestGenerations.get(key) === currentGen;
+      const isCurrent =
+        requestGenerations.get(key) === currentGen && !(holder.promise as any)?.isSuperseded;
       if (isCurrent) {
         const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
         if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
