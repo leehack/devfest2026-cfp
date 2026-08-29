@@ -55,6 +55,7 @@ import {
   toSubmission,
   type FormState,
 } from '../lib/formState';
+import { invalidateCache } from '../lib/cache';
 import {
   loadConfirmForm,
   loadSubmissionForm,
@@ -1667,6 +1668,8 @@ function ProposalFormPage({
         setSaveState('saved');
       }
       await submitProposal({ cfpId, proposalId: id });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
       // Codes only — never the title, the abstract or anything about the
       // person. This answers "which tracks are people proposing to", which is
       // the one thing page views cannot tell an organiser.
@@ -1691,6 +1694,8 @@ function ProposalFormPage({
     setSubmitting(true);
     try {
       await withdrawProposal({ cfpId, proposalId });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
       setStatus('withdrawn');
       markTalk(proposalId, 'withdrawn');
     } catch (error: any) {
@@ -1726,6 +1731,8 @@ function ProposalFormPage({
       revision.current += 1;
       await activeSave.current?.catch(() => undefined);
       await deleteDraftProposal({ cfpId, proposalId: target });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
 
       const remaining = talksRef.current.filter((talk) => talk.id !== target);
       talksRef.current = remaining;
@@ -1772,6 +1779,8 @@ function ProposalFormPage({
         response,
         ...(response === 'confirm' ? { answers: responseAnswers } : {}),
       });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
       setStatus(data.status);
       statusRef.current = data.status;
       markTalk(proposalId, data.status);

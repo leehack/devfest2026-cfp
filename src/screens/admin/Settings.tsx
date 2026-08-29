@@ -97,19 +97,20 @@ export function Settings({
     [onDirtyChange],
   );
 
-  const refresh = useCallback(async () => {
-    const scope = cfpId;
-    const request = ++generation.current;
-    const current = () =>
-      activeCfp.current === scope && generation.current === request;
-    try {
-      const cfp = await loadCfp(cfpId);
-      if (!current()) return false;
-      if (!cfp) {
-        setError(tRef.current.errors.notFound);
-        setFailedCfp(scope);
-        return false;
-      }
+  const refresh = useCallback(
+    async (force = false) => {
+      const scope = cfpId;
+      const request = ++generation.current;
+      const current = () =>
+        activeCfp.current === scope && generation.current === request;
+      try {
+        const cfp = await loadCfp(cfpId, { force });
+        if (!current()) return false;
+        if (!cfp) {
+          setError(tRef.current.errors.notFound);
+          setFailedCfp(scope);
+          return false;
+        }
       const nextName = cfp.name ?? '';
       const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
       const nextDescriptionEn = cfp.description?.en ?? '';
@@ -208,7 +209,7 @@ export function Settings({
   async function run(
     work: (current: () => boolean) => Promise<void>,
     ok: string,
-    after: (current: () => boolean) => Promise<unknown> | void = () => refresh(),
+    after: (current: () => boolean) => Promise<unknown> | void = () => refresh(true),
   ) {
     const scope = cfpId;
     const current = () => activeCfp.current === scope;

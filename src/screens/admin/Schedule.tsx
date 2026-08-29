@@ -252,22 +252,20 @@ export function Schedule({
   const [reviewingPublish, setReviewingPublish] = useState(false);
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
-  const setupRef = useRef<HTMLDetailsElement>(null);
-
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
     setError('');
     try {
       const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
-        loadCfp(cfpId),
-        loadScheduleDraft(cfpId),
-        loadAllProposals(cfpId),
-        loadSharedSchedule(cfpId),
-        loadSubmissionForm(cfpId),
+        loadCfp(cfpId, { force }),
+        loadScheduleDraft(cfpId, { force }),
+        loadAllProposals(cfpId, { force }),
+        loadSharedSchedule(cfpId, { force }),
+        loadSubmissionForm(cfpId, { force }),
       ]);
       if (request !== generation.current) return;
       const nextPublic = nextCfp?.publishedScheduleId
-        ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId)
+        ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId, { force })
         : null;
       if (request !== generation.current) return;
       const next = draft.config ?? initialConfig(nextCfp);
@@ -512,7 +510,7 @@ export function Schedule({
       );
       setNote(`${t.schedule.published} ${t.schedule.publishedVersion(data.version)}`);
       setReviewingPublish(false);
-      await refresh();
+      await refresh(true);
       await onDisclosureChanged?.('published');
       track('schedule_published', { cfp_id: cfpId, version: data.version });
     } catch (caught) {
@@ -536,7 +534,7 @@ export function Schedule({
         `${t.schedule.shared} ${t.schedule.sharedVersion(data.version)} ${t.schedule.sharedSummary(data.sharedCount, data.omittedCount)} ${t.schedule.sharedChannels(data.committeeNotificationCount, data.speakerNotificationCount)}`,
       );
       setReviewingShare(false);
-      await refresh();
+      await refresh(true);
       await onDisclosureChanged?.('shared');
       track('schedule_shared', { cfp_id: cfpId, version: data.version });
     } catch (caught) {
@@ -555,7 +553,7 @@ export function Schedule({
       await unpublishSchedule({ cfpId });
       setReviewingOffline(false);
       setNote(t.schedule.unpublishedSuccess);
-      await refresh();
+      await refresh(true);
       await onDisclosureChanged?.('offline');
       track('schedule_unpublished', { cfp_id: cfpId });
     } catch (caught) {
