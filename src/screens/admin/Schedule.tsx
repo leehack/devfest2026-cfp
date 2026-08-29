@@ -255,6 +255,15 @@ export function Schedule({
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
   const setupRef = useRef<HTMLDetailsElement>(null);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const draggingRef = useRef(dragging);
+  draggingRef.current = dragging;
+  const workingConfigRef = useRef(workingConfig);
+  workingConfigRef.current = workingConfig;
+  const configRef = useRef(config);
+  configRef.current = config;
+
   const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
     setError('');
@@ -264,6 +273,7 @@ export function Schedule({
       proposalRows: ProposalRow[],
       nextShared: SharedScheduleBundle,
       nextSubmissionForm: SubmissionForm,
+      isBackgroundRevalidate = false,
     ) => {
       const nextPublic = nextCfp?.publishedScheduleId
         ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId, { force })
@@ -273,12 +283,34 @@ export function Schedule({
       setCfp(nextCfp);
       setSharedPreview(nextShared);
       setPublicProgramme(nextPublic);
-      setConfig(draft.config);
-      setSetupOpen((current) => current || !draft.config);
-      setWorkingConfig(next);
-      setEntries(draft.entries);
       setSubmissionForm(nextSubmissionForm);
       setProposals(proposalRows);
+
+      const isSetupDirty = Boolean(
+        configRef.current &&
+          workingConfigRef.current &&
+          JSON.stringify({
+            timeZone: configRef.current.timeZone,
+            days: configRef.current.days,
+            rooms: configRef.current.rooms,
+          }) !==
+            JSON.stringify({
+              timeZone: workingConfigRef.current.timeZone,
+              days: workingConfigRef.current.days,
+              rooms: workingConfigRef.current.rooms,
+            }),
+      );
+
+      if (!isBackgroundRevalidate || !isSetupDirty) {
+        setConfig(draft.config);
+        setSetupOpen((current) => current || !draft.config);
+        setWorkingConfig(next);
+      }
+
+      if (!isBackgroundRevalidate || (editingRef.current === null && draggingRef.current === null)) {
+        setEntries(draft.entries);
+      }
+
       setSelectedDay((current) =>
         next.days.some((day: { date: string }) => day.date === current) ? current : next.days[0]?.date ?? '',
       );
@@ -306,6 +338,7 @@ export function Schedule({
                   resolvedProposals,
                   resolvedShared,
                   resolvedSubmissionForm,
+                  true,
                 );
               }
             }
@@ -326,6 +359,7 @@ export function Schedule({
         proposalRows,
         nextShared,
         nextSubmissionForm,
+        false,
       );
     } catch (caught) {
       if (request === generation.current) {

@@ -83,6 +83,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [filterEpoch, setFilterEpoch] = useState(0);
   const loadGeneration = useRef(0);
   const draftsRef = useRef(drafts);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  const indexRef = useRef(index);
+  indexRef.current = index;
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -95,7 +99,6 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setError('');
       setSelectedCategory(null);
       setQueueOpen(false);
-      setIndex(0);
       setSavingIds(new Set());
       setSavedId('');
       setFailures(new Map());
@@ -104,6 +107,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
         cfpDoc: Cfp | null,
         formDoc: SubmissionForm,
+        isBackgroundRevalidate = false,
       ) => {
         const reviews = await loadMyReviews(
           cfpId,
@@ -142,6 +146,19 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           ]),
         );
         draftsRef.current = loadedDrafts;
+
+        const currentProposalId = orderRef.current[indexRef.current]?.id;
+        const matchingIndex = currentProposalId
+          ? sorted.findIndex((p) => p.id === currentProposalId)
+          : -1;
+        if (matchingIndex >= 0) {
+          setIndex(matchingIndex);
+          indexRef.current = matchingIndex;
+        } else if (!isBackgroundRevalidate) {
+          setIndex(0);
+          indexRef.current = 0;
+        }
+
         setOrder(sorted);
         setOwn(loadedQueue.own);
         setMine(reviews);
@@ -150,8 +167,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         setBlindReview(Boolean(cfpDoc?.features?.blindReview));
         setIntakeOpen(open);
         setShape(formDoc);
-        setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
-        setFilterEpoch((e) => e + 1);
+        if (!isBackgroundRevalidate) {
+          setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
+          setFilterEpoch((e) => e + 1);
+        }
         setLoadedFor(scopeKey);
       };
 
@@ -166,7 +185,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
               if (request === loadGeneration.current && activeScope.current === scopeKey) {
                 revalidatedQueue = updated;
                 if (resolvedForm) {
-                  void applyQueue(updated, resolvedCfp, resolvedForm);
+                  void applyQueue(updated, resolvedCfp, resolvedForm, true);
                 }
               }
             },
