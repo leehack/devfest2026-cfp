@@ -970,7 +970,7 @@ function ProposalFormPage({
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
-        const currentTalks = found.filter((talk) => !isPastTalk(talk));
+        const currentTalks = effectiveFound.filter((talk) => !isPastTalk(talk));
         const requestedProposalId = preferredProposalId ?? proposalSelectionQuery(window.location.search);
         const preferred = requestedProposalId
           ? currentTalks.find((talk) => talk.id === requestedProposalId)
@@ -978,13 +978,13 @@ function ProposalFormPage({
         const open =
           preferred ??
           (cfp.state === 'open'
-            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? found[0])
+            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? effectiveFound[0])
             : (currentTalks.find((talk) => talk.status === 'accepted') ??
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
               currentTalks[0] ??
-              found[0]));
+              effectiveFound[0]));
         if (open) {
-          const next = fromDocuments(proposalForCurrentSpeaker(open), profile);
+          const next = fromDocuments(proposalForCurrentSpeaker(open), effectiveProfile);
           setForm(next);
           setSpeakerEditing(!speakerProfileComplete(next));
           setProposalId(open.id);
@@ -1000,8 +1000,8 @@ function ProposalFormPage({
           // submitted to another call or filled in `/me` has already written all
           // of this. Starting them from blank was asking for it twice.
           const next = {
-            ...fromDocuments(undefined, profile),
-            name: profile?.name || user.displayName || '',
+            ...fromDocuments(undefined, effectiveProfile),
+            name: effectiveProfile?.name || user.displayName || '',
             email: user.email ?? '',
           };
           setForm(next);

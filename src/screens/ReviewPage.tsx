@@ -157,13 +157,17 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 
       try {
         let revalidatedQueue: { proposals: ReviewerProposalRow[]; own: number } | null = null;
+        let resolvedCfp: Cfp | null = null;
+        let resolvedForm: SubmissionForm | null = null;
         const [loaded, cfp, form] = await Promise.all([
           loadReviewQueue(cfpId, {
             force,
             onRevalidate: (updated) => {
               if (request === loadGeneration.current && activeScope.current === scopeKey) {
                 revalidatedQueue = updated;
-                void applyQueue(updated, cfp, form);
+                if (resolvedForm) {
+                  void applyQueue(updated, resolvedCfp, resolvedForm);
+                }
               }
             },
           }),
@@ -173,7 +177,9 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           loadSubmissionForm(cfpId, { force }),
         ]);
         if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-        await applyQueue(revalidatedQueue ?? loaded, cfp, form);
+        resolvedCfp = cfp;
+        resolvedForm = form;
+        await applyQueue(revalidatedQueue ?? loaded, resolvedCfp, resolvedForm);
       } catch (e) {
         if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
         setOrder([]);

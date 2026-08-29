@@ -257,15 +257,13 @@ export function Schedule({
   const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
     setError('');
-    try {
-      const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
-        loadCfp(cfpId, { force }),
-        loadScheduleDraft(cfpId, { force }),
-        loadAllProposals(cfpId, { force }),
-        loadSharedSchedule(cfpId, { force, audience: 'committee' }),
-        loadSubmissionForm(cfpId, { force }),
-      ]);
-      if (request !== generation.current) return;
+    const applySchedule = async (
+      nextCfp: Cfp | null,
+      draft: ScheduleDraft,
+      proposalRows: ProposalRow[],
+      nextShared: SharedScheduleBundle,
+      nextSubmissionForm: SubmissionForm,
+    ) => {
       const nextPublic = nextCfp?.publishedScheduleId
         ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId, { force })
         : null;
@@ -284,6 +282,50 @@ export function Schedule({
         next.days.some((day) => day.date === current) ? current : next.days[0]?.date ?? '',
       );
       setLoaded(true);
+    };
+
+    try {
+      let revalidatedDraft: ScheduleDraft | null = null;
+      let resolvedCfp: Cfp | null = null;
+      let resolvedProposals: ProposalRow[] | null = null;
+      let resolvedShared: SharedScheduleBundle | null = null;
+      let resolvedSubmissionForm: SubmissionForm | null = null;
+
+      const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
+        loadCfp(cfpId, { force }),
+        loadScheduleDraft(cfpId, {
+          force,
+          onRevalidate: (updated) => {
+            if (request === generation.current) {
+              revalidatedDraft = updated;
+              if (resolvedCfp && resolvedProposals && resolvedShared && resolvedSubmissionForm) {
+                void applySchedule(
+                  resolvedCfp,
+                  updated,
+                  resolvedProposals,
+                  resolvedShared,
+                  resolvedSubmissionForm,
+                );
+              }
+            }
+          },
+        }),
+        loadAllProposals(cfpId, { force }),
+        loadSharedSchedule(cfpId, { force, audience: 'committee' }),
+        loadSubmissionForm(cfpId, { force }),
+      ]);
+      if (request !== generation.current) return;
+      resolvedCfp = nextCfp;
+      resolvedProposals = proposalRows;
+      resolvedShared = nextShared;
+      resolvedSubmissionForm = nextSubmissionForm;
+      await applySchedule(
+        nextCfp,
+        revalidatedDraft ?? draft,
+        proposalRows,
+        nextShared,
+        nextSubmissionForm,
+      );
     } catch (caught) {
       if (request === generation.current) {
         setError(scheduleError(caught, t));

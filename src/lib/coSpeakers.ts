@@ -167,5 +167,6 @@ export async function respondToCoSpeakerInvitation(
   invalidateCache(`allProposals:${cfpId}`);
   invalidateCache(`scheduleDraft:${cfpId}`);
   invalidateCache(`sharedSchedule:${cfpId}`);
+  invalidateCache(`reviewQueue:${cfpId}`);
   return { state: result.data.state, proposalId };
 }

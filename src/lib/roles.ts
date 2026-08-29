@@ -856,7 +856,7 @@ export async function loadReviewQueue(
 /** One-shot, refreshed by the caller after a change — §2 allows no listeners. */
 export async function loadCfp(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; onRevalidate?: (cfp: Cfp | null) => void } = {},
 ): Promise<Cfp | null> {
   return swrFetch(
     `cfp:${cfpId}`,
@@ -864,7 +864,7 @@ export async function loadCfp(
       const snap = await getDoc(doc(db, 'cfps', cfpId));
       return snap.exists() ? (snap.data() as Cfp) : null;
     },
-    { force: options.force, backgroundRevalidate: true },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
   );
 }
 

@@ -87,6 +87,9 @@ export function Settings({
     ((identityBaseline !== '' && identityState !== identityBaseline) ||
       (windowBaseline !== '' && windowState !== windowBaseline));
 
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -104,86 +107,102 @@ export function Settings({
       const request = ++generation.current;
       const current = () =>
         activeCfp.current === scope && generation.current === request;
-      try {
-        const cfp = await loadCfp(cfpId, { force });
+
+      const applyCfp = (cfp: Cfp | null) => {
         if (!current()) return false;
         if (!cfp) {
           setError(tRef.current.errors.notFound);
           setFailedCfp(scope);
           return false;
         }
-      const nextName = cfp.name ?? '';
-      const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
-      const nextDescriptionEn = cfp.description?.en ?? '';
-      const nextDescriptionFr = cfp.description?.fr ?? '';
-      const nextEventDate = cfp.eventStartDate ?? cfp.eventDate ?? '';
-      const nextEventEndDate = cfp.eventEndDate ?? nextEventDate;
-      const nextEventTimeZone = cfp.timeZone ?? 'America/Toronto';
-      const nextVenue = cfp.venue ?? '';
-      const nextPlace = cfp.location ?? '';
-      const nextWebsite = cfp.website ?? '';
-      const nextPrimaryColor = cfp.theme?.primaryColor ?? '';
-      const nextAccentColor = cfp.theme?.accentColor ?? '';
-      const nextBlindReview = cfp.features?.blindReview === true;
-      const nextOpensAt = toZonedDateTimeInput(toDate(cfp.opensAt), nextEventTimeZone);
-      const nextClosesAt = toZonedDateTimeInput(toDate(cfp.closesAt), nextEventTimeZone);
+        const nextName = cfp.name ?? '';
+        const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
+        const nextDescriptionEn = cfp.description?.en ?? '';
+        const nextDescriptionFr = cfp.description?.fr ?? '';
+        const nextEventDate = cfp.eventStartDate ?? cfp.eventDate ?? '';
+        const nextEventEndDate = cfp.eventEndDate ?? nextEventDate;
+        const nextEventTimeZone = cfp.timeZone ?? 'America/Toronto';
+        const nextVenue = cfp.venue ?? '';
+        const nextPlace = cfp.location ?? '';
+        const nextWebsite = cfp.website ?? '';
+        const nextPrimaryColor = cfp.theme?.primaryColor ?? '';
+        const nextAccentColor = cfp.theme?.accentColor ?? '';
+        const nextBlindReview = cfp.features?.blindReview === true;
+        const nextOpensAt = toZonedDateTimeInput(toDate(cfp.opensAt), nextEventTimeZone);
+        const nextClosesAt = toZonedDateTimeInput(toDate(cfp.closesAt), nextEventTimeZone);
 
-      setName(nextName);
-      setVisibility(nextVisibility);
-      setDescriptionEn(nextDescriptionEn);
-      setDescriptionFr(nextDescriptionFr);
-      setEventDate(nextEventDate);
-      setEventEndDate(nextEventEndDate);
-      setEventTimeZone(nextEventTimeZone);
-      setWindowTimeZone(nextEventTimeZone);
-      setVenue(nextVenue);
-      setPlace(nextPlace);
-      setWebsite(nextWebsite);
-      setPrimaryColor(nextPrimaryColor);
-      setAccentColor(nextAccentColor);
-      setBlindReview(nextBlindReview);
-      setArchived(cfp.archived === true);
-      setOpensAt(nextOpensAt);
-      setClosesAt(nextClosesAt);
-      setPaused(cfp.paused === true);
-      setReviewsVisible(cfp.reviewsVisible === true);
-      setProgrammePublished(Boolean(cfp.publishedScheduleId));
-      setIdentityBaseline(
-        JSON.stringify([
-          nextName,
-          nextVisibility,
-          nextDescriptionEn,
-          nextDescriptionFr,
-          nextEventDate,
-          nextEventEndDate,
-          nextEventTimeZone,
-          nextVenue,
-          nextPlace,
-          nextWebsite,
-          nextPrimaryColor,
-          nextAccentColor,
-          nextBlindReview,
-        ]),
-      );
-      setWindowBaseline(
-        JSON.stringify([
-          nextOpensAt,
-          nextClosesAt,
-          cfp.paused === true,
-          cfp.reviewsVisible === true,
-        ]),
-      );
-      setLoadedCfp(scope);
-      setFailedCfp('');
-      setError('');
-      return true;
-    } catch (e) {
-      if (!current()) return false;
-      setError(adminError(e, tRef.current));
-      setFailedCfp(scope);
-      return false;
-    }
-  }, [cfpId, tRef]);
+        setName(nextName);
+        setVisibility(nextVisibility);
+        setDescriptionEn(nextDescriptionEn);
+        setDescriptionFr(nextDescriptionFr);
+        setEventDate(nextEventDate);
+        setEventEndDate(nextEventEndDate);
+        setEventTimeZone(nextEventTimeZone);
+        setWindowTimeZone(nextEventTimeZone);
+        setVenue(nextVenue);
+        setPlace(nextPlace);
+        setWebsite(nextWebsite);
+        setPrimaryColor(nextPrimaryColor);
+        setAccentColor(nextAccentColor);
+        setBlindReview(nextBlindReview);
+        setArchived(cfp.archived === true);
+        setOpensAt(nextOpensAt);
+        setClosesAt(nextClosesAt);
+        setPaused(cfp.paused === true);
+        setReviewsVisible(cfp.reviewsVisible === true);
+        setProgrammePublished(Boolean(cfp.publishedScheduleId));
+        setIdentityBaseline(
+          JSON.stringify([
+            nextName,
+            nextVisibility,
+            nextDescriptionEn,
+            nextDescriptionFr,
+            nextEventDate,
+            nextEventEndDate,
+            nextEventTimeZone,
+            nextVenue,
+            nextPlace,
+            nextWebsite,
+            nextPrimaryColor,
+            nextAccentColor,
+            nextBlindReview,
+          ]),
+        );
+        setWindowBaseline(
+          JSON.stringify([
+            nextOpensAt,
+            nextClosesAt,
+            cfp.paused === true,
+            cfp.reviewsVisible === true,
+          ]),
+        );
+        setLoadedCfp(scope);
+        setFailedCfp('');
+        setError('');
+        return true;
+      };
+
+      try {
+        let revalidatedCfp: Cfp | null = null;
+        const cfp = await loadCfp(cfpId, {
+          force,
+          onRevalidate: (fresh) => {
+            if (current() && !dirtyRef.current) {
+              revalidatedCfp = fresh;
+              applyCfp(fresh);
+            }
+          },
+        });
+        return applyCfp(revalidatedCfp ?? cfp);
+      } catch (e) {
+        if (!current()) return false;
+        setError(adminError(e, tRef.current));
+        setFailedCfp(scope);
+        return false;
+      }
+    },
+    [cfpId, tRef],
+  );
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
