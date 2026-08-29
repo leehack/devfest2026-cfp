@@ -98,7 +98,14 @@ async function runFetcher<T>(
   const existing = inFlightRequests.get(key) as Promise<T> | undefined;
   if (existing) {
     if (onRevalidate) {
-      void existing.then((res) => onRevalidate(res)).catch(() => {});
+      const boundGen = requestGenerations.get(key) ?? 0;
+      void existing
+        .then((res) => {
+          if (requestGenerations.get(key) === boundGen) {
+            onRevalidate(res);
+          }
+        })
+        .catch(() => {});
     }
     return existing;
   }

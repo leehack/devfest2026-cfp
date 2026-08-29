@@ -196,13 +196,14 @@ export function Overview({ cfpId }: { cfpId: string }) {
   }, [cfpId, tRef]);
 
   useEffect(() => {
-    void load(loadedFor !== cfpId);
+    void load(data?.cfpId !== cfpId);
     // The locale settles after mount. Refetching operational data in response
     // would add reads without changing any of it.
     return () => {
       requestGeneration.current += 1;
     };
-  }, [cfpId, load, loadedFor]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfpId]);
 
   const current = data?.cfpId === cfpId ? data : null;
   if (loadedFor !== cfpId) return <p className="muted">{t.app.loading}</p>;

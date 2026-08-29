@@ -45,6 +45,7 @@ import {
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
 import { loadSubmissionForm } from '../../lib/proposals';
+import { invalidateCache } from '../../lib/cache';
 import {
   loadPublishedSchedule,
   loadScheduleDraft,
@@ -435,6 +436,8 @@ export function Schedule({
       setSelectedDay((current) =>
         saved.days.some((day) => day.date === current) ? current : (saved.days[0]?.date ?? ''),
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
       setNote(t.schedule.setupSaved);
     } catch (caught) {
       setError(scheduleError(caught, t));
@@ -459,6 +462,7 @@ export function Schedule({
       setWorkingConfig((current) =>
         current ? { ...current, revision: data.revision, needsAttention: true } : current,
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
       setEditing(null);
       return true;
     } catch (caught) {
@@ -484,6 +488,7 @@ export function Schedule({
       setWorkingConfig((current) =>
         current ? { ...current, revision: data.revision, needsAttention: true } : current,
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
       setEditing(null);
     } catch (caught) {
       setError(scheduleError(caught, t));
@@ -509,6 +514,11 @@ export function Schedule({
           ? { ...current, revision: data.revision, needsAttention: false }
           : current,
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`publishedSchedule:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`cfpWindow:${cfpId}`);
       setNote(`${t.schedule.published} ${t.schedule.publishedVersion(data.version)}`);
       setReviewingPublish(false);
       await refresh(true);
@@ -531,6 +541,10 @@ export function Schedule({
         cfpId,
         expectedRevision: config.revision,
       });
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`cfpWindow:${cfpId}`);
       setNote(
         `${t.schedule.shared} ${t.schedule.sharedVersion(data.version)} ${t.schedule.sharedSummary(data.sharedCount, data.omittedCount)} ${t.schedule.sharedChannels(data.committeeNotificationCount, data.speakerNotificationCount)}`,
       );
@@ -552,6 +566,11 @@ export function Schedule({
     setNote('');
     try {
       await unpublishSchedule({ cfpId });
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`publishedSchedule:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`cfpWindow:${cfpId}`);
       setReviewingOffline(false);
       setNote(t.schedule.unpublishedSuccess);
       await refresh(true);

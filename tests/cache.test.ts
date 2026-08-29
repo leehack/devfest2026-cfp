@@ -136,6 +136,36 @@ describe('cache', () => {
     expect(revalidatedData).toEqual({ count: 2 });
     expect(getCached('test:reval')).toEqual({ count: 2 });
   });
+
+  it('drops onRevalidate on deduplicated in-flight requests if superseded', async () => {
+    invalidateCache();
+    let callbackData: { val: string } | null = null;
+    const slowFetcher = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { val: 'stale-slow' };
+    };
+
+    // First caller starts the fetch
+    void swrFetch('test:dedupe-gen', slowFetcher);
+
+    // Second caller attaches to the existing in-flight promise with onRevalidate
+    void swrFetch('test:dedupe-gen', slowFetcher, {
+      onRevalidate: (d) => {
+        callbackData = d;
+      },
+    });
+
+    // Forced write occurs
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await swrFetch('test:dedupe-gen', async () => ({ val: 'fresh' }), { force: true });
+
+    // Wait for slow fetcher to finish
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Callback must NOT have fired because generation was incremented
+    expect(callbackData).toBeNull();
+    expect(getCached('test:dedupe-gen')).toEqual({ val: 'fresh' });
+  });
 });
 
 describe('prefetch', () => {

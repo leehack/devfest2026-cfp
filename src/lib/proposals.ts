@@ -351,6 +351,9 @@ export async function saveDraft(
         { merge: true },
       );
     }
+    invalidateCache('myProposals');
+    invalidateCache(`allProposals:${cfpId}`);
+    invalidateCache(`speakerProfile:${user.uid}`);
     return proposalId;
   }
 
@@ -364,6 +367,9 @@ export async function saveDraft(
     status: 'draft',
     updatedAt: serverTimestamp(),
   });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
+  invalidateCache(`speakerProfile:${user.uid}`);
   return created.id;
 }
 

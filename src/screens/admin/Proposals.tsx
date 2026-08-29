@@ -906,12 +906,12 @@ export function Proposals({
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh(loadedFor !== cfpId);
+    void refresh(rows.length === 0 || activeCfp.current !== cfpId);
     return () => {
       loadGeneration.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfpId, loadedFor]);
+  }, [cfpId]);
 
   /*
    * From the snapshot on the proposal, not from `speakers/{uid}`.
