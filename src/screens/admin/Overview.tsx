@@ -142,7 +142,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setData(null);
     }
     setError('');
+    let revalidatedCfp: Cfp | null = null;
     let revalidatedProposals: ProposalRow[] | null = null;
+    let revalidatedSubmission: SubmissionForm | null = null;
+    let revalidatedConfirmation: ConfirmForm | null = null;
     let latestDraft: { config: ScheduleConfig | null; entries: ScheduleEntry[] } | null = null;
     let latestShared: SharedScheduleBundle | null = null;
 
@@ -170,6 +173,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId, {
           onRevalidate: (updatedCfp) => {
+            revalidatedCfp = updatedCfp;
             if (requestGeneration.current === request && updatedCfp) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, cfp: updatedCfp } : prev));
             }
@@ -186,6 +190,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         loadCommittee(cfpId),
         loadSubmissionForm(cfpId, {
           onRevalidate: (updatedForm) => {
+            revalidatedSubmission = updatedForm;
             if (requestGeneration.current === request) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, submission: updatedForm } : prev));
             }
@@ -193,6 +198,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         }),
         loadConfirmForm(cfpId, {
           onRevalidate: (updatedForm) => {
+            revalidatedConfirmation = updatedForm;
             if (requestGeneration.current === request) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, confirmation: updatedForm } : prev));
             }
@@ -245,18 +251,19 @@ export function Overview({ cfpId }: { cfpId: string }) {
           })),
       ]);
       if (request !== requestGeneration.current) return;
-      if (!cfp) {
+      const effectiveCfp = revalidatedCfp ?? cfp;
+      if (!effectiveCfp) {
         setError(tRef.current.errors.notFound);
         setLoadedFor(cfpId);
         return;
       }
       setData({
         cfpId,
-        cfp,
+        cfp: effectiveCfp,
         proposals: revalidatedProposals ?? proposals,
         committee,
-        submission,
-        confirmation,
+        submission: revalidatedSubmission ?? submission,
+        confirmation: revalidatedConfirmation ?? confirmation,
         email,
         schedule,
       });

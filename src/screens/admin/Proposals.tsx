@@ -863,6 +863,8 @@ export function Proposals({
       });
     };
     let revalidatedRows: ProposalRow[] | null = null;
+    let revalidatedConfirm: ConfirmForm | null = null;
+    let revalidatedSubmission: SubmissionForm | null = null;
     try {
       const [all, form, submission, updateRequests] = await Promise.all([
         loadAllProposals(cfpId, {
@@ -875,8 +877,24 @@ export function Proposals({
             }
           },
         }),
-        loadConfirmForm(cfpId),
-        loadSubmissionForm(cfpId),
+        loadConfirmForm(cfpId, {
+          force,
+          onRevalidate: (updatedConfirm) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+              revalidatedConfirm = updatedConfirm;
+              setQuestions(updatedConfirm.fields);
+            }
+          },
+        }),
+        loadSubmissionForm(cfpId, {
+          force,
+          onRevalidate: (updatedSubmission) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+              revalidatedSubmission = updatedSubmission;
+              setShape(updatedSubmission);
+            }
+          },
+        }),
         readOnly
           ? Promise.resolve({ requests: [] as ProfileUpdateRequestSummary[], failed: false })
           : listSpeakerProfileUpdateRequests({ cfpId })
@@ -885,8 +903,8 @@ export function Proposals({
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setRows(mergePendingStatuses(revalidatedRows ?? all));
-      setQuestions(form.fields);
-      setShape(submission);
+      setQuestions((revalidatedConfirm ?? form).fields);
+      setShape(revalidatedSubmission ?? submission);
       setProfileRequests(updateRequests.requests);
       setProfileRequestsFailed(updateRequests.failed);
       setLoadedFor(cfpId);
