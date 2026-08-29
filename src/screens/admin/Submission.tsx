@@ -40,7 +40,7 @@ export function Submission({
     setForm(null);
     setLoading(true);
     setError('');
-    void loadSubmissionForm(cfpId)
+    void loadSubmissionForm(cfpId, { force: true })
       .then((loaded) => {
         if (request === generation.current) setForm(loaded);
       })

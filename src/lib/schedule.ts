@@ -118,13 +118,15 @@ export async function loadSharedSchedule(
   cfpId: string,
   options: {
     force?: boolean;
+    releaseId?: string;
     audience?: 'committee' | 'speaker';
     onRevalidate?: (bundle: SharedScheduleBundle) => void;
   } = {},
 ): Promise<SharedScheduleBundle> {
+  const releaseKey = options.releaseId ?? 'current';
   const audienceKey = options.audience ?? 'any';
   return swrFetch(
-    `sharedSchedule:${cfpId}:${audienceKey}`,
+    `sharedSchedule:${cfpId}:${releaseKey}:${audienceKey}`,
     async () => {
       const { data } = await getSharedSchedule({ cfpId });
       return {

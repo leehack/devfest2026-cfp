@@ -189,6 +189,7 @@ export function SchedulePage({
       releaseId ? loadPublishedSchedule(cfpId, releaseId) : Promise.resolve(null);
     const loadPreview = async (): Promise<PublishedScheduleBundle | null> => {
       const shared: SharedScheduleBundle = await loadSharedSchedule(cfpId, {
+        releaseId: previewReleaseId,
         audience: 'committee',
       });
       if (!shared.schedule) return null;

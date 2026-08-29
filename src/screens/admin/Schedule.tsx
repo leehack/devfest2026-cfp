@@ -301,13 +301,11 @@ export function Schedule({
             }),
       );
 
-      if (!isBackgroundRevalidate || !isSetupDirty) {
+      const isEditingOrDragging = editingRef.current !== null || draggingRef.current !== null;
+      if (!isBackgroundRevalidate || (!isSetupDirty && !isEditingOrDragging)) {
         setConfig(draft.config);
         setSetupOpen((current) => current || !draft.config);
         setWorkingConfig(next);
-      }
-
-      if (!isBackgroundRevalidate || (editingRef.current === null && draggingRef.current === null)) {
         setEntries(draft.entries);
       }
 

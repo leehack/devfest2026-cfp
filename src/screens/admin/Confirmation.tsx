@@ -40,7 +40,7 @@ export function Confirmation({
     setForm(null);
     setLoading(true);
     setError('');
-    void loadConfirmForm(cfpId)
+    void loadConfirmForm(cfpId, { force: true })
       .then((loaded) => {
         if (request === generation.current) setForm(loaded);
       })

@@ -157,6 +157,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         } else if (!isBackgroundRevalidate) {
           setIndex(0);
           indexRef.current = 0;
+        } else if (sorted.length > 0) {
+          const clamped = Math.min(Math.max(0, indexRef.current), sorted.length - 1);
+          setIndex(clamped);
+          indexRef.current = clamped;
+        } else {
+          setIndex(0);
+          indexRef.current = 0;
         }
 
         setOrder(sorted);
