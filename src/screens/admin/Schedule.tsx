@@ -67,7 +67,6 @@ import { scheduleError } from '../../lib/errors';
 import { track } from '../../lib/analytics';
 import { Result } from './Result';
 import { downloadScheduleCsv } from './scheduleExport';
-import type { Cfp } from '@shared/types';
 
 const SLOT_MINUTES = 15;
 const SLOT_HEIGHT = 24;
