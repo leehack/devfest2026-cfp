@@ -92,9 +92,7 @@ export async function swrFetch<T>(
     if (hasCached(key)) {
       const cached = getCached<T>(key) as T;
       if (backgroundRevalidate) {
-        void runFetcher(key, fetcher, ttlMs, onRevalidate, onError).catch((err) => {
-          onError?.(err);
-        });
+        void runFetcher(key, fetcher, ttlMs, onRevalidate, onError).catch(() => {});
       }
       return cached;
     }
@@ -149,11 +147,11 @@ async function runFetcher<T>(
       }
       return await swrFetch(key, fetcher, { ttlMs, onRevalidate, onError });
     } catch (fetchError) {
-      const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
-      if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
-        invalidateCache(key);
-      }
       if (requestGenerations.get(key) === currentGen) {
+        const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
+        if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
+          invalidateCache(key);
+        }
         onError?.(fetchError);
       }
       throw fetchError;

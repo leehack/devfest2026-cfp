@@ -331,16 +331,18 @@ export function Schedule({
     try {
       let currentDraftResult: ScheduleDraft | null = null;
       let currentProposalsResult: ProposalRow[] | null = null;
-      let currentCfpResult: Cfp | null = null;
+      let revalidatedCfp: { value: Cfp | null } | null = null;
       let currentSharedResult: SharedScheduleBundle | null = null;
       let currentFormResult: SubmissionForm | null = null;
+
+      const getEffectiveCfp = () => (revalidatedCfp ? revalidatedCfp.value : nextCfp);
 
       const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
         loadCfp(cfpId, {
           force,
           onRevalidate: (updatedCfp) => {
             if (request === generation.current) {
-              currentCfpResult = updatedCfp;
+              revalidatedCfp = { value: updatedCfp };
               if (currentDraftResult && currentProposalsResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
                   updatedCfp,
@@ -359,9 +361,9 @@ export function Schedule({
           onRevalidate: (updatedDraft) => {
             if (request === generation.current) {
               currentDraftResult = updatedDraft;
-              if (currentCfpResult && currentProposalsResult && currentSharedResult && currentFormResult) {
+              if (currentProposalsResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
-                  currentCfpResult,
+                  getEffectiveCfp(),
                   updatedDraft,
                   currentProposalsResult,
                   currentSharedResult,
@@ -383,9 +385,9 @@ export function Schedule({
           onRevalidate: (updatedProposals) => {
             if (request === generation.current) {
               currentProposalsResult = updatedProposals;
-              if (currentCfpResult && currentDraftResult && currentSharedResult && currentFormResult) {
+              if (currentDraftResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
-                  currentCfpResult,
+                  getEffectiveCfp(),
                   currentDraftResult,
                   updatedProposals,
                   currentSharedResult,
@@ -408,9 +410,9 @@ export function Schedule({
           onRevalidate: (updatedShared) => {
             if (request === generation.current) {
               currentSharedResult = updatedShared;
-              if (currentCfpResult && currentDraftResult && currentProposalsResult && currentFormResult) {
+              if (currentDraftResult && currentProposalsResult && currentFormResult) {
                 void applySchedule(
-                  currentCfpResult,
+                  getEffectiveCfp(),
                   currentDraftResult,
                   currentProposalsResult,
                   updatedShared,
@@ -426,9 +428,9 @@ export function Schedule({
           onRevalidate: (updatedForm) => {
             if (request === generation.current) {
               currentFormResult = updatedForm;
-              if (currentCfpResult && currentDraftResult && currentProposalsResult && currentSharedResult) {
+              if (currentDraftResult && currentProposalsResult && currentSharedResult) {
                 void applySchedule(
-                  currentCfpResult,
+                  getEffectiveCfp(),
                   currentDraftResult,
                   currentProposalsResult,
                   currentSharedResult,
@@ -441,13 +443,12 @@ export function Schedule({
         }),
       ]);
       if (request !== generation.current) return;
-      currentCfpResult = currentCfpResult ?? nextCfp;
       currentDraftResult = currentDraftResult ?? draft;
       currentProposalsResult = currentProposalsResult ?? proposalRows;
       currentSharedResult = currentSharedResult ?? nextShared;
       currentFormResult = currentFormResult ?? nextSubmissionForm;
       await applySchedule(
-        currentCfpResult,
+        getEffectiveCfp(),
         currentDraftResult,
         currentProposalsResult,
         currentSharedResult,

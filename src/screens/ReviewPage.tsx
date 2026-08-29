@@ -216,6 +216,9 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 
       let initialLoaded = false;
       let coalesceHandle: ReturnType<typeof setTimeout> | null = null;
+      let revalidatedCfp: { value: Cfp | null } | null = null;
+      const getEffectiveCfp = () => (revalidatedCfp ? revalidatedCfp.value : currentCfpResult);
+
       const triggerRevalidationApply = () => {
         if (!initialLoaded) return;
         if (coalesceHandle) clearTimeout(coalesceHandle);
@@ -226,7 +229,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             currentQueueResult &&
             currentFormResult
           ) {
-            void applyQueue(currentQueueResult, currentCfpResult, currentFormResult, true);
+            void applyQueue(currentQueueResult, getEffectiveCfp(), currentFormResult, true);
           }
         }, 50);
       };
@@ -246,7 +249,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             force,
             onRevalidate: (updatedCfp) => {
               if (request === loadGeneration.current && activeScope.current === scopeKey) {
-                currentCfpResult = updatedCfp;
+                revalidatedCfp = { value: updatedCfp };
                 triggerRevalidationApply();
               }
             },
@@ -265,7 +268,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         ]);
         if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
         currentQueueResult = currentQueueResult ?? loaded;
-        currentCfpResult = currentCfpResult ?? cfp;
+        currentCfpResult = revalidatedCfp ? revalidatedCfp.value : cfp;
         currentFormResult = currentFormResult ?? form;
         initialLoaded = true;
         await applyQueue(currentQueueResult, currentCfpResult, currentFormResult, false);
