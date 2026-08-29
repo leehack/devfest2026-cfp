@@ -82,6 +82,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [statusFilter, setStatusFilter] = useState<'unreviewed' | 'all'>('unreviewed');
   const [filterEpoch, setFilterEpoch] = useState(0);
   const loadGeneration = useRef(0);
+  const orderRef = useRef(order);
+  orderRef.current = order;
   const draftsRef = useRef(drafts);
   const selectedCategoryRef = useRef(selectedCategory);
   selectedCategoryRef.current = selectedCategory;
@@ -99,6 +101,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     async (force = false) => {
       const request = ++loadGeneration.current;
       deferredQueueApply.current.delete(scopeKey);
+      orderRef.current = [];
       setLoading(true);
       setLoadedFor('');
       setError('');
@@ -160,10 +163,24 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
         );
 
+        const freshMap = new Map(loadedQueue.proposals.map((p) => [p.id, p]));
+        const previousOrder = orderRef.current;
+        let effectiveOrder: ReviewerProposalRow[];
+        if (isBackgroundRevalidate && previousOrder.length > 0) {
+          const retained = previousOrder
+            .map((p) => freshMap.get(p.id))
+            .filter((p): p is ReviewerProposalRow => Boolean(p));
+          const existingIds = new Set(retained.map((p) => p.id));
+          const newlyAdded = sorted.filter((p) => !existingIds.has(p.id));
+          effectiveOrder = [...retained, ...newlyAdded];
+        } else {
+          effectiveOrder = sorted;
+        }
+
         const recovered = loadReviewDrafts(cfpId, user.uid);
         const existingDrafts = draftsRef.current;
         const loadedDrafts = new Map(
-          sorted.map((proposal) => [
+          effectiveOrder.map((proposal) => [
             proposal.id,
             {
               ...draftOf(reviews.get(proposal.id)),
@@ -177,13 +194,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         const effectiveCategory = isBackgroundRevalidate ? selectedCategoryRef.current : null;
         const effectiveStatusFilter = isBackgroundRevalidate
           ? statusFilterRef.current
-          : sorted.some((p) => !reviews.has(p.id))
+          : effectiveOrder.some((p) => !reviews.has(p.id))
             ? 'unreviewed'
             : 'all';
 
         const nextCategoryOrder = effectiveCategory
-          ? sorted.filter((p) => p.category === effectiveCategory)
-          : sorted;
+          ? effectiveOrder.filter((p) => p.category === effectiveCategory)
+          : effectiveOrder;
         const nextDeckOrder =
           effectiveStatusFilter === 'unreviewed'
             ? nextCategoryOrder.filter((p) => !reviews.has(p.id))
@@ -207,7 +224,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }
         }
 
-        setOrder(sorted);
+        setOrder(effectiveOrder);
+        orderRef.current = effectiveOrder;
         setOwn(loadedQueue.own);
         setMine(reviews);
         setDrafts(loadedDrafts);
