@@ -4,8 +4,16 @@ interface CacheEntry<T> {
   ttlMs: number;
 }
 
+interface InFlightEntry<T> {
+  promise: Promise<T>;
+  generation: number;
+  superseded: boolean;
+  onRevalidates: Array<(data: T) => void>;
+  onErrors: Array<(error: unknown) => void>;
+}
+
 const memoryStore = new Map<string, CacheEntry<unknown>>();
-const inFlightRequests = new Map<string, Promise<unknown>>();
+const inFlightRequests = new Map<string, InFlightEntry<any>>();
 const requestGenerations = new Map<string, number>();
 
 const DEFAULT_TTL_MS = 3 * 60 * 1000; // 3 minutes
@@ -41,8 +49,8 @@ export function setCached<T>(key: string, data: T, ttlMs = DEFAULT_TTL_MS): void
 export function invalidateCache(keyOrPrefix?: string): void {
   if (!keyOrPrefix) {
     memoryStore.clear();
-    for (const req of inFlightRequests.values()) {
-      (req as any).isSuperseded = true;
+    for (const entry of inFlightRequests.values()) {
+      entry.superseded = true;
     }
     inFlightRequests.clear();
     for (const key of requestGenerations.keys()) {
@@ -55,9 +63,9 @@ export function invalidateCache(keyOrPrefix?: string): void {
       memoryStore.delete(key);
     }
   }
-  for (const [key, req] of inFlightRequests.entries()) {
+  for (const [key, entry] of inFlightRequests.entries()) {
     if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
-      (req as any).isSuperseded = true;
+      entry.superseded = true;
       inFlightRequests.delete(key);
       requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
     }
@@ -89,9 +97,9 @@ export async function swrFetch<T>(
   } = options;
 
   if (force) {
-    const existing = inFlightRequests.get(key);
-    if (existing) {
-      (existing as any).isSuperseded = true;
+    const entry = inFlightRequests.get(key);
+    if (entry) {
+      entry.superseded = true;
       inFlightRequests.delete(key);
     }
     requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
@@ -116,38 +124,34 @@ async function runFetcher<T>(
   onRevalidate?: (data: T) => void,
   onError?: (error: unknown) => void,
 ): Promise<T> {
-  const existing = inFlightRequests.get(key) as Promise<T> | undefined;
+  const existing = inFlightRequests.get(key) as InFlightEntry<T> | undefined;
   if (existing) {
-    const boundGen = requestGenerations.get(key) ?? 0;
-    if (onRevalidate) {
-      void existing
-        .then((res) => {
-          if (requestGenerations.get(key) === boundGen && !(existing as any).isSuperseded) {
-            onRevalidate(res);
-          }
-        })
-        .catch(() => {});
-    }
-    if (onError) {
-      void existing.catch((err) => {
-        if (requestGenerations.get(key) === boundGen && !(existing as any).isSuperseded) {
-          onError(err);
-        }
-      });
-    }
-    return existing;
+    if (onRevalidate) existing.onRevalidates.push(onRevalidate);
+    if (onError) existing.onErrors.push(onError);
+    return existing.promise;
   }
 
   const currentGen = (requestGenerations.get(key) ?? 0) + 1;
   requestGenerations.set(key, currentGen);
 
-  const holder: { promise?: Promise<T> } = {};
+  const entry: InFlightEntry<T> = {
+    promise: null as any,
+    generation: currentGen,
+    superseded: false,
+    onRevalidates: [],
+    onErrors: [],
+  };
+  if (onRevalidate) entry.onRevalidates.push(onRevalidate);
+  if (onError) entry.onErrors.push(onError);
+
   const promise = (async () => {
     try {
       const result = await fetcher();
-      if (requestGenerations.get(key) === currentGen && !(holder.promise as any)?.isSuperseded) {
+      if (requestGenerations.get(key) === currentGen && !entry.superseded) {
         setCached(key, result, ttlMs);
-        onRevalidate?.(result);
+        for (const cb of entry.onRevalidates) {
+          cb(result);
+        }
         return result;
       }
       if (hasCached(key)) {
@@ -155,24 +159,24 @@ async function runFetcher<T>(
       }
       return await swrFetch(key, fetcher, { ttlMs, onRevalidate, onError });
     } catch (fetchError) {
-      const isCurrent =
-        requestGenerations.get(key) === currentGen && !(holder.promise as any)?.isSuperseded;
-      if (isCurrent) {
+      if (requestGenerations.get(key) === currentGen && !entry.superseded) {
         const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
         if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
           invalidateCache(key);
         }
-        onError?.(fetchError);
+        for (const cb of entry.onErrors) {
+          cb(fetchError);
+        }
       }
       throw fetchError;
     } finally {
-      if (inFlightRequests.get(key) === holder.promise) {
+      if (inFlightRequests.get(key) === entry) {
         inFlightRequests.delete(key);
       }
     }
   })();
 
-  holder.promise = promise;
-  inFlightRequests.set(key, promise);
+  entry.promise = promise;
+  inFlightRequests.set(key, entry);
   return promise;
 }

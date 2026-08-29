@@ -162,10 +162,15 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         );
 
         const recovered = loadReviewDrafts(cfpId, user.uid);
+        const existingDrafts = draftsRef.current;
         const loadedDrafts = new Map(
           sorted.map((proposal) => [
             proposal.id,
-            { ...draftOf(reviews.get(proposal.id)), ...recovered.get(proposal.id) },
+            {
+              ...draftOf(reviews.get(proposal.id)),
+              ...recovered.get(proposal.id),
+              ...(isBackgroundRevalidate ? existingDrafts.get(proposal.id) : {}),
+            },
           ]),
         );
         draftsRef.current = loadedDrafts;
