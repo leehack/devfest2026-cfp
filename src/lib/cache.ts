@@ -157,7 +157,19 @@ async function runFetcher<T>(
       if (hasCached(key)) {
         return getCached<T>(key) as T;
       }
-      return await swrFetch(key, fetcher, { ttlMs, onRevalidate, onError });
+      return await swrFetch(key, fetcher, {
+        ttlMs,
+        onRevalidate: (fresh) => {
+          for (const cb of entry.onRevalidates) {
+            cb(fresh);
+          }
+        },
+        onError: (err) => {
+          for (const cb of entry.onErrors) {
+            cb(err);
+          }
+        },
+      });
     } catch (fetchError) {
       if (requestGenerations.get(key) === currentGen && !entry.superseded) {
         const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');

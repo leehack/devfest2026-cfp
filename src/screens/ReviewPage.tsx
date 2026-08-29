@@ -90,7 +90,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const statusFilterRef = useRef(statusFilter);
   statusFilterRef.current = statusFilter;
   const currentProposalIdRef = useRef<string | null>(null);
-  const queueApplyGeneration = useRef(0);
+  const queueApplyGenerationsByScope = useRef<Map<string, number>>(new Map());
   const activeSavesByScope = useRef<Map<string, number>>(new Map());
   const deferredQueueApply = useRef<Map<string, () => void>>(new Map());
   const scopeKey = `${cfpId}:${user.uid}`;
@@ -121,7 +121,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         formDoc: SubmissionForm,
         isBackgroundRevalidate = false,
       ) => {
-        const applyGen = ++queueApplyGeneration.current;
+        const applyGen = (queueApplyGenerationsByScope.current.get(scopeKey) ?? 0) + 1;
+        queueApplyGenerationsByScope.current.set(scopeKey, applyGen);
         const reviews = await loadMyReviews(
           cfpId,
           user.uid,
@@ -137,7 +138,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           });
           return;
         }
-        if (applyGen !== queueApplyGeneration.current) {
+        if (applyGen !== queueApplyGenerationsByScope.current.get(scopeKey)) {
           return;
         }
         const visible = cfpDoc?.reviewsVisible === true;
@@ -264,6 +265,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
               if (request === loadGeneration.current && activeScope.current === scopeKey) {
                 currentQueueResult = updated;
                 triggerRevalidationApply();
+              }
+            },
+            onError: (err) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                setError(tRef.current.nav.forbidden);
+                setOrder([]);
+                setOwn(0);
+                setMine(new Map());
+                setDrafts(new Map());
+                setLoadedFor(scopeKey);
               }
             },
           }),
@@ -445,9 +456,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         );
       } finally {
         const remaining = (activeSavesByScope.current.get(scope) ?? 1) - 1;
+        const currentGen = queueApplyGenerationsByScope.current.get(scope) ?? 0;
+        queueApplyGenerationsByScope.current.set(scope, currentGen + 1);
         if (remaining <= 0) {
           activeSavesByScope.current.delete(scope);
-          queueApplyGeneration.current += 1;
           const deferred = deferredQueueApply.current.get(scope);
           if (deferred) {
             deferredQueueApply.current.delete(scope);
@@ -455,7 +467,6 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }
         } else {
           activeSavesByScope.current.set(scope, remaining);
-          queueApplyGeneration.current += 1;
         }
         if (activeScope.current === scope) {
           setSavingIds((current) => {
