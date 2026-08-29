@@ -103,6 +103,8 @@ export async function inviteProposalSpeaker(
   email: string,
 ): Promise<ProposalSpeakerRoster> {
   const result = await invite({ cfpId, proposalId, email });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapRoster(result.data);
 }
 
@@ -112,6 +114,8 @@ export async function revokeProposalSpeakerInvitation(
   invitationId: string,
 ): Promise<ProposalSpeakerRoster> {
   const result = await revoke({ cfpId, proposalId, invitationId });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapRoster(result.data);
 }
 
@@ -121,6 +125,8 @@ export async function retryProposalSpeakerInvitation(
   invitationId: string,
 ): Promise<ProposalSpeakerRoster> {
   const result = await retryInvitation({ cfpId, proposalId, invitationId });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapRoster(result.data);
 }
 

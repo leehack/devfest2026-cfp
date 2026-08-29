@@ -637,7 +637,14 @@ export async function loadInviteLinks(
 
 export async function loadCommittee(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    onRevalidate?: (committee: {
+      people: Person[];
+      pending: RoleGrant[];
+      inviteLinks: import('@shared/types').RoleInviteLink[];
+    }) => void;
+  } = {},
 ): Promise<{
   people: Person[];
   pending: RoleGrant[];
@@ -673,7 +680,7 @@ export async function loadCommittee(
         inviteLinks,
       };
     },
-    { force: options.force, backgroundRevalidate: true },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
   );
 }
 

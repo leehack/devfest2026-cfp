@@ -144,6 +144,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
     setError('');
     let revalidatedCfp: Cfp | null = null;
     let revalidatedProposals: ProposalRow[] | null = null;
+    let revalidatedCommittee: Awaited<ReturnType<typeof loadCommittee>> | null = null;
     let revalidatedSubmission: SubmissionForm | null = null;
     let revalidatedConfirmation: ConfirmForm | null = null;
     let latestDraft: { config: ScheduleConfig | null; entries: ScheduleEntry[] } | null = null;
@@ -187,7 +188,14 @@ export function Overview({ cfpId }: { cfpId: string }) {
             }
           },
         }),
-        loadCommittee(cfpId),
+        loadCommittee(cfpId, {
+          onRevalidate: (updatedCommittee) => {
+            revalidatedCommittee = updatedCommittee;
+            if (requestGeneration.current === request) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, committee: updatedCommittee } : prev));
+            }
+          },
+        }),
         loadSubmissionForm(cfpId, {
           onRevalidate: (updatedForm) => {
             revalidatedSubmission = updatedForm;
@@ -261,7 +269,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         cfpId,
         cfp: effectiveCfp,
         proposals: revalidatedProposals ?? proposals,
-        committee,
+        committee: revalidatedCommittee ?? committee,
         submission: revalidatedSubmission ?? submission,
         confirmation: revalidatedConfirmation ?? confirmation,
         email,

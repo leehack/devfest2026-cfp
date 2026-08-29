@@ -108,14 +108,26 @@ export function Committee({
     const current = () =>
       activeCfp.current === scope && generation.current === request;
     try {
+      let revalidatedCommittee: Awaited<ReturnType<typeof loadCommittee>> | null = null;
       const [committee, transferRes] = await Promise.all([
-        loadCommittee(cfpId, { force }),
+        loadCommittee(cfpId, {
+          force,
+          onRevalidate: (updated) => {
+            revalidatedCommittee = updated;
+            if (current()) {
+              setPeople(updated.people);
+              setPending(updated.pending);
+              setInviteLinks(updated.inviteLinks ?? []);
+            }
+          },
+        }),
         getEventOwnershipTransfer({ cfpId }).catch(() => ({ data: { ok: true, transfer: null } })),
       ]);
       if (!current()) return false;
-      setPeople(committee.people);
-      setPending(committee.pending);
-      setInviteLinks(committee.inviteLinks ?? []);
+      const effectiveCommittee = revalidatedCommittee ?? committee;
+      setPeople(effectiveCommittee.people);
+      setPending(effectiveCommittee.pending);
+      setInviteLinks(effectiveCommittee.inviteLinks ?? []);
       setPendingTransfer(transferRes.data.transfer ?? null);
       setLoadedCfp(scope);
       setLoadFailed(false);
