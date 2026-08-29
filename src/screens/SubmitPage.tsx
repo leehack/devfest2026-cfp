@@ -1089,6 +1089,8 @@ function ProposalFormPage({
             response: 'confirm',
             answers: snapshot,
           });
+          invalidateCache('myProposals');
+          invalidateCache(`allProposals:${cfpId}`);
           if (answerRevision.current === savedRevision) {
             answerDirty.current = false;
             savedAnswersRef.current = snapshot;

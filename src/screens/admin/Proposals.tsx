@@ -853,6 +853,7 @@ export function Proposals({
       committedDecisions.current.clear();
       decisionSequence.current = 0;
     }
+    let revalidatedRows: ProposalRow[] | null = null;
     try {
       const [all, form, submission, updateRequests] = await Promise.all([
         loadAllProposals(cfpId, {
@@ -860,6 +861,7 @@ export function Proposals({
           force,
           onRevalidate: (updated) => {
             if (request === loadGeneration.current && activeCfp.current === cfpId) {
+              revalidatedRows = updated;
               setRows(updated);
             }
           },
@@ -873,7 +875,7 @@ export function Proposals({
               .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
-      setRows(all);
+      setRows(revalidatedRows ?? all);
       setQuestions(form.fields);
       setShape(submission);
       setProfileRequests(updateRequests.requests);
@@ -1011,6 +1013,7 @@ export function Proposals({
       }
       invalidateCache(`allProposals:${cfpId}`);
       invalidateCache('myProposals');
+      invalidateCache(`reviewQueue:${cfpId}`);
       void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
@@ -1060,6 +1063,7 @@ export function Proposals({
       setUndo(latest === null ? null : committedDecisions.current.get(latest) ?? null);
       invalidateCache(`allProposals:${cfpId}`);
       invalidateCache('myProposals');
+      invalidateCache(`reviewQueue:${cfpId}`);
       setNote(t.admin.decisionUndone(snapshot.title));
       void onEmailQueueChange?.();
     } catch (e) {

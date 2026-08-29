@@ -6,7 +6,8 @@ import type {
   SpeakerInvitationViewState,
 } from '@shared/coSpeakers';
 
-import { functions } from '../firebase';
+import { db, functions } from '../firebase';
+import { invalidateCache } from './cache';
 
 export interface CoSpeakerInviteQuery {
   proposalId: string;
@@ -129,6 +130,8 @@ export async function removeProposalSpeaker(
   uid: string,
 ): Promise<ProposalSpeakerRoster | null> {
   const result = await remove({ cfpId, proposalId, uid });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapNullableRoster(result.data);
 }
 
@@ -158,5 +161,7 @@ export async function respondToCoSpeakerInvitation(
     response,
     ...(response === 'accept' && participation ? participation : {}),
   });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return { state: result.data.state, proposalId };
 }

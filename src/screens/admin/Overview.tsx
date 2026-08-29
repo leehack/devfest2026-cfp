@@ -137,12 +137,14 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setData(null);
     }
     setError('');
+    let revalidatedProposals: ProposalRow[] | null = null;
     try {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId),
         loadAllProposals(cfpId, {
           onRevalidate: (updated) => {
             if (requestGeneration.current === request) {
+              revalidatedProposals = updated;
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, proposals: updated } : prev));
             }
           },
@@ -192,7 +194,16 @@ export function Overview({ cfpId }: { cfpId: string }) {
         setLoadedFor(cfpId);
         return;
       }
-      setData({ cfpId, cfp, proposals, committee, submission, confirmation, email, schedule });
+      setData({
+        cfpId,
+        cfp,
+        proposals: revalidatedProposals ?? proposals,
+        committee,
+        submission,
+        confirmation,
+        email,
+        schedule,
+      });
       setLoadedFor(cfpId);
     } catch (e) {
       if (request !== requestGeneration.current) return;
