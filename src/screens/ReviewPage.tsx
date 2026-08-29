@@ -148,26 +148,37 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         );
         draftsRef.current = loadedDrafts;
 
-        const nextCategoryOrder = selectedCategoryRef.current
-          ? sorted.filter((p) => p.category === selectedCategoryRef.current)
+        const effectiveCategory = isBackgroundRevalidate ? selectedCategoryRef.current : null;
+        const effectiveStatusFilter = isBackgroundRevalidate
+          ? statusFilterRef.current
+          : sorted.some((p) => !reviews.has(p.id))
+            ? 'unreviewed'
+            : 'all';
+
+        const nextCategoryOrder = effectiveCategory
+          ? sorted.filter((p) => p.category === effectiveCategory)
           : sorted;
         const nextDeckOrder =
-          statusFilterRef.current === 'unreviewed'
+          effectiveStatusFilter === 'unreviewed'
             ? nextCategoryOrder.filter((p) => !reviews.has(p.id))
             : nextCategoryOrder;
 
-        const activeProposalId = currentProposalIdRef.current;
-        const matchingIndex = activeProposalId
-          ? nextDeckOrder.findIndex((p) => p.id === activeProposalId)
-          : -1;
-        if (matchingIndex >= 0) {
-          setIndex(matchingIndex);
-        } else if (!isBackgroundRevalidate) {
+        if (!isBackgroundRevalidate) {
           setIndex(0);
-        } else if (nextDeckOrder.length > 0) {
-          setIndex((currentIdx) => Math.min(Math.max(0, currentIdx), nextDeckOrder.length - 1));
+          setStatusFilter(effectiveStatusFilter);
+          setFilterEpoch((e) => e + 1);
         } else {
-          setIndex(0);
+          const activeProposalId = currentProposalIdRef.current;
+          const matchingIndex = activeProposalId
+            ? nextDeckOrder.findIndex((p) => p.id === activeProposalId)
+            : -1;
+          if (matchingIndex >= 0) {
+            setIndex(matchingIndex);
+          } else if (nextDeckOrder.length > 0) {
+            setIndex((currentIdx) => Math.min(Math.max(0, currentIdx), nextDeckOrder.length - 1));
+          } else {
+            setIndex(0);
+          }
         }
 
         setOrder(sorted);
@@ -178,10 +189,6 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         setBlindReview(Boolean(cfpDoc?.features?.blindReview));
         setIntakeOpen(open);
         setShape(formDoc);
-        if (!isBackgroundRevalidate) {
-          setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
-          setFilterEpoch((e) => e + 1);
-        }
         setLoadedFor(scopeKey);
       };
 

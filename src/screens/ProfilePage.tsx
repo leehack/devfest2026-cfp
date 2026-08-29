@@ -60,7 +60,14 @@ export function ProfilePage({ user }: { user: User }) {
     let cancelled = false;
     setReady(false);
     setLoadError('');
-    loadProfile(user)
+    loadProfile(user, {
+      force: loadAttempt > 0,
+      onRevalidate: (speaker) => {
+        if (!cancelled && !dirty.current) {
+          setForm({ ...fromDocuments(undefined, speaker), email: user.email ?? '' });
+        }
+      },
+    })
       .then((speaker) => {
         if (cancelled) return;
         // The address comes from the account either way, so a profile that does

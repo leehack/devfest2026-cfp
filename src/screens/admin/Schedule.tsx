@@ -254,6 +254,7 @@ export function Schedule({
   const [reviewingPublish, setReviewingPublish] = useState(false);
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
+  const mutationEpoch = useRef(0);
   const setupRef = useRef<HTMLDetailsElement>(null);
   const editingRef = useRef(editing);
   editingRef.current = editing;
@@ -266,6 +267,7 @@ export function Schedule({
 
   const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
+    const epochAtStart = mutationEpoch.current;
     setError('');
     const applySchedule = async (
       nextCfp: Cfp | null,
@@ -278,7 +280,7 @@ export function Schedule({
       const nextPublic = nextCfp?.publishedScheduleId
         ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId, { force })
         : null;
-      if (request !== generation.current) return;
+      if (request !== generation.current || epochAtStart !== mutationEpoch.current) return;
       const next = draft.config ?? initialConfig(nextCfp);
       setCfp(nextCfp);
       setSharedPreview(nextShared);
@@ -514,6 +516,7 @@ export function Schedule({
 
   async function saveConfig() {
     if (!workingConfig || archived) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -541,6 +544,7 @@ export function Schedule({
 
   async function saveEntry(entry: ScheduleEntry): Promise<boolean> {
     if (!config || archived) return false;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -568,6 +572,7 @@ export function Schedule({
 
   async function removeEntry(entry: ScheduleEntry) {
     if (!config || archived || !window.confirm(t.schedule.removeConfirm)) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     try {
@@ -592,6 +597,7 @@ export function Schedule({
 
   async function publish() {
     if (!config || !canPublish) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -626,6 +632,7 @@ export function Schedule({
 
   async function sharePreview() {
     if (!config || !canShare) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -654,6 +661,7 @@ export function Schedule({
 
   async function takeOffline() {
     if (archived || !cfp?.publishedScheduleId) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');

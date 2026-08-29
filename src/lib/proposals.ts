@@ -385,7 +385,10 @@ export async function saveDraft(
  */
 export async function loadProfile(
   user: User,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    onRevalidate?: (profile: Record<string, any> | undefined) => void;
+  } = {},
 ): Promise<Record<string, any> | undefined> {
   return swrFetch(
     `speakerProfile:${user.uid}`,
@@ -393,7 +396,7 @@ export async function loadProfile(
       const snap = await getDoc(doc(db, 'speakers', user.uid));
       return snap.exists() ? snap.data() : undefined;
     },
-    { force: options.force, backgroundRevalidate: true },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
   );
 }
 

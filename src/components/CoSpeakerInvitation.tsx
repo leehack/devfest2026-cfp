@@ -181,6 +181,7 @@ export function CoSpeakerInvitation({
   const [busy, setBusy] = useState<'accept' | 'decline' | 'switch' | null>(null);
   const [actionError, setActionError] = useState('');
   const focusTransition = useRef(false);
+  const dirtyRef = useRef(false);
   tRef.current = t;
 
   useEffect(() => {
@@ -189,7 +190,18 @@ export function CoSpeakerInvitation({
     setLoadError('');
     Promise.all([
       loadCoSpeakerInvitation(cfpId, proposalId, invitationId),
-      loadProfile(user),
+      loadProfile(user, {
+        force: attempt > 0,
+        onRevalidate: (profile) => {
+          if (!cancelled && !dirtyRef.current) {
+            setForm({
+              ...fromDocuments(undefined, profile),
+              name: profile?.name || user.displayName || '',
+              email: user.email ?? '',
+            });
+          }
+        },
+      }),
     ])
       .then(([nextSummary, profile]) => {
         if (cancelled) return;
@@ -199,6 +211,7 @@ export function CoSpeakerInvitation({
           name: profile?.name || user.displayName || '',
           email: user.email ?? '',
         });
+        dirtyRef.current = false;
       })
       .catch((error) => {
         if (!cancelled) setLoadError(friendlyError(error, tRef.current));
@@ -212,6 +225,7 @@ export function CoSpeakerInvitation({
   }, [cfpId, invitationId, proposalId, user, attempt]);
 
   const set = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
+    dirtyRef.current = true;
     setForm((previous) => ({ ...previous, [key]: value }));
   }, []);
   const faults = invitationFaults(form, summary, t);

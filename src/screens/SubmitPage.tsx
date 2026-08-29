@@ -901,17 +901,18 @@ function ProposalFormPage({
               setSpeaker(updatedProfile);
               speakerRef.current = updatedProfile;
               const activeId = proposalIdRef.current;
-              if (activeId) {
-                const matching = updatedTalks.find((t) => t.id === activeId);
-                if (
-                  matching &&
-                  matching.status !== statusRef.current &&
-                  !dirty.current &&
-                  !answerDirty.current
-                ) {
-                  setStatus(matching.status);
-                  statusRef.current = matching.status;
-                  showTalk(matching);
+              if (!dirty.current && !answerDirty.current) {
+                if (activeId) {
+                  const matching = updatedTalks.find((t) => t.id === activeId);
+                  if (matching) {
+                    showTalk(matching);
+                  }
+                } else {
+                  setForm((previous) => ({
+                    ...previous,
+                    ...fromDocuments(undefined, updatedProfile),
+                    email: user.email ?? previous.email,
+                  }));
                 }
               }
             },
