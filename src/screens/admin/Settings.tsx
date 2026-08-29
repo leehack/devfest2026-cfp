@@ -10,6 +10,7 @@ import {
 } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { archiveCfp, deleteCfp, loadCfp, setCfpWindow, updateCfp } from '../../lib/roles';
+import { invalidateCache } from '../../lib/cache';
 import { navigate } from '../../lib/router';
 import { useLatest } from '../../lib/useLatest';
 import { Result } from './Result';
@@ -332,6 +333,8 @@ export function Settings({
             blindReview,
           ]),
         );
+        invalidateCache(`cfp:${cfpId}`);
+        invalidateCache(`cfpWindow:${cfpId}`);
       },
     );
   }
@@ -359,7 +362,11 @@ export function Settings({
           reviewsVisible,
         })),
       t.admin.windowSaved,
-      () => setWindowBaseline(JSON.stringify([opensAt, closesAt, paused, reviewsVisible])),
+      () => {
+        setWindowBaseline(JSON.stringify([opensAt, closesAt, paused, reviewsVisible]));
+        invalidateCache(`cfp:${cfpId}`);
+        invalidateCache(`cfpWindow:${cfpId}`);
+      },
     );
   }
 

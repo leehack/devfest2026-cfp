@@ -87,25 +87,26 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
 
-  const load = useCallback(async () => {
-    const request = ++loadGeneration.current;
-    setLoading(true);
-    setLoadedFor('');
-    setError('');
-    setSelectedCategory(null);
-    setQueueOpen(false);
-    setIndex(0);
-    setSavingIds(new Set());
-    setSavedId('');
-    setFailures(new Map());
-    try {
-      const [loaded, cfp, form] = await Promise.all([
-        loadReviewQueue(cfpId),
-        loadCfp(cfpId),
-        // The card's chips read their labels off this call's own form — a
-        // category this committee invented has no entry in any dictionary.
-        loadSubmissionForm(cfpId),
-      ]);
+  const load = useCallback(
+    async (force = false) => {
+      const request = ++loadGeneration.current;
+      setLoading(true);
+      setLoadedFor('');
+      setError('');
+      setSelectedCategory(null);
+      setQueueOpen(false);
+      setIndex(0);
+      setSavingIds(new Set());
+      setSavedId('');
+      setFailures(new Map());
+      try {
+        const [loaded, cfp, form] = await Promise.all([
+          loadReviewQueue(cfpId, { force }),
+          loadCfp(cfpId, { force }),
+          // The card's chips read their labels off this call's own form — a
+          // category this committee invented has no entry in any dictionary.
+          loadSubmissionForm(cfpId, { force }),
+        ]);
       if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
       const reviews = await loadMyReviews(
         cfpId,
@@ -425,7 +426,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     return (
       <div className="load-failure" role="alert">
         <p className="field__error">{error}</p>
-        <button type="button" className="btn" onClick={() => void load()}>
+        <button type="button" className="btn" onClick={() => void load(true)}>
           {t.errors.reload}
         </button>
       </div>
@@ -440,7 +441,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         <p className="muted">
           {intakeOpen ? t.review.intakeOpenHelp : t.review.intakeClosedHelp}
         </p>
-        <button type="button" className="btn" onClick={() => void load()}>
+        <button type="button" className="btn" onClick={() => void load(true)}>
           {t.review.refresh}
         </button>
       </section>
@@ -468,7 +469,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           type="button"
           className="btn btn--ghost review-workload__refresh"
           disabled={savingIds.size > 0}
-          onClick={() => void load()}
+          onClick={() => void load(true)}
         >
           {t.review.refresh}
         </button>
@@ -808,7 +809,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             setSavedId('');
           }}
           onOpenQueue={() => setQueueOpen(true)}
-          onRefresh={() => void load()}
+          onRefresh={() => void load(true)}
           refreshDisabled={savingIds.size > 0}
         />
       )}

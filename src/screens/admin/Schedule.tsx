@@ -1234,7 +1234,7 @@ export function Schedule({
       )}
 
       {!editing && !reviewingShare && !reviewingPublish && !reviewingOffline && error === t.schedule.stale && (
-        <button type="button" className="btn" onClick={() => void refresh()}>
+        <button type="button" className="btn" onClick={() => void refresh(true)}>
           {t.schedule.reload}
         </button>
       )}

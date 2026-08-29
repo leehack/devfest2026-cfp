@@ -7,6 +7,7 @@ import {
 import { httpsCallable } from 'firebase/functions';
 
 import { db, functions } from '../firebase';
+import { invalidateCache } from './cache';
 import type { Score } from '@shared/enums';
 import type { Review } from '@shared/types';
 
@@ -62,6 +63,8 @@ export async function saveReview(
     conflictOfInterest: draft.conflictOfInterest,
     comment: draft.comment.trim(),
   });
+  invalidateCache(`reviewQueue:${cfpId}`);
+  invalidateCache(`allProposals:${cfpId}`);
 }
 
 export interface ReviewRow extends Review {
