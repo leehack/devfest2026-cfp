@@ -252,6 +252,7 @@ export function Schedule({
   const [reviewingPublish, setReviewingPublish] = useState(false);
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
+  const setupRef = useRef<HTMLDetailsElement>(null);
   const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
     setError('');
