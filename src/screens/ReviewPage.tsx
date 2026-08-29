@@ -134,7 +134,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         }
         if (isBackgroundRevalidate && savesInFlight > 0) {
           deferredQueueApply.current.set(scopeKey, () => {
-            void applyQueue(loadedQueue, cfpDoc, formDoc, false);
+            void applyQueue(loadedQueue, cfpDoc, formDoc, true);
           });
           return;
         }

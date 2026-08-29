@@ -10,6 +10,16 @@ const requestGenerations = new Map<string, number>();
 
 const DEFAULT_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
+export function hasCached(key: string): boolean {
+  const entry = memoryStore.get(key);
+  if (!entry) return false;
+  if (Date.now() - entry.cachedAt > entry.ttlMs) {
+    memoryStore.delete(key);
+    return false;
+  }
+  return true;
+}
+
 export function getCached<T>(key: string): T | undefined {
   const entry = memoryStore.get(key);
   if (!entry) return undefined;
@@ -77,8 +87,8 @@ export async function swrFetch<T>(
     inFlightRequests.delete(key);
     memoryStore.delete(key);
   } else {
-    const cached = getCached<T>(key);
-    if (cached !== undefined) {
+    if (hasCached(key)) {
+      const cached = getCached<T>(key) as T;
       if (backgroundRevalidate) {
         void runFetcher(key, fetcher, ttlMs, onRevalidate).catch(() => {});
       }
@@ -122,9 +132,8 @@ async function runFetcher<T>(
         onRevalidate?.(result);
         return result;
       }
-      const fresh = getCached<T>(key);
-      if (fresh !== undefined) {
-        return fresh;
+      if (hasCached(key)) {
+        return getCached<T>(key) as T;
       }
       return await swrFetch(key, fetcher, { ttlMs, onRevalidate });
     } catch (fetchError) {

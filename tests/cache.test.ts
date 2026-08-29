@@ -166,6 +166,44 @@ describe('cache', () => {
     expect(callbackData).toBeNull();
     expect(getCached('test:dedupe-gen')).toEqual({ val: 'fresh' });
   });
+
+  it('caches undefined values as valid cache hits', async () => {
+    invalidateCache();
+    let callCount = 0;
+    const fetcher = async () => {
+      callCount += 1;
+      return undefined;
+    };
+
+    const first = await swrFetch('test:undefined-hit', fetcher);
+    expect(first).toBeUndefined();
+    expect(callCount).toBe(1);
+
+    const second = await swrFetch('test:undefined-hit', fetcher);
+    expect(second).toBeUndefined();
+    expect(callCount).toBe(1);
+  });
+
+  it('evicts cached data when revalidation fails with permission-denied', async () => {
+    invalidateCache();
+    setCached('test:protected', { secret: 'data' });
+
+    const fetcher = async () => {
+      const error = new Error('PERMISSION_DENIED: caller lacks event role');
+      (error as any).code = 'permission-denied';
+      throw error;
+    };
+
+    // Foreground cached read returns data and triggers background revalidation
+    const cached = await swrFetch('test:protected', fetcher, { backgroundRevalidate: true });
+    expect(cached).toEqual({ secret: 'data' });
+
+    // Wait for background revalidation error to reject and evict
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Protected data is evicted
+    expect(getCached('test:protected')).toBeUndefined();
+  });
 });
 
 describe('prefetch', () => {
