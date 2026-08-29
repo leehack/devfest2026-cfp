@@ -3,6 +3,7 @@ import type { User } from 'firebase/auth';
 
 import { SelectField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
+import { isAuthError } from '../../lib/cache';
 import { adminError, roleAdminError, transferError } from '../../lib/errors';
 import {
   acceptEventOwnershipTransfer,
@@ -122,13 +123,15 @@ export function Committee({
             }
           },
           onError: (err) => {
-            hasFailed = true;
-            if (current()) {
-              setError(adminError(err, tRef.current));
-              setPeople([]);
-              setPending([]);
-              setInviteLinks([]);
-              setLoadFailed(true);
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (current()) {
+                setError(adminError(err, tRef.current));
+                setPeople([]);
+                setPending([]);
+                setInviteLinks([]);
+                setLoadFailed(true);
+              }
             }
           },
         }),

@@ -23,6 +23,7 @@ import { formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
 import { reviewError } from '../lib/errors';
+import { isAuthError } from '../lib/cache';
 import { loadSubmissionForm } from '../lib/proposals';
 import { reviewerTravelFields } from '../lib/reviewerTravel';
 import { loadCfp, loadReviewQueue, type ReviewerProposalRow } from '../lib/roles';
@@ -267,8 +268,12 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
                 triggerRevalidationApply();
               }
             },
-            onError: (_err) => {
-              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+            onError: (err) => {
+              if (
+                isAuthError(err) &&
+                request === loadGeneration.current &&
+                activeScope.current === scopeKey
+              ) {
                 setError(t.nav.forbidden);
                 setOrder([]);
                 setOwn(0);

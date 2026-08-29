@@ -46,7 +46,7 @@ import type { Cfp } from '@shared/types';
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
 import { loadSubmissionForm } from '../../lib/proposals';
-import { invalidateCache } from '../../lib/cache';
+import { invalidateCache, isAuthError } from '../../lib/cache';
 import {
   loadPublishedSchedule,
   loadScheduleDraft,
@@ -376,13 +376,15 @@ export function Schedule({
             }
           },
           onError: (err) => {
-            hasFailed = true;
-            if (request === generation.current) {
-              setError(scheduleError(err, tRef.current));
-              setConfig(null);
-              setEntries([]);
-              setProposals([]);
-              setLoaded(true);
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (request === generation.current) {
+                setError(scheduleError(err, tRef.current));
+                setConfig(null);
+                setEntries([]);
+                setProposals([]);
+                setLoaded(true);
+              }
             }
           },
         }),
@@ -404,13 +406,15 @@ export function Schedule({
             }
           },
           onError: (err) => {
-            hasFailed = true;
-            if (request === generation.current) {
-              setError(scheduleError(err, tRef.current));
-              setConfig(null);
-              setEntries([]);
-              setProposals([]);
-              setLoaded(true);
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (request === generation.current) {
+                setError(scheduleError(err, tRef.current));
+                setConfig(null);
+                setEntries([]);
+                setProposals([]);
+                setLoaded(true);
+              }
             }
           },
         }),
@@ -433,13 +437,15 @@ export function Schedule({
             }
           },
           onError: (err) => {
-            hasFailed = true;
-            if (request === generation.current) {
-              setError(scheduleError(err, tRef.current));
-              setConfig(null);
-              setEntries([]);
-              setProposals([]);
-              setLoaded(true);
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (request === generation.current) {
+                setError(scheduleError(err, tRef.current));
+                setConfig(null);
+                setEntries([]);
+                setProposals([]);
+                setLoaded(true);
+              }
             }
           },
         }),

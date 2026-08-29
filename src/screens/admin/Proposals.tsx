@@ -28,7 +28,7 @@ import {
   type ConfirmForm,
 } from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
-import { invalidateCache } from '../../lib/cache';
+import { invalidateCache, isAuthError } from '../../lib/cache';
 import {
   DEFAULT_SUBMISSION_FORM,
   labelOf,
@@ -879,11 +879,13 @@ export function Proposals({
             }
           },
           onError: (loadErr) => {
-            hasFailed = true;
-            if (request === loadGeneration.current && activeCfp.current === cfpId) {
-              setError(adminError(loadErr, t));
-              setRows([]);
-              setLoadFailed(true);
+            if (isAuthError(loadErr)) {
+              hasFailed = true;
+              if (request === loadGeneration.current && activeCfp.current === cfpId) {
+                setError(adminError(loadErr, t));
+                setRows([]);
+                setLoadFailed(true);
+              }
             }
           },
         }),

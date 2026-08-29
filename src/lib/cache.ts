@@ -4,6 +4,11 @@ interface CacheEntry<T> {
   ttlMs: number;
 }
 
+export function isAuthError(error: unknown): boolean {
+  const code = String((error as any)?.code || (error as any)?.message || '');
+  return /permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code);
+}
+
 interface InFlightEntry<T> {
   promise: Promise<T>;
   generation: number;
@@ -172,8 +177,7 @@ async function runFetcher<T>(
       });
     } catch (fetchError) {
       if (requestGenerations.get(key) === currentGen && !entry.superseded) {
-        const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
-        if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
+        if (isAuthError(fetchError)) {
           invalidateCache(key);
         }
         for (const cb of entry.onErrors) {

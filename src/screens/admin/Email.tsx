@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Checkbox, SelectField, TextAreaField, TextField } from '../../components/fields';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
+import { isAuthError } from '../../lib/cache';
 import {
   emailError,
   emailHistoryError,
@@ -1316,7 +1317,7 @@ function WriteToSpeaker({
               if (!cancelled) setRows(updated.filter((row) => row.status !== 'draft'));
             },
             onError: (err) => {
-              if (!cancelled) {
+              if (isAuthError(err) && !cancelled) {
                 setRows([]);
                 setLoadError(emailError(err, tRef.current));
               }

@@ -10,6 +10,7 @@ import {
   publishedProgrammeLifecycleStep,
 } from '../../lib/adminLifecycle';
 import { toDate } from '../../lib/dates';
+import { isAuthError } from '../../lib/cache';
 import { adminError } from '../../lib/errors';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
 import {
@@ -197,10 +198,12 @@ export function Overview({ cfpId }: { cfpId: string }) {
             }
           },
           onError: (err) => {
-            hasFailed = true;
-            if (requestGeneration.current === request) {
-              setError(adminError(err, tRef.current));
-              setData(null);
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (requestGeneration.current === request) {
+                setError(adminError(err, tRef.current));
+                setData(null);
+              }
             }
           },
         }),
@@ -212,10 +215,12 @@ export function Overview({ cfpId }: { cfpId: string }) {
             }
           },
           onError: (err) => {
-            hasFailed = true;
-            if (requestGeneration.current === request) {
-              setError(adminError(err, tRef.current));
-              setData(null);
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (requestGeneration.current === request) {
+                setError(adminError(err, tRef.current));
+                setData(null);
+              }
             }
           },
         }),
