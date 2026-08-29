@@ -880,17 +880,61 @@ function ProposalFormPage({
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked, publishedResult, sharedResult, requestResult] = await Promise.all([
-          loadMyProposals(cfpId, user),
-          loadConfirmForm(cfpId),
-          loadSubmissionForm(cfpId),
+        let revalidatedFound: LoadedProposal[] | null = null;
+        let revalidatedProfile: Record<string, any> | undefined;
+        const [
+          { talks: found, speaker: profile },
+          questions,
+          asked,
+          publishedResult,
+          sharedResult,
+          requestResult,
+        ] = await Promise.all([
+          loadMyProposals(cfpId, user, {
+            force: loadAttempt > 0,
+            onRevalidate: ({ talks: updatedTalks, speaker: updatedProfile }) => {
+              if (cancelled) return;
+              revalidatedFound = updatedTalks;
+              revalidatedProfile = updatedProfile;
+              setTalks(updatedTalks);
+              talksRef.current = updatedTalks;
+              setSpeaker(updatedProfile);
+              speakerRef.current = updatedProfile;
+              const activeId = proposalIdRef.current;
+              if (activeId) {
+                const matching = updatedTalks.find((t) => t.id === activeId);
+                if (
+                  matching &&
+                  matching.status !== statusRef.current &&
+                  !dirty.current &&
+                  !answerDirty.current
+                ) {
+                  setStatus(matching.status);
+                  statusRef.current = matching.status;
+                  showTalk(matching);
+                }
+              }
+            },
+          }),
+          loadConfirmForm(cfpId, {
+            force: loadAttempt > 0,
+            onRevalidate: (q) => {
+              if (!cancelled) setConfirmForm(q);
+            },
+          }),
+          loadSubmissionForm(cfpId, {
+            force: loadAttempt > 0,
+            onRevalidate: (s) => {
+              if (!cancelled) setShape(s);
+            },
+          }),
           cfp.publishedScheduleId
-            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId)
+            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId, { force: loadAttempt > 0 })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
           cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId
-            ? loadSharedSchedule(cfpId)
+            ? loadSharedSchedule(cfpId, { force: loadAttempt > 0 })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
@@ -899,16 +943,18 @@ function ProposalFormPage({
             .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
         ]);
         if (cancelled) return;
-        setTalks(found);
-        talksRef.current = found;
-        setSpeaker(profile);
-        speakerRef.current = profile;
+        const effectiveFound = revalidatedFound ?? found;
+        const effectiveProfile = revalidatedProfile ?? profile;
+        setTalks(effectiveFound);
+        talksRef.current = effectiveFound;
+        setSpeaker(effectiveProfile);
+        speakerRef.current = effectiveProfile;
         currentProfilePhotoGeneration.current =
-          typeof profile?.profilePhoto?.generation === 'string'
-            ? profile.profilePhoto.generation
+          typeof effectiveProfile?.profilePhoto?.generation === 'string'
+            ? effectiveProfile.profilePhoto.generation
             : null;
         sessionPhotoGenerations.current = new Map(
-          found.map((talk) => [
+          effectiveFound.map((talk) => [
             talk.id,
             talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
           ]),
@@ -1091,6 +1137,8 @@ function ProposalFormPage({
           });
           invalidateCache('myProposals');
           invalidateCache(`allProposals:${cfpId}`);
+          invalidateCache(`scheduleDraft:${cfpId}`);
+          invalidateCache(`sharedSchedule:${cfpId}`);
           if (answerRevision.current === savedRevision) {
             answerDirty.current = false;
             savedAnswersRef.current = snapshot;
@@ -1783,6 +1831,8 @@ function ProposalFormPage({
       });
       invalidateCache('myProposals');
       invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setStatus(data.status);
       statusRef.current = data.status;
       markTalk(proposalId, data.status);

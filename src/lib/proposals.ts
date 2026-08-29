@@ -163,7 +163,10 @@ export interface LoadedProposal {
 export async function loadMyProposals(
   cfpId: string,
   user: User,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    onRevalidate?: (data: { talks: LoadedProposal[]; speaker: Record<string, any> | undefined }) => void;
+  } = {},
 ): Promise<{ talks: LoadedProposal[]; speaker: Record<string, any> | undefined }> {
   return swrFetch(
     `myProposals:${cfpId}:${user.uid}`,
@@ -245,20 +248,20 @@ export async function loadMyProposals(
             speaker,
             ownConfirmation,
             ownParticipation: participation.exists()
-              ? {
-                  role: participation.data().role,
-                  acks: participation.data().acks,
-                  attendance: participation.data().attendance,
-                  detailsComplete: participation.data().detailsComplete,
-                }
-              : undefined,
-          };
-        }),
-        speaker,
-      };
-    },
-    { force: options.force, backgroundRevalidate: true },
-  );
+            ? {
+                role: participation.data().role,
+                acks: participation.data().acks,
+                attendance: participation.data().attendance,
+                detailsComplete: participation.data().detailsComplete,
+              }
+            : undefined,
+        };
+      }),
+      speaker,
+    };
+  },
+  { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+);
 }
 
 /**
@@ -565,7 +568,7 @@ export const respondToDecision = httpsCallable<
  */
 export async function loadConfirmForm(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; onRevalidate?: (form: ConfirmForm) => void } = {},
 ): Promise<ConfirmForm> {
   return swrFetch(
     `confirmForm:${cfpId}`,
@@ -573,7 +576,7 @@ export async function loadConfirmForm(
       const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
       return snap.exists() ? confirmFormFromData(snap.data()) : EMPTY_FORM;
     },
-    { force: options.force, backgroundRevalidate: true },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
   );
 }
 
@@ -588,7 +591,7 @@ export async function loadConfirmForm(
  */
 export async function loadSubmissionForm(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; onRevalidate?: (form: SubmissionForm) => void } = {},
 ): Promise<SubmissionForm> {
   return swrFetch(
     `submissionForm:${cfpId}`,
@@ -596,7 +599,7 @@ export async function loadSubmissionForm(
       const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'submissionForm'));
       return mergeSubmissionForm(snap.exists() ? snap.data() : undefined);
     },
-    { force: options.force, backgroundRevalidate: true },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
   );
 }
 

@@ -552,6 +552,8 @@ export function SubmissionFormEditor({
       setForm(data.form);
       setStored(data.form);
       invalidateCache(`submissionForm:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setNote(t.admin.submissionSaved);
     } catch (e) {
       setError(adminError(e, t));

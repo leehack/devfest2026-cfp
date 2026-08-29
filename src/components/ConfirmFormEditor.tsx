@@ -108,6 +108,8 @@ export function ConfirmFormEditor({
       setForm(savedForm);
       setStored(savedForm);
       invalidateCache(`confirmForm:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setNote(t.admin.formSaved);
     } catch (e) {
       setError(adminError(e, t));

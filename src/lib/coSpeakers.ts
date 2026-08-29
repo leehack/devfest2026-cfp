@@ -132,6 +132,8 @@ export async function removeProposalSpeaker(
   const result = await remove({ cfpId, proposalId, uid });
   invalidateCache('myProposals');
   invalidateCache(`allProposals:${cfpId}`);
+  invalidateCache(`scheduleDraft:${cfpId}`);
+  invalidateCache(`sharedSchedule:${cfpId}`);
   return unwrapNullableRoster(result.data);
 }
 
@@ -163,5 +165,7 @@ export async function respondToCoSpeakerInvitation(
   });
   invalidateCache('myProposals');
   invalidateCache(`allProposals:${cfpId}`);
+  invalidateCache(`scheduleDraft:${cfpId}`);
+  invalidateCache(`sharedSchedule:${cfpId}`);
   return { state: result.data.state, proposalId };
 }

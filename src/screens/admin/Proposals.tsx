@@ -1014,6 +1014,8 @@ export function Proposals({
       invalidateCache(`allProposals:${cfpId}`);
       invalidateCache('myProposals');
       invalidateCache(`reviewQueue:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
@@ -1064,6 +1066,8 @@ export function Proposals({
       invalidateCache(`allProposals:${cfpId}`);
       invalidateCache('myProposals');
       invalidateCache(`reviewQueue:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setNote(t.admin.decisionUndone(snapshot.title));
       void onEmailQueueChange?.();
     } catch (e) {
