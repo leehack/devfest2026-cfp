@@ -376,7 +376,7 @@ export function Schedule({
           onError: (err) => {
             if (request === generation.current) {
               setError(scheduleError(err, tRef.current));
-              setLoaded(false);
+              setLoaded(true);
             }
           },
         }),
@@ -400,7 +400,7 @@ export function Schedule({
           onError: (err) => {
             if (request === generation.current) {
               setError(scheduleError(err, tRef.current));
-              setLoaded(false);
+              setLoaded(true);
             }
           },
         }),

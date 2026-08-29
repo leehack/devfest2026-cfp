@@ -122,9 +122,7 @@ async function runFetcher<T>(
     }
     if (onError) {
       void existing.catch((err) => {
-        if (requestGenerations.get(key) === boundGen) {
-          onError(err);
-        }
+        onError(err);
       });
     }
     return existing;
@@ -147,7 +145,8 @@ async function runFetcher<T>(
       }
       return await swrFetch(key, fetcher, { ttlMs, onRevalidate, onError });
     } catch (fetchError) {
-      if (requestGenerations.get(key) === currentGen) {
+      const isCurrent = requestGenerations.get(key) === currentGen;
+      if (isCurrent) {
         const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
         if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
           invalidateCache(key);
