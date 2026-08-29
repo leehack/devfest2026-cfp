@@ -89,7 +89,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   statusFilterRef.current = statusFilter;
   const currentProposalIdRef = useRef<string | null>(null);
   const queueApplyGeneration = useRef(0);
-  const activeSavesCount = useRef(0);
+  const activeSavesByScope = useRef<Map<string, number>>(new Map());
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -122,9 +122,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           user.uid,
           loadedQueue.proposals.map((p) => p.id),
         );
+        const savesInFlight = activeSavesByScope.current.get(scopeKey) ?? 0;
         if (
           applyGen !== queueApplyGeneration.current ||
-          activeSavesCount.current > 0 ||
+          (isBackgroundRevalidate && savesInFlight > 0) ||
           request !== loadGeneration.current ||
           activeScope.current !== scopeKey
         ) {
@@ -372,7 +373,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       // a storage placeholder and is hidden again by `draftOf`.
       const storedScore = draft.score ?? 1;
       setSavingIds((current) => new Set(current).add(id));
-      activeSavesCount.current += 1;
+      activeSavesByScope.current.set(
+        scope,
+        (activeSavesByScope.current.get(scope) ?? 0) + 1,
+      );
       queueApplyGeneration.current += 1;
       try {
         await saveReview(cfpId, id, user.uid, {
@@ -408,7 +412,12 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }),
         );
       } finally {
-        activeSavesCount.current -= 1;
+        const remaining = (activeSavesByScope.current.get(scope) ?? 1) - 1;
+        if (remaining <= 0) {
+          activeSavesByScope.current.delete(scope);
+        } else {
+          activeSavesByScope.current.set(scope, remaining);
+        }
         queueApplyGeneration.current += 1;
         if (activeScope.current === scope) {
           setSavingIds((current) => {
