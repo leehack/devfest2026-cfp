@@ -142,11 +142,13 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setData(null);
     }
     setError('');
-    let revalidatedCfp: { value: Cfp | null } | null = null;
-    let revalidatedProposals: ProposalRow[] | null = null;
-    let revalidatedCommittee: Awaited<ReturnType<typeof loadCommittee>> | null = null;
-    let revalidatedSubmission: SubmissionForm | null = null;
-    let revalidatedConfirmation: ConfirmForm | null = null;
+    const revalidated = {
+      cfp: null as { value: Cfp | null } | null,
+      proposals: null as ProposalRow[] | null,
+      committee: null as Awaited<ReturnType<typeof loadCommittee>> | null,
+      submission: null as SubmissionForm | null,
+      confirmation: null as ConfirmForm | null,
+    };
     let latestDraft: { config: ScheduleConfig | null; entries: ScheduleEntry[] } | null = null;
     let latestShared: SharedScheduleBundle | null = null;
 
@@ -174,7 +176,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId, {
           onRevalidate: (updatedCfp) => {
-            revalidatedCfp = { value: updatedCfp };
+            revalidated.cfp = { value: updatedCfp };
             if (requestGeneration.current === request) {
               if (!updatedCfp) {
                 setError(tRef.current.errors.notFound);
@@ -189,14 +191,14 @@ export function Overview({ cfpId }: { cfpId: string }) {
         loadAllProposals(cfpId, {
           onRevalidate: (updated) => {
             if (requestGeneration.current === request) {
-              revalidatedProposals = updated;
+              revalidated.proposals = updated;
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, proposals: updated } : prev));
             }
           },
         }),
         loadCommittee(cfpId, {
           onRevalidate: (updatedCommittee) => {
-            revalidatedCommittee = updatedCommittee;
+            revalidated.committee = updatedCommittee;
             if (requestGeneration.current === request) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, committee: updatedCommittee } : prev));
             }
@@ -204,7 +206,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         }),
         loadSubmissionForm(cfpId, {
           onRevalidate: (updatedForm) => {
-            revalidatedSubmission = updatedForm;
+            revalidated.submission = updatedForm;
             if (requestGeneration.current === request) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, submission: updatedForm } : prev));
             }
@@ -212,7 +214,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         }),
         loadConfirmForm(cfpId, {
           onRevalidate: (updatedForm) => {
-            revalidatedConfirmation = updatedForm;
+            revalidated.confirmation = updatedForm;
             if (requestGeneration.current === request) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, confirmation: updatedForm } : prev));
             }
@@ -265,7 +267,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
           })),
       ]);
       if (request !== requestGeneration.current) return;
-      const effectiveCfp = revalidatedCfp ? revalidatedCfp.value : cfp;
+      const effectiveCfp = revalidated.cfp ? revalidated.cfp.value : cfp;
       if (!effectiveCfp) {
         setError(tRef.current.errors.notFound);
         setLoadedFor(cfpId);
@@ -274,10 +276,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setData({
         cfpId,
         cfp: effectiveCfp,
-        proposals: revalidatedProposals ?? proposals,
-        committee: revalidatedCommittee ?? committee,
-        submission: revalidatedSubmission ?? submission,
-        confirmation: revalidatedConfirmation ?? confirmation,
+        proposals: revalidated.proposals ?? proposals,
+        committee: revalidated.committee ?? committee,
+        submission: revalidated.submission ?? submission,
+        confirmation: revalidated.confirmation ?? confirmation,
         email,
         schedule,
       });
