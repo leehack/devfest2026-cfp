@@ -127,6 +127,12 @@ async function runFetcher<T>(
         return fresh;
       }
       return await swrFetch(key, fetcher, { ttlMs, onRevalidate });
+    } catch (fetchError) {
+      const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
+      if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
+        invalidateCache(key);
+      }
+      throw fetchError;
     } finally {
       if (inFlightRequests.get(key) === holder.promise) {
         inFlightRequests.delete(key);

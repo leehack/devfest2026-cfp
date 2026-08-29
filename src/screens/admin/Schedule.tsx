@@ -318,11 +318,11 @@ export function Schedule({
         setSetupOpen((current) => current || !draft.config);
         setWorkingConfig(next);
         setEntries(draft.entries);
+        setSelectedDay((current) =>
+          next.days.some((day: { date: string }) => day.date === current) ? current : next.days[0]?.date ?? '',
+        );
       }
 
-      setSelectedDay((current) =>
-        next.days.some((day: { date: string }) => day.date === current) ? current : next.days[0]?.date ?? '',
-      );
       setLoaded(true);
     };
 
