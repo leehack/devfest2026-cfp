@@ -125,17 +125,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           loadedQueue.proposals.map((p) => p.id),
         );
         const savesInFlight = activeSavesByScope.current.get(scopeKey) ?? 0;
-        if (
-          applyGen !== queueApplyGeneration.current ||
-          request !== loadGeneration.current ||
-          activeScope.current !== scopeKey
-        ) {
+        if (request !== loadGeneration.current || activeScope.current !== scopeKey) {
           return;
         }
         if (isBackgroundRevalidate && savesInFlight > 0) {
           deferredQueueApply.current.set(scopeKey, () => {
             void applyQueue(loadedQueue, cfpDoc, formDoc, true);
           });
+          return;
+        }
+        if (applyGen !== queueApplyGeneration.current) {
           return;
         }
         const visible = cfpDoc?.reviewsVisible === true;

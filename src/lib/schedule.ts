@@ -130,6 +130,7 @@ export async function loadSharedSchedule(
     releaseId?: string | null;
     audience?: 'committee' | 'speaker';
     onRevalidate?: (bundle: SharedScheduleBundle) => void;
+    onError?: (error: unknown) => void;
   } = {},
 ): Promise<SharedScheduleBundle> {
   const releaseKey = options.releaseId ?? 'current';
@@ -145,7 +146,12 @@ export async function loadSharedSchedule(
         stale: data.stale,
       };
     },
-    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
   );
 }
 

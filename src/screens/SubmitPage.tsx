@@ -883,6 +883,8 @@ function ProposalFormPage({
         let revalidatedProfile: Record<string, any> | undefined;
         let revalidatedConfirmForm: ConfirmForm | null = null;
         let revalidatedSubmissionForm: SubmissionForm | null = null;
+        let revalidatedPublished: { value: PublishedScheduleBundle | null; failed: boolean } | null = null;
+        let revalidatedShared: { value: SharedScheduleBundle | null; failed: boolean } | null = null;
         const [
           { talks: found, speaker: profile },
           questions,
@@ -949,7 +951,11 @@ function ProposalFormPage({
             ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId, {
                 force: loadAttempt > 0,
                 onRevalidate: (s) => {
-                  if (!cancelled) setPublishedSchedule(s);
+                  revalidatedPublished = { value: s, failed: false };
+                  if (!cancelled) {
+                    setPublishedSchedule(s);
+                    setPublishedScheduleFailed(false);
+                  }
                 },
               })
                 .then((value) => ({ value, failed: false }))
@@ -961,7 +967,18 @@ function ProposalFormPage({
                 releaseId: cfp.sharedScheduleId,
                 audience: 'speaker',
                 onRevalidate: (s) => {
-                  if (!cancelled) setSharedSchedule(s);
+                  revalidatedShared = { value: s, failed: false };
+                  if (!cancelled) {
+                    setSharedSchedule(s);
+                    setSharedScheduleFailed(false);
+                  }
+                },
+                onError: () => {
+                  revalidatedShared = { value: null, failed: true };
+                  if (!cancelled) {
+                    setSharedSchedule(null);
+                    setSharedScheduleFailed(true);
+                  }
                 },
               })
                 .then((value) => ({ value, failed: false }))
@@ -976,6 +993,8 @@ function ProposalFormPage({
         const effectiveProfile = revalidatedProfile ?? profile;
         const effectiveConfirmForm = revalidatedConfirmForm ?? questions;
         const effectiveSubmissionForm = revalidatedSubmissionForm ?? asked;
+        const effectivePublished = revalidatedPublished ?? publishedResult;
+        const effectiveShared = revalidatedShared ?? sharedResult;
         setTalks(effectiveFound);
         talksRef.current = effectiveFound;
         setSpeaker(effectiveProfile);
@@ -992,10 +1011,10 @@ function ProposalFormPage({
         );
         setConfirmForm(effectiveConfirmForm);
         setShape(effectiveSubmissionForm);
-        setPublishedSchedule(publishedResult.value);
-        setPublishedScheduleFailed(publishedResult.failed);
-        setSharedSchedule(sharedResult.value);
-        setSharedScheduleFailed(sharedResult.failed);
+        setPublishedSchedule(effectivePublished.value);
+        setPublishedScheduleFailed(effectivePublished.failed);
+        setSharedSchedule(effectiveShared.value);
+        setSharedScheduleFailed(effectiveShared.failed);
         setProfileRequests(requestResult.requests);
         setProfileRequestsFailed(requestResult.failed);
 

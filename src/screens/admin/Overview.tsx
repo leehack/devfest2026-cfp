@@ -307,7 +307,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
         submission: revalidated.submission ?? submission,
         confirmation: revalidated.confirmation ?? confirmation,
         email,
-        schedule,
+        schedule:
+          latestDraft && latestShared
+            ? computeScheduleOverview(latestDraft, latestShared)
+            : schedule,
       });
       setLoadedFor(cfpId);
     } catch (e) {

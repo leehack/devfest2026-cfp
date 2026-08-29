@@ -216,6 +216,22 @@ export function SchedulePage({
             }
           }
         },
+        onError: async () => {
+          if (!cancelled && previewReleaseId) {
+            try {
+              const fallback = await loadPublic();
+              if (!cancelled) {
+                setBundle(fallback);
+                setPreview(false);
+              }
+            } catch {
+              if (!cancelled) {
+                setBundle(null);
+                setFailed(true);
+              }
+            }
+          }
+        },
       });
       if (!shared.schedule) return null;
       return {
