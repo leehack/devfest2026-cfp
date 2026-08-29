@@ -120,8 +120,13 @@ async function runFetcher<T>(
       if (requestGenerations.get(key) === currentGen) {
         setCached(key, result, ttlMs);
         onRevalidate?.(result);
+        return result;
       }
-      return result;
+      const fresh = getCached<T>(key);
+      if (fresh !== undefined) {
+        return fresh;
+      }
+      return await swrFetch(key, fetcher, { ttlMs, onRevalidate });
     } finally {
       if (inFlightRequests.get(key) === holder.promise) {
         inFlightRequests.delete(key);

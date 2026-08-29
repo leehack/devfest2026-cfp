@@ -906,7 +906,7 @@ function ProposalFormPage({
                 if (activeId) {
                   const matching = updatedTalks.find((t) => t.id === activeId);
                   if (matching) {
-                    showTalk(matching);
+                    showTalk(matching, true);
                   } else {
                     showTalk(updatedTalks[0]);
                   }
@@ -1606,9 +1606,11 @@ function ProposalFormPage({
 
   // -------------------------------------------------------------- switching
 
-  function showTalk(talk?: LoadedProposal) {
+  function showTalk(talk?: LoadedProposal, preserveRoster = false) {
     revision.current += 1;
-    setSpeakerRoster(undefined);
+    if (!preserveRoster || talk?.id !== proposalIdRef.current) {
+      setSpeakerRoster(undefined);
+    }
     if (talk) {
       setForm(fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current));
       setProposalId(talk.id);

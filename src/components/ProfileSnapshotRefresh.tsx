@@ -273,6 +273,7 @@ export function ProfileSnapshotRefresh({
       invalidateCache(`scheduleDraft:${cfpId}`);
       invalidateCache(`sharedSchedule:${cfpId}`);
       invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache(`reviewQueue:${cfpId}`);
       invalidateCache('myProposals');
       setNotice(data.changed ? t.profileSnapshot.updated : t.profileSnapshot.unchanged);
       setScheduleNotice(data.scheduleNeedsAttention);
