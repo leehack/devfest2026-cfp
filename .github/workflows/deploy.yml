@@ -50,7 +50,7 @@ jobs:
 
       # Deploy in compatibility order: Functions first, App Hosting second, Rules third.
       - name: Deploy Cloud Functions
-        if: inputs.target == 'functions' || inputs.target == 'all'
+        if: github.event_name == 'push' || inputs.target == 'functions' || inputs.target == 'all'
         run: npm run deploy:functions
 
       - name: Deploy App Hosting
@@ -58,7 +58,7 @@ jobs:
         run: npm run deploy:app
 
       - name: Deploy Security Rules & Indexes
-        if: inputs.target == 'rules' || inputs.target == 'all'
+        if: github.event_name == 'push' || inputs.target == 'rules' || inputs.target == 'all'
         run: npm run deploy:rules
 
       - name: Verify Live Production Health
