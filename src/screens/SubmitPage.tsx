@@ -946,7 +946,12 @@ function ProposalFormPage({
             },
           }),
           cfp.publishedScheduleId
-            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId, { force: loadAttempt > 0 })
+            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId, {
+                force: loadAttempt > 0,
+                onRevalidate: (s) => {
+                  if (!cancelled) setPublishedSchedule(s);
+                },
+              })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
@@ -955,6 +960,9 @@ function ProposalFormPage({
                 force: loadAttempt > 0,
                 releaseId: cfp.sharedScheduleId,
                 audience: 'speaker',
+                onRevalidate: (s) => {
+                  if (!cancelled) setSharedSchedule(s);
+                },
               })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))

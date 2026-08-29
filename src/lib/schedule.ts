@@ -1,7 +1,7 @@
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 
-import { db, functions } from '../firebase';
+import { db, functions, auth } from '../firebase';
 import { swrFetch } from './cache';
 import type {
   PublishedSchedule,
@@ -133,9 +133,9 @@ export async function loadSharedSchedule(
   } = {},
 ): Promise<SharedScheduleBundle> {
   const releaseKey = options.releaseId ?? 'current';
-  const audienceKey = options.audience ?? 'any';
+  const uid = auth.currentUser?.uid ?? 'anon';
   return swrFetch(
-    `sharedSchedule:${cfpId}:${releaseKey}:${audienceKey}`,
+    `sharedSchedule:${cfpId}:${releaseKey}:${uid}`,
     async () => {
       const { data } = await getSharedSchedule({ cfpId });
       return {
@@ -152,7 +152,10 @@ export async function loadSharedSchedule(
 export async function loadPublishedSchedule(
   cfpId: string,
   releaseId: string,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    onRevalidate?: (bundle: PublishedScheduleBundle | null) => void;
+  } = {},
 ): Promise<PublishedScheduleBundle | null> {
   return swrFetch(
     `publishedSchedule:${cfpId}:${releaseId}`,
@@ -171,6 +174,10 @@ export async function loadPublishedSchedule(
         })) as PublishedScheduleEntry[],
       };
     },
-    { force: options.force, backgroundRevalidate: true },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+    },
   );
 }

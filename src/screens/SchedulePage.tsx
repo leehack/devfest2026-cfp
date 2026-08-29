@@ -186,11 +186,36 @@ export function SchedulePage({
     }
 
     const loadPublic = () =>
-      releaseId ? loadPublishedSchedule(cfpId, releaseId) : Promise.resolve(null);
+      releaseId
+        ? loadPublishedSchedule(cfpId, releaseId, {
+            force: loadAttempt > 0,
+            onRevalidate: (updated) => {
+              if (!cancelled && !previewReleaseId) {
+                setBundle(updated);
+              }
+            },
+          })
+        : Promise.resolve(null);
     const loadPreview = async (): Promise<PublishedScheduleBundle | null> => {
       const shared: SharedScheduleBundle = await loadSharedSchedule(cfpId, {
         releaseId: previewReleaseId,
         audience: 'committee',
+        force: loadAttempt > 0,
+        onRevalidate: (updatedShared) => {
+          if (!cancelled && previewReleaseId) {
+            if (!updatedShared.schedule) {
+              setBundle(null);
+            } else {
+              setBundle({
+                schedule: {
+                  ...updatedShared.schedule,
+                  publishedAt: updatedShared.schedule.publishedAt ?? updatedShared.schedule.sharedAt,
+                },
+                entries: updatedShared.entries,
+              });
+            }
+          }
+        },
       });
       if (!shared.schedule) return null;
       return {
