@@ -332,10 +332,11 @@ export function Schedule({
       let currentDraftResult: ScheduleDraft | null = null;
       let currentProposalsResult: ProposalRow[] | null = null;
       const revalidated = { cfp: null as { value: Cfp | null } | null };
+      let initialCfpResult: Cfp | null = null;
       let currentSharedResult: SharedScheduleBundle | null = null;
       let currentFormResult: SubmissionForm | null = null;
 
-      const getEffectiveCfp = () => (revalidated.cfp ? revalidated.cfp.value : nextCfp);
+      const getEffectiveCfp = () => (revalidated.cfp ? revalidated.cfp.value : initialCfpResult);
 
       const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
         loadCfp(cfpId, {
@@ -443,6 +444,7 @@ export function Schedule({
         }),
       ]);
       if (request !== generation.current) return;
+      initialCfpResult = nextCfp;
       currentDraftResult = currentDraftResult ?? draft;
       currentProposalsResult = currentProposalsResult ?? proposalRows;
       currentSharedResult = currentSharedResult ?? nextShared;
