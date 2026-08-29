@@ -27,6 +27,7 @@ import {
   type ConfirmField,
 } from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
+import { invalidateCache } from '../../lib/cache';
 import {
   DEFAULT_SUBMISSION_FORM,
   labelOf,
@@ -989,6 +990,8 @@ export function Proposals({
         const latest = Math.max(...committedDecisions.current.keys());
         setUndo(committedDecisions.current.get(latest) ?? null);
       }
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache('myProposals');
       void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
@@ -1036,6 +1039,8 @@ export function Proposals({
       const remaining = [...committedDecisions.current.keys()];
       const latest = remaining.length > 0 ? Math.max(...remaining) : null;
       setUndo(latest === null ? null : committedDecisions.current.get(latest) ?? null);
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache('myProposals');
       setNote(t.admin.decisionUndone(snapshot.title));
       void onEmailQueueChange?.();
     } catch (e) {
