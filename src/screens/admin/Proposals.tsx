@@ -821,7 +821,7 @@ export function Proposals({
     [cfpId, managedProposalId],
   );
 
-  const refresh = useCallback(async (reset = false) => {
+  const refresh = useCallback(async (reset = false, force = false) => {
     const request = ++loadGeneration.current;
     setCoverageLoading(true);
     setCoverageError('');
@@ -853,7 +853,7 @@ export function Proposals({
     }
     try {
       const [all, form, submission, updateRequests] = await Promise.all([
-        loadAllProposals(cfpId, { speakerDetails: true }),
+        loadAllProposals(cfpId, { speakerDetails: true, force }),
         loadConfirmForm(cfpId),
         loadSubmissionForm(cfpId),
         readOnly
@@ -905,12 +905,12 @@ export function Proposals({
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh(true);
+    void refresh(loadedFor !== cfpId);
     return () => {
       loadGeneration.current += 1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfpId]);
+  }, [cfpId, loadedFor]);
 
   /*
    * From the snapshot on the proposal, not from `speakers/{uid}`.

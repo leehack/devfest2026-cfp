@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from '../../components/Link';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
+import { useLatest } from '../../lib/useLatest';
 import {
   isLateIntakeWindow,
   overviewEmailReady,
@@ -123,6 +124,7 @@ function lifecycleHref(cfpId: string, step: number, firstSetupTab: SetupTab): st
 
 export function Overview({ cfpId }: { cfpId: string }) {
   const { t, locale } = useI18n();
+  const tRef = useLatest(t);
   const [data, setData] = useState<OverviewData | null>(null);
   const [loadedFor, setLoadedFor] = useState('');
   const [error, setError] = useState('');
@@ -180,7 +182,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
       ]);
       if (request !== requestGeneration.current) return;
       if (!cfp) {
-        setError(t.errors.notFound);
+        setError(tRef.current.errors.notFound);
         setLoadedFor(cfpId);
         return;
       }
@@ -188,20 +190,19 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setLoadedFor(cfpId);
     } catch (e) {
       if (request !== requestGeneration.current) return;
-      setError(adminError(e, t));
+      setError(adminError(e, tRef.current));
       setLoadedFor(cfpId);
     }
-  }, [cfpId, t]);
+  }, [cfpId, tRef]);
 
   useEffect(() => {
-    void load(true);
+    void load(loadedFor !== cfpId);
     // The locale settles after mount. Refetching operational data in response
     // would add reads without changing any of it.
     return () => {
       requestGeneration.current += 1;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfpId]);
+  }, [cfpId, load, loadedFor]);
 
   const current = data?.cfpId === cfpId ? data : null;
   if (loadedFor !== cfpId) return <p className="muted">{t.app.loading}</p>;

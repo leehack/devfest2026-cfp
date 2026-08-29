@@ -6,6 +6,7 @@ interface CacheEntry<T> {
 
 const memoryStore = new Map<string, CacheEntry<unknown>>();
 const inFlightRequests = new Map<string, Promise<unknown>>();
+const requestGenerations = new Map<string, number>();
 
 const DEFAULT_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
@@ -31,6 +32,9 @@ export function invalidateCache(keyOrPrefix?: string): void {
   if (!keyOrPrefix) {
     memoryStore.clear();
     inFlightRequests.clear();
+    for (const key of requestGenerations.keys()) {
+      requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
+    }
     return;
   }
   for (const key of memoryStore.keys()) {
@@ -41,14 +45,15 @@ export function invalidateCache(keyOrPrefix?: string): void {
   for (const key of inFlightRequests.keys()) {
     if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
       inFlightRequests.delete(key);
+      requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
     }
   }
 }
 
 /**
- * Executes an async fetcher with in-flight deduplication and memory caching.
+ * Executes an async fetcher with in-flight deduplication, generation tracking, and memory caching.
  * If fresh data is in cache, returns it immediately.
- * If stale data exists or force is requested, fetches in background / foreground.
+ * If backgroundRevalidate is requested or forced, fetches in background/foreground and notifies subscribers.
  */
 export async function swrFetch<T>(
   key: string,
@@ -57,42 +62,67 @@ export async function swrFetch<T>(
     ttlMs?: number;
     force?: boolean;
     backgroundRevalidate?: boolean;
+    onRevalidate?: (data: T) => void;
   } = {},
 ): Promise<T> {
-  const { ttlMs = DEFAULT_TTL_MS, force = false, backgroundRevalidate = false } = options;
+  const {
+    ttlMs = DEFAULT_TTL_MS,
+    force = false,
+    backgroundRevalidate = false,
+    onRevalidate,
+  } = options;
 
   if (force) {
-    // Purge any pre-mutation in-flight requests for this key
+    requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);
     inFlightRequests.delete(key);
     memoryStore.delete(key);
   } else {
     const cached = getCached<T>(key);
     if (cached !== undefined) {
       if (backgroundRevalidate) {
-        // Trigger background refresh without blocking
-        void runFetcher(key, fetcher, ttlMs).catch(() => {});
+        void runFetcher(key, fetcher, ttlMs, onRevalidate).catch(() => {});
       }
       return cached;
     }
   }
 
-  return runFetcher(key, fetcher, ttlMs);
+  return runFetcher(key, fetcher, ttlMs, onRevalidate);
 }
 
-async function runFetcher<T>(key: string, fetcher: () => Promise<T>, ttlMs: number): Promise<T> {
+async function runFetcher<T>(
+  key: string,
+  fetcher: () => Promise<T>,
+  ttlMs: number,
+  onRevalidate?: (data: T) => void,
+): Promise<T> {
   const existing = inFlightRequests.get(key) as Promise<T> | undefined;
-  if (existing) return existing;
+  if (existing) {
+    if (onRevalidate) {
+      void existing.then((res) => onRevalidate(res)).catch(() => {});
+    }
+    return existing;
+  }
 
+  const currentGen = (requestGenerations.get(key) ?? 0) + 1;
+  requestGenerations.set(key, currentGen);
+
+  const holder: { promise?: Promise<T> } = {};
   const promise = (async () => {
     try {
       const result = await fetcher();
-      setCached(key, result, ttlMs);
+      if (requestGenerations.get(key) === currentGen) {
+        setCached(key, result, ttlMs);
+        onRevalidate?.(result);
+      }
       return result;
     } finally {
-      inFlightRequests.delete(key);
+      if (inFlightRequests.get(key) === holder.promise) {
+        inFlightRequests.delete(key);
+      }
     }
   })();
 
+  holder.promise = promise;
   inFlightRequests.set(key, promise);
   return promise;
 }

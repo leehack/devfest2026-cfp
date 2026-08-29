@@ -406,7 +406,16 @@ export function App({
     }
     setCfpError(false);
 
-    loadCfpWindow(cfpId, { force: cfpAttempt > 0 })
+    loadCfpWindow(cfpId, {
+      force: cfpAttempt > 0,
+      onRevalidate: (next) => {
+        if (!cancelled && currentCfpId.current === cfpId) {
+          setCfp(next);
+          setLoadedCfpId(cfpId);
+          setCfpReady(true);
+        }
+      },
+    })
       .then((next) => {
         if (!cancelled) {
           setCfp(next);

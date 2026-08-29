@@ -87,6 +87,55 @@ describe('cache', () => {
     expect(freshResult).toEqual({ val: 'fresh-post-write' });
     expect(getCached('test:stale')).toEqual({ val: 'fresh-post-write' });
   });
+
+  it('prevents superseded slow background fetch from overwriting newer forced fetch result', async () => {
+    invalidateCache();
+    const slowPreWriteFetcher = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return { val: 'stale-pre-write' };
+    };
+
+    // Start background fetch
+    void swrFetch('test:generation', slowPreWriteFetcher);
+
+    // Later, forced mutation refresh finishes quickly
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const fastPostWriteFetcher = async () => ({ val: 'fresh-post-write' });
+    const fresh = await swrFetch('test:generation', fastPostWriteFetcher, { force: true });
+    expect(fresh).toEqual({ val: 'fresh-post-write' });
+    expect(getCached('test:generation')).toEqual({ val: 'fresh-post-write' });
+
+    // Wait for the slow pre-write fetcher to finish
+    await new Promise((resolve) => setTimeout(resolve, 70));
+
+    // Stale fetcher must NOT overwrite the cache
+    expect(getCached('test:generation')).toEqual({ val: 'fresh-post-write' });
+  });
+
+  it('notifies onRevalidate callback when background revalidation finishes', async () => {
+    invalidateCache();
+    setCached('test:reval', { count: 1 });
+
+    let revalidatedData: { count: number } | null = null;
+    const fetcher = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { count: 2 };
+    };
+
+    const initial = await swrFetch('test:reval', fetcher, {
+      backgroundRevalidate: true,
+      onRevalidate: (data) => {
+        revalidatedData = data;
+      },
+    });
+
+    expect(initial).toEqual({ count: 1 });
+    expect(revalidatedData).toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    expect(revalidatedData).toEqual({ count: 2 });
+    expect(getCached('test:reval')).toEqual({ count: 2 });
+  });
 });
 
 describe('prefetch', () => {
