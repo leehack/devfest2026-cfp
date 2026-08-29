@@ -862,7 +862,7 @@ export function Proposals({
         const pendingStatus = pendingStatuses.current.get(r.id);
         return pendingStatus ? { ...r, status: pendingStatus } : r;
       });
-    };
+    let hasFailed = false;
     let revalidatedRows: ProposalRow[] | null = null;
     let revalidatedConfirm: ConfirmForm | null = null;
     let revalidatedSubmission: SubmissionForm | null = null;
@@ -872,22 +872,24 @@ export function Proposals({
           speakerDetails: true,
           force,
           onRevalidate: (updated) => {
-            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+            if (request === loadGeneration.current && activeCfp.current === cfpId && !hasFailed) {
               revalidatedRows = updated;
               setRows(mergePendingStatuses(updated));
             }
           },
           onError: (loadErr) => {
+            hasFailed = true;
             if (request === loadGeneration.current && activeCfp.current === cfpId) {
               setError(adminError(loadErr, t));
               setRows([]);
+              setLoadFailed(true);
             }
           },
         }),
         loadConfirmForm(cfpId, {
           force,
           onRevalidate: (updatedConfirm) => {
-            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+            if (request === loadGeneration.current && activeCfp.current === cfpId && !hasFailed) {
               revalidatedConfirm = updatedConfirm;
               setQuestions(updatedConfirm.fields);
             }
@@ -896,7 +898,7 @@ export function Proposals({
         loadSubmissionForm(cfpId, {
           force,
           onRevalidate: (updatedSubmission) => {
-            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+            if (request === loadGeneration.current && activeCfp.current === cfpId && !hasFailed) {
               revalidatedSubmission = updatedSubmission;
               setShape(updatedSubmission);
             }
@@ -908,7 +910,7 @@ export function Proposals({
               .then(({ data }) => ({ requests: data.admin, failed: false }))
               .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
-      if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
+      if (request !== loadGeneration.current || activeCfp.current !== cfpId || hasFailed) return;
       setRows(mergePendingStatuses(revalidatedRows ?? all));
       setQuestions((revalidatedConfirm ?? form).fields);
       setShape(revalidatedSubmission ?? submission);

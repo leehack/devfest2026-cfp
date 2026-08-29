@@ -329,6 +329,7 @@ export function Schedule({
     };
 
     try {
+      let hasFailed = false;
       let currentDraftResult: ScheduleDraft | null = null;
       let currentProposalsResult: ProposalRow[] | null = null;
       const revalidated = { cfp: null as { value: Cfp | null } | null };
@@ -342,7 +343,7 @@ export function Schedule({
         loadCfp(cfpId, {
           force,
           onRevalidate: (updatedCfp) => {
-            if (request === generation.current) {
+            if (request === generation.current && !hasFailed) {
               revalidated.cfp = { value: updatedCfp };
               if (currentDraftResult && currentProposalsResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
@@ -360,7 +361,7 @@ export function Schedule({
         loadScheduleDraft(cfpId, {
           force,
           onRevalidate: (updatedDraft) => {
-            if (request === generation.current) {
+            if (request === generation.current && !hasFailed) {
               currentDraftResult = updatedDraft;
               if (currentProposalsResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
@@ -375,6 +376,7 @@ export function Schedule({
             }
           },
           onError: (err) => {
+            hasFailed = true;
             if (request === generation.current) {
               setError(scheduleError(err, tRef.current));
               setLoaded(true);
@@ -384,7 +386,7 @@ export function Schedule({
         loadAllProposals(cfpId, {
           force,
           onRevalidate: (updatedProposals) => {
-            if (request === generation.current) {
+            if (request === generation.current && !hasFailed) {
               currentProposalsResult = updatedProposals;
               if (currentDraftResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
@@ -399,6 +401,7 @@ export function Schedule({
             }
           },
           onError: (err) => {
+            hasFailed = true;
             if (request === generation.current) {
               setError(scheduleError(err, tRef.current));
               setLoaded(true);
@@ -409,7 +412,7 @@ export function Schedule({
           force,
           audience: 'committee',
           onRevalidate: (updatedShared) => {
-            if (request === generation.current) {
+            if (request === generation.current && !hasFailed) {
               currentSharedResult = updatedShared;
               if (currentDraftResult && currentProposalsResult && currentFormResult) {
                 void applySchedule(
@@ -427,7 +430,7 @@ export function Schedule({
         loadSubmissionForm(cfpId, {
           force,
           onRevalidate: (updatedForm) => {
-            if (request === generation.current) {
+            if (request === generation.current && !hasFailed) {
               currentFormResult = updatedForm;
               if (currentDraftResult && currentProposalsResult && currentSharedResult) {
                 void applySchedule(
@@ -443,7 +446,7 @@ export function Schedule({
           },
         }),
       ]);
-      if (request !== generation.current) return;
+      if (request !== generation.current || hasFailed) return;
       initialCfpResult = nextCfp;
       currentDraftResult = currentDraftResult ?? draft;
       currentProposalsResult = currentProposalsResult ?? proposalRows;

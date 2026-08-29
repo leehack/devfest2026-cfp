@@ -173,11 +173,12 @@ export function Overview({ cfpId }: { cfpId: string }) {
     };
 
     try {
+      let hasFailed = false;
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId, {
           onRevalidate: (updatedCfp) => {
             revalidated.cfp = { value: updatedCfp };
-            if (requestGeneration.current === request) {
+            if (requestGeneration.current === request && !hasFailed) {
               if (!updatedCfp) {
                 setError(tRef.current.errors.notFound);
                 setData(null);
@@ -190,12 +191,13 @@ export function Overview({ cfpId }: { cfpId: string }) {
         }),
         loadAllProposals(cfpId, {
           onRevalidate: (updated) => {
-            if (requestGeneration.current === request) {
+            if (requestGeneration.current === request && !hasFailed) {
               revalidated.proposals = updated;
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, proposals: updated } : prev));
             }
           },
           onError: (err) => {
+            hasFailed = true;
             if (requestGeneration.current === request) {
               setError(adminError(err, tRef.current));
               setData(null);
@@ -205,11 +207,12 @@ export function Overview({ cfpId }: { cfpId: string }) {
         loadCommittee(cfpId, {
           onRevalidate: (updatedCommittee) => {
             revalidated.committee = updatedCommittee;
-            if (requestGeneration.current === request) {
+            if (requestGeneration.current === request && !hasFailed) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, committee: updatedCommittee } : prev));
             }
           },
           onError: (err) => {
+            hasFailed = true;
             if (requestGeneration.current === request) {
               setError(adminError(err, tRef.current));
               setData(null);
@@ -219,7 +222,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         loadSubmissionForm(cfpId, {
           onRevalidate: (updatedForm) => {
             revalidated.submission = updatedForm;
-            if (requestGeneration.current === request) {
+            if (requestGeneration.current === request && !hasFailed) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, submission: updatedForm } : prev));
             }
           },
@@ -227,7 +230,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
         loadConfirmForm(cfpId, {
           onRevalidate: (updatedForm) => {
             revalidated.confirmation = updatedForm;
-            if (requestGeneration.current === request) {
+            if (requestGeneration.current === request && !hasFailed) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, confirmation: updatedForm } : prev));
             }
           },
@@ -254,9 +257,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
           loadScheduleDraft(cfpId, {
             onRevalidate: (draft) => {
               latestDraft = draft;
-              applyScheduleRevalidation();
+              if (!hasFailed) applyScheduleRevalidation();
             },
             onError: (err) => {
+              hasFailed = true;
               if (requestGeneration.current === request) {
                 setError(adminError(err, tRef.current));
                 setData(null);
@@ -267,7 +271,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
             audience: 'committee',
             onRevalidate: (shared) => {
               latestShared = shared;
-              applyScheduleRevalidation();
+              if (!hasFailed) applyScheduleRevalidation();
             },
           }),
         ])
@@ -284,7 +288,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
             checkFailed: true,
           })),
       ]);
-      if (request !== requestGeneration.current) return;
+      if (request !== requestGeneration.current || hasFailed) return;
       const effectiveCfp = revalidated.cfp ? revalidated.cfp.value : cfp;
       if (!effectiveCfp) {
         setError(tRef.current.errors.notFound);

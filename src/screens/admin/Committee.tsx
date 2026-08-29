@@ -108,19 +108,21 @@ export function Committee({
     const current = () =>
       activeCfp.current === scope && generation.current === request;
     try {
+      let hasFailed = false;
       let revalidatedCommittee: Awaited<ReturnType<typeof loadCommittee>> | null = null;
       const [committee, transferRes] = await Promise.all([
         loadCommittee(cfpId, {
           force,
           onRevalidate: (updated) => {
             revalidatedCommittee = updated;
-            if (current()) {
+            if (current() && !hasFailed) {
               setPeople(updated.people);
               setPending(updated.pending);
               setInviteLinks(updated.inviteLinks ?? []);
             }
           },
           onError: (err) => {
+            hasFailed = true;
             if (current()) {
               setError(adminError(err, tRef.current));
               setPeople([]);
@@ -132,7 +134,7 @@ export function Committee({
         }),
         getEventOwnershipTransfer({ cfpId }).catch(() => ({ data: { ok: true, transfer: null } })),
       ]);
-      if (!current()) return false;
+      if (!current() || hasFailed) return false;
       const effectiveCommittee = revalidatedCommittee ?? committee;
       setPeople(effectiveCommittee.people);
       setPending(effectiveCommittee.pending);
