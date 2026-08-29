@@ -41,7 +41,7 @@ import {
   type SubmissionForm,
 } from '@shared/submissionForm';
 import { localised, type Answers } from '@shared/confirmForm';
-import type { Review, SpeakerSnapshot } from '@shared/types';
+import type { Cfp, Review, SpeakerSnapshot } from '@shared/types';
 
 interface SaveFailure {
   id: string;
