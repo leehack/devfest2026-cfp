@@ -25,6 +25,7 @@ import {
   localised,
   type Answers,
   type ConfirmField,
+  type ConfirmForm,
 } from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
 import { invalidateCache } from '../../lib/cache';
