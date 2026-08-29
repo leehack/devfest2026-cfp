@@ -1315,6 +1315,12 @@ function WriteToSpeaker({
             onRevalidate: (updated) => {
               if (!cancelled) setRows(updated.filter((row) => row.status !== 'draft'));
             },
+            onError: (err) => {
+              if (!cancelled) {
+                setRows([]);
+                setLoadError(emailError(err, tRef.current));
+              }
+            },
           })
         ).filter((row) => row.status !== 'draft');
         if (!cancelled) setRows(sendable);

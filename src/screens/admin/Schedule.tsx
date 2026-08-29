@@ -379,6 +379,9 @@ export function Schedule({
             hasFailed = true;
             if (request === generation.current) {
               setError(scheduleError(err, tRef.current));
+              setConfig(null);
+              setEntries([]);
+              setProposals([]);
               setLoaded(true);
             }
           },
@@ -404,6 +407,9 @@ export function Schedule({
             hasFailed = true;
             if (request === generation.current) {
               setError(scheduleError(err, tRef.current));
+              setConfig(null);
+              setEntries([]);
+              setProposals([]);
               setLoaded(true);
             }
           },
@@ -424,6 +430,16 @@ export function Schedule({
                   true,
                 );
               }
+            }
+          },
+          onError: (err) => {
+            hasFailed = true;
+            if (request === generation.current) {
+              setError(scheduleError(err, tRef.current));
+              setConfig(null);
+              setEntries([]);
+              setProposals([]);
+              setLoaded(true);
             }
           },
         }),
