@@ -260,10 +260,28 @@ export function Overview({ cfpId }: { cfpId: string }) {
               if (!hasFailed) applyScheduleRevalidation();
             },
             onError: (err) => {
-              hasFailed = true;
-              if (requestGeneration.current === request) {
-                setError(adminError(err, tRef.current));
-                setData(null);
+              const code = String((err as any)?.code || (err as any)?.message || '');
+              if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
+                hasFailed = true;
+                if (requestGeneration.current === request) {
+                  setError(adminError(err, tRef.current));
+                  setData(null);
+                }
+              } else if (requestGeneration.current === request) {
+                setData((prev) =>
+                  prev && prev.cfpId === cfpId
+                    ? {
+                        ...prev,
+                        schedule: {
+                          configured: false,
+                          draftProposalIds: [],
+                          sharedReleaseId: '',
+                          stale: false,
+                          checkFailed: true,
+                        },
+                      }
+                    : prev,
+                );
               }
             },
           }),
