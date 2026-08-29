@@ -862,6 +862,7 @@ export function Proposals({
         const pendingStatus = pendingStatuses.current.get(r.id);
         return pendingStatus ? { ...r, status: pendingStatus } : r;
       });
+    };
     let hasFailed = false;
     let revalidatedRows: ProposalRow[] | null = null;
     let revalidatedConfirm: ConfirmForm | null = null;
