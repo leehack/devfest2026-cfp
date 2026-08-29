@@ -1309,9 +1309,14 @@ function WriteToSpeaker({
     setReviewing(false);
     void (async () => {
       try {
-        // Drafts are excluded: writing to someone about a talk they have not
-        // submitted tells them it was read.
-        const sendable = (await loadAllProposals(cfpId)).filter((row) => row.status !== 'draft');
+        const sendable = (
+          await loadAllProposals(cfpId, {
+            force: attempt > 0,
+            onRevalidate: (updated) => {
+              if (!cancelled) setRows(updated.filter((row) => row.status !== 'draft'));
+            },
+          })
+        ).filter((row) => row.status !== 'draft');
         if (!cancelled) setRows(sendable);
       } catch (e) {
         if (!cancelled) setLoadError(emailError(e, tRef.current));

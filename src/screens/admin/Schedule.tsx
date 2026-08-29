@@ -318,27 +318,43 @@ export function Schedule({
     };
 
     try {
-      let revalidatedDraft: ScheduleDraft | null = null;
-      let revalidatedProposals: ProposalRow[] | null = null;
-      let resolvedCfp: Cfp | null = null;
-      let resolvedProposals: ProposalRow[] | null = null;
-      let resolvedShared: SharedScheduleBundle | null = null;
-      let resolvedSubmissionForm: SubmissionForm | null = null;
+      let currentDraftResult: ScheduleDraft | null = null;
+      let currentProposalsResult: ProposalRow[] | null = null;
+      let currentCfpResult: Cfp | null = null;
+      let currentSharedResult: SharedScheduleBundle | null = null;
+      let currentFormResult: SubmissionForm | null = null;
 
       const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
-        loadCfp(cfpId, { force }),
+        loadCfp(cfpId, {
+          force,
+          onRevalidate: (updatedCfp) => {
+            if (request === generation.current) {
+              currentCfpResult = updatedCfp;
+              if (currentDraftResult && currentProposalsResult && currentSharedResult && currentFormResult) {
+                void applySchedule(
+                  updatedCfp,
+                  currentDraftResult,
+                  currentProposalsResult,
+                  currentSharedResult,
+                  currentFormResult,
+                  true,
+                );
+              }
+            }
+          },
+        }),
         loadScheduleDraft(cfpId, {
           force,
-          onRevalidate: (updated) => {
+          onRevalidate: (updatedDraft) => {
             if (request === generation.current) {
-              revalidatedDraft = updated;
-              if (resolvedCfp && (revalidatedProposals ?? resolvedProposals) && resolvedShared && resolvedSubmissionForm) {
+              currentDraftResult = updatedDraft;
+              if (currentCfpResult && currentProposalsResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
-                  resolvedCfp,
-                  updated,
-                  revalidatedProposals ?? resolvedProposals!,
-                  resolvedShared,
-                  resolvedSubmissionForm,
+                  currentCfpResult,
+                  updatedDraft,
+                  currentProposalsResult,
+                  currentSharedResult,
+                  currentFormResult,
                   true,
                 );
               }
@@ -349,34 +365,70 @@ export function Schedule({
           force,
           onRevalidate: (updatedProposals) => {
             if (request === generation.current) {
-              revalidatedProposals = updatedProposals;
-              if (resolvedCfp && resolvedShared && resolvedSubmissionForm) {
+              currentProposalsResult = updatedProposals;
+              if (currentCfpResult && currentDraftResult && currentSharedResult && currentFormResult) {
                 void applySchedule(
-                  resolvedCfp,
-                  revalidatedDraft ?? draft,
+                  currentCfpResult,
+                  currentDraftResult,
                   updatedProposals,
-                  resolvedShared,
-                  resolvedSubmissionForm,
+                  currentSharedResult,
+                  currentFormResult,
                   true,
                 );
               }
             }
           },
         }),
-        loadSharedSchedule(cfpId, { force, audience: 'committee' }),
-        loadSubmissionForm(cfpId, { force }),
+        loadSharedSchedule(cfpId, {
+          force,
+          audience: 'committee',
+          onRevalidate: (updatedShared) => {
+            if (request === generation.current) {
+              currentSharedResult = updatedShared;
+              if (currentCfpResult && currentDraftResult && currentProposalsResult && currentFormResult) {
+                void applySchedule(
+                  currentCfpResult,
+                  currentDraftResult,
+                  currentProposalsResult,
+                  updatedShared,
+                  currentFormResult,
+                  true,
+                );
+              }
+            }
+          },
+        }),
+        loadSubmissionForm(cfpId, {
+          force,
+          onRevalidate: (updatedForm) => {
+            if (request === generation.current) {
+              currentFormResult = updatedForm;
+              if (currentCfpResult && currentDraftResult && currentProposalsResult && currentSharedResult) {
+                void applySchedule(
+                  currentCfpResult,
+                  currentDraftResult,
+                  currentProposalsResult,
+                  currentSharedResult,
+                  updatedForm,
+                  true,
+                );
+              }
+            }
+          },
+        }),
       ]);
       if (request !== generation.current) return;
-      resolvedCfp = nextCfp;
-      resolvedProposals = revalidatedProposals ?? proposalRows;
-      resolvedShared = nextShared;
-      resolvedSubmissionForm = nextSubmissionForm;
+      currentCfpResult = currentCfpResult ?? nextCfp;
+      currentDraftResult = currentDraftResult ?? draft;
+      currentProposalsResult = currentProposalsResult ?? proposalRows;
+      currentSharedResult = currentSharedResult ?? nextShared;
+      currentFormResult = currentFormResult ?? nextSubmissionForm;
       await applySchedule(
-        nextCfp,
-        revalidatedDraft ?? draft,
-        resolvedProposals,
-        nextShared,
-        nextSubmissionForm,
+        currentCfpResult,
+        currentDraftResult,
+        currentProposalsResult,
+        currentSharedResult,
+        currentFormResult,
         false,
       );
     } catch (caught) {

@@ -906,6 +906,8 @@ function ProposalFormPage({
                   const matching = updatedTalks.find((t) => t.id === activeId);
                   if (matching) {
                     showTalk(matching);
+                  } else {
+                    showTalk(updatedTalks[0]);
                   }
                 } else {
                   setForm((previous) => ({

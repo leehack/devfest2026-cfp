@@ -88,6 +88,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const statusFilterRef = useRef(statusFilter);
   statusFilterRef.current = statusFilter;
   const currentProposalIdRef = useRef<string | null>(null);
+  const queueApplyGeneration = useRef(0);
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -104,18 +105,29 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setSavedId('');
       setFailures(new Map());
 
+      let currentQueueResult: { proposals: ReviewerProposalRow[]; own: number } | null = null;
+      let currentCfpResult: Cfp | null = null;
+      let currentFormResult: SubmissionForm | null = null;
+
       const applyQueue = async (
         loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
         cfpDoc: Cfp | null,
         formDoc: SubmissionForm,
         isBackgroundRevalidate = false,
       ) => {
+        const applyGen = ++queueApplyGeneration.current;
         const reviews = await loadMyReviews(
           cfpId,
           user.uid,
           loadedQueue.proposals.map((p) => p.id),
         );
-        if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+        if (
+          applyGen !== queueApplyGeneration.current ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
+          return;
+        }
         const visible = cfpDoc?.reviewsVisible === true;
         const opens = toDate(cfpDoc?.opensAt);
         const closes = toDate(cfpDoc?.closesAt);
@@ -193,30 +205,48 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       };
 
       try {
-        let revalidatedQueue: { proposals: ReviewerProposalRow[]; own: number } | null = null;
-        let resolvedCfp: Cfp | null = null;
-        let resolvedForm: SubmissionForm | null = null;
         const [loaded, cfp, form] = await Promise.all([
           loadReviewQueue(cfpId, {
             force,
             onRevalidate: (updated) => {
               if (request === loadGeneration.current && activeScope.current === scopeKey) {
-                revalidatedQueue = updated;
-                if (resolvedForm) {
-                  void applyQueue(updated, resolvedCfp, resolvedForm, true);
+                currentQueueResult = updated;
+                if (currentFormResult) {
+                  void applyQueue(updated, currentCfpResult, currentFormResult, true);
                 }
               }
             },
           }),
-          loadCfp(cfpId, { force }),
+          loadCfp(cfpId, {
+            force,
+            onRevalidate: (updatedCfp) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                currentCfpResult = updatedCfp;
+                if (currentQueueResult && currentFormResult) {
+                  void applyQueue(currentQueueResult, updatedCfp, currentFormResult, true);
+                }
+              }
+            },
+          }),
           // The card's chips read their labels off this call's own form — a
           // category this committee invented has no entry in any dictionary.
-          loadSubmissionForm(cfpId, { force }),
+          loadSubmissionForm(cfpId, {
+            force,
+            onRevalidate: (updatedForm) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                currentFormResult = updatedForm;
+                if (currentQueueResult) {
+                  void applyQueue(currentQueueResult, currentCfpResult, updatedForm, true);
+                }
+              }
+            },
+          }),
         ]);
         if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-        resolvedCfp = cfp;
-        resolvedForm = form;
-        await applyQueue(revalidatedQueue ?? loaded, resolvedCfp, resolvedForm);
+        currentQueueResult = currentQueueResult ?? loaded;
+        currentCfpResult = currentCfpResult ?? cfp;
+        currentFormResult = currentFormResult ?? form;
+        await applyQueue(currentQueueResult, currentCfpResult, currentFormResult, false);
       } catch (e) {
         if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
         setOrder([]);
@@ -329,6 +359,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       const storedScore = draft.score ?? 1;
       setSavingIds((current) => new Set(current).add(id));
       try {
+        queueApplyGeneration.current += 1;
         await saveReview(cfpId, id, user.uid, {
           score: storedScore,
           conflictOfInterest: draft.conflictOfInterest,
