@@ -116,10 +116,15 @@ const getSharedSchedule = httpsCallable<
 
 export async function loadSharedSchedule(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    audience?: 'committee' | 'speaker';
+    onRevalidate?: (bundle: SharedScheduleBundle) => void;
+  } = {},
 ): Promise<SharedScheduleBundle> {
+  const audienceKey = options.audience ?? 'any';
   return swrFetch(
-    `sharedSchedule:${cfpId}`,
+    `sharedSchedule:${cfpId}:${audienceKey}`,
     async () => {
       const { data } = await getSharedSchedule({ cfpId });
       return {
@@ -129,7 +134,7 @@ export async function loadSharedSchedule(
         stale: data.stale,
       };
     },
-    { force: options.force, backgroundRevalidate: true },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
   );
 }
 

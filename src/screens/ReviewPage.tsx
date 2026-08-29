@@ -99,76 +99,94 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setSavingIds(new Set());
       setSavedId('');
       setFailures(new Map());
+
+      const applyQueue = async (
+        loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
+        cfpDoc: Cfp | null,
+        formDoc: SubmissionForm,
+      ) => {
+        const reviews = await loadMyReviews(
+          cfpId,
+          user.uid,
+          loadedQueue.proposals.map((p) => p.id),
+        );
+        if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+        const visible = cfpDoc?.reviewsVisible === true;
+        const opens = toDate(cfpDoc?.opensAt);
+        const closes = toDate(cfpDoc?.closesAt);
+        const now = Date.now();
+        const open = Boolean(
+          cfpDoc &&
+            cfpDoc.archived !== true &&
+            cfpDoc.paused !== true &&
+            opens &&
+            closes &&
+            opens.getTime() <= now &&
+            now < closes.getTime(),
+        );
+
+        // Decided once, here. Once the round is open, disagreement is the point of
+        // the meeting, so the widest spreads come first; until then, work through
+        // what is unscored. Either way the deck holds still while you use it.
+        const sorted = [...loadedQueue.proposals].sort((a, b) =>
+          visible
+            ? (b.aggregate?.stdDev ?? 0) - (a.aggregate?.stdDev ?? 0)
+            : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
+        );
+
+        const recovered = loadReviewDrafts(cfpId, user.uid);
+        const loadedDrafts = new Map(
+          sorted.map((proposal) => [
+            proposal.id,
+            { ...draftOf(reviews.get(proposal.id)), ...recovered.get(proposal.id) },
+          ]),
+        );
+        draftsRef.current = loadedDrafts;
+        setOrder(sorted);
+        setOwn(loadedQueue.own);
+        setMine(reviews);
+        setDrafts(loadedDrafts);
+        setReviewsVisible(visible);
+        setBlindReview(Boolean(cfpDoc?.features?.blindReview));
+        setIntakeOpen(open);
+        setShape(formDoc);
+        setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
+        setFilterEpoch((e) => e + 1);
+        setLoadedFor(scopeKey);
+      };
+
       try {
+        let revalidatedQueue: { proposals: ReviewerProposalRow[]; own: number } | null = null;
         const [loaded, cfp, form] = await Promise.all([
-          loadReviewQueue(cfpId, { force }),
+          loadReviewQueue(cfpId, {
+            force,
+            onRevalidate: (updated) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                revalidatedQueue = updated;
+                void applyQueue(updated, cfp, form);
+              }
+            },
+          }),
           loadCfp(cfpId, { force }),
           // The card's chips read their labels off this call's own form — a
           // category this committee invented has no entry in any dictionary.
           loadSubmissionForm(cfpId, { force }),
         ]);
-      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-      const reviews = await loadMyReviews(
-        cfpId,
-        user.uid,
-        loaded.proposals.map((p) => p.id),
-      );
-      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-      const visible = cfp?.reviewsVisible === true;
-      const opens = toDate(cfp?.opensAt);
-      const closes = toDate(cfp?.closesAt);
-      const now = Date.now();
-      const open = Boolean(
-        cfp &&
-          cfp.archived !== true &&
-          cfp.paused !== true &&
-          opens &&
-          closes &&
-          opens.getTime() <= now &&
-          now < closes.getTime(),
-      );
-
-      // Decided once, here. Once the round is open, disagreement is the point of
-      // the meeting, so the widest spreads come first; until then, work through
-      // what is unscored. Either way the deck holds still while you use it.
-      const sorted = [...loaded.proposals].sort((a, b) =>
-        visible
-          ? (b.aggregate?.stdDev ?? 0) - (a.aggregate?.stdDev ?? 0)
-          : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
-      );
-
-      const recovered = loadReviewDrafts(cfpId, user.uid);
-      const loadedDrafts = new Map(
-        sorted.map((proposal) => [
-          proposal.id,
-          { ...draftOf(reviews.get(proposal.id)), ...recovered.get(proposal.id) },
-        ]),
-      );
-      draftsRef.current = loadedDrafts;
-      setOrder(sorted);
-      setOwn(loaded.own);
-      setMine(reviews);
-      setDrafts(loadedDrafts);
-      setReviewsVisible(visible);
-      setBlindReview(Boolean(cfp?.features?.blindReview));
-      setIntakeOpen(open);
-      setShape(form);
-      setIndex(0);
-      setFailures(new Map());
-      setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
-      setFilterEpoch((e) => e + 1);
-      setLoadedFor(scopeKey);
-    } catch (e) {
-      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-      setOrder([]);
-      setError(reviewError(e, t));
-      setLoadedFor(scopeKey);
-    } finally {
-      if (request === loadGeneration.current && activeScope.current === scopeKey) {
-        setLoading(false);
+        if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+        await applyQueue(revalidatedQueue ?? loaded, cfp, form);
+      } catch (e) {
+        if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+        setOrder([]);
+        setError(reviewError(e, t));
+        setLoadedFor(scopeKey);
+      } finally {
+        if (request === loadGeneration.current && activeScope.current === scopeKey) {
+          setLoading(false);
+        }
       }
-    }
-  }, [cfpId, scopeKey, t, user.uid]);
+    },
+    [cfpId, scopeKey, t, user.uid],
+  );
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt

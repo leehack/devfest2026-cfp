@@ -262,7 +262,7 @@ export function Schedule({
         loadCfp(cfpId, { force }),
         loadScheduleDraft(cfpId, { force }),
         loadAllProposals(cfpId, { force }),
-        loadSharedSchedule(cfpId, { force }),
+        loadSharedSchedule(cfpId, { force, audience: 'committee' }),
         loadSubmissionForm(cfpId, { force }),
       ]);
       if (request !== generation.current) return;

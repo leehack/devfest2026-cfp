@@ -934,7 +934,7 @@ function ProposalFormPage({
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
           cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId
-            ? loadSharedSchedule(cfpId, { force: loadAttempt > 0 })
+            ? loadSharedSchedule(cfpId, { force: loadAttempt > 0, audience: 'speaker' })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),

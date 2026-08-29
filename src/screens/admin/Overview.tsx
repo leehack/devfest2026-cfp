@@ -170,7 +170,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
             needsAttention: 0,
             checkFailed: true,
           })),
-        Promise.all([loadScheduleDraft(cfpId), loadSharedSchedule(cfpId)])
+        Promise.all([
+          loadScheduleDraft(cfpId),
+          loadSharedSchedule(cfpId, { audience: 'committee' }),
+        ])
           .then(([draft, shared]) => ({
             configured: draft.config !== null,
             draftProposalIds: draft.entries.flatMap((entry) =>
