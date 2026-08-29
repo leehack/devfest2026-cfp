@@ -545,6 +545,14 @@ export interface Person extends CfpMember {
   uid: string;
 }
 
+function getLinkTimestamp(raw: unknown): number {
+  if (!raw) return 0;
+  if (typeof (raw as any)?.toMillis === 'function') return (raw as any).toMillis();
+  if (typeof (raw as any)?.seconds === 'number') return (raw as any).seconds * 1000;
+  if (typeof raw === 'string' || typeof raw === 'number') return new Date(raw).getTime();
+  return 0;
+}
+
 export async function loadInviteLinks(
   cfpId: string,
   isOwner = false,
@@ -556,11 +564,7 @@ export async function loadInviteLinks(
   snap.forEach((d) => {
     links.push({ id: d.id, ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>) });
   });
-  links.sort((a, b) => {
-    const aTime = (a.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
-    const bTime = (b.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
-    return bTime - aTime;
-  });
+  links.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
   return links;
 }
 
@@ -586,11 +590,7 @@ export async function loadCommittee(
     id: d.id,
     ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>),
   }));
-  inviteLinks.sort((a, b) => {
-    const aTime = (a.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
-    const bTime = (b.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
-    return bTime - aTime;
-  });
+  inviteLinks.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
 
   return {
     people,

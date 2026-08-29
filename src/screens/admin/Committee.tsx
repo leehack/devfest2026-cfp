@@ -391,6 +391,20 @@ export function Committee({
     return 'active';
   }
 
+  function formatExpiryDate(raw: unknown): string | null {
+    if (!raw) return null;
+    const time =
+      typeof (raw as any)?.toMillis === 'function'
+        ? (raw as any).toMillis()
+        : typeof (raw as any)?.seconds === 'number'
+          ? (raw as any).seconds * 1000
+          : typeof raw === 'string' || typeof raw === 'number'
+            ? new Date(raw).getTime()
+            : null;
+    if (!time || isNaN(time)) return null;
+    return new Date(time).toLocaleDateString();
+  }
+
   return (
     <section className="section">
       {isTransferTarget && (
@@ -578,13 +592,7 @@ export function Committee({
               const status = getLinkStatus(link);
               const isCopied = copiedLinkId === link.id;
               const canRevoke = status === 'active' && (isOwner || link.role === 'reviewer');
-              const expiresDate = link.expiresAt
-                ? new Date(
-                    (link.expiresAt as any)?.toMillis
-                      ? (link.expiresAt as any).toMillis()
-                      : (link.expiresAt as any),
-                  ).toLocaleDateString()
-                : null;
+              const expiresDate = formatExpiryDate(link.expiresAt);
               return (
                 <li key={link.id} className="people__row" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
