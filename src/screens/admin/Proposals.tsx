@@ -911,7 +911,11 @@ export function Proposals({
               .then(({ data }) => ({ requests: data.admin, failed: false }))
               .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
-      if (request !== loadGeneration.current || activeCfp.current !== cfpId || hasFailed) return;
+      if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
+      if (hasFailed) {
+        setLoadedFor(cfpId);
+        return;
+      }
       setRows(mergePendingStatuses(revalidatedRows ?? all));
       setQuestions((revalidatedConfirm ?? form).fields);
       setShape(revalidatedSubmission ?? submission);

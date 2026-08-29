@@ -288,7 +288,11 @@ export function Overview({ cfpId }: { cfpId: string }) {
             checkFailed: true,
           })),
       ]);
-      if (request !== requestGeneration.current || hasFailed) return;
+      if (request !== requestGeneration.current) return;
+      if (hasFailed) {
+        setLoadedFor(cfpId);
+        return;
+      }
       const effectiveCfp = revalidated.cfp ? revalidated.cfp.value : cfp;
       if (!effectiveCfp) {
         setError(tRef.current.errors.notFound);

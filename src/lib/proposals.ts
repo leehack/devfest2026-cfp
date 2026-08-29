@@ -308,6 +308,8 @@ export async function saveDraft(
     },
     { merge: true },
   );
+  invalidateCache(`speakerProfile:${user.uid}`);
+  invalidateCache('myProposals');
 
   if (proposalId) {
     const { acks, attendance: personalAttendance, ...talkDoc } = shapedProposalDoc;
@@ -356,7 +358,6 @@ export async function saveDraft(
     }
     invalidateCache('myProposals');
     invalidateCache(`allProposals:${cfpId}`);
-    invalidateCache(`speakerProfile:${user.uid}`);
     return proposalId;
   }
 
@@ -372,7 +373,6 @@ export async function saveDraft(
   });
   invalidateCache('myProposals');
   invalidateCache(`allProposals:${cfpId}`);
-  invalidateCache(`speakerProfile:${user.uid}`);
   return created.id;
 }
 
