@@ -90,6 +90,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const currentProposalIdRef = useRef<string | null>(null);
   const queueApplyGeneration = useRef(0);
   const activeSavesByScope = useRef<Map<string, number>>(new Map());
+  const deferredQueueApply = useRef<Map<string, () => void>>(new Map());
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -97,6 +98,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const load = useCallback(
     async (force = false) => {
       const request = ++loadGeneration.current;
+      deferredQueueApply.current.delete(scopeKey);
       setLoading(true);
       setLoadedFor('');
       setError('');
@@ -125,10 +127,15 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         const savesInFlight = activeSavesByScope.current.get(scopeKey) ?? 0;
         if (
           applyGen !== queueApplyGeneration.current ||
-          (isBackgroundRevalidate && savesInFlight > 0) ||
           request !== loadGeneration.current ||
           activeScope.current !== scopeKey
         ) {
+          return;
+        }
+        if (isBackgroundRevalidate && savesInFlight > 0) {
+          deferredQueueApply.current.set(scopeKey, () => {
+            void applyQueue(loadedQueue, cfpDoc, formDoc, false);
+          });
           return;
         }
         const visible = cfpDoc?.reviewsVisible === true;
@@ -415,6 +422,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         const remaining = (activeSavesByScope.current.get(scope) ?? 1) - 1;
         if (remaining <= 0) {
           activeSavesByScope.current.delete(scope);
+          const deferred = deferredQueueApply.current.get(scope);
+          if (deferred) {
+            deferredQueueApply.current.delete(scope);
+            deferred();
+          }
         } else {
           activeSavesByScope.current.set(scope, remaining);
         }

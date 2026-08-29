@@ -902,9 +902,20 @@ function ProposalFormPage({
               setSpeaker(updatedProfile);
               speakerRef.current = updatedProfile;
               const activeId = proposalIdRef.current;
+              const matching = activeId ? updatedTalks.find((t) => t.id === activeId) : undefined;
+              if (matching) {
+                setStatus(matching.status);
+                statusRef.current = matching.status;
+                if (!sessionPhotoGenerations.current.has(matching.id)) {
+                  sessionPhotoGenerations.current.set(
+                    matching.id,
+                    matching.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
+                  );
+                }
+                setSessionPhotoGeneration(sessionPhotoGenerations.current.get(matching.id) ?? null);
+              }
               if (!dirty.current && !answerDirty.current) {
                 if (activeId) {
-                  const matching = updatedTalks.find((t) => t.id === activeId);
                   if (matching) {
                     showTalk(matching, true);
                   } else {
