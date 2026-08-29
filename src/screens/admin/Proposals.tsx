@@ -784,7 +784,16 @@ export function Proposals({
   const activeCfp = useRef(cfpId);
   const decisionSequence = useRef(0);
   const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
+  const pendingStatuses = useRef<Map<string, ProposalStatus>>(new Map());
   activeCfp.current = cfpId;
+
+  const mergePendingStatuses = useCallback((inputRows: ProposalRow[]) => {
+    if (pendingStatuses.current.size === 0) return inputRows;
+    return inputRows.map((r) => {
+      const pendingStatus = pendingStatuses.current.get(r.id);
+      return pendingStatus ? { ...r, status: pendingStatus } : r;
+    });
+  }, []);
 
   useEffect(() => {
     const search = new URLSearchParams(window.location.search);
@@ -851,6 +860,7 @@ export function Proposals({
       setProfileRequests([]);
       setProfileRequestsFailed(false);
       committedDecisions.current.clear();
+      pendingStatuses.current.clear();
       decisionSequence.current = 0;
     }
     let revalidatedRows: ProposalRow[] | null = null;
@@ -862,7 +872,7 @@ export function Proposals({
           onRevalidate: (updated) => {
             if (request === loadGeneration.current && activeCfp.current === cfpId) {
               revalidatedRows = updated;
-              setRows(updated);
+              setRows(mergePendingStatuses(updated));
             }
           },
         }),
@@ -875,7 +885,7 @@ export function Proposals({
               .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
-      setRows(revalidatedRows ?? all);
+      setRows(mergePendingStatuses(revalidatedRows ?? all));
       setQuestions(form.fields);
       setShape(submission);
       setProfileRequests(updateRequests.requests);
@@ -973,6 +983,7 @@ export function Proposals({
 
     setNote('');
     setPending((current) => new Set(current).add(row.id));
+    pendingStatuses.current.set(row.id, next);
     setRowErrors((current) => {
       const updated = new Map(current);
       updated.delete(row.id);
@@ -1028,6 +1039,7 @@ export function Proposals({
         new Map(current).set(row.id, adminError(e, t)),
       );
     } finally {
+      pendingStatuses.current.delete(row.id);
       if (activeCfp.current === scope) {
         setPending((current) => {
           const updated = new Set(current);
@@ -1044,6 +1056,7 @@ export function Proposals({
     const scope = cfpId;
     setUndo(null);
     setPending((current) => new Set(current).add(snapshot.proposalId));
+    pendingStatuses.current.set(snapshot.proposalId, snapshot.previous);
     setRows((current) =>
       current.map((proposal) =>
         proposal.id === snapshot.proposalId
@@ -1083,6 +1096,7 @@ export function Proposals({
         new Map(current).set(snapshot.proposalId, adminError(e, t)),
       );
     } finally {
+      pendingStatuses.current.delete(snapshot.proposalId);
       if (activeCfp.current === scope) {
         setPending((current) => {
           const updated = new Set(current);

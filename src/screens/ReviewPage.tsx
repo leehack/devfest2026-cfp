@@ -89,6 +89,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   statusFilterRef.current = statusFilter;
   const currentProposalIdRef = useRef<string | null>(null);
   const queueApplyGeneration = useRef(0);
+  const activeSavesCount = useRef(0);
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -123,6 +124,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         );
         if (
           applyGen !== queueApplyGeneration.current ||
+          activeSavesCount.current > 0 ||
           request !== loadGeneration.current ||
           activeScope.current !== scopeKey
         ) {
@@ -370,8 +372,9 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       // a storage placeholder and is hidden again by `draftOf`.
       const storedScore = draft.score ?? 1;
       setSavingIds((current) => new Set(current).add(id));
+      activeSavesCount.current += 1;
+      queueApplyGeneration.current += 1;
       try {
-        queueApplyGeneration.current += 1;
         await saveReview(cfpId, id, user.uid, {
           score: storedScore,
           conflictOfInterest: draft.conflictOfInterest,
@@ -405,6 +408,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }),
         );
       } finally {
+        activeSavesCount.current -= 1;
+        queueApplyGeneration.current += 1;
         if (activeScope.current === scope) {
           setSavingIds((current) => {
             const updated = new Set(current);
