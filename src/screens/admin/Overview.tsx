@@ -142,7 +142,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setData(null);
     }
     setError('');
-    let revalidatedCfp: Cfp | null = null;
+    let revalidatedCfp: { value: Cfp | null } | null = null;
     let revalidatedProposals: ProposalRow[] | null = null;
     let revalidatedCommittee: Awaited<ReturnType<typeof loadCommittee>> | null = null;
     let revalidatedSubmission: SubmissionForm | null = null;
@@ -174,9 +174,15 @@ export function Overview({ cfpId }: { cfpId: string }) {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId, {
           onRevalidate: (updatedCfp) => {
-            revalidatedCfp = updatedCfp;
-            if (requestGeneration.current === request && updatedCfp) {
-              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, cfp: updatedCfp } : prev));
+            revalidatedCfp = { value: updatedCfp };
+            if (requestGeneration.current === request) {
+              if (!updatedCfp) {
+                setError(tRef.current.errors.notFound);
+                setData(null);
+                setLoadedFor(cfpId);
+              } else {
+                setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, cfp: updatedCfp } : prev));
+              }
             }
           },
         }),
@@ -259,7 +265,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
           })),
       ]);
       if (request !== requestGeneration.current) return;
-      const effectiveCfp = revalidatedCfp ?? cfp;
+      const effectiveCfp = revalidatedCfp ? revalidatedCfp.value : cfp;
       if (!effectiveCfp) {
         setError(tRef.current.errors.notFound);
         setLoadedFor(cfpId);

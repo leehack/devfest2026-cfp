@@ -422,6 +422,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         const remaining = (activeSavesByScope.current.get(scope) ?? 1) - 1;
         if (remaining <= 0) {
           activeSavesByScope.current.delete(scope);
+          queueApplyGeneration.current += 1;
           const deferred = deferredQueueApply.current.get(scope);
           if (deferred) {
             deferredQueueApply.current.delete(scope);
@@ -429,8 +430,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }
         } else {
           activeSavesByScope.current.set(scope, remaining);
+          queueApplyGeneration.current += 1;
         }
-        queueApplyGeneration.current += 1;
         if (activeScope.current === scope) {
           setSavingIds((current) => {
             const updated = new Set(current);
