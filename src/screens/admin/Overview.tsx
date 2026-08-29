@@ -140,7 +140,13 @@ export function Overview({ cfpId }: { cfpId: string }) {
     try {
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
         loadCfp(cfpId),
-        loadAllProposals(cfpId),
+        loadAllProposals(cfpId, {
+          onRevalidate: (updated) => {
+            if (requestGeneration.current === request) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, proposals: updated } : prev));
+            }
+          },
+        }),
         loadCommittee(cfpId),
         loadSubmissionForm(cfpId),
         loadConfirmForm(cfpId),

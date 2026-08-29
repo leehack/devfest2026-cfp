@@ -1254,7 +1254,7 @@ export function Schedule({
           onRemove={() => void removeEntry(editing)}
           onReload={() => {
             setEditing(null);
-            void refresh();
+            void refresh(true);
           }}
         />
       )}

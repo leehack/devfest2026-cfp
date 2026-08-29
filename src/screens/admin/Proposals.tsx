@@ -780,6 +780,7 @@ export function Proposals({
   const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
   const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
   const loadGeneration = useRef(0);
+  const loadedScope = useRef<string | null>(null);
   const activeCfp = useRef(cfpId);
   const decisionSequence = useRef(0);
   const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
@@ -854,7 +855,15 @@ export function Proposals({
     }
     try {
       const [all, form, submission, updateRequests] = await Promise.all([
-        loadAllProposals(cfpId, { speakerDetails: true, force }),
+        loadAllProposals(cfpId, {
+          speakerDetails: true,
+          force,
+          onRevalidate: (updated) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+              setRows(updated);
+            }
+          },
+        }),
         loadConfirmForm(cfpId),
         loadSubmissionForm(cfpId),
         readOnly
@@ -906,7 +915,17 @@ export function Proposals({
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh(rows.length === 0 || activeCfp.current !== cfpId);
+    const isDifferentCfp = loadedScope.current !== cfpId;
+    if (isDifferentCfp) {
+      loadedScope.current = cfpId;
+      setRows([]);
+      setPending(new Set());
+      setUndo(null);
+      setRowErrors(new Map());
+      committedDecisions.current.clear();
+      decisionSequence.current = 0;
+    }
+    void refresh(isDifferentCfp);
     return () => {
       loadGeneration.current += 1;
     };

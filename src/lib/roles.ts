@@ -696,7 +696,11 @@ export interface ProposalRow extends Proposal {
 /** Admin-only proposal load for decisions, exports, and organiser operations. */
 export async function loadAllProposals(
   cfpId: string,
-  options: { speakerDetails?: boolean; force?: boolean } = {},
+  options: {
+    speakerDetails?: boolean;
+    force?: boolean;
+    onRevalidate?: (proposals: ProposalRow[]) => void;
+  } = {},
 ): Promise<ProposalRow[]> {
   const key = `allProposals:${cfpId}:${Boolean(options.speakerDetails)}`;
   return swrFetch(
@@ -774,7 +778,11 @@ export async function loadAllProposals(
           })),
       }));
     },
-    { force: options.force, backgroundRevalidate: true },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+    },
   );
 }
 
