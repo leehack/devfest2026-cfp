@@ -317,6 +317,7 @@ export function Schedule({
 
     try {
       let revalidatedDraft: ScheduleDraft | null = null;
+      let revalidatedProposals: ProposalRow[] | null = null;
       let resolvedCfp: Cfp | null = null;
       let resolvedProposals: ProposalRow[] | null = null;
       let resolvedShared: SharedScheduleBundle | null = null;
@@ -329,11 +330,11 @@ export function Schedule({
           onRevalidate: (updated) => {
             if (request === generation.current) {
               revalidatedDraft = updated;
-              if (resolvedCfp && resolvedProposals && resolvedShared && resolvedSubmissionForm) {
+              if (resolvedCfp && (revalidatedProposals ?? resolvedProposals) && resolvedShared && resolvedSubmissionForm) {
                 void applySchedule(
                   resolvedCfp,
                   updated,
-                  resolvedProposals,
+                  revalidatedProposals ?? resolvedProposals!,
                   resolvedShared,
                   resolvedSubmissionForm,
                   true,
@@ -342,19 +343,36 @@ export function Schedule({
             }
           },
         }),
-        loadAllProposals(cfpId, { force }),
+        loadAllProposals(cfpId, {
+          force,
+          onRevalidate: (updatedProposals) => {
+            if (request === generation.current) {
+              revalidatedProposals = updatedProposals;
+              if (resolvedCfp && resolvedShared && resolvedSubmissionForm) {
+                void applySchedule(
+                  resolvedCfp,
+                  revalidatedDraft ?? draft,
+                  updatedProposals,
+                  resolvedShared,
+                  resolvedSubmissionForm,
+                  true,
+                );
+              }
+            }
+          },
+        }),
         loadSharedSchedule(cfpId, { force, audience: 'committee' }),
         loadSubmissionForm(cfpId, { force }),
       ]);
       if (request !== generation.current) return;
       resolvedCfp = nextCfp;
-      resolvedProposals = proposalRows;
+      resolvedProposals = revalidatedProposals ?? proposalRows;
       resolvedShared = nextShared;
       resolvedSubmissionForm = nextSubmissionForm;
       await applySchedule(
         nextCfp,
         revalidatedDraft ?? draft,
-        proposalRows,
+        resolvedProposals,
         nextShared,
         nextSubmissionForm,
         false,

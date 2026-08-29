@@ -83,10 +83,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [filterEpoch, setFilterEpoch] = useState(0);
   const loadGeneration = useRef(0);
   const draftsRef = useRef(drafts);
-  const orderRef = useRef(order);
-  orderRef.current = order;
-  const indexRef = useRef(index);
-  indexRef.current = index;
+  const selectedCategoryRef = useRef(selectedCategory);
+  selectedCategoryRef.current = selectedCategory;
+  const statusFilterRef = useRef(statusFilter);
+  statusFilterRef.current = statusFilter;
+  const currentProposalIdRef = useRef<string | null>(null);
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -147,23 +148,26 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         );
         draftsRef.current = loadedDrafts;
 
-        const currentProposalId = orderRef.current[indexRef.current]?.id;
-        const matchingIndex = currentProposalId
-          ? sorted.findIndex((p) => p.id === currentProposalId)
+        const nextCategoryOrder = selectedCategoryRef.current
+          ? sorted.filter((p) => p.category === selectedCategoryRef.current)
+          : sorted;
+        const nextDeckOrder =
+          statusFilterRef.current === 'unreviewed'
+            ? nextCategoryOrder.filter((p) => !reviews.has(p.id))
+            : nextCategoryOrder;
+
+        const activeProposalId = currentProposalIdRef.current;
+        const matchingIndex = activeProposalId
+          ? nextDeckOrder.findIndex((p) => p.id === activeProposalId)
           : -1;
         if (matchingIndex >= 0) {
           setIndex(matchingIndex);
-          indexRef.current = matchingIndex;
         } else if (!isBackgroundRevalidate) {
           setIndex(0);
-          indexRef.current = 0;
-        } else if (sorted.length > 0) {
-          const clamped = Math.min(Math.max(0, indexRef.current), sorted.length - 1);
-          setIndex(clamped);
-          indexRef.current = clamped;
+        } else if (nextDeckOrder.length > 0) {
+          setIndex((currentIdx) => Math.min(Math.max(0, currentIdx), nextDeckOrder.length - 1));
         } else {
           setIndex(0);
-          indexRef.current = 0;
         }
 
         setOrder(sorted);
@@ -257,6 +261,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 
   const isComplete = deckOrder.length === 0 || index >= deckOrder.length;
   const current = !isComplete ? deckOrder[index] : null;
+  currentProposalIdRef.current = current?.id ?? null;
   const displayIndex = current ? index : deckOrder.length;
 
   const handled = categoryOrder.filter((proposal) => mine.has(proposal.id)).length;
