@@ -335,7 +335,7 @@ export function Committee({
         void navigator.clipboard.writeText(fullUrl).then(() => {
           setCopiedLinkId(data.link.id);
           setTimeout(() => setCopiedLinkId(null), 3000);
-        });
+        }).catch(() => {});
       }
 
       await refresh(false);
@@ -371,15 +371,21 @@ export function Committee({
       void navigator.clipboard.writeText(fullUrl).then(() => {
         setCopiedLinkId(token);
         setTimeout(() => setCopiedLinkId(null), 3000);
-      });
+      }).catch(() => {});
     }
   }
 
   function getLinkStatus(link: RoleInviteLink): 'revoked' | 'expired' | 'exhausted' | 'active' {
     if (link.revokedAt) return 'revoked';
+    const raw = link.expiresAt as any;
     const expiresAt =
-      (link.expiresAt as { toMillis?: () => number })?.toMillis?.() ??
-      (typeof link.expiresAt === 'string' ? new Date(link.expiresAt).getTime() : null);
+      typeof raw?.toMillis === 'function'
+        ? raw.toMillis()
+        : typeof raw?.seconds === 'number'
+          ? raw.seconds * 1000
+          : typeof raw === 'string' || typeof raw === 'number'
+            ? new Date(raw).getTime()
+            : null;
     if (expiresAt && expiresAt <= Date.now()) return 'expired';
     if (link.maxClaims !== null && link.claimedCount >= link.maxClaims) return 'exhausted';
     return 'active';

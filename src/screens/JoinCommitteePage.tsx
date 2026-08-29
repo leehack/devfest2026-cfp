@@ -19,7 +19,13 @@ const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
 function getInviteToken(): string {
   if (typeof window === 'undefined') return '';
   const params = new URLSearchParams(window.location.search);
-  return params.get('invite') ?? params.get('token') ?? '';
+  const fromQuery = params.get('invite') ?? params.get('token') ?? '';
+  if (fromQuery) return fromQuery;
+  const parts = window.location.pathname.replace(/^\/+|\/+$/g, '').split('/');
+  if ((parts[2] === 'invite' || parts[2] === 'join') && parts[3]) {
+    return decodeURIComponent(parts[3]);
+  }
+  return '';
 }
 
 export function JoinCommitteePage({
@@ -111,7 +117,10 @@ export function JoinCommitteePage({
   const roleName = info ? t.enums.role[info.role] ?? info.role : '';
   const eventName = cfp?.name ?? cfpId;
   const currentRole = userRoleState.role;
-  const isAlreadyRole = currentRole && info && (currentRole === info.role || currentRole === 'owner');
+  const isAlreadyRole =
+    currentRole &&
+    info &&
+    (currentRole === info.role || currentRole === 'owner' || (currentRole === 'admin' && info.role === 'reviewer'));
 
   if (loading) {
     return (
