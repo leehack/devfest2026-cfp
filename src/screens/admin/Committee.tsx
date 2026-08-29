@@ -102,14 +102,14 @@ export function Committee({
       pendingTransfer.targetEmail.toLowerCase() === user.email.toLowerCase()) ||
       pendingTransfer.targetUid === user.uid);
 
-  const refresh = useCallback(async (reportError = true) => {
+  const refresh = useCallback(async (reportError = true, force = false) => {
     const scope = cfpId;
     const request = ++generation.current;
     const current = () =>
       activeCfp.current === scope && generation.current === request;
     try {
       const [committee, transferRes] = await Promise.all([
-        loadCommittee(cfpId),
+        loadCommittee(cfpId, { force }),
         getEventOwnershipTransfer({ cfpId }).catch(() => ({ data: { ok: true, transfer: null } })),
       ]);
       if (!current()) return false;

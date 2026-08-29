@@ -16,6 +16,7 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
+import { swrFetch } from './cache';
 import { STATUS_SETS, type AttendanceStatus, type ProposalStatus } from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
@@ -570,36 +571,43 @@ export async function loadInviteLinks(
 
 export async function loadCommittee(
   cfpId: string,
+  options: { force?: boolean } = {},
 ): Promise<{
   people: Person[];
   pending: RoleGrant[];
   inviteLinks: import('@shared/types').RoleInviteLink[];
 }> {
-  const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
-  const [members, grants] = await Promise.all([
-    getDocs(collection(db, 'cfps', cfpId, 'members')),
-    getDocs(collection(db, 'cfps', cfpId, 'roleGrants')),
-  ]);
+  return swrFetch(
+    `committee:${cfpId}`,
+    async () => {
+      const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
+      const [members, grants] = await Promise.all([
+        getDocs(collection(db, 'cfps', cfpId, 'members')),
+        getDocs(collection(db, 'cfps', cfpId, 'roleGrants')),
+      ]);
 
-  const people = members.docs.map((d) => ({ ...(d.data() as CfpMember), uid: d.id }));
-  const linksSnap = await getDocs(col).catch(async () => {
-    return getDocs(query(col, where('role', '==', 'reviewer'))).catch(() => ({ docs: [] }));
-  });
+      const people = members.docs.map((d) => ({ ...(d.data() as CfpMember), uid: d.id }));
+      const linksSnap = await getDocs(col).catch(async () => {
+        return getDocs(query(col, where('role', '==', 'reviewer'))).catch(() => ({ docs: [] }));
+      });
 
-  const inviteLinks: import('@shared/types').RoleInviteLink[] = linksSnap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>),
-  }));
-  inviteLinks.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
+      const inviteLinks: import('@shared/types').RoleInviteLink[] = linksSnap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>),
+      }));
+      inviteLinks.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
 
-  return {
-    people,
-    // Only the ones still waiting — a claimed grant is already a person above.
-    pending: grants.docs
-      .map((d) => d.data() as RoleGrant)
-      .filter((g) => !g.claimedBy),
-    inviteLinks,
-  };
+      return {
+        people,
+        // Only the ones still waiting — a claimed grant is already a person above.
+        pending: grants.docs
+          .map((d) => d.data() as RoleGrant)
+          .filter((g) => !g.claimedBy),
+        inviteLinks,
+      };
+    },
+    { force: options.force, backgroundRevalidate: true },
+  );
 }
 
 export interface ProposalRow extends Proposal {

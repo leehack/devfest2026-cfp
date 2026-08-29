@@ -1,6 +1,7 @@
-import type { AnchorHTMLAttributes, MouseEvent } from 'react';
+import type { AnchorHTMLAttributes, FocusEvent, MouseEvent } from 'react';
 
 import { goTo } from '../lib/router';
+import { prefetchByPath } from '../lib/prefetch';
 
 /**
  * A real anchor that navigates without reloading the document.
@@ -14,6 +15,8 @@ import { goTo } from '../lib/router';
 export function Link({
   to,
   onClick,
+  onMouseEnter,
+  onFocus,
   ...props
 }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & { to: string }) {
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
@@ -24,5 +27,23 @@ export function Link({
     goTo(to);
   }
 
-  return <a {...props} href={to} onClick={handleClick} />;
+  function handleMouseEnter(event: MouseEvent<HTMLAnchorElement>) {
+    onMouseEnter?.(event);
+    prefetchByPath(to);
+  }
+
+  function handleFocus(event: FocusEvent<HTMLAnchorElement>) {
+    onFocus?.(event);
+    prefetchByPath(to);
+  }
+
+  return (
+    <a
+      {...props}
+      href={to}
+      onClick={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onFocus={handleFocus}
+    />
+  );
 }

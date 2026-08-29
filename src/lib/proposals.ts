@@ -16,6 +16,7 @@ import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
 import type { Locale } from '../i18n';
+import { swrFetch } from './cache';
 import { mapEmpty, toDocuments, type FormState } from './formState';
 import type { EditScope } from './lifecycle';
 import { cfpState } from '@shared/cfpWindow';
@@ -70,50 +71,59 @@ export interface CfpWindow {
  * The window, read off the CFP document itself. Null means there is no such CFP
  * — a mistyped link, or one that has been deleted.
  */
-export async function loadCfpWindow(cfpId: string): Promise<CfpWindow | null> {
-  const snap = await getDoc(doc(db, 'cfps', cfpId));
-  if (!snap.exists()) return null;
+export async function loadCfpWindow(
+  cfpId: string,
+  options: { force?: boolean } = {},
+): Promise<CfpWindow | null> {
+  return swrFetch(
+    `cfpWindow:${cfpId}`,
+    async () => {
+      const snap = await getDoc(doc(db, 'cfps', cfpId));
+      if (!snap.exists()) return null;
 
-  const data = snap.data() as Cfp & { opensAt: Timestamp; closesAt: Timestamp };
-  const opensAt = data.opensAt.toDate();
-  const closesAt = data.closesAt.toDate();
-  const now = Date.now();
+      const data = snap.data() as Cfp & { opensAt: Timestamp; closesAt: Timestamp };
+      const opensAt = data.opensAt.toDate();
+      const closesAt = data.closesAt.toDate();
+      const now = Date.now();
 
-  // Advisory only. The rules and submitProposal re-check against the server
-  // clock — this just decides what the page renders.
-  const state = cfpState(
-    {
-      archived: data.archived,
-      paused: data.paused,
-      opensAtMs: opensAt.getTime(),
-      closesAtMs: closesAt.getTime(),
+      // Advisory only. The rules and submitProposal re-check against the server
+      // clock — this just decides what the page renders.
+      const state = cfpState(
+        {
+          archived: data.archived,
+          paused: data.paused,
+          opensAtMs: opensAt.getTime(),
+          closesAtMs: closesAt.getTime(),
+        },
+        now,
+      );
+
+      return {
+        name: data.name ?? cfpId,
+        opensAt,
+        closesAt,
+        paused: data.paused,
+        state,
+        visibility: data.visibility ?? 'public',
+        profile: {
+          description: data.description,
+          eventDate: data.eventDate,
+          eventStartDate: data.eventStartDate ?? data.eventDate,
+          eventEndDate: data.eventEndDate ?? data.eventStartDate ?? data.eventDate,
+          timeZone: data.timeZone,
+          venue: data.venue,
+          location: data.location,
+          website: data.website,
+        },
+        sharedScheduleId: data.sharedScheduleId,
+        publishedScheduleId: data.publishedScheduleId,
+        theme: data.theme,
+        features: data.features,
+        orgId: data.orgId,
+      };
     },
-    now,
+    { force: options.force, backgroundRevalidate: true },
   );
-
-  return {
-    name: data.name ?? cfpId,
-    opensAt,
-    closesAt,
-    paused: data.paused,
-    state,
-    visibility: data.visibility ?? 'public',
-    profile: {
-      description: data.description,
-      eventDate: data.eventDate,
-      eventStartDate: data.eventStartDate ?? data.eventDate,
-      eventEndDate: data.eventEndDate ?? data.eventStartDate ?? data.eventDate,
-      timeZone: data.timeZone,
-      venue: data.venue,
-      location: data.location,
-      website: data.website,
-    },
-    sharedScheduleId: data.sharedScheduleId,
-    publishedScheduleId: data.publishedScheduleId,
-    theme: data.theme,
-    features: data.features,
-    orgId: data.orgId,
-  };
 }
 
 export interface LoadedProposal {

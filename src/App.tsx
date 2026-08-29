@@ -119,6 +119,11 @@ export function App({
   const [cfpError, setCfpError] = useState(false);
   const [cfpAttempt, setCfpAttempt] = useState(0);
   const currentCfpId = useRef<string | null>(null);
+  const loadedCfpRef = useRef<{ id: string | null; hasValue: boolean }>({
+    id: initialCfp?.id ?? null,
+    hasValue: Boolean(initialCfp?.value),
+  });
+  loadedCfpRef.current = { id: loadedCfpId, hasValue: Boolean(cfp) };
   const seededCfp = useRef(
     initialCfp ? { id: initialCfp.id, stillOnInitialRoute: true } : null,
   );
@@ -391,20 +396,29 @@ export function App({
       setCfpError(false);
       return;
     }
-    setCfpReady(false);
+
+    const alreadyLoaded =
+      loadedCfpRef.current.id === cfpId && loadedCfpRef.current.hasValue;
+    if (!alreadyLoaded) {
+      setCfpReady(false);
+    }
     setCfpError(false);
-    loadCfpWindow(cfpId)
+
+    loadCfpWindow(cfpId, { force: cfpAttempt > 0 })
       .then((next) => {
         if (!cancelled) {
           setCfp(next);
           setLoadedCfpId(cfpId);
+          setCfpReady(true);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setCfp(null);
-          setLoadedCfpId(cfpId);
-          setCfpError(true);
+          if (!alreadyLoaded) {
+            setCfp(null);
+            setLoadedCfpId(cfpId);
+            setCfpError(true);
+          }
         }
       })
       .finally(() => {
