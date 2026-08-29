@@ -644,6 +644,7 @@ export async function loadCommittee(
       pending: RoleGrant[];
       inviteLinks: import('@shared/types').RoleInviteLink[];
     }) => void;
+    onError?: (error: unknown) => void;
   } = {},
 ): Promise<{
   people: Person[];
@@ -680,7 +681,12 @@ export async function loadCommittee(
         inviteLinks,
       };
     },
-    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
   );
 }
 
@@ -707,6 +713,7 @@ export async function loadAllProposals(
     speakerDetails?: boolean;
     force?: boolean;
     onRevalidate?: (proposals: ProposalRow[]) => void;
+    onError?: (error: unknown) => void;
   } = {},
 ): Promise<ProposalRow[]> {
   const key = `allProposals:${cfpId}:${Boolean(options.speakerDetails)}`;
@@ -789,6 +796,7 @@ export async function loadAllProposals(
       force: options.force,
       backgroundRevalidate: true,
       onRevalidate: options.onRevalidate,
+      onError: options.onError,
     },
   );
 }

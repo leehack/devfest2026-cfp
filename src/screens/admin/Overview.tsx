@@ -195,12 +195,24 @@ export function Overview({ cfpId }: { cfpId: string }) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, proposals: updated } : prev));
             }
           },
+          onError: (err) => {
+            if (requestGeneration.current === request) {
+              setError(adminError(err, tRef.current));
+              setData(null);
+            }
+          },
         }),
         loadCommittee(cfpId, {
           onRevalidate: (updatedCommittee) => {
             revalidated.committee = updatedCommittee;
             if (requestGeneration.current === request) {
               setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, committee: updatedCommittee } : prev));
+            }
+          },
+          onError: (err) => {
+            if (requestGeneration.current === request) {
+              setError(adminError(err, tRef.current));
+              setData(null);
             }
           },
         }),
@@ -243,6 +255,12 @@ export function Overview({ cfpId }: { cfpId: string }) {
             onRevalidate: (draft) => {
               latestDraft = draft;
               applyScheduleRevalidation();
+            },
+            onError: (err) => {
+              if (requestGeneration.current === request) {
+                setError(adminError(err, tRef.current));
+                setData(null);
+              }
             },
           }),
           loadSharedSchedule(cfpId, {

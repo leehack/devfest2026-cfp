@@ -877,6 +877,12 @@ export function Proposals({
               setRows(mergePendingStatuses(updated));
             }
           },
+          onError: (loadErr) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId) {
+              setError(adminError(loadErr, t));
+              setRows([]);
+            }
+          },
         }),
         loadConfirmForm(cfpId, {
           force,

@@ -120,6 +120,15 @@ export function Committee({
               setInviteLinks(updated.inviteLinks ?? []);
             }
           },
+          onError: (err) => {
+            if (current()) {
+              setError(adminError(err, tRef.current));
+              setPeople([]);
+              setPending([]);
+              setInviteLinks([]);
+              setLoadFailed(true);
+            }
+          },
         }),
         getEventOwnershipTransfer({ cfpId }).catch(() => ({ data: { ok: true, transfer: null } })),
       ]);

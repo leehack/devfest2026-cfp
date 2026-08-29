@@ -369,6 +369,12 @@ export function Schedule({
               }
             }
           },
+          onError: (err) => {
+            if (request === generation.current) {
+              setError(adminError(err, tRef.current));
+              setLoaded(false);
+            }
+          },
         }),
         loadAllProposals(cfpId, {
           force,
@@ -385,6 +391,12 @@ export function Schedule({
                   true,
                 );
               }
+            }
+          },
+          onError: (err) => {
+            if (request === generation.current) {
+              setError(adminError(err, tRef.current));
+              setLoaded(false);
             }
           },
         }),

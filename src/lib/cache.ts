@@ -73,6 +73,7 @@ export async function swrFetch<T>(
     force?: boolean;
     backgroundRevalidate?: boolean;
     onRevalidate?: (data: T) => void;
+    onError?: (error: unknown) => void;
   } = {},
 ): Promise<T> {
   const {
@@ -80,6 +81,7 @@ export async function swrFetch<T>(
     force = false,
     backgroundRevalidate = false,
     onRevalidate,
+    onError,
   } = options;
 
   if (force) {
@@ -90,13 +92,15 @@ export async function swrFetch<T>(
     if (hasCached(key)) {
       const cached = getCached<T>(key) as T;
       if (backgroundRevalidate) {
-        void runFetcher(key, fetcher, ttlMs, onRevalidate).catch(() => {});
+        void runFetcher(key, fetcher, ttlMs, onRevalidate, onError).catch((err) => {
+          onError?.(err);
+        });
       }
       return cached;
     }
   }
 
-  return runFetcher(key, fetcher, ttlMs, onRevalidate);
+  return runFetcher(key, fetcher, ttlMs, onRevalidate, onError);
 }
 
 async function runFetcher<T>(
@@ -104,11 +108,12 @@ async function runFetcher<T>(
   fetcher: () => Promise<T>,
   ttlMs: number,
   onRevalidate?: (data: T) => void,
+  onError?: (error: unknown) => void,
 ): Promise<T> {
   const existing = inFlightRequests.get(key) as Promise<T> | undefined;
   if (existing) {
+    const boundGen = requestGenerations.get(key) ?? 0;
     if (onRevalidate) {
-      const boundGen = requestGenerations.get(key) ?? 0;
       void existing
         .then((res) => {
           if (requestGenerations.get(key) === boundGen) {
@@ -116,6 +121,13 @@ async function runFetcher<T>(
           }
         })
         .catch(() => {});
+    }
+    if (onError) {
+      void existing.catch((err) => {
+        if (requestGenerations.get(key) === boundGen) {
+          onError(err);
+        }
+      });
     }
     return existing;
   }
@@ -135,11 +147,14 @@ async function runFetcher<T>(
       if (hasCached(key)) {
         return getCached<T>(key) as T;
       }
-      return await swrFetch(key, fetcher, { ttlMs, onRevalidate });
+      return await swrFetch(key, fetcher, { ttlMs, onRevalidate, onError });
     } catch (fetchError) {
       const code = String((fetchError as any)?.code || (fetchError as any)?.message || '');
       if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
         invalidateCache(key);
+      }
+      if (requestGenerations.get(key) === currentGen) {
+        onError?.(fetchError);
       }
       throw fetchError;
     } finally {

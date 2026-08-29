@@ -74,7 +74,11 @@ export interface ScheduleDraft {
 
 export async function loadScheduleDraft(
   cfpId: string,
-  options: { force?: boolean; onRevalidate?: (draft: ScheduleDraft) => void } = {},
+  options: {
+    force?: boolean;
+    onRevalidate?: (draft: ScheduleDraft) => void;
+    onError?: (error: unknown) => void;
+  } = {},
 ): Promise<ScheduleDraft> {
   return swrFetch(
     `scheduleDraft:${cfpId}`,
@@ -91,7 +95,12 @@ export async function loadScheduleDraft(
         })) as ScheduleEntry[],
       };
     },
-    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
   );
 }
 
