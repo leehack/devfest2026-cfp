@@ -36,6 +36,7 @@ import { withKeys } from './ConfirmFormEditor';
 import { Checkbox, TextField } from './fields';
 import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
+import { invalidateCache } from '../lib/cache';
 import { setSubmissionForm } from '../lib/roles';
 import {
   FORM_LIMITS,
@@ -550,6 +551,9 @@ export function SubmissionFormEditor({
       // What was actually stored, not what we sent: the callable trims and drops.
       setForm(data.form);
       setStored(data.form);
+      invalidateCache(`submissionForm:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setNote(t.admin.submissionSaved);
     } catch (e) {
       setError(adminError(e, t));

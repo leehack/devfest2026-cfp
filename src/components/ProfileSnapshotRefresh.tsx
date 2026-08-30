@@ -7,6 +7,7 @@ import type {
 } from '@shared/types';
 
 import { useI18n } from '../i18n/context';
+import { invalidateCache } from '../lib/cache';
 import {
   cancelProposalSpeakerProfileUpdate,
   completeProposalSpeakerProfileUpdate,
@@ -269,6 +270,11 @@ export function ProfileSnapshotRefresh({
         expectedLatestFingerprint: fresh.latestFingerprint,
         ...(speakerUid ? { speakerUid } : {}),
       });
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache(`reviewQueue:${cfpId}`);
+      invalidateCache('myProposals');
       setNotice(data.changed ? t.profileSnapshot.updated : t.profileSnapshot.unchanged);
       setScheduleNotice(data.scheduleNeedsAttention);
       onRefreshed?.(data);
@@ -411,6 +417,10 @@ export function ProfileSnapshotRefresh({
         proposalId,
         requestId: pendingRequest.requestId,
       });
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache('myProposals');
       setPreview((current) => (current ? { ...current, request: data.request } : current));
       onRequestChanged?.(data.request);
       setRequestNotice(

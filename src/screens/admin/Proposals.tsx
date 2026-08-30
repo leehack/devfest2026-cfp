@@ -25,8 +25,10 @@ import {
   localised,
   type Answers,
   type ConfirmField,
+  type ConfirmForm,
 } from '@shared/confirmForm';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
+import { invalidateCache, isAuthError } from '../../lib/cache';
 import {
   DEFAULT_SUBMISSION_FORM,
   labelOf,
@@ -779,9 +781,11 @@ export function Proposals({
   const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
   const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
   const loadGeneration = useRef(0);
+  const loadedScope = useRef<string | null>(null);
   const activeCfp = useRef(cfpId);
   const decisionSequence = useRef(0);
   const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
+  const pendingStatuses = useRef<Map<string, ProposalStatus>>(new Map());
   activeCfp.current = cfpId;
 
   useEffect(() => {
@@ -821,7 +825,7 @@ export function Proposals({
     [cfpId, managedProposalId],
   );
 
-  const refresh = useCallback(async (reset = false) => {
+  const refresh = useCallback(async (reset = false, force = false) => {
     const request = ++loadGeneration.current;
     setCoverageLoading(true);
     setCoverageError('');
@@ -849,13 +853,60 @@ export function Proposals({
       setProfileRequests([]);
       setProfileRequestsFailed(false);
       committedDecisions.current.clear();
+      pendingStatuses.current.clear();
       decisionSequence.current = 0;
     }
+    const mergePendingStatuses = (inputRows: ProposalRow[]) => {
+      if (pendingStatuses.current.size === 0) return inputRows;
+      return inputRows.map((r) => {
+        const pendingStatus = pendingStatuses.current.get(r.id);
+        return pendingStatus ? { ...r, status: pendingStatus } : r;
+      });
+    };
+    let hasFailed = false;
+    let revalidatedRows: ProposalRow[] | null = null;
+    let revalidatedConfirm: ConfirmForm | null = null;
+    let revalidatedSubmission: SubmissionForm | null = null;
     try {
       const [all, form, submission, updateRequests] = await Promise.all([
-        loadAllProposals(cfpId, { speakerDetails: true }),
-        loadConfirmForm(cfpId),
-        loadSubmissionForm(cfpId),
+        loadAllProposals(cfpId, {
+          speakerDetails: true,
+          force,
+          onRevalidate: (updated) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId && !hasFailed) {
+              revalidatedRows = updated;
+              setRows(mergePendingStatuses(updated));
+            }
+          },
+          onError: (loadErr) => {
+            if (isAuthError(loadErr)) {
+              hasFailed = true;
+              if (request === loadGeneration.current && activeCfp.current === cfpId) {
+                setError(adminError(loadErr, t));
+                setRows([]);
+                setLoadFailed(true);
+              }
+            }
+          },
+        }),
+        loadConfirmForm(cfpId, {
+          force,
+          onRevalidate: (updatedConfirm) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId && !hasFailed) {
+              revalidatedConfirm = updatedConfirm;
+              setQuestions(updatedConfirm.fields);
+            }
+          },
+        }),
+        loadSubmissionForm(cfpId, {
+          force,
+          onRevalidate: (updatedSubmission) => {
+            if (request === loadGeneration.current && activeCfp.current === cfpId && !hasFailed) {
+              revalidatedSubmission = updatedSubmission;
+              setShape(updatedSubmission);
+            }
+          },
+        }),
         readOnly
           ? Promise.resolve({ requests: [] as ProfileUpdateRequestSummary[], failed: false })
           : listSpeakerProfileUpdateRequests({ cfpId })
@@ -863,9 +914,13 @@ export function Proposals({
               .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
-      setRows(all);
-      setQuestions(form.fields);
-      setShape(submission);
+      if (hasFailed) {
+        setLoadedFor(cfpId);
+        return;
+      }
+      setRows(mergePendingStatuses(revalidatedRows ?? all));
+      setQuestions((revalidatedConfirm ?? form).fields);
+      setShape(revalidatedSubmission ?? submission);
       setProfileRequests(updateRequests.requests);
       setProfileRequestsFailed(updateRequests.failed);
       setLoadedFor(cfpId);
@@ -905,7 +960,17 @@ export function Proposals({
    * it again would refetch and overwrite whatever is on screen unsaved.
    */
   useEffect(() => {
-    void refresh(true);
+    const isDifferentCfp = loadedScope.current !== cfpId;
+    if (isDifferentCfp) {
+      loadedScope.current = cfpId;
+      setRows([]);
+      setPending(new Set());
+      setUndo(null);
+      setRowErrors(new Map());
+      committedDecisions.current.clear();
+      decisionSequence.current = 0;
+    }
+    void refresh(isDifferentCfp);
     return () => {
       loadGeneration.current += 1;
     };
@@ -951,6 +1016,7 @@ export function Proposals({
 
     setNote('');
     setPending((current) => new Set(current).add(row.id));
+    pendingStatuses.current.set(row.id, next);
     setRowErrors((current) => {
       const updated = new Map(current);
       updated.delete(row.id);
@@ -989,6 +1055,11 @@ export function Proposals({
         const latest = Math.max(...committedDecisions.current.keys());
         setUndo(committedDecisions.current.get(latest) ?? null);
       }
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache('myProposals');
+      invalidateCache(`reviewQueue:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
@@ -1001,6 +1072,7 @@ export function Proposals({
         new Map(current).set(row.id, adminError(e, t)),
       );
     } finally {
+      pendingStatuses.current.delete(row.id);
       if (activeCfp.current === scope) {
         setPending((current) => {
           const updated = new Set(current);
@@ -1017,6 +1089,7 @@ export function Proposals({
     const scope = cfpId;
     setUndo(null);
     setPending((current) => new Set(current).add(snapshot.proposalId));
+    pendingStatuses.current.set(snapshot.proposalId, snapshot.previous);
     setRows((current) =>
       current.map((proposal) =>
         proposal.id === snapshot.proposalId
@@ -1036,6 +1109,11 @@ export function Proposals({
       const remaining = [...committedDecisions.current.keys()];
       const latest = remaining.length > 0 ? Math.max(...remaining) : null;
       setUndo(latest === null ? null : committedDecisions.current.get(latest) ?? null);
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache('myProposals');
+      invalidateCache(`reviewQueue:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setNote(t.admin.decisionUndone(snapshot.title));
       void onEmailQueueChange?.();
     } catch (e) {
@@ -1051,6 +1129,7 @@ export function Proposals({
         new Map(current).set(snapshot.proposalId, adminError(e, t)),
       );
     } finally {
+      pendingStatuses.current.delete(snapshot.proposalId);
       if (activeCfp.current === scope) {
         setPending((current) => {
           const updated = new Set(current);
@@ -1190,14 +1269,14 @@ export function Proposals({
           requests={profileRequests}
           failed={profileRequestsFailed}
           onOpen={openSpeakerManagement}
-          onRetry={() => void refresh()}
+          onRetry={() => void refresh(false, true)}
         />
       )}
       <ReviewCoverage
         coverage={coverage}
         loading={coverageLoading}
         error={coverageError}
-        onRetry={() => void refresh()}
+        onRetry={() => void refresh(false, true)}
       />
 
       <section className="section decision-panel">

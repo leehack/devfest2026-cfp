@@ -3,6 +3,13 @@
 Conventions and hard-won facts for this repo. `SPEC.md` is the product spec;
 `README.md` is for humans arriving at the project.
 
+## Git & Deployment Rules
+
+- **Never merge to `main` or trigger a production deploy without explicit user approval.**
+- Always work on a feature branch (e.g. `perf/...`, `fix/...`, `feature/...`).
+- Push branches and create a Pull Request (`gh pr create`) for the user to review.
+- Merging to `main` deploys directly to production via GitHub Actions CD pipeline.
+
 ## Commands
 
 ```bash

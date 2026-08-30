@@ -23,6 +23,7 @@ import { formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
 import { reviewError } from '../lib/errors';
+import { isAuthError } from '../lib/cache';
 import { loadSubmissionForm } from '../lib/proposals';
 import { reviewerTravelFields } from '../lib/reviewerTravel';
 import { loadCfp, loadReviewQueue, type ReviewerProposalRow } from '../lib/roles';
@@ -41,7 +42,7 @@ import {
   type SubmissionForm,
 } from '@shared/submissionForm';
 import { localised, type Answers } from '@shared/confirmForm';
-import type { Review, SpeakerSnapshot } from '@shared/types';
+import type { Cfp, Review, SpeakerSnapshot } from '@shared/types';
 
 interface SaveFailure {
   id: string;
@@ -82,92 +83,277 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [statusFilter, setStatusFilter] = useState<'unreviewed' | 'all'>('unreviewed');
   const [filterEpoch, setFilterEpoch] = useState(0);
   const loadGeneration = useRef(0);
+  const orderRef = useRef(order);
+  orderRef.current = order;
   const draftsRef = useRef(drafts);
+  const selectedCategoryRef = useRef(selectedCategory);
+  selectedCategoryRef.current = selectedCategory;
+  const statusFilterRef = useRef(statusFilter);
+  statusFilterRef.current = statusFilter;
+  const currentProposalIdRef = useRef<string | null>(null);
+  const queueApplyGenerationsByScope = useRef<Map<string, number>>(new Map());
+  const activeSavesByScope = useRef<Map<string, number>>(new Map());
+  const deferredQueueApply = useRef<Map<string, () => void>>(new Map());
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
 
-  const load = useCallback(async () => {
-    const request = ++loadGeneration.current;
-    setLoading(true);
-    setLoadedFor('');
-    setError('');
-    setSelectedCategory(null);
-    setQueueOpen(false);
-    setIndex(0);
-    setSavingIds(new Set());
-    setSavedId('');
-    setFailures(new Map());
-    try {
-      const [loaded, cfp, form] = await Promise.all([
-        loadReviewQueue(cfpId),
-        loadCfp(cfpId),
-        // The card's chips read their labels off this call's own form — a
-        // category this committee invented has no entry in any dictionary.
-        loadSubmissionForm(cfpId),
-      ]);
-      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-      const reviews = await loadMyReviews(
-        cfpId,
-        user.uid,
-        loaded.proposals.map((p) => p.id),
-      );
-      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-      const visible = cfp?.reviewsVisible === true;
-      const opens = toDate(cfp?.opensAt);
-      const closes = toDate(cfp?.closesAt);
-      const now = Date.now();
-      const open = Boolean(
-        cfp &&
-          cfp.archived !== true &&
-          cfp.paused !== true &&
-          opens &&
-          closes &&
-          opens.getTime() <= now &&
-          now < closes.getTime(),
-      );
-
-      // Decided once, here. Once the round is open, disagreement is the point of
-      // the meeting, so the widest spreads come first; until then, work through
-      // what is unscored. Either way the deck holds still while you use it.
-      const sorted = [...loaded.proposals].sort((a, b) =>
-        visible
-          ? (b.aggregate?.stdDev ?? 0) - (a.aggregate?.stdDev ?? 0)
-          : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
-      );
-
-      const recovered = loadReviewDrafts(cfpId, user.uid);
-      const loadedDrafts = new Map(
-        sorted.map((proposal) => [
-          proposal.id,
-          { ...draftOf(reviews.get(proposal.id)), ...recovered.get(proposal.id) },
-        ]),
-      );
-      draftsRef.current = loadedDrafts;
-      setOrder(sorted);
-      setOwn(loaded.own);
-      setMine(reviews);
-      setDrafts(loadedDrafts);
-      setReviewsVisible(visible);
-      setBlindReview(Boolean(cfp?.features?.blindReview));
-      setIntakeOpen(open);
-      setShape(form);
-      setIndex(0);
+  const load = useCallback(
+    async (force = false) => {
+      const request = ++loadGeneration.current;
+      deferredQueueApply.current.delete(scopeKey);
+      orderRef.current = [];
+      setLoading(true);
+      setLoadedFor('');
+      setError('');
+      setSelectedCategory(null);
+      setQueueOpen(false);
+      setSavingIds(new Set());
+      setSavedId('');
       setFailures(new Map());
-      setStatusFilter(sorted.some((p) => !reviews.has(p.id)) ? 'unreviewed' : 'all');
-      setFilterEpoch((e) => e + 1);
-      setLoadedFor(scopeKey);
-    } catch (e) {
-      if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
-      setOrder([]);
-      setError(reviewError(e, t));
-      setLoadedFor(scopeKey);
-    } finally {
-      if (request === loadGeneration.current && activeScope.current === scopeKey) {
-        setLoading(false);
+
+      let currentQueueResult: { proposals: ReviewerProposalRow[]; own: number } | null = null;
+      let currentCfpResult: Cfp | null = null;
+      let currentFormResult: SubmissionForm | null = null;
+      let accessFailed = false;
+
+      const clearProtectedQueue = (failure: unknown) => {
+        if (
+          !isAuthError(failure) ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
+          return;
+        }
+        accessFailed = true;
+        currentQueueResult = null;
+        deferredQueueApply.current.delete(scopeKey);
+        queueApplyGenerationsByScope.current.set(
+          scopeKey,
+          (queueApplyGenerationsByScope.current.get(scopeKey) ?? 0) + 1,
+        );
+        setError(t.nav.forbidden);
+        setOrder([]);
+        orderRef.current = [];
+        setOwn(0);
+        setMine(new Map());
+        setDrafts(new Map());
+        draftsRef.current = new Map();
+        setLoadedFor(scopeKey);
+      };
+
+      const applyQueue = async (
+        loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
+        cfpDoc: Cfp | null,
+        formDoc: SubmissionForm,
+        isBackgroundRevalidate = false,
+      ) => {
+        const applyGen = (queueApplyGenerationsByScope.current.get(scopeKey) ?? 0) + 1;
+        queueApplyGenerationsByScope.current.set(scopeKey, applyGen);
+        const reviews = await loadMyReviews(
+          cfpId,
+          user.uid,
+          loadedQueue.proposals.map((p) => p.id),
+        );
+        const savesInFlight = activeSavesByScope.current.get(scopeKey) ?? 0;
+        if (
+          accessFailed ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
+          return;
+        }
+        if (isBackgroundRevalidate && savesInFlight > 0) {
+          deferredQueueApply.current.set(scopeKey, () => {
+            applyQueueInBackground(loadedQueue, cfpDoc, formDoc);
+          });
+          return;
+        }
+        if (applyGen !== queueApplyGenerationsByScope.current.get(scopeKey)) {
+          return;
+        }
+        const visible = cfpDoc?.reviewsVisible === true;
+        const opens = toDate(cfpDoc?.opensAt);
+        const closes = toDate(cfpDoc?.closesAt);
+        const now = Date.now();
+        const open = Boolean(
+          cfpDoc &&
+            cfpDoc.archived !== true &&
+            cfpDoc.paused !== true &&
+            opens &&
+            closes &&
+            opens.getTime() <= now &&
+            now < closes.getTime(),
+        );
+
+        // Decided once, here. Once the round is open, disagreement is the point of
+        // the meeting, so the widest spreads come first; until then, work through
+        // what is unscored. Either way the deck holds still while you use it.
+        const sorted = [...loadedQueue.proposals].sort((a, b) =>
+          visible
+            ? (b.aggregate?.stdDev ?? 0) - (a.aggregate?.stdDev ?? 0)
+            : Number(reviews.has(a.id)) - Number(reviews.has(b.id)),
+        );
+
+        const freshMap = new Map(loadedQueue.proposals.map((p) => [p.id, p]));
+        const previousOrder = orderRef.current;
+        let effectiveOrder: ReviewerProposalRow[];
+        if (isBackgroundRevalidate && previousOrder.length > 0) {
+          const retained = previousOrder
+            .map((p) => freshMap.get(p.id))
+            .filter((p): p is ReviewerProposalRow => Boolean(p));
+          const existingIds = new Set(retained.map((p) => p.id));
+          const newlyAdded = sorted.filter((p) => !existingIds.has(p.id));
+          effectiveOrder = [...retained, ...newlyAdded];
+        } else {
+          effectiveOrder = sorted;
+        }
+
+        const recovered = loadReviewDrafts(cfpId, user.uid);
+        const existingDrafts = draftsRef.current;
+        const loadedDrafts = new Map(
+          effectiveOrder.map((proposal) => [
+            proposal.id,
+            {
+              ...draftOf(reviews.get(proposal.id)),
+              ...recovered.get(proposal.id),
+              ...(isBackgroundRevalidate ? existingDrafts.get(proposal.id) : {}),
+            },
+          ]),
+        );
+        draftsRef.current = loadedDrafts;
+
+        const effectiveCategory = isBackgroundRevalidate ? selectedCategoryRef.current : null;
+        const effectiveStatusFilter = isBackgroundRevalidate
+          ? statusFilterRef.current
+          : effectiveOrder.some((p) => !reviews.has(p.id))
+            ? 'unreviewed'
+            : 'all';
+
+        const nextCategoryOrder = effectiveCategory
+          ? effectiveOrder.filter((p) => p.category === effectiveCategory)
+          : effectiveOrder;
+        const nextDeckOrder =
+          effectiveStatusFilter === 'unreviewed'
+            ? nextCategoryOrder.filter((p) => !reviews.has(p.id))
+            : nextCategoryOrder;
+
+        if (!isBackgroundRevalidate) {
+          setIndex(0);
+          setStatusFilter(effectiveStatusFilter);
+          setFilterEpoch((e) => e + 1);
+        } else {
+          const activeProposalId = currentProposalIdRef.current;
+          const matchingIndex = activeProposalId
+            ? nextDeckOrder.findIndex((p) => p.id === activeProposalId)
+            : -1;
+          if (matchingIndex >= 0) {
+            setIndex(matchingIndex);
+          } else if (nextDeckOrder.length > 0) {
+            setIndex((currentIdx) => Math.min(Math.max(0, currentIdx), nextDeckOrder.length - 1));
+          } else {
+            setIndex(0);
+          }
+        }
+
+        setOrder(effectiveOrder);
+        orderRef.current = effectiveOrder;
+        setOwn(loadedQueue.own);
+        setMine(reviews);
+        setDrafts(loadedDrafts);
+        setReviewsVisible(visible);
+        setBlindReview(Boolean(cfpDoc?.features?.blindReview));
+        setIntakeOpen(open);
+        setShape(formDoc);
+        setLoadedFor(scopeKey);
+      };
+
+      const applyQueueInBackground = (
+        loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
+        cfpDoc: Cfp | null,
+        formDoc: SubmissionForm,
+      ) => {
+        void applyQueue(loadedQueue, cfpDoc, formDoc, true).catch(clearProtectedQueue);
+      };
+
+      let initialLoaded = false;
+      let coalesceHandle: ReturnType<typeof setTimeout> | null = null;
+      const revalidated = { cfp: null as { value: Cfp | null } | null };
+      const getEffectiveCfp = () => (revalidated.cfp ? revalidated.cfp.value : currentCfpResult);
+
+      const triggerRevalidationApply = () => {
+        if (!initialLoaded) return;
+        if (coalesceHandle) clearTimeout(coalesceHandle);
+        coalesceHandle = setTimeout(() => {
+          if (
+            request === loadGeneration.current &&
+            activeScope.current === scopeKey &&
+            currentQueueResult &&
+            currentFormResult
+          ) {
+            applyQueueInBackground(currentQueueResult, getEffectiveCfp(), currentFormResult);
+          }
+        }, 50);
+      };
+
+      try {
+        const [loaded, cfp, form] = await Promise.all([
+          loadReviewQueue(cfpId, {
+            force,
+            onRevalidate: (updated) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                currentQueueResult = updated;
+                triggerRevalidationApply();
+              }
+            },
+            onError: clearProtectedQueue,
+          }),
+          loadCfp(cfpId, {
+            force,
+            onRevalidate: (updatedCfp) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                revalidated.cfp = { value: updatedCfp };
+                triggerRevalidationApply();
+              }
+            },
+          }),
+          // The card's chips read their labels off this call's own form — a
+          // category this committee invented has no entry in any dictionary.
+          loadSubmissionForm(cfpId, {
+            force,
+            onRevalidate: (updatedForm) => {
+              if (request === loadGeneration.current && activeScope.current === scopeKey) {
+                currentFormResult = updatedForm;
+                triggerRevalidationApply();
+              }
+            },
+          }),
+        ]);
+        if (
+          accessFailed ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
+          return;
+        }
+        currentQueueResult = currentQueueResult ?? loaded;
+        currentCfpResult = revalidated.cfp ? revalidated.cfp.value : cfp;
+        currentFormResult = currentFormResult ?? form;
+        initialLoaded = true;
+        await applyQueue(currentQueueResult, currentCfpResult, currentFormResult, false);
+      } catch (e) {
+        if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+        setOrder([]);
+        setError(reviewError(e, t));
+        setLoadedFor(scopeKey);
+      } finally {
+        if (request === loadGeneration.current && activeScope.current === scopeKey) {
+          setLoading(false);
+        }
       }
-    }
-  }, [cfpId, scopeKey, t, user.uid]);
+    },
+    [cfpId, scopeKey, t, user.uid],
+  );
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -206,6 +392,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
 
   const isComplete = deckOrder.length === 0 || index >= deckOrder.length;
   const current = !isComplete ? deckOrder[index] : null;
+  currentProposalIdRef.current = current?.id ?? null;
   const displayIndex = current ? index : deckOrder.length;
 
   const handled = categoryOrder.filter((proposal) => mine.has(proposal.id)).length;
@@ -265,6 +452,14 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       // a storage placeholder and is hidden again by `draftOf`.
       const storedScore = draft.score ?? 1;
       setSavingIds((current) => new Set(current).add(id));
+      activeSavesByScope.current.set(
+        scope,
+        (activeSavesByScope.current.get(scope) ?? 0) + 1,
+      );
+      queueApplyGenerationsByScope.current.set(
+        scope,
+        (queueApplyGenerationsByScope.current.get(scope) ?? 0) + 1,
+      );
       try {
         await saveReview(cfpId, id, user.uid, {
           score: storedScore,
@@ -299,6 +494,19 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           }),
         );
       } finally {
+        const remaining = (activeSavesByScope.current.get(scope) ?? 1) - 1;
+        const currentGen = queueApplyGenerationsByScope.current.get(scope) ?? 0;
+        queueApplyGenerationsByScope.current.set(scope, currentGen + 1);
+        if (remaining <= 0) {
+          activeSavesByScope.current.delete(scope);
+          const deferred = deferredQueueApply.current.get(scope);
+          if (deferred) {
+            deferredQueueApply.current.delete(scope);
+            deferred();
+          }
+        } else {
+          activeSavesByScope.current.set(scope, remaining);
+        }
         if (activeScope.current === scope) {
           setSavingIds((current) => {
             const updated = new Set(current);
@@ -425,7 +633,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     return (
       <div className="load-failure" role="alert">
         <p className="field__error">{error}</p>
-        <button type="button" className="btn" onClick={() => void load()}>
+        <button type="button" className="btn" onClick={() => void load(true)}>
           {t.errors.reload}
         </button>
       </div>
@@ -440,7 +648,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         <p className="muted">
           {intakeOpen ? t.review.intakeOpenHelp : t.review.intakeClosedHelp}
         </p>
-        <button type="button" className="btn" onClick={() => void load()}>
+        <button type="button" className="btn" onClick={() => void load(true)}>
           {t.review.refresh}
         </button>
       </section>
@@ -468,7 +676,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           type="button"
           className="btn btn--ghost review-workload__refresh"
           disabled={savingIds.size > 0}
-          onClick={() => void load()}
+          onClick={() => void load(true)}
         >
           {t.review.refresh}
         </button>
@@ -808,7 +1016,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             setSavedId('');
           }}
           onOpenQueue={() => setQueueOpen(true)}
-          onRefresh={() => void load()}
+          onRefresh={() => void load(true)}
           refreshDisabled={savingIds.size > 0}
         />
       )}

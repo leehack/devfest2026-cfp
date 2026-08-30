@@ -186,9 +186,53 @@ export function SchedulePage({
     }
 
     const loadPublic = () =>
-      releaseId ? loadPublishedSchedule(cfpId, releaseId) : Promise.resolve(null);
+      releaseId
+        ? loadPublishedSchedule(cfpId, releaseId, {
+            force: loadAttempt > 0,
+            onRevalidate: (updated) => {
+              if (!cancelled && !previewReleaseId) {
+                setBundle(updated);
+              }
+            },
+          })
+        : Promise.resolve(null);
     const loadPreview = async (): Promise<PublishedScheduleBundle | null> => {
-      const shared: SharedScheduleBundle = await loadSharedSchedule(cfpId);
+      const shared: SharedScheduleBundle = await loadSharedSchedule(cfpId, {
+        releaseId: previewReleaseId,
+        audience: 'committee',
+        force: loadAttempt > 0,
+        onRevalidate: (updatedShared) => {
+          if (!cancelled && previewReleaseId) {
+            if (!updatedShared.schedule) {
+              setBundle(null);
+            } else {
+              setBundle({
+                schedule: {
+                  ...updatedShared.schedule,
+                  publishedAt: updatedShared.schedule.publishedAt ?? updatedShared.schedule.sharedAt,
+                },
+                entries: updatedShared.entries,
+              });
+            }
+          }
+        },
+        onError: async () => {
+          if (!cancelled && previewReleaseId) {
+            try {
+              const fallback = await loadPublic();
+              if (!cancelled) {
+                setBundle(fallback);
+                setPreview(false);
+              }
+            } catch {
+              if (!cancelled) {
+                setBundle(null);
+                setFailed(true);
+              }
+            }
+          }
+        },
+      });
       if (!shared.schedule) return null;
       return {
         schedule: {

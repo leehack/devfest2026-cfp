@@ -42,9 +42,11 @@ import {
   type ScheduleRoom,
   type CustomScheduleSpeaker,
 } from '@shared/schedule';
+import type { Cfp } from '@shared/types';
 import type { ProposalRow } from '../../lib/roles';
 import { loadAllProposals, loadCfp } from '../../lib/roles';
 import { loadSubmissionForm } from '../../lib/proposals';
+import { invalidateCache, isAuthError } from '../../lib/cache';
 import {
   loadPublishedSchedule,
   loadScheduleDraft,
@@ -56,6 +58,7 @@ import {
   unpublishSchedule,
   upsertScheduleEntry,
   type PublishedScheduleBundle,
+  type ScheduleDraft,
   type SharedScheduleBundle,
 } from '../../lib/schedule';
 import { toDate } from '../../lib/dates';
@@ -64,7 +67,6 @@ import { scheduleError } from '../../lib/errors';
 import { track } from '../../lib/analytics';
 import { Result } from './Result';
 import { downloadScheduleCsv } from './scheduleExport';
-import type { Cfp } from '@shared/types';
 
 const SLOT_MINUTES = 15;
 const SLOT_HEIGHT = 24;
@@ -229,6 +231,8 @@ export function Schedule({
   onDisclosureChanged?: (stage: 'shared' | 'published' | 'offline') => void | Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   const [config, setConfig] = useState<ScheduleConfig | null>(null);
   const [workingConfig, setWorkingConfig] = useState<ScheduleConfig | null>(null);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
@@ -252,38 +256,222 @@ export function Schedule({
   const [reviewingPublish, setReviewingPublish] = useState(false);
   const [reviewingOffline, setReviewingOffline] = useState(false);
   const generation = useRef(0);
+  const mutationEpoch = useRef(0);
+  const scheduleApplyGeneration = useRef(0);
   const setupRef = useRef<HTMLDetailsElement>(null);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const draggingRef = useRef(dragging);
+  draggingRef.current = dragging;
+  const workingConfigRef = useRef(workingConfig);
+  workingConfigRef.current = workingConfig;
+  const configRef = useRef(config);
+  configRef.current = config;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
+    const epochAtStart = mutationEpoch.current;
+    let hasFailed = false;
     setError('');
-    try {
-      const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
-        loadCfp(cfpId),
-        loadScheduleDraft(cfpId),
-        loadAllProposals(cfpId),
-        loadSharedSchedule(cfpId),
-        loadSubmissionForm(cfpId),
-      ]);
-      if (request !== generation.current) return;
+    const applySchedule = async (
+      nextCfp: Cfp | null,
+      draft: ScheduleDraft,
+      proposalRows: ProposalRow[],
+      nextShared: SharedScheduleBundle,
+      nextSubmissionForm: SubmissionForm,
+      isBackgroundRevalidate = false,
+    ) => {
+      const applyGen = ++scheduleApplyGeneration.current;
       const nextPublic = nextCfp?.publishedScheduleId
-        ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId)
+        ? await loadPublishedSchedule(cfpId, nextCfp.publishedScheduleId, { force })
         : null;
-      if (request !== generation.current) return;
+      if (
+        scheduleApplyGeneration.current !== applyGen ||
+        hasFailed ||
+        request !== generation.current ||
+        epochAtStart !== mutationEpoch.current
+      ) {
+        return;
+      }
       const next = draft.config ?? initialConfig(nextCfp);
       setCfp(nextCfp);
       setSharedPreview(nextShared);
       setPublicProgramme(nextPublic);
-      setConfig(draft.config);
-      setSetupOpen((current) => current || !draft.config);
-      setWorkingConfig(next);
-      setEntries(draft.entries);
       setSubmissionForm(nextSubmissionForm);
       setProposals(proposalRows);
-      setSelectedDay((current) =>
-        next.days.some((day) => day.date === current) ? current : next.days[0]?.date ?? '',
+
+      const baselineConfig = configRef.current ?? initialConfig(nextCfp);
+      const isSetupDirty = Boolean(
+        baselineConfig &&
+          workingConfigRef.current &&
+          JSON.stringify({
+            timeZone: baselineConfig.timeZone,
+            days: baselineConfig.days,
+            rooms: baselineConfig.rooms,
+          }) !==
+            JSON.stringify({
+              timeZone: workingConfigRef.current.timeZone,
+              days: workingConfigRef.current.days,
+              rooms: workingConfigRef.current.rooms,
+            }),
       );
+
+      const isEditingOrDragging = editingRef.current !== null || draggingRef.current !== null;
+      if (!isBackgroundRevalidate || (!isSetupDirty && !isEditingOrDragging)) {
+        setConfig(draft.config);
+        setSetupOpen((current) => current || !draft.config);
+        setWorkingConfig(next);
+        setEntries(draft.entries);
+        setSelectedDay((current) =>
+          next.days.some((day: { date: string }) => day.date === current) ? current : next.days[0]?.date ?? '',
+        );
+      }
+
       setLoaded(true);
+    };
+
+    const applyScheduleInBackground = (...args: Parameters<typeof applySchedule>) => {
+      // Background SWR failures leave the last complete schedule on screen. The
+      // protected loaders report authorization failures through their onError handlers.
+      void applySchedule(...args).catch(() => {});
+    };
+
+    const failProtectedLoad = (failure: unknown) => {
+      if (!isAuthError(failure)) return;
+      hasFailed = true;
+      if (request !== generation.current) return;
+      setError(scheduleError(failure, tRef.current));
+      setConfig(null);
+      setWorkingConfig(null);
+      setEntries([]);
+      setProposals([]);
+      setSubmissionForm(null);
+      setSharedPreview(null);
+      setEditing(null);
+      setDragging(null);
+      setLoaded(true);
+    };
+
+    try {
+      let currentDraftResult: ScheduleDraft | null = null;
+      let currentProposalsResult: ProposalRow[] | null = null;
+      const revalidated = { cfp: null as { value: Cfp | null } | null };
+      let initialCfpResult: Cfp | null = null;
+      let currentSharedResult: SharedScheduleBundle | null = null;
+      let currentFormResult: SubmissionForm | null = null;
+
+      const getEffectiveCfp = () => (revalidated.cfp ? revalidated.cfp.value : initialCfpResult);
+
+      const [nextCfp, draft, proposalRows, nextShared, nextSubmissionForm] = await Promise.all([
+        loadCfp(cfpId, {
+          force,
+          onRevalidate: (updatedCfp) => {
+            if (request === generation.current && !hasFailed) {
+              revalidated.cfp = { value: updatedCfp };
+              if (currentDraftResult && currentProposalsResult && currentSharedResult && currentFormResult) {
+                applyScheduleInBackground(
+                  updatedCfp,
+                  currentDraftResult,
+                  currentProposalsResult,
+                  currentSharedResult,
+                  currentFormResult,
+                  true,
+                );
+              }
+            }
+          },
+        }),
+        loadScheduleDraft(cfpId, {
+          force,
+          onRevalidate: (updatedDraft) => {
+            if (request === generation.current && !hasFailed) {
+              currentDraftResult = updatedDraft;
+              if (currentProposalsResult && currentSharedResult && currentFormResult) {
+                applyScheduleInBackground(
+                  getEffectiveCfp(),
+                  updatedDraft,
+                  currentProposalsResult,
+                  currentSharedResult,
+                  currentFormResult,
+                  true,
+                );
+              }
+            }
+          },
+          onError: failProtectedLoad,
+        }),
+        loadAllProposals(cfpId, {
+          force,
+          onRevalidate: (updatedProposals) => {
+            if (request === generation.current && !hasFailed) {
+              currentProposalsResult = updatedProposals;
+              if (currentDraftResult && currentSharedResult && currentFormResult) {
+                applyScheduleInBackground(
+                  getEffectiveCfp(),
+                  currentDraftResult,
+                  updatedProposals,
+                  currentSharedResult,
+                  currentFormResult,
+                  true,
+                );
+              }
+            }
+          },
+          onError: failProtectedLoad,
+        }),
+        loadSharedSchedule(cfpId, {
+          force,
+          audience: 'committee',
+          onRevalidate: (updatedShared) => {
+            if (request === generation.current && !hasFailed) {
+              currentSharedResult = updatedShared;
+              if (currentDraftResult && currentProposalsResult && currentFormResult) {
+                applyScheduleInBackground(
+                  getEffectiveCfp(),
+                  currentDraftResult,
+                  currentProposalsResult,
+                  updatedShared,
+                  currentFormResult,
+                  true,
+                );
+              }
+            }
+          },
+          onError: failProtectedLoad,
+        }),
+        loadSubmissionForm(cfpId, {
+          force,
+          onRevalidate: (updatedForm) => {
+            if (request === generation.current && !hasFailed) {
+              currentFormResult = updatedForm;
+              if (currentDraftResult && currentProposalsResult && currentSharedResult) {
+                applyScheduleInBackground(
+                  getEffectiveCfp(),
+                  currentDraftResult,
+                  currentProposalsResult,
+                  currentSharedResult,
+                  updatedForm,
+                  true,
+                );
+              }
+            }
+          },
+        }),
+      ]);
+      if (request !== generation.current || hasFailed) return;
+      initialCfpResult = nextCfp;
+      currentDraftResult = currentDraftResult ?? draft;
+      currentProposalsResult = currentProposalsResult ?? proposalRows;
+      currentSharedResult = currentSharedResult ?? nextShared;
+      currentFormResult = currentFormResult ?? nextSubmissionForm;
+      await applySchedule(
+        getEffectiveCfp(),
+        currentDraftResult,
+        currentProposalsResult,
+        currentSharedResult,
+        currentFormResult,
+        false,
+      );
     } catch (caught) {
       if (request === generation.current) {
         setError(scheduleError(caught, t));
@@ -366,9 +554,14 @@ export function Schedule({
   );
   const shareConflicts = scheduleConflicts(shareableEntries, speakerMap);
   const roomIdsInUse = useMemo(() => scheduleRoomIdsInUse(entries), [entries]);
+  const baselineConfig = config ?? (cfp ? initialConfig(cfp) : null);
   const setupDirty = Boolean(
-    config &&
-      JSON.stringify({ timeZone: config.timeZone, days: config.days, rooms: config.rooms }) !==
+    baselineConfig &&
+      JSON.stringify({
+        timeZone: baselineConfig.timeZone,
+        days: baselineConfig.days,
+        rooms: baselineConfig.rooms,
+      }) !==
         JSON.stringify({
           timeZone: workingConfig?.timeZone,
           days: workingConfig?.days,
@@ -421,6 +614,7 @@ export function Schedule({
 
   async function saveConfig() {
     if (!workingConfig || archived) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -436,6 +630,8 @@ export function Schedule({
       setSelectedDay((current) =>
         saved.days.some((day) => day.date === current) ? current : (saved.days[0]?.date ?? ''),
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
       setNote(t.schedule.setupSaved);
     } catch (caught) {
       setError(scheduleError(caught, t));
@@ -446,6 +642,7 @@ export function Schedule({
 
   async function saveEntry(entry: ScheduleEntry): Promise<boolean> {
     if (!config || archived) return false;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -460,6 +657,7 @@ export function Schedule({
       setWorkingConfig((current) =>
         current ? { ...current, revision: data.revision, needsAttention: true } : current,
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
       setEditing(null);
       return true;
     } catch (caught) {
@@ -472,6 +670,7 @@ export function Schedule({
 
   async function removeEntry(entry: ScheduleEntry) {
     if (!config || archived || !window.confirm(t.schedule.removeConfirm)) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     try {
@@ -485,6 +684,7 @@ export function Schedule({
       setWorkingConfig((current) =>
         current ? { ...current, revision: data.revision, needsAttention: true } : current,
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
       setEditing(null);
     } catch (caught) {
       setError(scheduleError(caught, t));
@@ -495,6 +695,7 @@ export function Schedule({
 
   async function publish() {
     if (!config || !canPublish) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -510,9 +711,14 @@ export function Schedule({
           ? { ...current, revision: data.revision, needsAttention: false }
           : current,
       );
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`publishedSchedule:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`cfpWindow:${cfpId}`);
       setNote(`${t.schedule.published} ${t.schedule.publishedVersion(data.version)}`);
       setReviewingPublish(false);
-      await refresh();
+      await refresh(true);
       await onDisclosureChanged?.('published');
       track('schedule_published', { cfp_id: cfpId, version: data.version });
     } catch (caught) {
@@ -524,6 +730,7 @@ export function Schedule({
 
   async function sharePreview() {
     if (!config || !canShare) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
@@ -532,11 +739,15 @@ export function Schedule({
         cfpId,
         expectedRevision: config.revision,
       });
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`cfpWindow:${cfpId}`);
       setNote(
         `${t.schedule.shared} ${t.schedule.sharedVersion(data.version)} ${t.schedule.sharedSummary(data.sharedCount, data.omittedCount)} ${t.schedule.sharedChannels(data.committeeNotificationCount, data.speakerNotificationCount)}`,
       );
       setReviewingShare(false);
-      await refresh();
+      await refresh(true);
       await onDisclosureChanged?.('shared');
       track('schedule_shared', { cfp_id: cfpId, version: data.version });
     } catch (caught) {
@@ -548,14 +759,20 @@ export function Schedule({
 
   async function takeOffline() {
     if (archived || !cfp?.publishedScheduleId) return;
+    mutationEpoch.current += 1;
     setBusy(true);
     setError('');
     setNote('');
     try {
       await unpublishSchedule({ cfpId });
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
+      invalidateCache(`publishedSchedule:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`cfpWindow:${cfpId}`);
       setReviewingOffline(false);
       setNote(t.schedule.unpublishedSuccess);
-      await refresh();
+      await refresh(true);
       await onDisclosureChanged?.('offline');
       track('schedule_unpublished', { cfp_id: cfpId });
     } catch (caught) {
@@ -1216,7 +1433,7 @@ export function Schedule({
       )}
 
       {!editing && !reviewingShare && !reviewingPublish && !reviewingOffline && error === t.schedule.stale && (
-        <button type="button" className="btn" onClick={() => void refresh()}>
+        <button type="button" className="btn" onClick={() => void refresh(true)}>
           {t.schedule.reload}
         </button>
       )}
@@ -1236,7 +1453,7 @@ export function Schedule({
           onRemove={() => void removeEntry(editing)}
           onReload={() => {
             setEditing(null);
-            void refresh();
+            void refresh(true);
           }}
         />
       )}

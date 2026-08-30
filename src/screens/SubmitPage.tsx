@@ -55,6 +55,7 @@ import {
   toSubmission,
   type FormState,
 } from '../lib/formState';
+import { invalidateCache } from '../lib/cache';
 import {
   loadConfirmForm,
   loadSubmissionForm,
@@ -878,18 +879,110 @@ function ProposalFormPage({
       try {
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
-        // already loads two documents.
-        const [{ talks: found, speaker: profile }, questions, asked, publishedResult, sharedResult, requestResult] = await Promise.all([
-          loadMyProposals(cfpId, user),
-          loadConfirmForm(cfpId),
-          loadSubmissionForm(cfpId),
+        let revalidatedFound: LoadedProposal[] | null = null;
+        const revalidatedProfile = {
+          current: null as { value: Record<string, any> | undefined } | null,
+        };
+        let revalidatedConfirmForm: ConfirmForm | null = null;
+        let revalidatedSubmissionForm: SubmissionForm | null = null;
+        let revalidatedPublished: { value: PublishedScheduleBundle | null; failed: boolean } | null = null;
+        let revalidatedShared: { value: SharedScheduleBundle | null; failed: boolean } | null = null;
+        const [
+          { talks: found, speaker: profile },
+          questions,
+          asked,
+          publishedResult,
+          sharedResult,
+          requestResult,
+        ] = await Promise.all([
+          loadMyProposals(cfpId, user, {
+            force: loadAttempt > 0,
+            onRevalidate: ({ talks: updatedTalks, speaker: updatedProfile }) => {
+              if (cancelled) return;
+              revalidatedFound = updatedTalks;
+              revalidatedProfile.current = { value: updatedProfile };
+              setTalks(updatedTalks);
+              talksRef.current = updatedTalks;
+              setSpeaker(updatedProfile);
+              speakerRef.current = updatedProfile;
+              const activeId = proposalIdRef.current;
+              const matching = activeId ? updatedTalks.find((t) => t.id === activeId) : undefined;
+              if (matching) {
+                setStatus(matching.status);
+                statusRef.current = matching.status;
+                if (!sessionPhotoGenerations.current.has(matching.id)) {
+                  sessionPhotoGenerations.current.set(
+                    matching.id,
+                    matching.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
+                  );
+                }
+                setSessionPhotoGeneration(sessionPhotoGenerations.current.get(matching.id) ?? null);
+              }
+              if (!dirty.current && !answerDirty.current) {
+                if (activeId) {
+                  if (matching) {
+                    showTalk(matching, true);
+                  } else {
+                    showTalk(updatedTalks[0]);
+                  }
+                } else {
+                  setForm((previous) => ({
+                    ...previous,
+                    ...fromDocuments(undefined, updatedProfile),
+                    email: user.email ?? previous.email,
+                  }));
+                }
+              }
+            },
+          }),
+          loadConfirmForm(cfpId, {
+            force: loadAttempt > 0,
+            onRevalidate: (q) => {
+              revalidatedConfirmForm = q;
+              if (!cancelled) setConfirmForm(q);
+            },
+          }),
+          loadSubmissionForm(cfpId, {
+            force: loadAttempt > 0,
+            onRevalidate: (s) => {
+              revalidatedSubmissionForm = s;
+              if (!cancelled) setShape(s);
+            },
+          }),
           cfp.publishedScheduleId
-            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId)
+            ? loadPublishedSchedule(cfpId, cfp.publishedScheduleId, {
+                force: loadAttempt > 0,
+                onRevalidate: (s) => {
+                  revalidatedPublished = { value: s, failed: false };
+                  if (!cancelled) {
+                    setPublishedSchedule(s);
+                    setPublishedScheduleFailed(false);
+                  }
+                },
+              })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
           cfp.sharedScheduleId && cfp.sharedScheduleId !== cfp.publishedScheduleId
-            ? loadSharedSchedule(cfpId)
+            ? loadSharedSchedule(cfpId, {
+                force: loadAttempt > 0,
+                releaseId: cfp.sharedScheduleId,
+                audience: 'speaker',
+                onRevalidate: (s) => {
+                  revalidatedShared = { value: s, failed: false };
+                  if (!cancelled) {
+                    setSharedSchedule(s);
+                    setSharedScheduleFailed(false);
+                  }
+                },
+                onError: () => {
+                  revalidatedShared = { value: null, failed: true };
+                  if (!cancelled) {
+                    setSharedSchedule(null);
+                    setSharedScheduleFailed(true);
+                  }
+                },
+              })
                 .then((value) => ({ value, failed: false }))
                 .catch(() => ({ value: null, failed: true }))
             : Promise.resolve({ value: null, failed: false }),
@@ -898,32 +991,40 @@ function ProposalFormPage({
             .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
         ]);
         if (cancelled) return;
-        setTalks(found);
-        talksRef.current = found;
-        setSpeaker(profile);
-        speakerRef.current = profile;
+        const effectiveFound = revalidatedFound ?? found;
+        const effectiveProfile = revalidatedProfile.current
+          ? revalidatedProfile.current.value
+          : profile;
+        const effectiveConfirmForm = revalidatedConfirmForm ?? questions;
+        const effectiveSubmissionForm = revalidatedSubmissionForm ?? asked;
+        const effectivePublished = revalidatedPublished ?? publishedResult;
+        const effectiveShared = revalidatedShared ?? sharedResult;
+        setTalks(effectiveFound);
+        talksRef.current = effectiveFound;
+        setSpeaker(effectiveProfile);
+        speakerRef.current = effectiveProfile;
         currentProfilePhotoGeneration.current =
-          typeof profile?.profilePhoto?.generation === 'string'
-            ? profile.profilePhoto.generation
+          typeof effectiveProfile?.profilePhoto?.generation === 'string'
+            ? effectiveProfile.profilePhoto.generation
             : null;
         sessionPhotoGenerations.current = new Map(
-          found.map((talk) => [
+          effectiveFound.map((talk) => [
             talk.id,
             talk.ownConfirmation?.speakerPhoto?.sourceGeneration ?? null,
           ]),
         );
-        setConfirmForm(questions);
-        setShape(asked);
-        setPublishedSchedule(publishedResult.value);
-        setPublishedScheduleFailed(publishedResult.failed);
-        setSharedSchedule(sharedResult.value);
-        setSharedScheduleFailed(sharedResult.failed);
+        setConfirmForm(effectiveConfirmForm);
+        setShape(effectiveSubmissionForm);
+        setPublishedSchedule(effectivePublished.value);
+        setPublishedScheduleFailed(effectivePublished.failed);
+        setSharedSchedule(effectiveShared.value);
+        setSharedScheduleFailed(effectiveShared.failed);
         setProfileRequests(requestResult.requests);
         setProfileRequestsFailed(requestResult.failed);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
-        const currentTalks = found.filter((talk) => !isPastTalk(talk));
+        const currentTalks = effectiveFound.filter((talk) => !isPastTalk(talk));
         const requestedProposalId = preferredProposalId ?? proposalSelectionQuery(window.location.search);
         const preferred = requestedProposalId
           ? currentTalks.find((talk) => talk.id === requestedProposalId)
@@ -931,38 +1032,40 @@ function ProposalFormPage({
         const open =
           preferred ??
           (cfp.state === 'open'
-            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? found[0])
+            ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? effectiveFound[0])
             : (currentTalks.find((talk) => talk.status === 'accepted') ??
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
               currentTalks[0] ??
-              found[0]));
-        if (open) {
-          const next = fromDocuments(proposalForCurrentSpeaker(open), profile);
-          setForm(next);
-          setSpeakerEditing(!speakerProfileComplete(next));
-          setProposalId(open.id);
-          proposalIdRef.current = open.id;
-          setStatus(open.status);
-          setSessionPhotoGeneration(sessionPhotoGenerations.current.get(open.id) ?? null);
-          const loadedAnswers = confirmationAnswersFrom(open);
-          setAnswers(loadedAnswers);
-          savedAnswersRef.current = loadedAnswers;
-          answerDirty.current = false;
-        } else {
-          // No talk here yet — but `speakers/{uid}` is global, so anyone who has
-          // submitted to another call or filled in `/me` has already written all
-          // of this. Starting them from blank was asking for it twice.
-          const next = {
-            ...fromDocuments(undefined, profile),
-            name: profile?.name || user.displayName || '',
-            email: user.email ?? '',
-          };
-          setForm(next);
-          setSpeakerEditing(!speakerProfileComplete(next));
-          setSessionPhotoGeneration(null);
-          setAnswers({});
-          savedAnswersRef.current = {};
-          answerDirty.current = false;
+              effectiveFound[0]));
+        if (!dirty.current && !answerDirty.current) {
+          if (open) {
+            const next = fromDocuments(proposalForCurrentSpeaker(open), effectiveProfile);
+            setForm(next);
+            setSpeakerEditing(!speakerProfileComplete(next));
+            setProposalId(open.id);
+            proposalIdRef.current = open.id;
+            setStatus(open.status);
+            setSessionPhotoGeneration(sessionPhotoGenerations.current.get(open.id) ?? null);
+            const loadedAnswers = confirmationAnswersFrom(open);
+            setAnswers(loadedAnswers);
+            savedAnswersRef.current = loadedAnswers;
+            answerDirty.current = false;
+          } else {
+            // No talk here yet — but `speakers/{uid}` is global, so anyone who has
+            // submitted to another call or filled in `/me` has already written all
+            // of this. Starting them from blank was asking for it twice.
+            const next = {
+              ...fromDocuments(undefined, effectiveProfile),
+              name: effectiveProfile?.name || user.displayName || '',
+              email: user.email ?? '',
+            };
+            setForm(next);
+            setSpeakerEditing(!speakerProfileComplete(next));
+            setSessionPhotoGeneration(null);
+            setAnswers({});
+            savedAnswersRef.current = {};
+            answerDirty.current = false;
+          }
         }
       } catch (error) {
         if (!cancelled) setLoadError(friendlyError(error, tRef.current));
@@ -1088,6 +1191,10 @@ function ProposalFormPage({
             response: 'confirm',
             answers: snapshot,
           });
+          invalidateCache('myProposals');
+          invalidateCache(`allProposals:${cfpId}`);
+          invalidateCache(`scheduleDraft:${cfpId}`);
+          invalidateCache(`sharedSchedule:${cfpId}`);
           if (answerRevision.current === savedRevision) {
             answerDirty.current = false;
             savedAnswersRef.current = snapshot;
@@ -1541,9 +1648,11 @@ function ProposalFormPage({
 
   // -------------------------------------------------------------- switching
 
-  function showTalk(talk?: LoadedProposal) {
+  function showTalk(talk?: LoadedProposal, preserveRoster = false) {
     revision.current += 1;
-    setSpeakerRoster(undefined);
+    if (!preserveRoster || talk?.id !== proposalIdRef.current) {
+      setSpeakerRoster(undefined);
+    }
     if (talk) {
       setForm(fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current));
       setProposalId(talk.id);
@@ -1667,6 +1776,8 @@ function ProposalFormPage({
         setSaveState('saved');
       }
       await submitProposal({ cfpId, proposalId: id });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
       // Codes only — never the title, the abstract or anything about the
       // person. This answers "which tracks are people proposing to", which is
       // the one thing page views cannot tell an organiser.
@@ -1691,6 +1802,8 @@ function ProposalFormPage({
     setSubmitting(true);
     try {
       await withdrawProposal({ cfpId, proposalId });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
       setStatus('withdrawn');
       markTalk(proposalId, 'withdrawn');
     } catch (error: any) {
@@ -1726,6 +1839,8 @@ function ProposalFormPage({
       revision.current += 1;
       await activeSave.current?.catch(() => undefined);
       await deleteDraftProposal({ cfpId, proposalId: target });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
 
       const remaining = talksRef.current.filter((talk) => talk.id !== target);
       talksRef.current = remaining;
@@ -1772,6 +1887,10 @@ function ProposalFormPage({
         response,
         ...(response === 'confirm' ? { answers: responseAnswers } : {}),
       });
+      invalidateCache('myProposals');
+      invalidateCache(`allProposals:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setStatus(data.status);
       statusRef.current = data.status;
       markTalk(proposalId, data.status);

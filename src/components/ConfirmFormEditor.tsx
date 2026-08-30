@@ -15,6 +15,7 @@ import { FieldRows, normaliseOptionLines } from './FieldRows';
 import { Checkbox } from './fields';
 import { useI18n } from '../i18n/context';
 import { adminError } from '../lib/errors';
+import { invalidateCache } from '../lib/cache';
 import { setConfirmForm } from '../lib/roles';
 import {
   keyFromLabel,
@@ -106,6 +107,9 @@ export function ConfirmFormEditor({
       };
       setForm(savedForm);
       setStored(savedForm);
+      invalidateCache(`confirmForm:${cfpId}`);
+      invalidateCache(`scheduleDraft:${cfpId}`);
+      invalidateCache(`sharedSchedule:${cfpId}`);
       setNote(t.admin.formSaved);
     } catch (e) {
       setError(adminError(e, t));

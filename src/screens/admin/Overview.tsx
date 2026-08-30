@@ -3,15 +3,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from '../../components/Link';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
+import { useLatest } from '../../lib/useLatest';
 import {
   isLateIntakeWindow,
   overviewEmailReady,
   publishedProgrammeLifecycleStep,
 } from '../../lib/adminLifecycle';
 import { toDate } from '../../lib/dates';
+import { isAuthError } from '../../lib/cache';
 import { adminError } from '../../lib/errors';
 import { loadConfirmForm, loadSubmissionForm } from '../../lib/proposals';
-import { loadScheduleDraft, loadSharedSchedule } from '../../lib/schedule';
+import {
+  loadScheduleDraft,
+  loadSharedSchedule,
+  type SharedScheduleBundle,
+} from '../../lib/schedule';
 import {
   emailQueue,
   loadAllProposals,
@@ -24,6 +30,7 @@ import { paths } from '../../lib/paths';
 import { cfpState, type CfpState } from '@shared/cfpWindow';
 import type { ConfirmForm } from '@shared/confirmForm';
 import type { EmailDeliveryProblem, EmailDeliveryReadiness } from '@shared/emailSettings';
+import type { ScheduleConfig, ScheduleEntry } from '@shared/schedule';
 import type { SubmissionForm } from '@shared/submissionForm';
 import type { Cfp } from '@shared/types';
 import { inStatusSet } from '@shared/enums';
@@ -123,6 +130,7 @@ function lifecycleHref(cfpId: string, step: number, firstSetupTab: SetupTab): st
 
 export function Overview({ cfpId }: { cfpId: string }) {
   const { t, locale } = useI18n();
+  const tRef = useLatest(t);
   const [data, setData] = useState<OverviewData | null>(null);
   const [loadedFor, setLoadedFor] = useState('');
   const [error, setError] = useState('');
@@ -135,13 +143,103 @@ export function Overview({ cfpId }: { cfpId: string }) {
       setData(null);
     }
     setError('');
+    const revalidated = {
+      cfp: null as { value: Cfp | null } | null,
+      proposals: null as ProposalRow[] | null,
+      committee: null as Awaited<ReturnType<typeof loadCommittee>> | null,
+      submission: null as SubmissionForm | null,
+      confirmation: null as ConfirmForm | null,
+    };
+    let latestDraft: { config: ScheduleConfig | null; entries: ScheduleEntry[] } | null = null;
+    let latestShared: SharedScheduleBundle | null = null;
+
+    const computeScheduleOverview = (
+      draft: { config: ScheduleConfig | null; entries: ScheduleEntry[] },
+      shared: SharedScheduleBundle,
+    ) => ({
+      configured: draft.config !== null,
+      draftProposalIds: draft.entries.flatMap((entry: ScheduleEntry) =>
+        entry.kind === 'proposal' ? [entry.proposalId] : [],
+      ),
+      sharedReleaseId: shared.schedule?.id ?? '',
+      stale: Boolean(draft.config?.needsAttention || shared.stale),
+      checkFailed: false,
+    });
+
+    const applyScheduleRevalidation = () => {
+      if (requestGeneration.current === request && latestDraft && latestShared) {
+        const nextSchedule = computeScheduleOverview(latestDraft, latestShared);
+        setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, schedule: nextSchedule } : prev));
+      }
+    };
+
     try {
+      let hasFailed = false;
       const [cfp, proposals, committee, submission, confirmation, email, schedule] = await Promise.all([
-        loadCfp(cfpId),
-        loadAllProposals(cfpId),
-        loadCommittee(cfpId),
-        loadSubmissionForm(cfpId),
-        loadConfirmForm(cfpId),
+        loadCfp(cfpId, {
+          onRevalidate: (updatedCfp) => {
+            revalidated.cfp = { value: updatedCfp };
+            if (requestGeneration.current === request && !hasFailed) {
+              if (!updatedCfp) {
+                setError(tRef.current.errors.notFound);
+                setData(null);
+                setLoadedFor(cfpId);
+              } else {
+                setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, cfp: updatedCfp } : prev));
+              }
+            }
+          },
+        }),
+        loadAllProposals(cfpId, {
+          onRevalidate: (updated) => {
+            if (requestGeneration.current === request && !hasFailed) {
+              revalidated.proposals = updated;
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, proposals: updated } : prev));
+            }
+          },
+          onError: (err) => {
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (requestGeneration.current === request) {
+                setError(adminError(err, tRef.current));
+                setData(null);
+              }
+            }
+          },
+        }),
+        loadCommittee(cfpId, {
+          onRevalidate: (updatedCommittee) => {
+            revalidated.committee = updatedCommittee;
+            if (requestGeneration.current === request && !hasFailed) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, committee: updatedCommittee } : prev));
+            }
+          },
+          onError: (err) => {
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (requestGeneration.current === request) {
+                setError(adminError(err, tRef.current));
+                setData(null);
+              }
+            }
+          },
+        }),
+        loadSubmissionForm(cfpId, {
+          onRevalidate: (updatedForm) => {
+            revalidated.submission = updatedForm;
+            if (requestGeneration.current === request && !hasFailed) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, submission: updatedForm } : prev));
+            }
+          },
+        }),
+        loadConfirmForm(cfpId, {
+          onRevalidate: (updatedForm) => {
+            revalidated.confirmation = updatedForm;
+            if (requestGeneration.current === request && !hasFailed) {
+              setData((prev) => (prev && prev.cfpId === cfpId ? { ...prev, confirmation: updatedForm } : prev));
+            }
+          },
+        }),
         Promise.all([
           emailQueue({ cfpId, action: 'readiness' }),
           emailQueue({ cfpId, action: 'summary' }),
@@ -160,16 +258,59 @@ export function Overview({ cfpId }: { cfpId: string }) {
             needsAttention: 0,
             checkFailed: true,
           })),
-        Promise.all([loadScheduleDraft(cfpId), loadSharedSchedule(cfpId)])
-          .then(([draft, shared]) => ({
-            configured: draft.config !== null,
-            draftProposalIds: draft.entries.flatMap((entry) =>
-              entry.kind === 'proposal' ? [entry.proposalId] : [],
-            ),
-            sharedReleaseId: shared.schedule?.id ?? '',
-            stale: Boolean(draft.config?.needsAttention || shared.stale),
-            checkFailed: false,
-          }))
+        Promise.all([
+          loadScheduleDraft(cfpId, {
+            onRevalidate: (draft) => {
+              latestDraft = draft;
+              if (!hasFailed) applyScheduleRevalidation();
+            },
+            onError: (err) => {
+              if (isAuthError(err)) {
+                hasFailed = true;
+                if (requestGeneration.current === request) {
+                  setError(adminError(err, tRef.current));
+                  setData(null);
+                }
+              } else if (requestGeneration.current === request) {
+                setData((prev) =>
+                  prev && prev.cfpId === cfpId
+                    ? {
+                        ...prev,
+                        schedule: {
+                          configured: false,
+                          draftProposalIds: [],
+                          sharedReleaseId: '',
+                          stale: false,
+                          checkFailed: true,
+                        },
+                      }
+                    : prev,
+                );
+              }
+            },
+          }),
+          loadSharedSchedule(cfpId, {
+            audience: 'committee',
+            onRevalidate: (shared) => {
+              latestShared = shared;
+              if (!hasFailed) applyScheduleRevalidation();
+            },
+            onError: (err) => {
+              if (isAuthError(err)) {
+                hasFailed = true;
+                if (requestGeneration.current === request) {
+                  setError(adminError(err, tRef.current));
+                  setData(null);
+                }
+              }
+            },
+          }),
+        ])
+          .then(([draft, shared]) => {
+            latestDraft = latestDraft ?? draft;
+            latestShared = latestShared ?? shared;
+            return computeScheduleOverview(latestDraft, latestShared);
+          })
           .catch(() => ({
             configured: false,
             draftProposalIds: [],
@@ -179,22 +320,39 @@ export function Overview({ cfpId }: { cfpId: string }) {
           })),
       ]);
       if (request !== requestGeneration.current) return;
-      if (!cfp) {
-        setError(t.errors.notFound);
+      if (hasFailed) {
         setLoadedFor(cfpId);
         return;
       }
-      setData({ cfpId, cfp, proposals, committee, submission, confirmation, email, schedule });
+      const effectiveCfp = revalidated.cfp ? revalidated.cfp.value : cfp;
+      if (!effectiveCfp) {
+        setError(tRef.current.errors.notFound);
+        setLoadedFor(cfpId);
+        return;
+      }
+      setData({
+        cfpId,
+        cfp: effectiveCfp,
+        proposals: revalidated.proposals ?? proposals,
+        committee: revalidated.committee ?? committee,
+        submission: revalidated.submission ?? submission,
+        confirmation: revalidated.confirmation ?? confirmation,
+        email,
+        schedule:
+          latestDraft && latestShared
+            ? computeScheduleOverview(latestDraft, latestShared)
+            : schedule,
+      });
       setLoadedFor(cfpId);
     } catch (e) {
       if (request !== requestGeneration.current) return;
-      setError(adminError(e, t));
+      setError(adminError(e, tRef.current));
       setLoadedFor(cfpId);
     }
-  }, [cfpId, t]);
+  }, [cfpId, tRef]);
 
   useEffect(() => {
-    void load(true);
+    void load(data?.cfpId !== cfpId);
     // The locale settles after mount. Refetching operational data in response
     // would add reads without changing any of it.
     return () => {

@@ -16,7 +16,7 @@ import type { User } from 'firebase/auth';
 
 import { db, functions } from '../firebase';
 import type { Locale } from '../i18n';
-import { swrFetch } from './cache';
+import { invalidateCache, swrFetch } from './cache';
 import { mapEmpty, toDocuments, type FormState } from './formState';
 import type { EditScope } from './lifecycle';
 import { cfpState } from '@shared/cfpWindow';
@@ -73,7 +73,11 @@ export interface CfpWindow {
  */
 export async function loadCfpWindow(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    backgroundRevalidate?: boolean;
+    onRevalidate?: (data: CfpWindow | null) => void;
+  } = {},
 ): Promise<CfpWindow | null> {
   return swrFetch(
     `cfpWindow:${cfpId}`,
@@ -122,7 +126,11 @@ export async function loadCfpWindow(
         orgId: data.orgId,
       };
     },
-    { force: options.force, backgroundRevalidate: true },
+    {
+      force: options.force,
+      backgroundRevalidate: options.backgroundRevalidate ?? true,
+      onRevalidate: options.onRevalidate,
+    },
   );
 }
 
@@ -155,95 +163,105 @@ export interface LoadedProposal {
 export async function loadMyProposals(
   cfpId: string,
   user: User,
+  options: {
+    force?: boolean;
+    onRevalidate?: (data: { talks: LoadedProposal[]; speaker: Record<string, any> | undefined }) => void;
+  } = {},
 ): Promise<{ talks: LoadedProposal[]; speaker: Record<string, any> | undefined }> {
-  const [snap, speakerSnap] = await Promise.all([
-    getDocs(
-      query(
-        collection(db, 'cfps', cfpId, 'proposals'),
-        where('speakerIds', 'array-contains', user.uid),
-      ),
-    ),
-    getDoc(doc(db, 'speakers', user.uid)),
-  ]);
-
-  const speaker = speakerSnap.exists() ? speakerSnap.data() : undefined;
-  const [confirmationSnaps, participationSnaps] = await Promise.all([
-    Promise.all(
-      snap.docs.map((proposal) =>
-        getDoc(
-          doc(
-            db,
-            'cfps',
-            cfpId,
-            'proposals',
-            proposal.id,
-            'speakerConfirmations',
-            user.uid,
+  return swrFetch(
+    `myProposals:${cfpId}:${user.uid}`,
+    async () => {
+      const [snap, speakerSnap] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, 'cfps', cfpId, 'proposals'),
+            where('speakerIds', 'array-contains', user.uid),
           ),
         ),
-      ),
-    ),
-    Promise.all(
-      snap.docs.map((proposal) =>
-        getDoc(
-          doc(
-            db,
-            'cfps',
-            cfpId,
-            'proposals',
-            proposal.id,
-            'speakerParticipants',
-            user.uid,
+        getDoc(doc(db, 'speakers', user.uid)),
+      ]);
+
+      const speaker = speakerSnap.exists() ? speakerSnap.data() : undefined;
+      const [confirmationSnaps, participationSnaps] = await Promise.all([
+        Promise.all(
+          snap.docs.map((proposal) =>
+            getDoc(
+              doc(
+                db,
+                'cfps',
+                cfpId,
+                'proposals',
+                proposal.id,
+                'speakerConfirmations',
+                user.uid,
+              ),
+            ),
           ),
         ),
-      ),
-    ),
-  ]);
+        Promise.all(
+          snap.docs.map((proposal) =>
+            getDoc(
+              doc(
+                db,
+                'cfps',
+                cfpId,
+                'proposals',
+                proposal.id,
+                'speakerParticipants',
+                user.uid,
+              ),
+            ),
+          ),
+        ),
+      ]);
 
-  return {
-    talks: snap.docs.map((d, index) => {
-      const proposal = d.data();
-      const confirmation = confirmationSnaps[index];
-      const participation = participationSnaps[index];
-      const ids = Array.isArray(proposal.speakerIds) ? proposal.speakerIds : [];
-      const usesPersonalConfirmation = Boolean(proposal.primarySpeakerId) || ids.length > 1;
-      const legacyResponse =
-        proposal.status === 'confirmed' || proposal.status === 'declined'
-          ? proposal.status
-          : undefined;
-      const ownConfirmation = confirmation.exists()
-        ? {
-            response: confirmation.data().response as 'confirmed' | 'declined' | undefined,
-            answers: (confirmation.data().answers ?? {}) as Answers,
-            headshotUploads: confirmation.data().headshotUploads as HeadshotUploads | undefined,
-            speakerPhoto: confirmation.data().speakerPhoto as ConfirmedSpeakerPhoto | undefined,
-          }
-        : usesPersonalConfirmation
-          ? undefined
-          : {
-              response: legacyResponse,
-              answers: (proposal.confirmAnswers ?? {}) as Answers,
-              headshotUploads: proposal.headshotUploads as HeadshotUploads | undefined,
-              speakerPhoto: proposal.speakerPhoto as ConfirmedSpeakerPhoto | undefined,
-            };
       return {
-        id: d.id,
-        status: (proposal.status ?? 'draft') as ProposalStatus,
-        proposal,
-        speaker,
-        ownConfirmation,
-        ownParticipation: participation.exists()
-          ? {
-              role: participation.data().role,
-              acks: participation.data().acks,
-              attendance: participation.data().attendance,
-              detailsComplete: participation.data().detailsComplete,
-            }
-          : undefined,
-      };
-    }),
-    speaker,
-  };
+        talks: snap.docs.map((d, index) => {
+          const proposal = d.data();
+          const confirmation = confirmationSnaps[index];
+          const participation = participationSnaps[index];
+          const ids = Array.isArray(proposal.speakerIds) ? proposal.speakerIds : [];
+          const usesPersonalConfirmation = Boolean(proposal.primarySpeakerId) || ids.length > 1;
+          const legacyResponse =
+            proposal.status === 'confirmed' || proposal.status === 'declined'
+              ? proposal.status
+              : undefined;
+          const ownConfirmation = confirmation.exists()
+            ? {
+                response: confirmation.data().response as 'confirmed' | 'declined' | undefined,
+                answers: (confirmation.data().answers ?? {}) as Answers,
+                headshotUploads: confirmation.data().headshotUploads as HeadshotUploads | undefined,
+                speakerPhoto: confirmation.data().speakerPhoto as ConfirmedSpeakerPhoto | undefined,
+              }
+            : usesPersonalConfirmation
+              ? undefined
+              : {
+                  response: legacyResponse,
+                  answers: (proposal.confirmAnswers ?? {}) as Answers,
+                  headshotUploads: proposal.headshotUploads as HeadshotUploads | undefined,
+                  speakerPhoto: proposal.speakerPhoto as ConfirmedSpeakerPhoto | undefined,
+                };
+          return {
+            id: d.id,
+            status: (proposal.status ?? 'draft') as ProposalStatus,
+            proposal,
+            speaker,
+            ownConfirmation,
+            ownParticipation: participation.exists()
+            ? {
+                role: participation.data().role,
+                acks: participation.data().acks,
+                attendance: participation.data().attendance,
+                detailsComplete: participation.data().detailsComplete,
+              }
+            : undefined,
+        };
+      }),
+      speaker,
+    };
+  },
+  { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+);
 }
 
 /**
@@ -290,6 +308,8 @@ export async function saveDraft(
     },
     { merge: true },
   );
+  invalidateCache(`speakerProfile:${user.uid}`);
+  invalidateCache('myProposals');
 
   if (proposalId) {
     const { acks, attendance: personalAttendance, ...talkDoc } = shapedProposalDoc;
@@ -336,6 +356,8 @@ export async function saveDraft(
         { merge: true },
       );
     }
+    invalidateCache('myProposals');
+    invalidateCache(`allProposals:${cfpId}`);
     return proposalId;
   }
 
@@ -349,6 +371,8 @@ export async function saveDraft(
     status: 'draft',
     updatedAt: serverTimestamp(),
   });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return created.id;
 }
 
@@ -359,9 +383,21 @@ export async function saveDraft(
  * rather than through a call for proposals. Same document the submission form
  * saves; the only difference is that nothing else is being written with it.
  */
-export async function loadProfile(user: User): Promise<Record<string, any> | undefined> {
-  const snap = await getDoc(doc(db, 'speakers', user.uid));
-  return snap.exists() ? snap.data() : undefined;
+export async function loadProfile(
+  user: User,
+  options: {
+    force?: boolean;
+    onRevalidate?: (profile: Record<string, any> | undefined) => void;
+  } = {},
+): Promise<Record<string, any> | undefined> {
+  return swrFetch(
+    `speakerProfile:${user.uid}`,
+    async () => {
+      const snap = await getDoc(doc(db, 'speakers', user.uid));
+      return snap.exists() ? snap.data() : undefined;
+    },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+  );
 }
 
 export async function saveProfile(user: User, form: FormState, locale: Locale): Promise<void> {
@@ -382,6 +418,8 @@ export async function saveProfile(user: User, form: FormState, locale: Locale): 
     },
     { merge: true },
   );
+  invalidateCache(`speakerProfile:${user.uid}`);
+  invalidateCache('myProposals');
 }
 
 export const uploadProfilePhoto = httpsCallable<
@@ -531,9 +569,18 @@ export const respondToDecision = httpsCallable<
  * document read rather than a callable — the speaker's page needs it before it
  * can render the confirmation.
  */
-export async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
-  const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
-  return snap.exists() ? confirmFormFromData(snap.data()) : EMPTY_FORM;
+export async function loadConfirmForm(
+  cfpId: string,
+  options: { force?: boolean; onRevalidate?: (form: ConfirmForm) => void } = {},
+): Promise<ConfirmForm> {
+  return swrFetch(
+    `confirmForm:${cfpId}`,
+    async () => {
+      const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'confirmForm'));
+      return snap.exists() ? confirmFormFromData(snap.data()) : EMPTY_FORM;
+    },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+  );
 }
 
 /**
@@ -545,9 +592,18 @@ export async function loadConfirmForm(cfpId: string): Promise<ConfirmForm> {
  * using. Merged key by key so a config that sets only `fields` still gets the
  * standard taxonomy rather than four empty dropdowns.
  */
-export async function loadSubmissionForm(cfpId: string): Promise<SubmissionForm> {
-  const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'submissionForm'));
-  return mergeSubmissionForm(snap.exists() ? snap.data() : undefined);
+export async function loadSubmissionForm(
+  cfpId: string,
+  options: { force?: boolean; onRevalidate?: (form: SubmissionForm) => void } = {},
+): Promise<SubmissionForm> {
+  return swrFetch(
+    `submissionForm:${cfpId}`,
+    async () => {
+      const snap = await getDoc(doc(db, 'cfps', cfpId, 'config', 'submissionForm'));
+      return mergeSubmissionForm(snap.exists() ? snap.data() : undefined);
+    },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+  );
 }
 
 export const importSessionizeProfile = httpsCallable<

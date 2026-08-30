@@ -10,11 +10,13 @@ import {
 } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
 import { archiveCfp, deleteCfp, loadCfp, setCfpWindow, updateCfp } from '../../lib/roles';
+import { invalidateCache } from '../../lib/cache';
 import { navigate } from '../../lib/router';
 import { useLatest } from '../../lib/useLatest';
 import { Result } from './Result';
 import type { CfpRole, Visibility } from '@shared/cfp';
 import { CFP_LIMITS } from '@shared/cfp';
+import type { Cfp } from '@shared/types';
 
 export function Settings({
   cfpId,
@@ -86,6 +88,9 @@ export function Settings({
     ((identityBaseline !== '' && identityState !== identityBaseline) ||
       (windowBaseline !== '' && windowState !== windowBaseline));
 
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
@@ -97,91 +102,109 @@ export function Settings({
     [onDirtyChange],
   );
 
-  const refresh = useCallback(async () => {
-    const scope = cfpId;
-    const request = ++generation.current;
-    const current = () =>
-      activeCfp.current === scope && generation.current === request;
-    try {
-      const cfp = await loadCfp(cfpId);
-      if (!current()) return false;
-      if (!cfp) {
-        setError(tRef.current.errors.notFound);
+  const refresh = useCallback(
+    async (force = false) => {
+      const scope = cfpId;
+      const request = ++generation.current;
+      const current = () =>
+        activeCfp.current === scope && generation.current === request;
+
+      const applyCfp = (cfp: Cfp | null) => {
+        if (!current()) return false;
+        if (!cfp) {
+          setError(tRef.current.errors.notFound);
+          setLoadedCfp('');
+          setFailedCfp(scope);
+          return false;
+        }
+        const nextName = cfp.name ?? '';
+        const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
+        const nextDescriptionEn = cfp.description?.en ?? '';
+        const nextDescriptionFr = cfp.description?.fr ?? '';
+        const nextEventDate = cfp.eventStartDate ?? cfp.eventDate ?? '';
+        const nextEventEndDate = cfp.eventEndDate ?? nextEventDate;
+        const nextEventTimeZone = cfp.timeZone ?? 'America/Toronto';
+        const nextVenue = cfp.venue ?? '';
+        const nextPlace = cfp.location ?? '';
+        const nextWebsite = cfp.website ?? '';
+        const nextPrimaryColor = cfp.theme?.primaryColor ?? '';
+        const nextAccentColor = cfp.theme?.accentColor ?? '';
+        const nextBlindReview = cfp.features?.blindReview === true;
+        const nextOpensAt = toZonedDateTimeInput(toDate(cfp.opensAt), nextEventTimeZone);
+        const nextClosesAt = toZonedDateTimeInput(toDate(cfp.closesAt), nextEventTimeZone);
+
+        setName(nextName);
+        setVisibility(nextVisibility);
+        setDescriptionEn(nextDescriptionEn);
+        setDescriptionFr(nextDescriptionFr);
+        setEventDate(nextEventDate);
+        setEventEndDate(nextEventEndDate);
+        setEventTimeZone(nextEventTimeZone);
+        setWindowTimeZone(nextEventTimeZone);
+        setVenue(nextVenue);
+        setPlace(nextPlace);
+        setWebsite(nextWebsite);
+        setPrimaryColor(nextPrimaryColor);
+        setAccentColor(nextAccentColor);
+        setBlindReview(nextBlindReview);
+        setArchived(cfp.archived === true);
+        setOpensAt(nextOpensAt);
+        setClosesAt(nextClosesAt);
+        setPaused(cfp.paused === true);
+        setReviewsVisible(cfp.reviewsVisible === true);
+        setProgrammePublished(Boolean(cfp.publishedScheduleId));
+        setIdentityBaseline(
+          JSON.stringify([
+            nextName,
+            nextVisibility,
+            nextDescriptionEn,
+            nextDescriptionFr,
+            nextEventDate,
+            nextEventEndDate,
+            nextEventTimeZone,
+            nextVenue,
+            nextPlace,
+            nextWebsite,
+            nextPrimaryColor,
+            nextAccentColor,
+            nextBlindReview,
+          ]),
+        );
+        setWindowBaseline(
+          JSON.stringify([
+            nextOpensAt,
+            nextClosesAt,
+            cfp.paused === true,
+            cfp.reviewsVisible === true,
+          ]),
+        );
+        setLoadedCfp(scope);
+        setFailedCfp('');
+        setError('');
+        return true;
+      };
+
+      try {
+        const revalidatedCfp = { current: null as { value: Cfp | null } | null };
+        const cfp = await loadCfp(cfpId, {
+          force,
+          onRevalidate: (fresh) => {
+            if (current() && !dirtyRef.current) {
+              revalidatedCfp.current = { value: fresh };
+              applyCfp(fresh);
+            }
+          },
+        });
+        return applyCfp(revalidatedCfp.current ? revalidatedCfp.current.value : cfp);
+      } catch (e) {
+        if (!current()) return false;
+        setError(adminError(e, tRef.current));
         setFailedCfp(scope);
         return false;
       }
-      const nextName = cfp.name ?? '';
-      const nextVisibility = (cfp.visibility ?? 'public') as Visibility;
-      const nextDescriptionEn = cfp.description?.en ?? '';
-      const nextDescriptionFr = cfp.description?.fr ?? '';
-      const nextEventDate = cfp.eventStartDate ?? cfp.eventDate ?? '';
-      const nextEventEndDate = cfp.eventEndDate ?? nextEventDate;
-      const nextEventTimeZone = cfp.timeZone ?? 'America/Toronto';
-      const nextVenue = cfp.venue ?? '';
-      const nextPlace = cfp.location ?? '';
-      const nextWebsite = cfp.website ?? '';
-      const nextPrimaryColor = cfp.theme?.primaryColor ?? '';
-      const nextAccentColor = cfp.theme?.accentColor ?? '';
-      const nextBlindReview = cfp.features?.blindReview === true;
-      const nextOpensAt = toZonedDateTimeInput(toDate(cfp.opensAt), nextEventTimeZone);
-      const nextClosesAt = toZonedDateTimeInput(toDate(cfp.closesAt), nextEventTimeZone);
-
-      setName(nextName);
-      setVisibility(nextVisibility);
-      setDescriptionEn(nextDescriptionEn);
-      setDescriptionFr(nextDescriptionFr);
-      setEventDate(nextEventDate);
-      setEventEndDate(nextEventEndDate);
-      setEventTimeZone(nextEventTimeZone);
-      setWindowTimeZone(nextEventTimeZone);
-      setVenue(nextVenue);
-      setPlace(nextPlace);
-      setWebsite(nextWebsite);
-      setPrimaryColor(nextPrimaryColor);
-      setAccentColor(nextAccentColor);
-      setBlindReview(nextBlindReview);
-      setArchived(cfp.archived === true);
-      setOpensAt(nextOpensAt);
-      setClosesAt(nextClosesAt);
-      setPaused(cfp.paused === true);
-      setReviewsVisible(cfp.reviewsVisible === true);
-      setProgrammePublished(Boolean(cfp.publishedScheduleId));
-      setIdentityBaseline(
-        JSON.stringify([
-          nextName,
-          nextVisibility,
-          nextDescriptionEn,
-          nextDescriptionFr,
-          nextEventDate,
-          nextEventEndDate,
-          nextEventTimeZone,
-          nextVenue,
-          nextPlace,
-          nextWebsite,
-          nextPrimaryColor,
-          nextAccentColor,
-          nextBlindReview,
-        ]),
-      );
-      setWindowBaseline(
-        JSON.stringify([
-          nextOpensAt,
-          nextClosesAt,
-          cfp.paused === true,
-          cfp.reviewsVisible === true,
-        ]),
-      );
-      setLoadedCfp(scope);
-      setFailedCfp('');
-      setError('');
-      return true;
-    } catch (e) {
-      if (!current()) return false;
-      setError(adminError(e, tRef.current));
-      setFailedCfp(scope);
-      return false;
-    }
-  }, [cfpId, tRef]);
+    },
+    [cfpId, tRef],
+  );
 
   /*
    * Keyed on the call, not on the loader's identity. The loader is rebuilt
@@ -208,7 +231,7 @@ export function Settings({
   async function run(
     work: (current: () => boolean) => Promise<void>,
     ok: string,
-    after: (current: () => boolean) => Promise<unknown> | void = () => refresh(),
+    after: (current: () => boolean) => Promise<unknown> | void = () => refresh(true),
   ) {
     const scope = cfpId;
     const current = () => activeCfp.current === scope;
@@ -331,6 +354,8 @@ export function Settings({
             blindReview,
           ]),
         );
+        invalidateCache(`cfp:${cfpId}`);
+        invalidateCache(`cfpWindow:${cfpId}`);
       },
     );
   }
@@ -358,7 +383,11 @@ export function Settings({
           reviewsVisible,
         })),
       t.admin.windowSaved,
-      () => setWindowBaseline(JSON.stringify([opensAt, closesAt, paused, reviewsVisible])),
+      () => {
+        setWindowBaseline(JSON.stringify([opensAt, closesAt, paused, reviewsVisible]));
+        invalidateCache(`cfp:${cfpId}`);
+        invalidateCache(`cfpWindow:${cfpId}`);
+      },
     );
   }
 

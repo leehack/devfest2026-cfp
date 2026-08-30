@@ -7,6 +7,7 @@ import type {
 } from '@shared/coSpeakers';
 
 import { functions } from '../firebase';
+import { invalidateCache } from './cache';
 
 export interface CoSpeakerInviteQuery {
   proposalId: string;
@@ -102,6 +103,8 @@ export async function inviteProposalSpeaker(
   email: string,
 ): Promise<ProposalSpeakerRoster> {
   const result = await invite({ cfpId, proposalId, email });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapRoster(result.data);
 }
 
@@ -111,6 +114,8 @@ export async function revokeProposalSpeakerInvitation(
   invitationId: string,
 ): Promise<ProposalSpeakerRoster> {
   const result = await revoke({ cfpId, proposalId, invitationId });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapRoster(result.data);
 }
 
@@ -120,6 +125,8 @@ export async function retryProposalSpeakerInvitation(
   invitationId: string,
 ): Promise<ProposalSpeakerRoster> {
   const result = await retryInvitation({ cfpId, proposalId, invitationId });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
   return unwrapRoster(result.data);
 }
 
@@ -129,6 +136,10 @@ export async function removeProposalSpeaker(
   uid: string,
 ): Promise<ProposalSpeakerRoster | null> {
   const result = await remove({ cfpId, proposalId, uid });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
+  invalidateCache(`scheduleDraft:${cfpId}`);
+  invalidateCache(`sharedSchedule:${cfpId}`);
   return unwrapNullableRoster(result.data);
 }
 
@@ -158,5 +169,10 @@ export async function respondToCoSpeakerInvitation(
     response,
     ...(response === 'accept' && participation ? participation : {}),
   });
+  invalidateCache('myProposals');
+  invalidateCache(`allProposals:${cfpId}`);
+  invalidateCache(`scheduleDraft:${cfpId}`);
+  invalidateCache(`sharedSchedule:${cfpId}`);
+  invalidateCache(`reviewQueue:${cfpId}`);
   return { state: result.data.state, proposalId };
 }

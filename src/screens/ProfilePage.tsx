@@ -58,15 +58,27 @@ export function ProfilePage({ user }: { user: User }) {
 
   useEffect(() => {
     let cancelled = false;
+    let revalidatedProfile: { value: Record<string, any> | undefined } | null = null;
     setReady(false);
     setLoadError('');
-    loadProfile(user)
+    loadProfile(user, {
+      force: loadAttempt > 0,
+      onRevalidate: (speaker) => {
+        revalidatedProfile = { value: speaker };
+        if (!cancelled && !dirty.current) {
+          setForm({ ...fromDocuments(undefined, speaker), email: user.email ?? '' });
+        }
+      },
+    })
       .then((speaker) => {
         if (cancelled) return;
         // The address comes from the account either way, so a profile that does
         // not exist yet still opens with the one field we already know.
-        setForm({ ...fromDocuments(undefined, speaker), email: user.email ?? '' });
-        dirty.current = false;
+        if (!dirty.current) {
+          const effectiveSpeaker = revalidatedProfile ? revalidatedProfile.value : speaker;
+          setForm({ ...fromDocuments(undefined, effectiveSpeaker), email: user.email ?? '' });
+          dirty.current = false;
+        }
       })
       .catch((e) => !cancelled && setLoadError(friendlyError(e, tRef.current)))
       .finally(() => !cancelled && setReady(true));

@@ -16,7 +16,7 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { auth, db, functions } from '../firebase';
-import { swrFetch } from './cache';
+import { getCached, swrFetch } from './cache';
 import { STATUS_SETS, type AttendanceStatus, type ProposalStatus } from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
@@ -138,7 +138,14 @@ export function usePlatformAccess(user: User | null): {
     status: PlatformAccessStatus | null;
     ready: boolean;
     error: boolean;
-  } | null>(null);
+  } | null>(() => {
+    if (!uid) return null;
+    const cached = getCached<PlatformAccessStatus>(`platformAccess:${uid}`);
+    if (cached !== undefined) {
+      return { uid, status: cached, ready: true, error: false };
+    }
+    return null;
+  });
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((current) => current + 1), []);
 
@@ -149,13 +156,38 @@ export function usePlatformAccess(user: User | null): {
       return;
     }
 
-    setLookup({ uid, status: null, ready: false, error: false });
-    platformAccess({})
-      .then(({ data }) => {
+    const cached = getCached<PlatformAccessStatus>(`platformAccess:${uid}`);
+    if (cached !== undefined && attempt === 0) {
+      setLookup({ uid, status: cached, ready: true, error: false });
+    } else {
+      setLookup((prev) =>
+        prev?.uid === uid ? prev : { uid, status: null, ready: false, error: false },
+      );
+    }
+
+    void swrFetch(
+      `platformAccess:${uid}`,
+      async () => {
+        const { data } = await platformAccess({});
+        return data;
+      },
+      {
+        force: attempt > 0,
+        backgroundRevalidate: cached !== undefined && attempt === 0,
+        onRevalidate: (fresh) => {
+          if (!cancelled) setLookup({ uid, status: fresh, ready: true, error: false });
+        },
+      },
+    )
+      .then((data) => {
         if (!cancelled) setLookup({ uid, status: data, ready: true, error: false });
       })
       .catch(() => {
-        if (!cancelled) setLookup({ uid, status: null, ready: true, error: true });
+        if (!cancelled) {
+          if (cached === undefined || attempt > 0) {
+            setLookup({ uid, status: null, ready: true, error: true });
+          }
+        }
       });
     return () => {
       cancelled = true;
@@ -164,6 +196,10 @@ export function usePlatformAccess(user: User | null): {
 
   if (!uid) return { status: null, ready: true, error: false, retry };
   if (!lookup || lookup.uid !== uid) {
+    const cached = getCached<PlatformAccessStatus>(`platformAccess:${uid}`);
+    if (cached !== undefined) {
+      return { status: cached, ready: true, error: false, retry };
+    }
     return { status: null, ready: false, error: false, retry };
   }
   return { status: lookup.status, ready: lookup.ready, error: lookup.error, retry };
@@ -493,9 +529,18 @@ export function useRole(
     role: CfpRole | null;
     ready: boolean;
     error: boolean;
-  } | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  const retry = useCallback(() => setAttempt((current) => current + 1), []);
+  } | null>(() => {
+    if (!uid || !cfpId) return null;
+    const cached = getCached<CfpRole | null>(`role:${cfpId}:${uid}`);
+    if (cached !== undefined) {
+      return { uid, cfpId, role: cached, ready: true, error: false };
+    }
+    return null;
+  });
+  const [retryKey, setRetryKey] = useState<string | null>(null);
+  const retry = useCallback(() => {
+    if (cfpId) setRetryKey(`${cfpId}:${Date.now()}`);
+  }, [cfpId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -505,38 +550,64 @@ export function useRole(
     }
 
     const scope = { uid, cfpId };
-    setLookup({ ...scope, role: null, ready: false, error: false });
-    (async () => {
-      let role: CfpRole | null = null;
-      let error = false;
-      try {
+    const isRetrying = Boolean(retryKey && retryKey.startsWith(`${cfpId}:`));
+    const cached = getCached<CfpRole | null>(`role:${cfpId}:${uid}`);
+    if (cached !== undefined && !isRetrying) {
+      setLookup({ ...scope, role: cached, ready: true, error: false });
+    } else {
+      setLookup((prev) =>
+        prev?.uid === uid && prev.cfpId === cfpId && !isRetrying
+          ? prev
+          : { ...scope, role: null, ready: false, error: false },
+      );
+    }
+
+    void swrFetch(
+      `role:${cfpId}:${uid}`,
+      async () => {
         const mine = await getDoc(doc(db, 'cfps', cfpId, 'members', uid));
-        if (cancelled) return;
         if (mine.exists()) {
-          role = (mine.data() as CfpMember).role;
-        } else {
-          const { data } = await claimRole({ cfpId });
-          if (cancelled) return;
-          role = data.role;
+          return (mine.data() as CfpMember).role;
         }
-      } catch {
-        // A missing membership is an ordinary speaker and is answered by
-        // `claimRole` with `{role:null}`. Reaching here means neither read nor
-        // claim completed, so calling it "forbidden" would turn an outage into a
-        // false statement about the person's account.
-        error = true;
-      } finally {
-        if (!cancelled) setLookup({ ...scope, role, ready: true, error });
-      }
-    })();
+        const { data } = await claimRole({ cfpId });
+        return data.role;
+      },
+      {
+        force: isRetrying,
+        backgroundRevalidate: cached !== undefined && !isRetrying,
+        onRevalidate: (freshRole) => {
+          if (!cancelled) {
+            setLookup({ ...scope, role: freshRole, ready: true, error: false });
+          }
+        },
+      },
+    )
+      .then((role) => {
+        if (!cancelled) {
+          if (isRetrying) setRetryKey(null);
+          setLookup({ ...scope, role, ready: true, error: false });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (isRetrying) setRetryKey(null);
+          if (cached === undefined || isRetrying) {
+            setLookup({ ...scope, role: null, ready: true, error: true });
+          }
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [uid, cfpId, attempt]);
+  }, [uid, cfpId, retryKey]);
 
   if (!uid || !cfpId) return { role: null, ready: true, error: false, retry };
   if (!lookup || lookup.uid !== uid || lookup.cfpId !== cfpId) {
+    const cached = getCached<CfpRole | null>(`role:${cfpId}:${uid}`);
+    if (cached !== undefined) {
+      return { role: cached, ready: true, error: false, retry };
+    }
     return { role: null, ready: false, error: false, retry };
   }
   return { role: lookup.role, ready: lookup.ready, error: lookup.error, retry };
@@ -571,7 +642,15 @@ export async function loadInviteLinks(
 
 export async function loadCommittee(
   cfpId: string,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean;
+    onRevalidate?: (committee: {
+      people: Person[];
+      pending: RoleGrant[];
+      inviteLinks: import('@shared/types').RoleInviteLink[];
+    }) => void;
+    onError?: (error: unknown) => void;
+  } = {},
 ): Promise<{
   people: Person[];
   pending: RoleGrant[];
@@ -607,7 +686,12 @@ export async function loadCommittee(
         inviteLinks,
       };
     },
-    { force: options.force, backgroundRevalidate: true },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
   );
 }
 
@@ -630,75 +714,97 @@ export interface ProposalRow extends Proposal {
 /** Admin-only proposal load for decisions, exports, and organiser operations. */
 export async function loadAllProposals(
   cfpId: string,
-  options: { speakerDetails?: boolean } = {},
+  options: {
+    speakerDetails?: boolean;
+    force?: boolean;
+    onRevalidate?: (proposals: ProposalRow[]) => void;
+    onError?: (error: unknown) => void;
+  } = {},
 ): Promise<ProposalRow[]> {
-  const snap = await getDocs(
-    query(collection(db, 'cfps', cfpId, 'proposals'), where('status', '!=', 'draft')),
-  );
-  const multiSpeaker = options.speakerDetails ? snap.docs.filter((proposal) => {
-    const data = proposal.data();
-    return Boolean(data.primarySpeakerId) ||
-      (Array.isArray(data.speakerIds) && data.speakerIds.length > 1);
-  }) : [];
-  const [confirmationReads, participantReads] = await Promise.all([
-    Promise.all(
-      multiSpeaker.map((proposal) =>
-        getDocs(
-          collection(
-            db,
-            'cfps',
-            cfpId,
-            'proposals',
-            proposal.id,
-            'speakerConfirmations',
+  const viewerUid = auth.currentUser?.uid ?? 'anon';
+  const key = `allProposals:${cfpId}:${viewerUid}:${Boolean(options.speakerDetails)}`;
+  return swrFetch(
+    key,
+    async () => {
+      const snap = await getDocs(
+        query(collection(db, 'cfps', cfpId, 'proposals'), where('status', '!=', 'draft')),
+      );
+      const multiSpeaker = options.speakerDetails
+        ? snap.docs.filter((proposal) => {
+            const data = proposal.data();
+            return (
+              Boolean(data.primarySpeakerId) ||
+              (Array.isArray(data.speakerIds) && data.speakerIds.length > 1)
+            );
+          })
+        : [];
+      const [confirmationReads, participantReads] = await Promise.all([
+        Promise.all(
+          multiSpeaker.map((proposal) =>
+            getDocs(
+              collection(
+                db,
+                'cfps',
+                cfpId,
+                'proposals',
+                proposal.id,
+                'speakerConfirmations',
+              ),
+            ),
           ),
         ),
-      ),
-    ),
-    Promise.all(
-      multiSpeaker.map((proposal) =>
-        getDocs(
-          collection(
-            db,
-            'cfps',
-            cfpId,
-            'proposals',
-            proposal.id,
-            'speakerParticipants',
+        Promise.all(
+          multiSpeaker.map((proposal) =>
+            getDocs(
+              collection(
+                db,
+                'cfps',
+                cfpId,
+                'proposals',
+                proposal.id,
+                'speakerParticipants',
+              ),
+            ),
           ),
         ),
-      ),
-    ),
-  ]);
-  const confirmations = new Map(
-    multiSpeaker.map((proposal, index) => [proposal.id, confirmationReads[index]]),
+      ]);
+      const confirmations = new Map(
+        multiSpeaker.map((proposal, index) => [proposal.id, confirmationReads[index]]),
+      );
+      const participants = new Map(
+        multiSpeaker.map((proposal, index) => [proposal.id, participantReads[index]]),
+      );
+      return snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Proposal),
+        speakerConfirmations: (confirmations.get(d.id)?.docs ?? [])
+          .filter((confirmation) => {
+            const speakerIds = d.data().speakerIds;
+            return Array.isArray(speakerIds) && speakerIds.includes(confirmation.id);
+          })
+          .map((confirmation) => ({
+            uid: confirmation.id,
+            response: confirmation.data().response,
+            answers: confirmation.data().answers,
+            speakerPhoto: confirmation.data().speakerPhoto,
+          })),
+        speakerParticipants: (participants.get(d.id)?.docs ?? [])
+          .filter((participant) => participant.data().status === 'active')
+          .map((participant) => ({
+            uid: participant.id,
+            role: participant.data().role,
+            acks: participant.data().acks,
+            attendance: participant.data().attendance,
+          })),
+      }));
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
   );
-  const participants = new Map(
-    multiSpeaker.map((proposal, index) => [proposal.id, participantReads[index]]),
-  );
-  return snap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Proposal),
-    speakerConfirmations: (confirmations.get(d.id)?.docs ?? [])
-      .filter((confirmation) => {
-        const speakerIds = d.data().speakerIds;
-        return Array.isArray(speakerIds) && speakerIds.includes(confirmation.id);
-      })
-      .map((confirmation) => ({
-        uid: confirmation.id,
-        response: confirmation.data().response,
-        answers: confirmation.data().answers,
-        speakerPhoto: confirmation.data().speakerPhoto,
-      })),
-    speakerParticipants: (participants.get(d.id)?.docs ?? [])
-      .filter((participant) => participant.data().status === 'active')
-      .map((participant) => ({
-        uid: participant.id,
-        role: participant.data().role,
-        acks: participant.data().acks,
-        attendance: participant.data().attendance,
-      })),
-  }));
 }
 
 export interface ReviewQueue {
@@ -753,15 +859,43 @@ const reviewQueueCall = httpsCallable<
  * The callable filters active and former speakers before returning its public
  * review projection. Review writes enforce the same conflict independently.
  */
-export async function loadReviewQueue(cfpId: string): Promise<ReviewQueue> {
-  const { data } = await reviewQueueCall({ cfpId });
-  return { proposals: data.proposals, own: data.own };
+export async function loadReviewQueue(
+  cfpId: string,
+  options: {
+    force?: boolean;
+    onRevalidate?: (queue: ReviewQueue) => void;
+    onError?: (error: unknown) => void;
+  } = {},
+): Promise<ReviewQueue> {
+  const uid = auth.currentUser?.uid ?? 'anon';
+  return swrFetch(
+    `reviewQueue:${cfpId}:${uid}`,
+    async () => {
+      const { data } = await reviewQueueCall({ cfpId });
+      return { proposals: data.proposals, own: data.own };
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
+  );
 }
 
 /** One-shot, refreshed by the caller after a change — §2 allows no listeners. */
-export async function loadCfp(cfpId: string): Promise<Cfp | null> {
-  const snap = await getDoc(doc(db, 'cfps', cfpId));
-  return snap.exists() ? (snap.data() as Cfp) : null;
+export async function loadCfp(
+  cfpId: string,
+  options: { force?: boolean; onRevalidate?: (cfp: Cfp | null) => void } = {},
+): Promise<Cfp | null> {
+  return swrFetch(
+    `cfp:${cfpId}`,
+    async () => {
+      const snap = await getDoc(doc(db, 'cfps', cfpId));
+      return snap.exists() ? (snap.data() as Cfp) : null;
+    },
+    { force: options.force, backgroundRevalidate: true, onRevalidate: options.onRevalidate },
+  );
 }
 
 export interface CfpSummary extends Cfp {

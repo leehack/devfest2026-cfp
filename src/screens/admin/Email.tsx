@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Checkbox, SelectField, TextAreaField, TextField } from '../../components/fields';
 import { formatDate } from '../../i18n';
 import { useI18n } from '../../i18n/context';
+import { isAuthError } from '../../lib/cache';
 import {
   emailError,
   emailHistoryError,
@@ -1276,6 +1277,7 @@ function WriteToSpeaker({
   const [recipientError, setRecipientError] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const activeCfp = useRef(cfpId);
+  const recipientGeneration = useRef(0);
   activeCfp.current = cfpId;
   const dirty = !readOnly && (subject !== '' || body !== '');
 
@@ -1292,6 +1294,7 @@ function WriteToSpeaker({
 
   useEffect(() => {
     let cancelled = false;
+    recipientGeneration.current += 1;
     setRows([]);
     setProposalId('');
     setSubject('');
@@ -1308,11 +1311,35 @@ function WriteToSpeaker({
     setRecipientError('');
     setReviewing(false);
     void (async () => {
+      let hasFailed = false;
+      const applyRows = (updated: ProposalRow[]) => {
+        const sendable = updated.filter((row) => row.status !== 'draft');
+        setRows(sendable);
+        setProposalId((current) =>
+          sendable.some((row) => row.id === current) ? current : '',
+        );
+        return sendable;
+      };
       try {
-        // Drafts are excluded: writing to someone about a talk they have not
-        // submitted tells them it was read.
-        const sendable = (await loadAllProposals(cfpId)).filter((row) => row.status !== 'draft');
-        if (!cancelled) setRows(sendable);
+        const loaded = await loadAllProposals(cfpId, {
+          force: attempt > 0,
+          onRevalidate: (updated) => {
+            if (!cancelled && !hasFailed) applyRows(updated);
+          },
+          onError: (err) => {
+            if (isAuthError(err) && !cancelled) {
+              hasFailed = true;
+              recipientGeneration.current += 1;
+              applyRows([]);
+              setRecipientPreview([]);
+              setRecipientsFingerprint('');
+              setMessageConfigurationFingerprint('');
+              setReviewing(false);
+              setLoadError(emailError(err, tRef.current));
+            }
+          },
+        });
+        if (!cancelled && !hasFailed) applyRows(loaded);
       } catch (e) {
         if (!cancelled) setLoadError(emailError(e, tRef.current));
       } finally {
@@ -1326,6 +1353,8 @@ function WriteToSpeaker({
 
   useEffect(() => {
     let cancelled = false;
+    const request = ++recipientGeneration.current;
+    const current = () => !cancelled && request === recipientGeneration.current;
     setRecipientPreview([]);
     setRecipientsFingerprint('');
     setMessageConfigurationFingerprint('');
@@ -1345,7 +1374,7 @@ function WriteToSpeaker({
           action: 'preview',
           proposalId,
         });
-        if (cancelled) return;
+        if (!current()) return;
         if (
           !visibleConfigurationFingerprint ||
           data.emailConfigurationFingerprint !== visibleConfigurationFingerprint
@@ -1362,9 +1391,9 @@ function WriteToSpeaker({
         setRecipientsFingerprint(data.recipientsFingerprint ?? '');
         setMessageConfigurationFingerprint(visibleConfigurationFingerprint);
       } catch (e) {
-        if (!cancelled) setRecipientError(emailError(e, tRef.current));
+        if (current()) setRecipientError(emailError(e, tRef.current));
       } finally {
-        if (!cancelled) setRecipientLoading(false);
+        if (current()) setRecipientLoading(false);
       }
     })();
     return () => {

@@ -1,7 +1,8 @@
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 
-import { db, functions } from '../firebase';
+import { db, functions, auth } from '../firebase';
+import { swrFetch } from './cache';
 import type {
   PublishedSchedule,
   PublishedScheduleEntry,
@@ -71,18 +72,37 @@ export interface ScheduleDraft {
   entries: ScheduleEntry[];
 }
 
-export async function loadScheduleDraft(cfpId: string): Promise<ScheduleDraft> {
-  const [configSnap, entriesSnap] = await Promise.all([
-    getDoc(doc(db, 'cfps', cfpId, 'config', 'schedule')),
-    getDocs(collection(db, 'cfps', cfpId, 'scheduleDraft')),
-  ]);
-  return {
-    config: configSnap.exists() ? (configSnap.data() as ScheduleConfig) : null,
-    entries: entriesSnap.docs.map((entry) => ({
-      id: entry.id,
-      ...(entry.data() as Omit<ScheduleEntry, 'id'>),
-    })) as ScheduleEntry[],
-  };
+export async function loadScheduleDraft(
+  cfpId: string,
+  options: {
+    force?: boolean;
+    onRevalidate?: (draft: ScheduleDraft) => void;
+    onError?: (error: unknown) => void;
+  } = {},
+): Promise<ScheduleDraft> {
+  const viewerUid = auth.currentUser?.uid ?? 'anon';
+  return swrFetch(
+    `scheduleDraft:${cfpId}:${viewerUid}`,
+    async () => {
+      const [configSnap, entriesSnap] = await Promise.all([
+        getDoc(doc(db, 'cfps', cfpId, 'config', 'schedule')),
+        getDocs(collection(db, 'cfps', cfpId, 'scheduleDraft')),
+      ]);
+      return {
+        config: configSnap.exists() ? (configSnap.data() as ScheduleConfig) : null,
+        entries: entriesSnap.docs.map((entry) => ({
+          id: entry.id,
+          ...(entry.data() as Omit<ScheduleEntry, 'id'>),
+        })) as ScheduleEntry[],
+      };
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
+  );
 }
 
 export interface PublishedScheduleBundle {
@@ -104,31 +124,67 @@ const getSharedSchedule = httpsCallable<
   { ok: true } & SharedScheduleBundle
 >(functions, 'getSharedSchedule');
 
-export async function loadSharedSchedule(cfpId: string): Promise<SharedScheduleBundle> {
-  const { data } = await getSharedSchedule({ cfpId });
-  return {
-    audience: data.audience,
-    schedule: data.schedule,
-    entries: data.entries,
-    stale: data.stale,
-  };
+export async function loadSharedSchedule(
+  cfpId: string,
+  options: {
+    force?: boolean;
+    releaseId?: string | null;
+    audience?: 'committee' | 'speaker';
+    onRevalidate?: (bundle: SharedScheduleBundle) => void;
+    onError?: (error: unknown) => void;
+  } = {},
+): Promise<SharedScheduleBundle> {
+  const releaseKey = options.releaseId ?? 'current';
+  const uid = auth.currentUser?.uid ?? 'anon';
+  return swrFetch(
+    `sharedSchedule:${cfpId}:${releaseKey}:${uid}`,
+    async () => {
+      const { data } = await getSharedSchedule({ cfpId });
+      return {
+        audience: data.audience,
+        schedule: data.schedule,
+        entries: data.entries,
+        stale: data.stale,
+      };
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
+  );
 }
 
 export async function loadPublishedSchedule(
   cfpId: string,
   releaseId: string,
+  options: {
+    force?: boolean;
+    onRevalidate?: (bundle: PublishedScheduleBundle | null) => void;
+  } = {},
 ): Promise<PublishedScheduleBundle | null> {
-  const release = doc(db, 'cfps', cfpId, 'scheduleReleases', releaseId);
-  const [scheduleSnap, entriesSnap] = await Promise.all([
-    getDoc(release),
-    getDocs(collection(release, 'entries')),
-  ]);
-  if (!scheduleSnap.exists()) return null;
-  return {
-    schedule: { id: scheduleSnap.id, ...(scheduleSnap.data() as Omit<PublishedSchedule, 'id'>) },
-    entries: entriesSnap.docs.map((entry) => ({
-      id: entry.id,
-      ...(entry.data() as Omit<PublishedScheduleEntry, 'id'>),
-    })) as PublishedScheduleEntry[],
-  };
+  return swrFetch(
+    `publishedSchedule:${cfpId}:${releaseId}`,
+    async () => {
+      const release = doc(db, 'cfps', cfpId, 'scheduleReleases', releaseId);
+      const [scheduleSnap, entriesSnap] = await Promise.all([
+        getDoc(release),
+        getDocs(collection(release, 'entries')),
+      ]);
+      if (!scheduleSnap.exists()) return null;
+      return {
+        schedule: { id: scheduleSnap.id, ...(scheduleSnap.data() as Omit<PublishedSchedule, 'id'>) },
+        entries: entriesSnap.docs.map((entry) => ({
+          id: entry.id,
+          ...(entry.data() as Omit<PublishedScheduleEntry, 'id'>),
+        })) as PublishedScheduleEntry[],
+      };
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+    },
+  );
 }

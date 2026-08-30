@@ -3,6 +3,7 @@ import type { User } from 'firebase/auth';
 
 import { SelectField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
+import { isAuthError } from '../../lib/cache';
 import { adminError, roleAdminError, transferError } from '../../lib/errors';
 import {
   acceptEventOwnershipTransfer,
@@ -108,14 +109,40 @@ export function Committee({
     const current = () =>
       activeCfp.current === scope && generation.current === request;
     try {
+      let hasFailed = false;
+      let revalidatedCommittee: Awaited<ReturnType<typeof loadCommittee>> | null = null;
       const [committee, transferRes] = await Promise.all([
-        loadCommittee(cfpId, { force }),
+        loadCommittee(cfpId, {
+          force,
+          onRevalidate: (updated) => {
+            revalidatedCommittee = updated;
+            if (current() && !hasFailed) {
+              setPeople(updated.people);
+              setPending(updated.pending);
+              setInviteLinks(updated.inviteLinks ?? []);
+            }
+          },
+          onError: (err) => {
+            if (isAuthError(err)) {
+              hasFailed = true;
+              if (current()) {
+                setError(adminError(err, tRef.current));
+                setPeople([]);
+                setPending([]);
+                setInviteLinks([]);
+                setPendingTransfer(null);
+                setLoadFailed(true);
+              }
+            }
+          },
+        }),
         getEventOwnershipTransfer({ cfpId }).catch(() => ({ data: { ok: true, transfer: null } })),
       ]);
-      if (!current()) return false;
-      setPeople(committee.people);
-      setPending(committee.pending);
-      setInviteLinks(committee.inviteLinks ?? []);
+      if (!current() || hasFailed) return false;
+      const effectiveCommittee = revalidatedCommittee ?? committee;
+      setPeople(effectiveCommittee.people);
+      setPending(effectiveCommittee.pending);
+      setInviteLinks(effectiveCommittee.inviteLinks ?? []);
       setPendingTransfer(transferRes.data.transfer ?? null);
       setLoadedCfp(scope);
       setLoadFailed(false);
