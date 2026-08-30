@@ -271,6 +271,7 @@ export function Schedule({
   const refresh = useCallback(async (force = false) => {
     const request = ++generation.current;
     const epochAtStart = mutationEpoch.current;
+    let hasFailed = false;
     setError('');
     const applySchedule = async (
       nextCfp: Cfp | null,
@@ -286,6 +287,7 @@ export function Schedule({
         : null;
       if (
         scheduleApplyGeneration.current !== applyGen ||
+        hasFailed ||
         request !== generation.current ||
         epochAtStart !== mutationEpoch.current
       ) {
@@ -328,8 +330,29 @@ export function Schedule({
       setLoaded(true);
     };
 
+    const applyScheduleInBackground = (...args: Parameters<typeof applySchedule>) => {
+      // Background SWR failures leave the last complete schedule on screen. The
+      // protected loaders report authorization failures through their onError handlers.
+      void applySchedule(...args).catch(() => {});
+    };
+
+    const failProtectedLoad = (failure: unknown) => {
+      if (!isAuthError(failure)) return;
+      hasFailed = true;
+      if (request !== generation.current) return;
+      setError(scheduleError(failure, tRef.current));
+      setConfig(null);
+      setWorkingConfig(null);
+      setEntries([]);
+      setProposals([]);
+      setSubmissionForm(null);
+      setSharedPreview(null);
+      setEditing(null);
+      setDragging(null);
+      setLoaded(true);
+    };
+
     try {
-      let hasFailed = false;
       let currentDraftResult: ScheduleDraft | null = null;
       let currentProposalsResult: ProposalRow[] | null = null;
       const revalidated = { cfp: null as { value: Cfp | null } | null };
@@ -346,7 +369,7 @@ export function Schedule({
             if (request === generation.current && !hasFailed) {
               revalidated.cfp = { value: updatedCfp };
               if (currentDraftResult && currentProposalsResult && currentSharedResult && currentFormResult) {
-                void applySchedule(
+                applyScheduleInBackground(
                   updatedCfp,
                   currentDraftResult,
                   currentProposalsResult,
@@ -364,7 +387,7 @@ export function Schedule({
             if (request === generation.current && !hasFailed) {
               currentDraftResult = updatedDraft;
               if (currentProposalsResult && currentSharedResult && currentFormResult) {
-                void applySchedule(
+                applyScheduleInBackground(
                   getEffectiveCfp(),
                   updatedDraft,
                   currentProposalsResult,
@@ -375,18 +398,7 @@ export function Schedule({
               }
             }
           },
-          onError: (err) => {
-            if (isAuthError(err)) {
-              hasFailed = true;
-              if (request === generation.current) {
-                setError(scheduleError(err, tRef.current));
-                setConfig(null);
-                setEntries([]);
-                setProposals([]);
-                setLoaded(true);
-              }
-            }
-          },
+          onError: failProtectedLoad,
         }),
         loadAllProposals(cfpId, {
           force,
@@ -394,7 +406,7 @@ export function Schedule({
             if (request === generation.current && !hasFailed) {
               currentProposalsResult = updatedProposals;
               if (currentDraftResult && currentSharedResult && currentFormResult) {
-                void applySchedule(
+                applyScheduleInBackground(
                   getEffectiveCfp(),
                   currentDraftResult,
                   updatedProposals,
@@ -405,18 +417,7 @@ export function Schedule({
               }
             }
           },
-          onError: (err) => {
-            if (isAuthError(err)) {
-              hasFailed = true;
-              if (request === generation.current) {
-                setError(scheduleError(err, tRef.current));
-                setConfig(null);
-                setEntries([]);
-                setProposals([]);
-                setLoaded(true);
-              }
-            }
-          },
+          onError: failProtectedLoad,
         }),
         loadSharedSchedule(cfpId, {
           force,
@@ -425,7 +426,7 @@ export function Schedule({
             if (request === generation.current && !hasFailed) {
               currentSharedResult = updatedShared;
               if (currentDraftResult && currentProposalsResult && currentFormResult) {
-                void applySchedule(
+                applyScheduleInBackground(
                   getEffectiveCfp(),
                   currentDraftResult,
                   currentProposalsResult,
@@ -436,18 +437,7 @@ export function Schedule({
               }
             }
           },
-          onError: (err) => {
-            if (isAuthError(err)) {
-              hasFailed = true;
-              if (request === generation.current) {
-                setError(scheduleError(err, tRef.current));
-                setConfig(null);
-                setEntries([]);
-                setProposals([]);
-                setLoaded(true);
-              }
-            }
-          },
+          onError: failProtectedLoad,
         }),
         loadSubmissionForm(cfpId, {
           force,
@@ -455,7 +445,7 @@ export function Schedule({
             if (request === generation.current && !hasFailed) {
               currentFormResult = updatedForm;
               if (currentDraftResult && currentProposalsResult && currentSharedResult) {
-                void applySchedule(
+                applyScheduleInBackground(
                   getEffectiveCfp(),
                   currentDraftResult,
                   currentProposalsResult,

@@ -23,6 +23,10 @@ const requestGenerations = new Map<string, number>();
 
 const DEFAULT_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
+function matchesKeyOrPrefix(key: string, keyOrPrefix: string): boolean {
+  return key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`);
+}
+
 export function hasCached(key: string): boolean {
   const entry = memoryStore.get(key);
   if (!entry) return false;
@@ -64,12 +68,12 @@ export function invalidateCache(keyOrPrefix?: string): void {
     return;
   }
   for (const key of memoryStore.keys()) {
-    if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
+    if (matchesKeyOrPrefix(key, keyOrPrefix)) {
       memoryStore.delete(key);
     }
   }
   for (const [key, entry] of inFlightRequests.entries()) {
-    if (key === keyOrPrefix || key.startsWith(`${keyOrPrefix}:`) || key.startsWith(keyOrPrefix)) {
+    if (matchesKeyOrPrefix(key, keyOrPrefix)) {
       entry.superseded = true;
       inFlightRequests.delete(key);
       requestGenerations.set(key, (requestGenerations.get(key) ?? 0) + 1);

@@ -880,7 +880,9 @@ function ProposalFormPage({
         // Both at once: the questions are organiser config, and waiting for the
         // proposals first would put a second round trip in front of a page that
         let revalidatedFound: LoadedProposal[] | null = null;
-        let revalidatedProfile: Record<string, any> | undefined;
+        const revalidatedProfile = {
+          current: null as { value: Record<string, any> | undefined } | null,
+        };
         let revalidatedConfirmForm: ConfirmForm | null = null;
         let revalidatedSubmissionForm: SubmissionForm | null = null;
         let revalidatedPublished: { value: PublishedScheduleBundle | null; failed: boolean } | null = null;
@@ -898,7 +900,7 @@ function ProposalFormPage({
             onRevalidate: ({ talks: updatedTalks, speaker: updatedProfile }) => {
               if (cancelled) return;
               revalidatedFound = updatedTalks;
-              revalidatedProfile = updatedProfile;
+              revalidatedProfile.current = { value: updatedProfile };
               setTalks(updatedTalks);
               talksRef.current = updatedTalks;
               setSpeaker(updatedProfile);
@@ -990,7 +992,9 @@ function ProposalFormPage({
         ]);
         if (cancelled) return;
         const effectiveFound = revalidatedFound ?? found;
-        const effectiveProfile = revalidatedProfile ?? profile;
+        const effectiveProfile = revalidatedProfile.current
+          ? revalidatedProfile.current.value
+          : profile;
         const effectiveConfirmForm = revalidatedConfirmForm ?? questions;
         const effectiveSubmissionForm = revalidatedSubmissionForm ?? asked;
         const effectivePublished = revalidatedPublished ?? publishedResult;

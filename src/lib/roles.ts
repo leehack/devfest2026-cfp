@@ -721,7 +721,8 @@ export async function loadAllProposals(
     onError?: (error: unknown) => void;
   } = {},
 ): Promise<ProposalRow[]> {
-  const key = `allProposals:${cfpId}:${Boolean(options.speakerDetails)}`;
+  const viewerUid = auth.currentUser?.uid ?? 'anon';
+  const key = `allProposals:${cfpId}:${viewerUid}:${Boolean(options.speakerDetails)}`;
   return swrFetch(
     key,
     async () => {

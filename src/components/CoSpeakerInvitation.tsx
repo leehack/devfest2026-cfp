@@ -186,7 +186,9 @@ export function CoSpeakerInvitation({
 
   useEffect(() => {
     let cancelled = false;
-    let revalidatedProfile: Awaited<ReturnType<typeof loadProfile>> | undefined;
+    let revalidatedProfile: {
+      value: Awaited<ReturnType<typeof loadProfile>>;
+    } | null = null;
     setLoading(true);
     setLoadError('');
     Promise.all([
@@ -194,7 +196,7 @@ export function CoSpeakerInvitation({
       loadProfile(user, {
         force: attempt > 0,
         onRevalidate: (profile) => {
-          revalidatedProfile = profile;
+          revalidatedProfile = { value: profile };
           if (!cancelled && !dirtyRef.current) {
             setForm({
               ...fromDocuments(undefined, profile),
@@ -207,7 +209,7 @@ export function CoSpeakerInvitation({
     ])
       .then(([nextSummary, profile]) => {
         if (cancelled) return;
-        const effectiveProfile = revalidatedProfile !== undefined ? revalidatedProfile : profile;
+        const effectiveProfile = revalidatedProfile ? revalidatedProfile.value : profile;
         setSummary(nextSummary);
         if (!dirtyRef.current) {
           setForm({

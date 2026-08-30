@@ -80,8 +80,9 @@ export async function loadScheduleDraft(
     onError?: (error: unknown) => void;
   } = {},
 ): Promise<ScheduleDraft> {
+  const viewerUid = auth.currentUser?.uid ?? 'anon';
   return swrFetch(
-    `scheduleDraft:${cfpId}`,
+    `scheduleDraft:${cfpId}:${viewerUid}`,
     async () => {
       const [configSnap, entriesSnap] = await Promise.all([
         getDoc(doc(db, 'cfps', cfpId, 'config', 'schedule')),

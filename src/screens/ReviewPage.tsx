@@ -115,6 +115,32 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       let currentQueueResult: { proposals: ReviewerProposalRow[]; own: number } | null = null;
       let currentCfpResult: Cfp | null = null;
       let currentFormResult: SubmissionForm | null = null;
+      let accessFailed = false;
+
+      const clearProtectedQueue = (failure: unknown) => {
+        if (
+          !isAuthError(failure) ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
+          return;
+        }
+        accessFailed = true;
+        currentQueueResult = null;
+        deferredQueueApply.current.delete(scopeKey);
+        queueApplyGenerationsByScope.current.set(
+          scopeKey,
+          (queueApplyGenerationsByScope.current.get(scopeKey) ?? 0) + 1,
+        );
+        setError(t.nav.forbidden);
+        setOrder([]);
+        orderRef.current = [];
+        setOwn(0);
+        setMine(new Map());
+        setDrafts(new Map());
+        draftsRef.current = new Map();
+        setLoadedFor(scopeKey);
+      };
 
       const applyQueue = async (
         loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
@@ -130,12 +156,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           loadedQueue.proposals.map((p) => p.id),
         );
         const savesInFlight = activeSavesByScope.current.get(scopeKey) ?? 0;
-        if (request !== loadGeneration.current || activeScope.current !== scopeKey) {
+        if (
+          accessFailed ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
           return;
         }
         if (isBackgroundRevalidate && savesInFlight > 0) {
           deferredQueueApply.current.set(scopeKey, () => {
-            void applyQueue(loadedQueue, cfpDoc, formDoc, true);
+            applyQueueInBackground(loadedQueue, cfpDoc, formDoc);
           });
           return;
         }
@@ -238,6 +268,14 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
         setLoadedFor(scopeKey);
       };
 
+      const applyQueueInBackground = (
+        loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
+        cfpDoc: Cfp | null,
+        formDoc: SubmissionForm,
+      ) => {
+        void applyQueue(loadedQueue, cfpDoc, formDoc, true).catch(clearProtectedQueue);
+      };
+
       let initialLoaded = false;
       let coalesceHandle: ReturnType<typeof setTimeout> | null = null;
       const revalidated = { cfp: null as { value: Cfp | null } | null };
@@ -253,7 +291,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             currentQueueResult &&
             currentFormResult
           ) {
-            void applyQueue(currentQueueResult, getEffectiveCfp(), currentFormResult, true);
+            applyQueueInBackground(currentQueueResult, getEffectiveCfp(), currentFormResult);
           }
         }, 50);
       };
@@ -268,20 +306,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
                 triggerRevalidationApply();
               }
             },
-            onError: (err) => {
-              if (
-                isAuthError(err) &&
-                request === loadGeneration.current &&
-                activeScope.current === scopeKey
-              ) {
-                setError(t.nav.forbidden);
-                setOrder([]);
-                setOwn(0);
-                setMine(new Map());
-                setDrafts(new Map());
-                setLoadedFor(scopeKey);
-              }
-            },
+            onError: clearProtectedQueue,
           }),
           loadCfp(cfpId, {
             force,
@@ -304,7 +329,13 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             },
           }),
         ]);
-        if (request !== loadGeneration.current || activeScope.current !== scopeKey) return;
+        if (
+          accessFailed ||
+          request !== loadGeneration.current ||
+          activeScope.current !== scopeKey
+        ) {
+          return;
+        }
         currentQueueResult = currentQueueResult ?? loaded;
         currentCfpResult = revalidated.cfp ? revalidated.cfp.value : cfp;
         currentFormResult = currentFormResult ?? form;

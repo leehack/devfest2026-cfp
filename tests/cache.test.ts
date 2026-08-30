@@ -18,15 +18,18 @@ describe('cache', () => {
   it('invalidates by exact key or prefix', () => {
     invalidateCache();
     setCached('cfpWindow:cfp1', { id: 'cfp1' });
+    setCached('cfpWindow:cfp10', { id: 'cfp10' });
     setCached('cfpWindow:cfp2', { id: 'cfp2' });
     setCached('committee:cfp1', { count: 3 });
 
     invalidateCache('cfpWindow:cfp1');
     expect(getCached('cfpWindow:cfp1')).toBeUndefined();
+    expect(getCached('cfpWindow:cfp10')).toBeDefined();
     expect(getCached('cfpWindow:cfp2')).toBeDefined();
     expect(getCached('committee:cfp1')).toBeDefined();
 
     invalidateCache('cfpWindow');
+    expect(getCached('cfpWindow:cfp10')).toBeUndefined();
     expect(getCached('cfpWindow:cfp2')).toBeUndefined();
     expect(getCached('committee:cfp1')).toBeDefined();
   });

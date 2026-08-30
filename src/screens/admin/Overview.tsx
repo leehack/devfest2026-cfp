@@ -265,8 +265,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
               if (!hasFailed) applyScheduleRevalidation();
             },
             onError: (err) => {
-              const code = String((err as any)?.code || (err as any)?.message || '');
-              if (/permission-denied|unauthenticated|unauthorized|forbidden|PERMISSION_DENIED/i.test(code)) {
+              if (isAuthError(err)) {
                 hasFailed = true;
                 if (requestGeneration.current === request) {
                   setError(adminError(err, tRef.current));
@@ -295,6 +294,15 @@ export function Overview({ cfpId }: { cfpId: string }) {
             onRevalidate: (shared) => {
               latestShared = shared;
               if (!hasFailed) applyScheduleRevalidation();
+            },
+            onError: (err) => {
+              if (isAuthError(err)) {
+                hasFailed = true;
+                if (requestGeneration.current === request) {
+                  setError(adminError(err, tRef.current));
+                  setData(null);
+                }
+              }
             },
           }),
         ])

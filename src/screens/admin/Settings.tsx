@@ -113,6 +113,7 @@ export function Settings({
         if (!current()) return false;
         if (!cfp) {
           setError(tRef.current.errors.notFound);
+          setLoadedCfp('');
           setFailedCfp(scope);
           return false;
         }
@@ -184,17 +185,17 @@ export function Settings({
       };
 
       try {
-        let revalidatedCfp: Cfp | null = null;
+        const revalidatedCfp = { current: null as { value: Cfp | null } | null };
         const cfp = await loadCfp(cfpId, {
           force,
           onRevalidate: (fresh) => {
             if (current() && !dirtyRef.current) {
-              revalidatedCfp = fresh;
+              revalidatedCfp.current = { value: fresh };
               applyCfp(fresh);
             }
           },
         });
-        return applyCfp(revalidatedCfp ?? cfp);
+        return applyCfp(revalidatedCfp.current ? revalidatedCfp.current.value : cfp);
       } catch (e) {
         if (!current()) return false;
         setError(adminError(e, tRef.current));

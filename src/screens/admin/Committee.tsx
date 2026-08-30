@@ -130,6 +130,7 @@ export function Committee({
                 setPeople([]);
                 setPending([]);
                 setInviteLinks([]);
+                setPendingTransfer(null);
                 setLoadFailed(true);
               }
             }
