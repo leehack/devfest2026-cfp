@@ -123,7 +123,12 @@ export async function swrFetch<T>(
     }
   }
 
-  return runFetcher(key, fetcher, ttlMs, onRevalidate, onError);
+  // Foreground callers receive fresh data through this promise. Revalidation
+  // callbacks are reserved for the cached background path above; treating an
+  // initial load as a revalidation lets consumers apply partial aggregate state
+  // before their other foreground reads have finished. Keep error callbacks so
+  // protected screens can clear retained data immediately on access failures.
+  return runFetcher(key, fetcher, ttlMs, undefined, onError);
 }
 
 async function runFetcher<T>(
@@ -166,19 +171,25 @@ async function runFetcher<T>(
       if (hasCached(key)) {
         return getCached<T>(key) as T;
       }
-      return await swrFetch(key, fetcher, {
+      return await runFetcher(
+        key,
+        fetcher,
         ttlMs,
-        onRevalidate: (fresh) => {
-          for (const cb of entry.onRevalidates) {
-            cb(fresh);
-          }
-        },
-        onError: (err) => {
-          for (const cb of entry.onErrors) {
-            cb(err);
-          }
-        },
-      });
+        entry.onRevalidates.length > 0
+          ? (fresh) => {
+              for (const cb of entry.onRevalidates) {
+                cb(fresh);
+              }
+            }
+          : undefined,
+        entry.onErrors.length > 0
+          ? (err) => {
+              for (const cb of entry.onErrors) {
+                cb(err);
+              }
+            }
+          : undefined,
+      );
     } catch (fetchError) {
       if (requestGenerations.get(key) === currentGen && !entry.superseded) {
         if (isAuthError(fetchError)) {

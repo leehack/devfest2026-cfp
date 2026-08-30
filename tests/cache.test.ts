@@ -140,6 +140,40 @@ describe('cache', () => {
     expect(getCached('test:reval')).toEqual({ count: 2 });
   });
 
+  it('does not report an uncached foreground fetch as a revalidation', async () => {
+    invalidateCache();
+    let revalidatedData: { count: number } | null = null;
+
+    const result = await swrFetch(
+      'test:foreground',
+      async () => ({ count: 1 }),
+      {
+        onRevalidate: (data) => {
+          revalidatedData = data;
+        },
+      },
+    );
+
+    expect(result).toEqual({ count: 1 });
+    expect(revalidatedData).toBeNull();
+  });
+
+  it('continues to notify onError for an uncached foreground failure', async () => {
+    invalidateCache();
+    const failure = new Error('network unavailable');
+    let callbackError: unknown = null;
+
+    await expect(
+      swrFetch('test:foreground-error', async () => Promise.reject(failure), {
+        onError: (error) => {
+          callbackError = error;
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(callbackError).toBe(failure);
+  });
+
   it('drops onRevalidate on deduplicated in-flight requests if superseded', async () => {
     invalidateCache();
     let callbackData: { val: string } | null = null;
@@ -168,6 +202,39 @@ describe('cache', () => {
     // Callback must NOT have fired because generation was incremented
     expect(callbackData).toBeNull();
     expect(getCached('test:dedupe-gen')).toEqual({ val: 'fresh' });
+  });
+
+  it('delivers fresh data when an invalidated background revalidation retries', async () => {
+    invalidateCache();
+    setCached('test:retry-background', { val: 'cached' });
+
+    let callCount = 0;
+    let resolveFirst: ((value: { val: string }) => void) | undefined;
+    const fetcher = async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return new Promise<{ val: string }>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return { val: 'fresh-retry' };
+    };
+    let revalidatedData: { val: string } | null = null;
+
+    await swrFetch('test:retry-background', fetcher, {
+      backgroundRevalidate: true,
+      onRevalidate: (data) => {
+        revalidatedData = data;
+      },
+    });
+    invalidateCache('test:retry-background');
+    resolveFirst?.({ val: 'superseded' });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(callCount).toBe(2);
+    expect(revalidatedData).toEqual({ val: 'fresh-retry' });
+    expect(getCached('test:retry-background')).toEqual({ val: 'fresh-retry' });
   });
 
   it('caches undefined values as valid cache hits', async () => {
