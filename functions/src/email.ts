@@ -536,6 +536,33 @@ interface SendOutcome {
   ambiguous?: boolean;
 }
 
+/** In-invocation retries on a provider rate limit, and the bounds on each wait. */
+export const RESEND_RATE_LIMIT_RETRY = {
+  attempts: 3,
+  defaultWaitMs: 1_000,
+  maxWaitMs: 5_000,
+} as const;
+
+/**
+ * How long to wait before retrying a 429, from Resend's `retry-after` seconds.
+ * Bounded so a strange header cannot park the function until its timeout.
+ */
+export function rateLimitWaitMs(retryAfter: string | null): number {
+  const seconds = Number(retryAfter);
+  if (!Number.isFinite(seconds) || seconds <= 0) return RESEND_RATE_LIMIT_RETRY.defaultWaitMs;
+  return Math.min(Math.ceil(seconds * 1000), RESEND_RATE_LIMIT_RETRY.maxWaitMs);
+}
+
+interface SendRetryOptions {
+  attempts?: number;
+  wait?: (ms: number) => Promise<void>;
+}
+
+const defaultWait = (ms: number) =>
+  // Jitter keeps concurrent instances from retrying in the same instant and
+  // colliding with the limit again.
+  new Promise<void>((resolve) => setTimeout(resolve, ms + Math.floor(Math.random() * 250)));
+
 /**
  * One rendered message, handed to Resend.
  *
@@ -543,6 +570,10 @@ interface SendOutcome {
  * `emailLog` at all. That link is a bearer credential: anyone who reads it is
  * signed in as its owner, so it must not be written to a collection, kept in a
  * retry queue, or held anywhere it could be read back later.
+ *
+ * A 429 is retried here with the same idempotency key. The account limit is
+ * per second and one submission fans out to the whole committee at once, so
+ * the second attempt normally lands; the trigger's own retry is for crashes.
  */
 export async function sendViaResend(
   to: string,
@@ -550,57 +581,69 @@ export async function sendViaResend(
   apiKey: string,
   settings: EmailSettings,
   idempotencyKey?: string,
+  retry: SendRetryOptions = {},
 ): Promise<SendOutcome> {
   const sender = settings.from;
   if (!apiKey || !sender) {
     logger.warn('email not configured — rendering only', { to, subject: email.subject });
     return { status: 'dry_run' };
   }
+  const attempts = retry.attempts ?? RESEND_RATE_LIMIT_RETRY.attempts;
+  const wait = retry.wait ?? defaultWait;
 
-  let response: Response;
-  try {
-    response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        'content-type': 'application/json',
-        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
-      },
-      signal: AbortSignal.timeout(15_000),
-      body: JSON.stringify({
-        from: sender,
-        to: [to],
-        subject: email.subject,
-        text: email.text,
-        html: email.html,
-        ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
-      }),
-    });
-  } catch (error) {
-    return { status: 'failed', error: `network: ${String(error)}`, ambiguous: true };
-  }
+  for (let attempt = 1; ; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          'content-type': 'application/json',
+          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+        },
+        signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify({
+          from: sender,
+          to: [to],
+          subject: email.subject,
+          text: email.text,
+          html: email.html,
+          ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
+        }),
+      });
+    } catch (error) {
+      return { status: 'failed', error: `network: ${String(error)}`, ambiguous: true };
+    }
 
-  const body = (await response.json().catch(() => ({}))) as {
-    id?: string;
-    message?: string;
-    name?: string;
-  };
-  if (!response.ok) {
-    const ambiguousResponse =
-      response.status === 408 ||
-      response.status >= 500 ||
-      (response.status === 409 &&
-        (body.name === 'concurrent_idempotent_requests' ||
-          /concurrent/i.test(body.message ?? '')));
-    return {
-      status: 'failed',
-      error: `${response.status}: ${body.message ?? 'unknown'}`,
-      // Resend has the same idempotent request in flight. Retrying the same key
-      // is safe; assigning a new one could send it twice.
-      ...(ambiguousResponse ? { ambiguous: true } : {}),
+    if (response.status === 429 && attempt < attempts) {
+      await wait(rateLimitWaitMs(response.headers.get('retry-after')));
+      continue;
+    }
+
+    const body = (await response.json().catch(() => ({}))) as {
+      id?: string;
+      message?: string;
+      name?: string;
     };
+    if (!response.ok) {
+      const ambiguousResponse =
+        response.status === 408 ||
+        response.status === 429 ||
+        response.status >= 500 ||
+        (response.status === 409 &&
+          (body.name === 'concurrent_idempotent_requests' ||
+            /concurrent/i.test(body.message ?? '')));
+      return {
+        status: 'failed',
+        error: `${response.status}: ${body.message ?? 'unknown'}`,
+        // Resend has the same idempotent request in flight, or refused it on
+        // rate limit. Retrying the same key is safe; assigning a new one could
+        // send it twice.
+        ...(ambiguousResponse ? { ambiguous: true } : {}),
+      };
+    }
+    return { status: 'sent', providerId: body.id };
   }
-  return { status: 'sent', providerId: body.id };
 }
 
 /**
@@ -686,7 +729,12 @@ function claimedScheduleUrl(
 export const SEND_QUEUED_EMAIL_TRIGGER_OPTIONS = {
   document: 'cfps/{cfpId}/emailLog/{logId}',
   region: 'northamerica-northeast1',
-  maxInstances: 10,
+  // At most five provider requests in flight. Resend allows ten per second,
+  // and one submission queues a row per committee member in one transaction,
+  // so the default (ten instances, eighty concurrent each) lost a third of
+  // every fan-out to 429s that nothing retried.
+  maxInstances: 5,
+  concurrency: 1,
   retry: true,
 } as const;
 
