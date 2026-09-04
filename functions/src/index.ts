@@ -148,6 +148,7 @@ import {
   verifiedStaffUser,
   type EmailStatus,
 } from './email';
+import { flushEmailBatches, pendingBatchMemberIds } from './emailBatch';
 import {
   decodeHeadshotUpload,
   decodeSpeakerProfilePhotoUpload,
@@ -6407,6 +6408,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
     };
   }
 
+  // A batch the provider may still have accepted is resolved before any of
+  // its rows can be reclaimed; reclaiming one would send it a second time
+  // under a fresh key that Resend cannot dedupe against the batch.
+  if (action === 'retry') await flushEmailBatches(db, cfpId, null, { coalesceMs: 0 });
+  const stillBatched = await pendingBatchMemberIds(db, cfpId);
   const snap = await log.get();
   const queueDocs = snap.docs.filter(
     (doc) => !isCoSpeakerInvitationEmail(doc.get('kind')),
@@ -6414,6 +6420,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   const expiredSending = queueDocs.filter(
     (doc) =>
       doc.get('status') === 'sending' &&
+      !stillBatched.has(doc.id) &&
       sendingLeaseExpired(doc.get('sendingStartedAt') ?? doc.updateTime),
   );
   const expiredSendingIds = new Set(expiredSending.map((doc) => doc.id));

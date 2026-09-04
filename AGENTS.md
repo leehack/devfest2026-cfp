@@ -56,8 +56,8 @@ tests/       *.test.ts — rules.test.ts needs the emulator, the rest do not
 ```
 
 **It is a platform: everything hangs under `cfps/{cfpId}`, where the id is the
-slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config` and `emailLog`
-are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
+slug.** `proposals`, `reviews`, `members`, `roleGrants`, `config`, `emailLog`
+and `emailBatches` are all subcollections of one CFP. Only `speakers/{uid}` (the profile belongs to
 the account), `platformMembers/{uid}` and `platformRoleGrants/{email}` (platform
 administrator access), callable-only `platformUserLimits/{uid}` (per-account
 organization ownership overrides), `signInLinks` and `speakerInvitationLimits`
@@ -620,10 +620,22 @@ collection — the rule names the two readable documents one at a time.
 - **Resend allows ten requests a second, and a submission fans out to the whole
   committee in one transaction.** With the default trigger options a third of
   every fan-out died on 429s that nothing retried — `retry: true` only covers a
-  crash, and a recorded failure is a normal return. `sendViaResend` now retries
-  a 429 in place with the same key and `SEND_QUEUED_EMAIL_TRIGGER_OPTIONS` runs
-  five instances at concurrency one. Do not raise those without moving delivery
-  to the batch endpoint.
+  crash, and a recorded failure is a normal return. Real delivery is therefore
+  batched: the trigger still claims and revalidates one row, but with a provider
+  key it *stages* the row and drains every staged row of the event through
+  `/emails/batch` (`functions/src/emailBatch.ts`). Staging and the per-event lock
+  (`config/emailBatchLock`) are one transaction, so a late row is either seen by
+  the drainer's final query or drained by its own invocation. A batch is a
+  manifest under `emailBatches/{batchId}` — members, not content — and its id is
+  the idempotency key, so an ambiguous failure re-sends the identical manifest
+  and Resend dedupes it. `emailQueue`'s retry flushes pending batches first and
+  never reclaims a row a pending batch may still deliver. A 429 is still retried
+  in place with the same key, and the trigger runs five instances at concurrency
+  one. Without a key (the emulator) the trigger finishes with `dry_run` itself,
+  so e2e never sees the batch path; `tests/emailBatchFlow.test.ts` in the `rules`
+  project does, against real transactions. In permissive mode Resend returns
+  `data` for the accepted emails only and `errors[{index}]` for the rest, so the
+  two are zipped back into payload order — never read `data[i]` positionally.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.
