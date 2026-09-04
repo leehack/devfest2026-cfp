@@ -617,6 +617,13 @@ collection — the rule names the two readable documents one at a time.
   while a fresh claim remains untouchable. Resend retains idempotency keys for
   24 hours, so the remaining ambiguity is a process that stays lost beyond that
   provider window.
+- **Resend allows ten requests a second, and a submission fans out to the whole
+  committee in one transaction.** With the default trigger options a third of
+  every fan-out died on 429s that nothing retried — `retry: true` only covers a
+  crash, and a recorded failure is a normal return. `sendViaResend` now retries
+  a 429 in place with the same key and `SEND_QUEUED_EMAIL_TRIGGER_OPTIONS` runs
+  five instances at concurrency one. Do not raise those without moving delivery
+  to the batch endpoint.
 - **Population sd for reviewer calibration, sample sd for disagreement.** They
   differ by √(n/(n−1)), which varies with n — mixing them makes proposals with
   unequal review counts incomparable.

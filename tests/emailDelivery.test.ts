@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EMAIL_SENDING_LEASE_MS,
+  RESEND_RATE_LIMIT_RETRY,
   SEND_QUEUED_EMAIL_TRIGGER_OPTIONS,
   decisionEmailStillTrue,
   deliver,
   emailClaimMode,
   logId,
   providerAttemptId,
+  rateLimitWaitMs,
   resendIdempotencyKey,
   reviewedRecipientStillTrue,
   sendViaResend,
@@ -158,11 +160,98 @@ describe('Resend idempotency', () => {
     ).resolves.toMatchObject({ status: 'failed', ambiguous: true });
   });
 
-  it('configures the Firestore trigger to retry crashes', () => {
+  it('configures the Firestore trigger to retry crashes and pace provider requests', () => {
     expect(SEND_QUEUED_EMAIL_TRIGGER_OPTIONS).toMatchObject({
       retry: true,
       document: 'cfps/{cfpId}/emailLog/{logId}',
+      concurrency: 1,
     });
+    // Resend's account limit is ten requests per second.
+    expect(SEND_QUEUED_EMAIL_TRIGGER_OPTIONS.maxInstances).toBeLessThanOrEqual(5);
+  });
+
+  it('retries a rate-limited send with the same key after the provider wait', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: 'Too many requests' }), {
+          status: 429,
+          headers: { 'content-type': 'application/json', 'retry-after': '2' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'provider-email-id' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      sendViaResend('speaker@example.org', rendered, 'resend-key', settings, 'attempt-key', {
+        wait,
+      }),
+    ).resolves.toMatchObject({ status: 'sent', providerId: 'provider-email-id' });
+
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1]?.headers).toMatchObject({ 'Idempotency-Key': 'attempt-key' });
+  });
+
+  it('gives up on a persistent rate limit as ambiguous so a retry reuses the key', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ message: 'Too many requests' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      sendViaResend('speaker@example.org', rendered, 'resend-key', settings, 'attempt-key', {
+        wait,
+      }),
+    ).resolves.toMatchObject({ status: 'failed', ambiguous: true, error: '429: Too many requests' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(RESEND_RATE_LIMIT_RETRY.attempts);
+    expect(wait).toHaveBeenCalledTimes(RESEND_RATE_LIMIT_RETRY.attempts - 1);
+    expect(wait).toHaveBeenCalledWith(RESEND_RATE_LIMIT_RETRY.defaultWaitMs);
+  });
+
+  it('bounds the wait taken from the retry-after header', () => {
+    expect(rateLimitWaitMs('1')).toBe(1_000);
+    expect(rateLimitWaitMs('0.5')).toBe(500);
+    expect(rateLimitWaitMs('120')).toBe(RESEND_RATE_LIMIT_RETRY.maxWaitMs);
+    expect(rateLimitWaitMs(null)).toBe(RESEND_RATE_LIMIT_RETRY.defaultWaitMs);
+    expect(rateLimitWaitMs('soon')).toBe(RESEND_RATE_LIMIT_RETRY.defaultWaitMs);
+    expect(rateLimitWaitMs('-3')).toBe(RESEND_RATE_LIMIT_RETRY.defaultWaitMs);
+  });
+
+  it('does not retry a rejected request that was not rate limited', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ message: 'Invalid `to` field' }), {
+        status: 422,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    const outcome = await sendViaResend(
+      'speaker@example.org',
+      rendered,
+      'resend-key',
+      settings,
+      'attempt-key',
+      { wait },
+    );
+    expect(outcome).toMatchObject({ status: 'failed', error: '422: Invalid `to` field' });
+    expect(outcome).not.toHaveProperty('ambiguous');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
   });
 
   it('passes the stable attempt key to Resend and omits it for an untracked direct send', async () => {
