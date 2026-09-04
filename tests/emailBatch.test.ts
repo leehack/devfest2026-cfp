@@ -133,6 +133,36 @@ describe('batch provider request', () => {
     });
   });
 
+  it('reports a key reused with another payload as accepted earlier', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        json(409, {
+          name: 'invalid_idempotent_request',
+          message: 'Idempotency key already used with a different payload',
+        }),
+      ),
+    );
+    await expect(sendBatchViaResend(emails, 'resend-key', 'batch-key')).resolves.toEqual({
+      ok: false,
+      error: '409: Idempotency key already used with a different payload',
+      ambiguous: false,
+      acceptedEarlier: true,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        json(409, { name: 'concurrent_idempotent_requests', message: 'in progress' }),
+      ),
+    );
+    await expect(sendBatchViaResend(emails, 'resend-key', 'batch-key')).resolves.toEqual({
+      ok: false,
+      error: '409: in progress',
+      ambiguous: true,
+    });
+  });
+
   it('reports a rejected request as final', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(401, { message: 'API key is invalid' })));
     await expect(sendBatchViaResend(emails, 'resend-key', 'batch-key')).resolves.toEqual({

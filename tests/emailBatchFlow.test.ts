@@ -259,6 +259,74 @@ describe('email batch drain', () => {
     expect(await pendingBatchMemberIds(db, CFP)).toEqual(new Set());
   });
 
+  it('replays the composition that went on the wire, not the rows still waiting', async () => {
+    await seedStaged('a', 'a@example.org');
+    await seedStaged('b', 'b@example.org');
+    await seedStaged('c', 'c@example.org');
+    let attempt = 0;
+    const calls: Array<string[]> = [];
+    const send = vi.fn(async (emails: readonly BatchEmailPayload[]) => {
+      calls.push(emails.map((email) => email.to[0]));
+      attempt += 1;
+      if (attempt === 1) return { ok: false as const, error: 'network: lost', ambiguous: true };
+      return {
+        ok: true as const,
+        outcomes: emails.map((email) => ({ status: 'sent' as const, providerId: `p-${email.to[0]}` })),
+      };
+    });
+    let clock = Date.now();
+    const deps = { ...instant, send, now: () => clock };
+
+    await flushEmailBatches(db, CFP, null, deps);
+    const [batch] = await batchDocs();
+    expect(batch.get('requested')).toEqual(['a', 'b', 'c']);
+
+    // The provider had in fact accepted the request and the drainer died
+    // after finalising `a`: replaying a smaller payload would break the key.
+    await db.doc(`cfps/${CFP}/emailLog/a`).update({ status: 'sent', providerId: 'p-original' });
+    clock += EMAIL_BATCH.retryDelayMs + 1;
+    await flushEmailBatches(db, CFP, null, deps);
+
+    expect(calls).toEqual([
+      ['a@example.org', 'b@example.org', 'c@example.org'],
+      ['a@example.org', 'b@example.org', 'c@example.org'],
+    ]);
+    expect(await row('a')).toMatchObject({ status: 'sent', providerId: 'p-original' });
+    expect(await row('b')).toMatchObject({ status: 'sent', providerId: 'p-b@example.org' });
+    expect(await row('c')).toMatchObject({ status: 'sent', providerId: 'p-c@example.org' });
+    expect((await batchDocs())[0].data()).toMatchObject({ status: 'completed', attempts: 2 });
+  });
+
+  it('reads a payload mismatch on replay as the earlier request having been accepted', async () => {
+    await seedStaged('a', 'a@example.org');
+    await seedStaged('b', 'b@example.org');
+    let attempt = 0;
+    const send = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) return { ok: false as const, error: 'network: lost', ambiguous: true };
+      return {
+        ok: false as const,
+        error: '409: Idempotency key already used with a different payload',
+        ambiguous: false,
+        acceptedEarlier: true,
+      };
+    });
+    let clock = Date.now();
+    const deps = { ...instant, send, now: () => clock };
+
+    await flushEmailBatches(db, CFP, null, deps);
+    clock += EMAIL_BATCH.retryDelayMs + 1;
+    await flushEmailBatches(db, CFP, null, deps);
+
+    const a = await row('a');
+    expect(a).toMatchObject({ status: 'sent' });
+    expect(a.providerId).toBeUndefined();
+    expect(a.error).toBeUndefined();
+    expect(await row('b')).toMatchObject({ status: 'sent' });
+    expect((await batchDocs())[0].data()).toMatchObject({ status: 'completed', sent: 2, failed: 0 });
+    expect(await pendingBatchMemberIds(db, CFP)).toEqual(new Set());
+  });
+
   it('fails the rows and preserves their attempt identity once retries run out', async () => {
     await seedStaged('a', 'a@example.org');
     const send = vi.fn(async () => ({ ok: false as const, error: '503: down', ambiguous: true }));

@@ -628,7 +628,11 @@ collection — the rule names the two readable documents one at a time.
   the drainer's final query or drained by its own invocation. A batch is a
   manifest under `emailBatches/{batchId}` — members, not content — and its id is
   the idempotency key, so an ambiguous failure re-sends the identical manifest
-  and Resend dedupes it. `emailQueue`'s retry flushes pending batches first and
+  and Resend dedupes it. The manifest records the rows that went on the wire
+  (`requested`) before the request, and a replay carries exactly those rows
+  whatever their state now; a 409 `invalid_idempotent_request` on replay means
+  the original was accepted, so the rows are marked sent without provider ids.
+  `emailQueue`'s retry flushes pending batches first and
   never reclaims a row a pending batch may still deliver. A 429 is still retried
   in place with the same key, and the trigger runs five instances at concurrency
   one. Without a key (the emulator) the trigger finishes with `dry_run` itself,
