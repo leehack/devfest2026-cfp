@@ -45,6 +45,7 @@ import {
 } from '../../shared/emailTemplates';
 import type { EmailSettings } from '../../shared/emailSettings';
 import { inStatusSet } from '../../shared/enums';
+import { flushEmailBatches } from './emailBatch';
 import { readResendKey } from './secrets';
 import {
   emailContentContext,
@@ -653,14 +654,11 @@ export async function sendViaResend(
  * rather than `sent` — a log that claims to have sent mail it did not is worse
  * than no log. That is also what makes the pipeline testable end to end.
  */
-export async function deliver(
+export function renderQueuedEmail(
   row: FirebaseFirestore.DocumentData,
-  apiKey: string,
-  settings: EmailSettings,
   cfp: { id: string; name: string; publicUrl: string },
   templates?: TemplateOverrides,
-  idempotencyKey?: string,
-): Promise<SendOutcome> {
+): RenderedEmail {
   const locale = (row.locale ?? 'en') as EmailLocale;
   // The link and the event name are resolved now rather than when the row was
   // written, so renaming a CFP or moving the site fixes mail still in the queue.
@@ -679,13 +677,22 @@ export async function deliver(
     isStaffEmail(row.kind) ||
     isRoleInvitationEmail(row.kind) ||
     isCoSpeakerInvitationEmail(row.kind);
-  const email =
-    row.kind === MESSAGE_KIND
-      ? renderTemplate({ subject: row.subject as string, body: row.body as string }, locale, data)
-      : row.bilingual === true && committeeNotice
-        ? renderBilingualEmail(row.kind as EmailKind, data, templates)
-        : renderEmail(row.kind as EmailKind, locale, data, templates);
+  return row.kind === MESSAGE_KIND
+    ? renderTemplate({ subject: row.subject as string, body: row.body as string }, locale, data)
+    : row.bilingual === true && committeeNotice
+      ? renderBilingualEmail(row.kind as EmailKind, data, templates)
+      : renderEmail(row.kind as EmailKind, locale, data, templates);
+}
 
+export async function deliver(
+  row: FirebaseFirestore.DocumentData,
+  apiKey: string,
+  settings: EmailSettings,
+  cfp: { id: string; name: string; publicUrl: string },
+  templates?: TemplateOverrides,
+  idempotencyKey?: string,
+): Promise<SendOutcome> {
+  const email = renderQueuedEmail(row, cfp, templates);
   return sendViaResend(row.to as string, email, apiKey, settings, idempotencyKey);
 }
 
@@ -735,6 +742,8 @@ export const SEND_QUEUED_EMAIL_TRIGGER_OPTIONS = {
   // every fan-out to 429s that nothing retried.
   maxInstances: 5,
   concurrency: 1,
+  // A drain may send several batches with bounded retries between them.
+  timeoutSeconds: 300,
   retry: true,
 } as const;
 
@@ -758,6 +767,8 @@ function supersededEmailUpdate(
     sendingClaimId: FieldValue.delete(),
     sendingStartedAt: FieldValue.delete(),
     providerAttemptId: FieldValue.delete(),
+    batchStaged: FieldValue.delete(),
+    batchStagedAt: FieldValue.delete(),
   };
 }
 
@@ -941,6 +952,9 @@ export const sendQueuedEmail = onDocumentWritten(
               attempts: FieldValue.increment(1),
               sendingClaimId: claimId,
               sendingStartedAt: FieldValue.serverTimestamp(),
+              batchId: FieldValue.delete(),
+              batchStaged: FieldValue.delete(),
+              batchStagedAt: FieldValue.delete(),
             }
           : {};
       const providerIdempotencyAttempt = providerAttemptId(snap.data()!, claimId);
@@ -1093,6 +1107,8 @@ export const sendQueuedEmail = onDocumentWritten(
                   sentAt: terminalStatus === 'sent' ? terminalAt! : FieldValue.delete(),
                   sendingClaimId: FieldValue.delete(),
                   sendingStartedAt: FieldValue.delete(),
+                  batchStaged: FieldValue.delete(),
+                  batchStagedAt: FieldValue.delete(),
                   ...(!preserveProviderAttempt
                     ? { providerAttemptId: FieldValue.delete() }
                     : {}),
@@ -1392,6 +1408,21 @@ export const sendQueuedEmail = onDocumentWritten(
       return;
     }
     const handoffApiKey = await readResendKey();
+    if (handoffApiKey) {
+      // Real delivery goes through the batch drain. Staging happens in the
+      // same transaction as the lock attempt, so the row is either drained by
+      // whoever holds the lock or by this invocation once it takes it.
+      const flushed = await flushEmailBatches(db, cfpId, {
+        ref,
+        claimId,
+        configurationFingerprint: handoffConfigurationFingerprint,
+        reviewed,
+      });
+      logger.info('email staged', { cfpId, logId: event.params.logId, kind: claimed.kind, ...flushed });
+      return;
+    }
+    // Without a key `deliver` renders and records `dry_run` — the emulator
+    // path, and what makes the pipeline observable end to end.
     const outcome = await deliver(
       claimed,
       handoffApiKey,
