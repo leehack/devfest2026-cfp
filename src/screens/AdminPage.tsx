@@ -4,7 +4,7 @@ import type { User } from 'firebase/auth';
 import { Link } from '../components/Link';
 import { useI18n } from '../i18n/context';
 import { ADMIN_TABS, goTo, href, type AdminTab } from '../lib/router';
-import { emailQueue } from '../lib/roles';
+import { loadEmailSummary, publishEmailSummary, type EmailSummary } from '../lib/roles';
 import type { CfpRole } from '@shared/cfp';
 
 const Committee = lazy(() =>
@@ -82,37 +82,46 @@ export function AdminPage({
     pendingEmailState?.cfpId === cfpId && pendingEmailState.failed;
 
   const publishPendingEmailCount = useCallback(
-    (state: { waiting: number; needsAttention: number }) => {
+    (state: EmailSummary) => {
       queueRequest.current += 1;
+      publishEmailSummary(cfpId, state);
       setPendingEmailState({ cfpId, ...state, failed: false });
     },
     [cfpId],
   );
 
-  const refreshPendingEmails = useCallback(async () => {
-    const request = ++queueRequest.current;
-    try {
-      const { data } = await emailQueue({ cfpId, action: 'summary' });
-      if (request !== queueRequest.current) return;
-      setPendingEmailState({
-        cfpId,
-        waiting: data.waiting ?? 0,
-        needsAttention: data.needsAttention ?? 0,
-        failed: false,
-      });
-    } catch {
-      if (request !== queueRequest.current) return;
-      setPendingEmailState((current) => ({
-        cfpId,
-        waiting: current?.cfpId === cfpId ? current.waiting : null,
-        needsAttention: current?.cfpId === cfpId ? current.needsAttention : 0,
-        failed: true,
-      }));
-    }
-  }, [cfpId]);
+  /** `force` after an action that queues or releases mail; a tab switch reuses the cache. */
+  const refreshPendingEmails = useCallback(
+    async (force: boolean) => {
+      const request = ++queueRequest.current;
+      const apply = (summary: EmailSummary) => {
+        if (request !== queueRequest.current) return;
+        setPendingEmailState({ cfpId, ...summary, failed: false });
+      };
+      const fail = () => {
+        if (request !== queueRequest.current) return;
+        setPendingEmailState((current) => ({
+          cfpId,
+          waiting: current?.cfpId === cfpId ? current.waiting : null,
+          needsAttention: current?.cfpId === cfpId ? current.needsAttention : 0,
+          failed: true,
+        }));
+      };
+      try {
+        apply(await loadEmailSummary(cfpId, { force, onRevalidate: apply, onError: fail }));
+      } catch {
+        fail();
+      }
+    },
+    [cfpId],
+  );
+  const forceRefreshPendingEmails = useCallback(
+    () => refreshPendingEmails(true),
+    [refreshPendingEmails],
+  );
 
   useEffect(() => {
-    void refreshPendingEmails();
+    void refreshPendingEmails(false);
     return () => {
       queueRequest.current += 1;
     };
@@ -415,7 +424,7 @@ export function AdminPage({
             readOnly={archived}
             pendingEmailCount={pendingEmailCount}
             pendingEmailCheckFailed={pendingEmailCheckFailed}
-            onEmailQueueChange={refreshPendingEmails}
+            onEmailQueueChange={forceRefreshPendingEmails}
           />
         )}
         {tab === 'schedule' && (
@@ -423,7 +432,7 @@ export function AdminPage({
             cfpId={cfpId}
             readOnly={archived}
             onDisclosureChanged={async (stage) => {
-              if (stage === 'shared') await refreshPendingEmails();
+              if (stage === 'shared') await refreshPendingEmails(true);
               onCfpChange?.();
             }}
           />

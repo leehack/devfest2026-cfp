@@ -23,6 +23,8 @@ import {
   loadAllProposals,
   loadCfp,
   loadCommittee,
+  loadEmailSummary,
+  type EmailSummary,
   type ProposalRow,
 } from '../../lib/roles';
 import { href, navigate, type AdminTab } from '../../lib/router';
@@ -149,6 +151,7 @@ export function Overview({ cfpId }: { cfpId: string }) {
       committee: null as Awaited<ReturnType<typeof loadCommittee>> | null,
       submission: null as SubmissionForm | null,
       confirmation: null as ConfirmForm | null,
+      emailSummary: null as EmailSummary | null,
     };
     let latestDraft: { config: ScheduleConfig | null; entries: ScheduleEntry[] } | null = null;
     let latestShared: SharedScheduleBundle | null = null;
@@ -242,13 +245,25 @@ export function Overview({ cfpId }: { cfpId: string }) {
         }),
         Promise.all([
           emailQueue({ cfpId, action: 'readiness' }),
-          emailQueue({ cfpId, action: 'summary' }),
+          // Shares the admin badge's cache and in-flight request: one call, not two.
+          loadEmailSummary(cfpId, {
+            onRevalidate: (summary) => {
+              revalidated.emailSummary = summary;
+              if (requestGeneration.current === request && !hasFailed) {
+                setData((prev) =>
+                  prev && prev.cfpId === cfpId && !prev.email.checkFailed
+                    ? { ...prev, email: { ...prev.email, ...summary } }
+                    : prev,
+                );
+              }
+            },
+          }),
         ])
-          .then(([{ data: snapshot }, { data: summary }]) => ({
+          .then(([{ data: snapshot }, summary]) => ({
             delivery: snapshot.delivery ?? null,
             problems: snapshot.delivery?.problems ?? [],
-            waiting: summary.waiting ?? 0,
-            needsAttention: summary.needsAttention ?? 0,
+            waiting: summary.waiting,
+            needsAttention: summary.needsAttention,
             checkFailed: false,
           }))
           .catch(() => ({
@@ -337,7 +352,10 @@ export function Overview({ cfpId }: { cfpId: string }) {
         committee: revalidated.committee ?? committee,
         submission: revalidated.submission ?? submission,
         confirmation: revalidated.confirmation ?? confirmation,
-        email,
+        email:
+          revalidated.emailSummary && !email.checkFailed
+            ? { ...email, ...revalidated.emailSummary }
+            : email,
         schedule:
           latestDraft && latestShared
             ? computeScheduleOverview(latestDraft, latestShared)

@@ -16,7 +16,7 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { auth, db, functions } from '../firebase';
-import { getCached, swrFetch } from './cache';
+import { getCached, invalidateCache, setCached, swrFetch } from './cache';
 import {
   STATUS_SETS,
   type AttendanceStatus,
@@ -386,6 +386,49 @@ export const emailQueue = httpsCallable<
     truncated?: number;
   }
 >(functions, 'emailQueue');
+
+export interface EmailSummary {
+  waiting: number;
+  needsAttention: number;
+}
+
+const emailSummaryKey = (cfpId: string) =>
+  `emailSummary:${cfpId}:${auth.currentUser?.uid ?? 'anon'}`;
+
+/**
+ * The counts behind the admin email badge. Cached so a remount paints at once and
+ * the badge and overview share one call; still revalidated every time, because
+ * delivery failures land asynchronously and the next tab switch must show them.
+ */
+export async function loadEmailSummary(
+  cfpId: string,
+  options: {
+    force?: boolean;
+    onRevalidate?: (summary: EmailSummary) => void;
+    onError?: (error: unknown) => void;
+  } = {},
+): Promise<EmailSummary> {
+  return swrFetch(
+    emailSummaryKey(cfpId),
+    async () => {
+      const { data } = await emailQueue({ cfpId, action: 'summary' });
+      return { waiting: data.waiting ?? 0, needsAttention: data.needsAttention ?? 0 };
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
+  );
+}
+
+/** Adopts counts an email action just returned; a fetch already in flight may predate it. */
+export function publishEmailSummary(cfpId: string, summary: EmailSummary): void {
+  const key = emailSummaryKey(cfpId);
+  invalidateCache(key);
+  setCached(key, summary);
+}
 
 export interface EmailRow {
   logId: string;
