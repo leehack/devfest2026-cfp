@@ -1970,6 +1970,16 @@ export const fr: Dictionary = {
     colScore: 'Moyenne',
     colReviews: 'Évaluations',
     colSpread: 'Écart',
+    detailOpen: 'Détails',
+    detailOpenFor: (title: string) => `Ouvrir les détails de ${title}`,
+    detailEyebrow: 'Détails de la proposition',
+    detailClose: 'Fermer les détails',
+    detailAggregate: 'Résumé des notes',
+    detailNormalized: 'Calibrée',
+    detailNoReviews: 'Aucune évaluation pour l’instant.',
+    detailOwnProposal:
+      'Vous présentez cette proposition : ses évaluations individuelles vous restent masquées.',
+    detailReviewsDenied: 'Ces évaluations ne sont pas accessibles à votre compte.',
   },
 
   review: {

@@ -1940,6 +1940,16 @@ export const en = {
     colScore: 'Average',
     colReviews: 'Reviews',
     colSpread: 'Spread',
+    detailOpen: 'Details',
+    detailOpenFor: (title: string) => `Open details for ${title}`,
+    detailEyebrow: 'Proposal details',
+    detailClose: 'Close details',
+    detailAggregate: 'Score summary',
+    detailNormalized: 'Calibrated',
+    detailNoReviews: 'No reviews yet.',
+    detailOwnProposal:
+      'You speak on this proposal, so its individual reviews stay hidden from you.',
+    detailReviewsDenied: 'These reviews are not available to your account.',
   },
 
   review: {

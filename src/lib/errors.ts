@@ -79,6 +79,13 @@ export function adminError(error: unknown, t: Dictionary): string {
   }
 }
 
+/** An organiser reading a proposal's reviews: a denial is the own-proposal rule. */
+export function adminReviewsError(error: unknown, t: Dictionary): string {
+  return codeOf(error) === 'permission-denied'
+    ? t.admin.detailReviewsDenied
+    : adminError(error, t);
+}
+
 export function orgError(error: unknown, t: Dictionary): string {
   if (codeOf(error) === 'resource-exhausted') {
     if (reasonOf(error) === 'org_limit_reached') return t.orgs.createLimitHelp;

@@ -411,6 +411,7 @@ export function AdminPage({
         {tab === 'proposals' && (
           <Proposals
             cfpId={cfpId}
+            viewerUid={user.uid}
             readOnly={archived}
             pendingEmailCount={pendingEmailCount}
             pendingEmailCheckFailed={pendingEmailCheckFailed}
