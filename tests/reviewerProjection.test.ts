@@ -8,6 +8,7 @@ import {
 
 import {
   REVIEWER_PROPOSAL_FIELDS,
+  reviewerOwnReviewProjection,
   reviewerProposalProjection,
   reviewerTravelParticipantIds,
 } from '../functions/src/reviewerProjection';
@@ -376,5 +377,26 @@ describe('reviewer proposal projection', () => {
     expect(blind.speakerTravel).toBeUndefined();
     expect(blind.title).toBe('Safe title');
     expect(blind.abstract).toBe('Safe abstract');
+  });
+});
+
+describe('reviewer own-review projection', () => {
+  it('keeps only score, conflict and comment, dropping the Timestamp', () => {
+    expect(
+      reviewerOwnReviewProjection({
+        cfpId: 'devfest',
+        score: 3,
+        conflictOfInterest: false,
+        comment: 'Strong demo',
+        updatedAt: Timestamp.fromMillis(1_000),
+      }),
+    ).toEqual({ score: 3, conflictOfInterest: false, comment: 'Strong demo' });
+  });
+
+  it('treats a missing document as not reviewed and drops unknown scores', () => {
+    expect(reviewerOwnReviewProjection(undefined)).toBeNull();
+    expect(reviewerOwnReviewProjection({ score: 9, conflictOfInterest: true })).toEqual({
+      conflictOfInterest: true,
+    });
   });
 });

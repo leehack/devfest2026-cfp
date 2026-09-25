@@ -300,7 +300,9 @@ collection — the rule names the two readable documents one at a time.
   submission questions, `reviewerVisible: false` excludes that answer; an absent
   flag is the legacy-compatible visible default. Acknowledgements never enter the
   review payload. It filters active or former speakers out of their own
-  proposals. Drafts are outside that queue. Active speakers and event admins
+  proposals. Drafts are outside that queue. The same response carries the
+  caller's own reviews of the returned proposals (`mine`: score, conflict,
+  comment), so the deck makes no per-proposal review reads. Active speakers and event admins
   retain the raw reads they need. An exact pending invitee sees only a separate
   callable-projected consent summary. The queue is a one-shot read, so attendance
   is current as of its most recent load or refresh rather than updated live.

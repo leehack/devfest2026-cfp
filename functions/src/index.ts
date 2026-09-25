@@ -15,6 +15,7 @@ import {
   FieldValue,
   getFirestore,
   Timestamp,
+  type DocumentReference,
   type DocumentSnapshot,
   type QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
@@ -246,8 +247,10 @@ import {
   useFreshHostingOrigin,
 } from './authLinks';
 import {
+  reviewerOwnReviewProjection,
   reviewerProposalProjection,
   reviewerTravelParticipantIds,
+  type ReviewerOwnReview,
   type ReviewerParticipantSource,
 } from './reviewerProjection';
 export {
@@ -3482,7 +3485,7 @@ export const setSubmissionForm = onCall(CALLABLE, async (request) => {
 });
 
 const REVIEW_QUEUE_STATUSES = STATUS_SETS.reviewQueue;
-const REVIEW_TRAVEL_READ_CHUNK = 100;
+const REVIEW_QUEUE_READ_CHUNK = 100;
 const AGGREGATE_REVISION_FIELD = '_aggregateRevision';
 const AGGREGATE_CHUNK = 400;
 
@@ -3494,6 +3497,14 @@ const aggregateScorable = (status: unknown): boolean =>
   (PROPOSAL_STATUSES as readonly string[]).includes(status) &&
   status !== 'draft' &&
   status !== 'withdrawn';
+
+async function getAllChunked(refs: DocumentReference[]): Promise<DocumentSnapshot[]> {
+  const chunks: Promise<DocumentSnapshot[]>[] = [];
+  for (let index = 0; index < refs.length; index += REVIEW_QUEUE_READ_CHUNK) {
+    chunks.push(db.getAll(...refs.slice(index, index + REVIEW_QUEUE_READ_CHUNK)));
+  }
+  return (await Promise.all(chunks)).flat();
+}
 
 export const reviewQueue = onCall(CALLABLE, async (request) => {
   const cfpId = requireCfpId(request.data);
@@ -3534,24 +3545,36 @@ export const reviewQueue = onCall(CALLABLE, async (request) => {
         })),
       )
     : [];
+  // The caller's own reviews ride along so the deck needs no per-proposal
+  // follow-up read. Only `visible`: never a review on their own talk.
+  const [participants, ownReviews] = await Promise.all([
+    getAllChunked(participantReads.map(({ ref }) => ref)),
+    getAllChunked(
+      visible.map((proposal) =>
+        db.doc(`cfps/${cfpId}/proposals/${proposal.id}/reviews/${reviewerUid}`),
+      ),
+    ),
+  ]);
   const participantByProposal = new Map<
     string,
     Map<string, ReviewerParticipantSource>
   >();
-  for (let index = 0; index < participantReads.length; index += REVIEW_TRAVEL_READ_CHUNK) {
-    const chunk = participantReads.slice(index, index + REVIEW_TRAVEL_READ_CHUNK);
-    const participants = await db.getAll(...chunk.map(({ ref }) => ref));
-    participants.forEach((participant, participantIndex) => {
-      if (!participant.exists) return;
-      const { proposalId, uid } = chunk[participantIndex];
-      const byUid = participantByProposal.get(proposalId) ?? new Map();
-      byUid.set(uid, participant.data() ?? {});
-      participantByProposal.set(proposalId, byUid);
-    });
-  }
+  participants.forEach((participant, participantIndex) => {
+    if (!participant.exists) return;
+    const { proposalId, uid } = participantReads[participantIndex];
+    const byUid = participantByProposal.get(proposalId) ?? new Map();
+    byUid.set(uid, participant.data() ?? {});
+    participantByProposal.set(proposalId, byUid);
+  });
+  const mine: Record<string, ReviewerOwnReview> = {};
+  ownReviews.forEach((review, reviewIndex) => {
+    const projected = reviewerOwnReviewProjection(review.data());
+    if (projected) mine[visible[reviewIndex].id] = projected;
+  });
   return {
     ok: true,
     own: own.length,
+    mine,
     proposals: visible.map((proposal) =>
       reviewerProposalProjection(
         proposal.id,

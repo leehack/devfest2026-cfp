@@ -179,8 +179,15 @@ test.describe('review backend operations', () => {
         status: 'accepted',
       }),
     ]);
+    await Promise.all([
+      seedReview('projected', reviewer.uid, 3),
+      seedReview('projected', 'another-reviewer', 1),
+      seedReview('reviewer-own', reviewer.uid, 2),
+    ]);
 
     const queue = await callJson(reviewer.idToken, 'reviewQueue', {});
+    // Only the caller's own review, only on proposals in the deck.
+    expect(queue.mine).toEqual({ projected: { score: 3, conflictOfInterest: false } });
     expect(queue).toMatchObject({
       ok: true,
       own: 1,

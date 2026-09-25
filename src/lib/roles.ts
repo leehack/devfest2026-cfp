@@ -17,7 +17,12 @@ import type { User } from 'firebase/auth';
 
 import { auth, db, functions } from '../firebase';
 import { getCached, swrFetch } from './cache';
-import { STATUS_SETS, type AttendanceStatus, type ProposalStatus } from '@shared/enums';
+import {
+  STATUS_SETS,
+  type AttendanceStatus,
+  type ProposalStatus,
+  type Score,
+} from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
@@ -815,6 +820,15 @@ export interface ReviewQueue {
    * "the only one is yours", and the screen has to be able to say which.
    */
   own: number;
+  /** The caller's own reviews, keyed by proposal id — only for `proposals`. */
+  mine: Record<string, OwnReview>;
+}
+
+/** A reviewer's own review as the queue callable projects it. */
+export interface OwnReview {
+  score?: Score;
+  conflictOfInterest: boolean;
+  comment?: string;
 }
 
 export interface ReviewerSpeakerTravel {
@@ -850,7 +864,7 @@ export type ReviewerProposalRow = Pick<
 
 const reviewQueueCall = httpsCallable<
   Just,
-  { ok: boolean; proposals: ReviewerProposalRow[]; own: number }
+  { ok: boolean } & ReviewQueue
 >(functions, 'reviewQueue');
 
 /**
@@ -872,7 +886,7 @@ export async function loadReviewQueue(
     `reviewQueue:${cfpId}:${uid}`,
     async () => {
       const { data } = await reviewQueueCall({ cfpId });
-      return { proposals: data.proposals, own: data.own };
+      return { proposals: data.proposals, own: data.own, mine: data.mine };
     },
     {
       force: options.force,
