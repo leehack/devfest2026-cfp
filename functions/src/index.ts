@@ -3546,13 +3546,17 @@ export const reviewQueue = onCall(CALLABLE, async (request) => {
       )
     : [];
   // The caller's own reviews ride along so the deck needs no per-proposal
-  // follow-up read. Only `visible`: never a review on their own talk.
-  const [participants, ownReviews] = await Promise.all([
+  // follow-up read. The Admin SDK skips the rules, so this restates their
+  // `speaksOnThis` gate: no review on a talk the caller has a roster row on.
+  const [participants, ownReviews, ownParticipantRows] = await Promise.all([
     getAllChunked(participantReads.map(({ ref }) => ref)),
     getAllChunked(
       visible.map((proposal) =>
         db.doc(`cfps/${cfpId}/proposals/${proposal.id}/reviews/${reviewerUid}`),
       ),
+    ),
+    getAllChunked(
+      visible.map((proposal) => speakerParticipantRef(db, cfpId, proposal.id, reviewerUid)),
     ),
   ]);
   const participantByProposal = new Map<
@@ -3568,6 +3572,7 @@ export const reviewQueue = onCall(CALLABLE, async (request) => {
   });
   const mine: Record<string, ReviewerOwnReview> = {};
   ownReviews.forEach((review, reviewIndex) => {
+    if (ownParticipantRows[reviewIndex].exists) return;
     const projected = reviewerOwnReviewProjection(review.data());
     if (projected) mine[visible[reviewIndex].id] = projected;
   });
