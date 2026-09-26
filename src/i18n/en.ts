@@ -1974,6 +1974,11 @@ export const en = {
       'Proposals are closed. When every item has a response, the organisers can make decisions.',
     scoresVisibleDuringIntake:
       'Committee scores are visible while proposals are open. For an independent late-intake round, ask an organiser to hide scores before continuing.',
+    search: 'Find a talk',
+    searchPlaceholder: 'Title or speaker',
+    searchPlaceholderBlind: 'Title',
+    noMatches: (query: string) => `No talk matches “${query}”.`,
+    clearSearch: 'Clear search',
     allCategories: 'All categories',
     filterNeedsResponse: 'Needs response',
     filterAll: 'All proposals',
