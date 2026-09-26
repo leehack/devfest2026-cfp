@@ -4,6 +4,7 @@ import {
   type Answers,
 } from '../../shared/confirmForm';
 import { MAX_ACTIVE_SPEAKERS } from '../../shared/coSpeakers';
+import { SCORES, type Score } from '../../shared/enums';
 import { attendanceSchemaFor } from '../../shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -246,4 +247,21 @@ export function reviewerProposalProjection(
   const aggregate = includeAggregate ? aggregateFrom(source.aggregate) : null;
   if (aggregate) projected.aggregate = aggregate;
   return projected;
+}
+
+export interface ReviewerOwnReview {
+  score?: Score;
+  conflictOfInterest: boolean;
+  comment?: string;
+}
+
+/** The caller's own review, minus `cfpId` and the Timestamp a callable cannot carry. */
+export function reviewerOwnReviewProjection(
+  source: Record<string, unknown> | undefined,
+): ReviewerOwnReview | null {
+  if (!source) return null;
+  const own: ReviewerOwnReview = { conflictOfInterest: source.conflictOfInterest === true };
+  if ((SCORES as readonly unknown[]).includes(source.score)) own.score = source.score as Score;
+  if (typeof source.comment === 'string' && source.comment) own.comment = source.comment;
+  return own;
 }

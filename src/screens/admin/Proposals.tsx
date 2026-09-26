@@ -875,6 +875,22 @@ export function Proposals({
       pendingStatuses.current.clear();
       decisionSequence.current = 0;
     }
+    // Independent of the rows, so it runs alongside them rather than after.
+    void reviewCoverage({ cfpId })
+      .then(({ data }) => {
+        if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
+        setCoverage(data);
+        setCoverageError('');
+      })
+      .catch((coverageFailure) => {
+        if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
+        setCoverageError(adminError(coverageFailure, t));
+      })
+      .finally(() => {
+        if (request === loadGeneration.current && activeCfp.current === cfpId) {
+          setCoverageLoading(false);
+        }
+      });
     const mergePendingStatuses = (inputRows: ProposalRow[]) => {
       if (pendingStatuses.current.size === 0) return inputRows;
       return inputRows.map((r) => {
@@ -945,21 +961,6 @@ export function Proposals({
       setLoadedFor(cfpId);
       setLoadFailed(false);
       setError('');
-      void reviewCoverage({ cfpId })
-        .then(({ data }) => {
-          if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
-          setCoverage(data);
-          setCoverageError('');
-        })
-        .catch((coverageFailure) => {
-          if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
-          setCoverageError(adminError(coverageFailure, t));
-        })
-        .finally(() => {
-          if (request === loadGeneration.current && activeCfp.current === cfpId) {
-            setCoverageLoading(false);
-          }
-        });
     } catch (e) {
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       setError(adminError(e, t));

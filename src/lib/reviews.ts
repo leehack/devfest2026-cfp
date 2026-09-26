@@ -1,9 +1,4 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-} from 'firebase/firestore/lite';
+import { collection, getDocs } from 'firebase/firestore/lite';
 import { httpsCallable } from 'firebase/functions';
 
 import { db, functions } from '../firebase';
@@ -15,27 +10,6 @@ export interface ReviewDraft {
   score: Score;
   conflictOfInterest: boolean;
   comment: string;
-}
-
-/**
- * A reviewer's own reviews, one `get` per proposal.
- *
- * A collection-group query would be one round trip instead of N, but listing
- * `reviews` is denied until the round closes — reading your own document by id
- * is the only access the rules give a reviewer before then.
- */
-export async function loadMyReviews(
-  cfpId: string,
-  uid: string,
-  proposalIds: string[],
-): Promise<Map<string, Review>> {
-  const found = await Promise.all(
-    proposalIds.map(async (id) => {
-      const snap = await getDoc(doc(db, 'cfps', cfpId, 'proposals', id, 'reviews', uid));
-      return snap.exists() ? ([id, snap.data() as Review] as const) : null;
-    }),
-  );
-  return new Map(found.filter((entry): entry is [string, Review] => entry !== null));
 }
 
 const saveReviewCall = httpsCallable<

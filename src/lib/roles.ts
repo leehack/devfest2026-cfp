@@ -16,8 +16,13 @@ import { httpsCallable } from 'firebase/functions';
 import type { User } from 'firebase/auth';
 
 import { auth, db, functions } from '../firebase';
-import { getCached, swrFetch } from './cache';
-import { STATUS_SETS, type AttendanceStatus, type ProposalStatus } from '@shared/enums';
+import { getCached, invalidateCache, setCached, swrFetch } from './cache';
+import {
+  STATUS_SETS,
+  type AttendanceStatus,
+  type ProposalStatus,
+  type Score,
+} from '@shared/enums';
 import type { CfpProfile, CfpRole, Visibility } from '@shared/cfp';
 import type { EmailSettings } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
@@ -381,6 +386,49 @@ export const emailQueue = httpsCallable<
     truncated?: number;
   }
 >(functions, 'emailQueue');
+
+export interface EmailSummary {
+  waiting: number;
+  needsAttention: number;
+}
+
+const emailSummaryKey = (cfpId: string) =>
+  `emailSummary:${cfpId}:${auth.currentUser?.uid ?? 'anon'}`;
+
+/**
+ * The counts behind the admin email badge. Cached so a remount paints at once and
+ * the badge and overview share one call; still revalidated every time, because
+ * delivery failures land asynchronously and the next tab switch must show them.
+ */
+export async function loadEmailSummary(
+  cfpId: string,
+  options: {
+    force?: boolean;
+    onRevalidate?: (summary: EmailSummary) => void;
+    onError?: (error: unknown) => void;
+  } = {},
+): Promise<EmailSummary> {
+  return swrFetch(
+    emailSummaryKey(cfpId),
+    async () => {
+      const { data } = await emailQueue({ cfpId, action: 'summary' });
+      return { waiting: data.waiting ?? 0, needsAttention: data.needsAttention ?? 0 };
+    },
+    {
+      force: options.force,
+      backgroundRevalidate: true,
+      onRevalidate: options.onRevalidate,
+      onError: options.onError,
+    },
+  );
+}
+
+/** Adopts counts an email action just returned; a fetch already in flight may predate it. */
+export function publishEmailSummary(cfpId: string, summary: EmailSummary): void {
+  const key = emailSummaryKey(cfpId);
+  invalidateCache(key);
+  setCached(key, summary);
+}
 
 export interface EmailRow {
   logId: string;
@@ -815,6 +863,15 @@ export interface ReviewQueue {
    * "the only one is yours", and the screen has to be able to say which.
    */
   own: number;
+  /** The caller's own reviews, keyed by proposal id — only for `proposals`. */
+  mine: Record<string, OwnReview>;
+}
+
+/** A reviewer's own review as the queue callable projects it. */
+export interface OwnReview {
+  score?: Score;
+  conflictOfInterest: boolean;
+  comment?: string;
 }
 
 export interface ReviewerSpeakerTravel {
@@ -850,7 +907,7 @@ export type ReviewerProposalRow = Pick<
 
 const reviewQueueCall = httpsCallable<
   Just,
-  { ok: boolean; proposals: ReviewerProposalRow[]; own: number }
+  { ok: boolean } & ReviewQueue
 >(functions, 'reviewQueue');
 
 /**
@@ -872,7 +929,7 @@ export async function loadReviewQueue(
     `reviewQueue:${cfpId}:${uid}`,
     async () => {
       const { data } = await reviewQueueCall({ cfpId });
-      return { proposals: data.proposals, own: data.own };
+      return { proposals: data.proposals, own: data.own, mine: data.mine };
     },
     {
       force: options.force,

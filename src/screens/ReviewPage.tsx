@@ -27,8 +27,14 @@ import { reviewError } from '../lib/errors';
 import { isAuthError } from '../lib/cache';
 import { loadSubmissionForm } from '../lib/proposals';
 import { reviewerTravelFields } from '../lib/reviewerTravel';
-import { loadCfp, loadReviewQueue, type ReviewerProposalRow } from '../lib/roles';
-import { loadMyReviews, saveReview } from '../lib/reviews';
+import {
+  loadCfp,
+  loadReviewQueue,
+  type OwnReview,
+  type ReviewerProposalRow,
+  type ReviewQueue,
+} from '../lib/roles';
+import { saveReview } from '../lib/reviews';
 import {
   clearReviewDraft,
   keepReviewDraft,
@@ -42,7 +48,7 @@ import {
   type SubmissionForm,
 } from '@shared/submissionForm';
 import { localised } from '@shared/confirmForm';
-import type { Cfp, Review } from '@shared/types';
+import type { Cfp } from '@shared/types';
 
 interface SaveFailure {
   id: string;
@@ -51,7 +57,7 @@ interface SaveFailure {
   message: string;
 }
 
-const draftOf = (review?: Review): Draft => ({
+const draftOf = (review?: OwnReview): Draft => ({
   // The rules keep a score-shaped value on every review document, but a
   // declared conflict is not a score. Keep the placeholder out of the UI.
   score: review?.conflictOfInterest ? null : review?.score ?? null,
@@ -64,7 +70,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
   const [order, setOrder] = useState<ReviewerProposalRow[]>([]);
   const [own, setOwn] = useState(0);
-  const [mine, setMine] = useState<Map<string, Review>>(new Map());
+  const [mine, setMine] = useState<Map<string, OwnReview>>(new Map());
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map());
   const [reviewsVisible, setReviewsVisible] = useState(false);
   const [blindReview, setBlindReview] = useState(false);
@@ -94,6 +100,9 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const queueApplyGenerationsByScope = useRef<Map<string, number>>(new Map());
   const activeSavesByScope = useRef<Map<string, number>>(new Map());
   const deferredQueueApply = useRef<Map<string, () => void>>(new Map());
+  // Saves this tab made since the last load, per scope. A queue payload fetched
+  // while a save was in flight can predate it, so these win over its `mine`.
+  const savedSinceLoad = useRef<Map<string, Map<string, OwnReview>>>(new Map());
   const scopeKey = `${cfpId}:${user.uid}`;
   const activeScope = useRef(scopeKey);
   activeScope.current = scopeKey;
@@ -102,6 +111,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     async (force = false) => {
       const request = ++loadGeneration.current;
       deferredQueueApply.current.delete(scopeKey);
+      savedSinceLoad.current.delete(scopeKey);
       orderRef.current = [];
       setLoading(true);
       setLoadedFor('');
@@ -112,7 +122,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setSavedId('');
       setFailures(new Map());
 
-      let currentQueueResult: { proposals: ReviewerProposalRow[]; own: number } | null = null;
+      let currentQueueResult: ReviewQueue | null = null;
       let currentCfpResult: Cfp | null = null;
       let currentFormResult: SubmissionForm | null = null;
       let accessFailed = false;
@@ -143,18 +153,17 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       };
 
       const applyQueue = async (
-        loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
+        loadedQueue: ReviewQueue,
         cfpDoc: Cfp | null,
         formDoc: SubmissionForm,
         isBackgroundRevalidate = false,
       ) => {
         const applyGen = (queueApplyGenerationsByScope.current.get(scopeKey) ?? 0) + 1;
         queueApplyGenerationsByScope.current.set(scopeKey, applyGen);
-        const reviews = await loadMyReviews(
-          cfpId,
-          user.uid,
-          loadedQueue.proposals.map((p) => p.id),
-        );
+        const reviews = new Map([
+          ...Object.entries(loadedQueue.mine ?? {}),
+          ...(savedSinceLoad.current.get(scopeKey) ?? []),
+        ]);
         const savesInFlight = activeSavesByScope.current.get(scopeKey) ?? 0;
         if (
           accessFailed ||
@@ -269,7 +278,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       };
 
       const applyQueueInBackground = (
-        loadedQueue: { proposals: ReviewerProposalRow[]; own: number },
+        loadedQueue: ReviewQueue,
         cfpDoc: Cfp | null,
         formDoc: SubmissionForm,
       ) => {
@@ -467,15 +476,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           comment: draft.comment,
         });
         if (activeScope.current !== scope) return;
-        setMine((prev) =>
-          new Map(prev).set(id, {
-            cfpId,
-            score: storedScore,
-            conflictOfInterest: draft.conflictOfInterest,
-            comment: draft.comment.trim() || undefined,
-            updatedAt: null,
-          }),
+        const saved: OwnReview = {
+          score: storedScore,
+          conflictOfInterest: draft.conflictOfInterest,
+          comment: draft.comment.trim() || undefined,
+        };
+        savedSinceLoad.current.set(
+          scope,
+          new Map(savedSinceLoad.current.get(scope)).set(id, saved),
         );
+        setMine((prev) => new Map(prev).set(id, saved));
         setSavedId(id);
         clearReviewDraft(cfpId, user.uid, id, draft);
         setFailures((current) => {
@@ -1118,7 +1128,7 @@ interface CardProps {
   shape: SubmissionForm;
   proposal: ReviewerProposalRow;
   draft: Draft;
-  existing?: Review;
+  existing?: OwnReview;
   reviewsVisible: boolean;
   saving: boolean;
   saved: boolean;
