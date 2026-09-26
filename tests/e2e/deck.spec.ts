@@ -290,6 +290,33 @@ test.describe('the review deck', () => {
     expect(await readReviews('deck-1')).toHaveLength(0);
   });
 
+  test('search finds a talk even after it has been scored', async ({ page }) => {
+    await stage(page);
+    await page.keyboard.press('3');
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
+    await page.getByRole('button', { name: /Needs response/ }).click();
+    await expect(page.getByText('1 of 2', { exact: true })).toBeVisible();
+
+    const search = page.getByRole('searchbox', { name: 'Find a talk' });
+    await search.fill('ALPHA');
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await expect(page.getByText('1 of 1', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /All proposals/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    // Seeded speaker snapshot name.
+    await search.fill('test speaker');
+    await expect(page.getByText('1 of 3', { exact: true })).toBeVisible();
+
+    await search.fill('nothing like this');
+    await expect(page.getByText('No talk matches “nothing like this”.')).toBeVisible();
+    await page.getByRole('button', { name: 'Clear search' }).click();
+    await expect(search).toHaveValue('');
+    await expect(page.getByText('1 of 3', { exact: true })).toBeVisible();
+  });
+
   test('a score survives going back to it', async ({ page }) => {
     await stage(page);
 

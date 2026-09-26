@@ -65,6 +65,20 @@ const draftOf = (review?: OwnReview): Draft => ({
   comment: review?.comment ?? '',
 });
 
+const fold = (text: string) =>
+  text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+
+/** Title or speaker name. Under blind review the projection carries no speakers. */
+function matchesQuery(proposal: ReviewerProposalRow, query: string): boolean {
+  const needle = fold(query.trim());
+  return (
+    !needle ||
+    [proposal.title, ...(proposal.speakerSnapshot ?? []).map((speaker) => speaker.name)].some(
+      (value) => Boolean(value) && fold(value).includes(needle),
+    )
+  );
+}
+
 export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const { t, locale } = useI18n();
   const [shape, setShape] = useState<SubmissionForm>(DEFAULT_SUBMISSION_FORM);
@@ -87,6 +101,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'unreviewed' | 'all'>('unreviewed');
+  const [query, setQuery] = useState('');
   const [filterEpoch, setFilterEpoch] = useState(0);
   const loadGeneration = useRef(0);
   const orderRef = useRef(order);
@@ -96,6 +111,8 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   selectedCategoryRef.current = selectedCategory;
   const statusFilterRef = useRef(statusFilter);
   statusFilterRef.current = statusFilter;
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const currentProposalIdRef = useRef<string | null>(null);
   const queueApplyGenerationsByScope = useRef<Map<string, number>>(new Map());
   const activeSavesByScope = useRef<Map<string, number>>(new Map());
@@ -117,6 +134,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       setLoadedFor('');
       setError('');
       setSelectedCategory(null);
+      setQuery('');
       setQueueOpen(false);
       setSavingIds(new Set());
       setSavedId('');
@@ -239,9 +257,12 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
             ? 'unreviewed'
             : 'all';
 
-        const nextCategoryOrder = effectiveCategory
-          ? effectiveOrder.filter((p) => p.category === effectiveCategory)
-          : effectiveOrder;
+        const effectiveQuery = isBackgroundRevalidate ? queryRef.current : '';
+        const nextCategoryOrder = (
+          effectiveCategory
+            ? effectiveOrder.filter((p) => p.category === effectiveCategory)
+            : effectiveOrder
+        ).filter((p) => matchesQuery(p, effectiveQuery));
         const nextDeckOrder =
           effectiveStatusFilter === 'unreviewed'
             ? nextCategoryOrder.filter((p) => !reviews.has(p.id))
@@ -393,11 +414,10 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   );
 
   const deckOrder = useMemo(() => {
-    return statusFilter === 'unreviewed'
-      ? categoryOrder.filter((p) => !mine.has(p.id))
-      : categoryOrder;
+    const matching = categoryOrder.filter((p) => matchesQuery(p, query));
+    return statusFilter === 'unreviewed' ? matching.filter((p) => !mine.has(p.id)) : matching;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categoryOrder, statusFilter, filterEpoch]);
+  }, [categoryOrder, statusFilter, query, filterEpoch]);
 
   const isComplete = deckOrder.length === 0 || index >= deckOrder.length;
   const current = !isComplete ? deckOrder[index] : null;
@@ -578,6 +598,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   const showFailure = useCallback(
     (id: string) => {
       setStatusFilter('all');
+      setQuery('');
       setFilterEpoch((e) => e + 1);
       const failedIndex = scopedOrder.findIndex((proposal) => proposal.id === id);
       if (failedIndex < 0) return;
@@ -699,6 +720,24 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       )}
 
       <div className="review-filters">
+        <label className="review-search">
+          <span>{t.review.search}</span>
+          <input
+            className="field__input"
+            type="search"
+            value={query}
+            placeholder={blindReview ? t.review.searchPlaceholderBlind : t.review.searchPlaceholder}
+            onChange={(event) => {
+              const next = event.target.value;
+              setQuery(next);
+              // A talk you already scored is exactly the one people search for.
+              if (next.trim()) setStatusFilter('all');
+              setFilterEpoch((e) => e + 1);
+              setIndex(0);
+              setSavedId('');
+            }}
+          />
+        </label>
         <div className="filter-bar" role="group" aria-label={t.review.queue}>
           <button
             type="button"
@@ -1006,6 +1045,21 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
           onConflict={conflictAndAdvance}
           onSave={saveAndAdvance}
         />
+      ) : query.trim() && deckOrder.length === 0 ? (
+        <div className="empty-filter" role="status">
+          <p>{t.review.noMatches(query.trim())}</p>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => {
+              setQuery('');
+              setFilterEpoch((e) => e + 1);
+              setIndex(0);
+            }}
+          >
+            {t.review.clearSearch}
+          </button>
+        </div>
       ) : (
         <DeckCompleted
           handled={handled}

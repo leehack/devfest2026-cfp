@@ -2004,6 +2004,11 @@ export const fr: Dictionary = {
       'Les propositions sont fermées. Lorsque chaque élément a une réponse, l’organisation peut décider.',
     scoresVisibleDuringIntake:
       'Les notes du comité sont visibles pendant que les propositions sont ouvertes. Pour une ronde tardive indépendante, demandez à l’organisation de masquer les notes avant de continuer.',
+    search: 'Trouver une proposition',
+    searchPlaceholder: 'Titre ou conférencier',
+    searchPlaceholderBlind: 'Titre',
+    noMatches: (query: string) => `Aucune proposition ne correspond à « ${query} ».`,
+    clearSearch: 'Effacer la recherche',
     allCategories: 'Toutes les catégories',
     filterNeedsResponse: 'À évaluer',
     filterAll: 'Toutes les propositions',
