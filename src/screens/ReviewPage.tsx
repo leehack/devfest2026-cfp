@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { TextAreaField } from '../components/fields';
+import { Committee, ProposalContent } from '../components/ProposalDetail';
 import { formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { toDate } from '../lib/dates';
@@ -27,7 +28,7 @@ import { isAuthError } from '../lib/cache';
 import { loadSubmissionForm } from '../lib/proposals';
 import { reviewerTravelFields } from '../lib/reviewerTravel';
 import { loadCfp, loadReviewQueue, type ReviewerProposalRow } from '../lib/roles';
-import { loadMyReviews, loadReviewsFor, saveReview, type ReviewRow } from '../lib/reviews';
+import { loadMyReviews, saveReview } from '../lib/reviews';
 import {
   clearReviewDraft,
   keepReviewDraft,
@@ -38,11 +39,10 @@ import { LIMITS, SCORES, type Score } from '@shared/enums';
 import {
   DEFAULT_SUBMISSION_FORM,
   labelOf,
-  type SubmissionField,
   type SubmissionForm,
 } from '@shared/submissionForm';
-import { localised, type Answers } from '@shared/confirmForm';
-import type { Cfp, Review, SpeakerSnapshot } from '@shared/types';
+import { localised } from '@shared/confirmForm';
+import type { Cfp, Review } from '@shared/types';
 
 interface SaveFailure {
   id: string;
@@ -1142,7 +1142,7 @@ function ReviewCard({
   onConflict,
   onSave,
 }: CardProps) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const top = useRef<HTMLElement>(null);
   const titleId = `proposal-${proposal.id}-title`;
 
@@ -1155,32 +1155,6 @@ function ReviewCard({
     top.current?.scrollIntoView({ block: 'start' });
   }, [proposal.id]);
 
-  /*
-   * The snapshot frozen onto the proposal at submission, not `speakers/{uid}`.
-   *
-   * A profile belongs to the account and is global; a role is per CFP. Reading
-   * profiles here would hand every committee on the platform the whole speaker
-   * directory — and would show a bio edited in 2028 to a 2026 committee.
-   */
-  const people = proposal.speakerSnapshot ?? [];
-
-  const names = people.map((s) => s.name).filter(Boolean).join(', ');
-
-  /*
-   * A chip each, rather than the one dot-separated grey line this used to be.
-   *
-   * That line ran the speaker's name into four taxonomy values at caption
-   * weight, and "Either — you choose" wrapped mid-phrase, so its em dash and
-   * the separators read as the same punctuation. A reviewer looked straight at
-   * it and reported the category and format as missing from the card.
-   */
-  const facets = [
-    labelOf(shape.category, proposal.category, locale),
-    labelOf(shape.format, proposal.format, locale),
-    labelOf(shape.level, proposal.level, locale),
-    labelOf(shape.deliveryLanguage, proposal.deliveryLanguage, locale),
-  ].filter(Boolean);
-
   return (
     <section
       className="section card"
@@ -1189,30 +1163,7 @@ function ReviewCard({
       aria-labelledby={titleId}
     >
       <h2 id={titleId}>{proposal.title || '—'}</h2>
-      {names && <p className="card__byline">{names}</p>}
-      {facets.length > 0 && (
-        <ul className="facets">
-          {facets.map((facet) => (
-            <li key={facet} className="facet">
-              {facet}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <p className="card__text">{proposal.abstract}</p>
-      {proposal.pitch && (
-        <>
-          <h3 className="card__subtitle">{t.proposal.pitch}</h3>
-          <p className="card__text">{proposal.pitch}</p>
-        </>
-      )}
-
-      <SubmissionAnswers fields={shape.fields} answers={proposal.answers} />
-
-      {people.map((s, i) => (
-        <Speaker key={s.uid || i} speaker={s} />
-      ))}
+      <ProposalContent shape={shape} proposal={proposal} />
 
       <Logistics proposal={proposal} shape={shape} />
 
@@ -1292,58 +1243,9 @@ function ReviewCard({
         </span>
       </div>
 
+      {/* Only mounted once an admin opens the round, so nothing anchors before then. */}
       {reviewsVisible && <Committee cfpId={cfpId} proposalId={proposal.id} />}
     </section>
-  );
-}
-
-/** Current organiser-defined questions about the talk, never speaker logistics. */
-function SubmissionAnswers({
-  fields,
-  answers,
-}: {
-  fields: SubmissionField[];
-  answers?: Answers;
-}) {
-  const { t, locale } = useI18n();
-  if (!answers) return null;
-
-  const rows = fields.flatMap((field) => {
-    if (
-      field.type === 'image' ||
-      field.reviewerVisible === false ||
-      !Object.prototype.hasOwnProperty.call(answers, field.key)
-    ) {
-      return [];
-    }
-    const answer = answers[field.key];
-    const value =
-      typeof answer === 'boolean'
-        ? answer
-          ? t.review.answerYes
-          : t.review.answerNo
-        : field.type === 'select'
-          ? localised(
-              field.options?.find((option) => option.value === answer)?.label,
-              locale,
-            ) || answer
-          : answer;
-    return [{ key: field.key, label: localised(field.label, locale), value }];
-  });
-  if (rows.length === 0) return null;
-
-  return (
-    <>
-      <h3 className="card__subtitle">{t.review.submissionAnswers}</h3>
-      <dl className="answers">
-        {rows.map(({ key, label, value }) => (
-          <div key={key}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </>
   );
 }
 
@@ -1439,113 +1341,6 @@ function Logistics({
           })}
         </div>
       )}
-    </>
-  );
-}
-
-/**
- * Everything the speaker told us, because the committee is judging whether this
- * person can deliver this talk and a name is not enough to do that on. The
- * schema says the bio "feeds promotion as well as review" — review never saw it.
- *
- * The known cost is bias: an employer and a GDE badge import reputation that
- * the abstract did not earn. Deliberate, and the alternative was worse — a
- * reviewer guessing at delivery risk with nothing to go on at all.
- */
-function Speaker({ speaker }: { speaker: SpeakerSnapshot }) {
-  const { t } = useI18n();
-  const line = [[speaker.jobTitle, speaker.company].filter(Boolean).join(', '), speaker.basedIn]
-    .filter(Boolean)
-    .join(' · ');
-
-  return (
-    <div className="speaker">
-      <h3 className="card__subtitle">
-        {speaker.name || '—'}
-        {speaker.isGde && <span className="tag">{t.review.gde}</span>}
-      </h3>
-      {line && <p className="speaker__line">{line}</p>}
-      {speaker.bio && <p className="card__text">{speaker.bio}</p>}
-
-      {speaker.pastTalks && (
-        <>
-          <p className="speaker__label">{t.speaker.pastTalks}</p>
-          <p className="card__text">{speaker.pastTalks}</p>
-        </>
-      )}
-
-      {speaker.socials && speaker.socials.length > 0 && (
-        <p className="speaker__line">
-          {speaker.socials.map((s, i) => (
-            <span key={`${s.platform}-${s.handle}-${i}`}>
-              {i > 0 && ' · '}
-              {(t.enums.socialPlatform as Record<string, string>)[s.platform] ?? s.platform}:{' '}
-              {s.handle}
-            </span>
-          ))}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** Only mounted once an admin opens the round, so nothing anchors before then. */
-function Committee({ cfpId, proposalId }: { cfpId: string; proposalId: string }) {
-  const { t } = useI18n();
-  const [rows, setRows] = useState<ReviewRow[] | null>(null);
-  const [error, setError] = useState('');
-  const tRef = useRef(t);
-  tRef.current = t;
-
-  const load = useCallback(async () => {
-    setRows(null);
-    setError('');
-    try {
-      setRows(await loadReviewsFor(cfpId, proposalId));
-    } catch (e) {
-      setError(reviewError(e, tRef.current));
-      setRows([]);
-    }
-  }, [cfpId, proposalId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  if (rows === null) {
-    return (
-      <p className="muted" role="status">
-        {t.app.loading}
-      </p>
-    );
-  }
-  if (error) {
-    return (
-      <div className="load-failure" role="alert">
-        <p className="field__error">{error}</p>
-        <button type="button" className="btn btn--ghost" onClick={() => void load()}>
-          {t.errors.reload}
-        </button>
-      </div>
-    );
-  }
-  if (rows.length === 0) return null;
-
-  return (
-    <>
-      <h3 className="card__subtitle">{t.review.others}</h3>
-      <ul className="reviews">
-        {rows.map((row) => (
-          <li key={row.reviewerUid}>
-            <strong>
-              {row.conflictOfInterest
-                ? t.review.conflictDeclared
-                : t.review.scores[row.score]}
-            </strong>
-            {row.comment && <p className="card__text">{row.comment}</p>}
-          </li>
-        ))}
-      </ul>
     </>
   );
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link } from '../../components/Link';
 import { CoSpeakerRosterDialog } from '../../components/CoSpeakerRoster';
+import { ProposalDetailDialog } from '../../components/ProposalDetail';
 import { useI18n } from '../../i18n/context';
 import { adminError } from '../../lib/errors';
 import { href } from '../../lib/router';
@@ -744,12 +745,14 @@ function ReviewCoverage({
 
 export function Proposals({
   cfpId,
+  viewerUid,
   readOnly = false,
   pendingEmailCount,
   pendingEmailCheckFailed,
   onEmailQueueChange,
 }: {
   cfpId: string;
+  viewerUid: string;
   readOnly?: boolean;
   pendingEmailCount?: number | null;
   pendingEmailCheckFailed?: boolean;
@@ -778,6 +781,7 @@ export function Proposals({
   const [sort, setSort] = useState<ProposalSort>('score');
   const [managedProposalId, setManagedProposalId] = useState<string | null>(null);
   const [managedSpeakerUid, setManagedSpeakerUid] = useState<string | null>(null);
+  const [detailProposalId, setDetailProposalId] = useState<string | null>(null);
   const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
   const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
   const loadGeneration = useRef(0);
@@ -794,7 +798,22 @@ export function Proposals({
     const speakerUid = search.get('profileSpeaker');
     setManagedProposalId(proposalId?.trim() || null);
     setManagedSpeakerUid(proposalId?.trim() && speakerUid?.trim() ? speakerUid.trim() : null);
+    setDetailProposalId(search.get('proposal')?.trim() || null);
   }, [cfpId]);
+
+  const openProposalDetail = useCallback((proposalId: string) => {
+    setDetailProposalId(proposalId);
+    const url = new URL(window.location.href);
+    url.searchParams.set('proposal', proposalId);
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const closeProposalDetail = useCallback(() => {
+    setDetailProposalId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('proposal');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const openSpeakerManagement = useCallback((proposalId: string, speakerUid?: string) => {
     setManagedProposalId(proposalId);
@@ -1140,6 +1159,56 @@ export function Proposals({
     }
   }
 
+  /** The status select, shared by the table row and the detail drawer. */
+  function decision(row: ProposalRow) {
+    if (row.status === 'draft' || row.status === 'withdrawn') {
+      return (
+        <span className={`status-chip status-chip--${row.status}`}>
+          {t.enums.status[row.status]}
+        </span>
+      );
+    }
+    const saving = pending.has(row.id);
+    const rowError = rowErrors.get(row.id);
+    return (
+      <div className="decision-control">
+        <select
+          className="field__input field__input--select"
+          aria-label={`${t.admin.colStatus}: ${row.title}`}
+          value={row.status}
+          disabled={readOnly || saving}
+          onChange={(event) => void decide(row, event.target.value as ProposalStatus)}
+        >
+          {(
+            row.status === 'submitted'
+              ? (['submitted', ...ADMIN_PROPOSAL_STATUSES] as const)
+              : ADMIN_PROPOSAL_STATUSES
+          ).map((status) => (
+            <option key={status} value={status}>
+              {t.enums.status[status]}
+            </option>
+          ))}
+          {row.status !== 'submitted' &&
+            !(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(row.status) && (
+            <option value={row.status} disabled>
+              {t.enums.status[row.status]}
+            </option>
+          )}
+        </select>
+        {saving && (
+          <span className="decision-control__saving" role="status">
+            {t.admin.savingDecision}
+          </span>
+        )}
+        {rowError && (
+          <span className="field__error decision-control__error" role="alert">
+            {rowError}
+          </span>
+        )}
+      </div>
+    );
+  }
+
   const inCurrentScope = loadedFor === cfpId;
   const scopedRows = useMemo(() => (inCurrentScope ? rows : []), [inCurrentScope, rows]);
   const scopedShape = inCurrentScope ? shape : DEFAULT_SUBMISSION_FORM;
@@ -1236,6 +1305,9 @@ export function Proposals({
   );
   const accepted = ranked.filter((row) => row.status === 'accepted' || row.status === 'confirmed');
   const decidable = ranked.filter((row) => row.status !== 'draft' && row.status !== 'withdrawn');
+  const detailRow = detailProposalId
+    ? scopedRows.find((row) => row.id === detailProposalId)
+    : undefined;
   const undoHasDecisionEmail =
     undo !== null && (DECISION_KINDS as readonly string[]).includes(undo.next);
 
@@ -1476,7 +1548,6 @@ export function Proposals({
               <tbody>
                 {filtered.map((row) => {
                   const saving = pending.has(row.id);
-                  const rowError = rowErrors.get(row.id);
                   const rowProfileRequests = profileRequestsByProposal.get(row.id) ?? [];
                   const waitingProfileRequests = rowProfileRequests.filter(
                     (request) => request.state === 'waiting',
@@ -1491,6 +1562,14 @@ export function Proposals({
                         <span className="decision-table__category">
                           {labelOf(scopedShape.category, row.category, locale)}
                         </span>
+                        <button
+                          type="button"
+                          className="btn btn--ghost btn--small decision-table__details"
+                          aria-label={t.admin.detailOpenFor(row.title || t.admin.untitled)}
+                          onClick={() => openProposalDetail(row.id)}
+                        >
+                          {t.admin.detailOpen}
+                        </button>
                       </td>
                       <td data-label={t.admin.colSpeaker}>
                         <div className="decision-speakers">
@@ -1522,51 +1601,7 @@ export function Proposals({
                       <td data-label={t.admin.colSpread}>
                         {row.aggregate ? row.aggregate.stdDev.toFixed(2) : '—'}
                       </td>
-                      <td data-label={t.admin.colStatus}>
-                        {row.status === 'draft' || row.status === 'withdrawn' ? (
-                          <span className={`status-chip status-chip--${row.status}`}>
-                            {t.enums.status[row.status]}
-                          </span>
-                        ) : (
-                          <div className="decision-control">
-                            <select
-                              className="field__input field__input--select"
-                              aria-label={`${t.admin.colStatus}: ${row.title}`}
-                              value={row.status}
-                              disabled={readOnly || saving}
-                              onChange={(event) =>
-                                void decide(row, event.target.value as ProposalStatus)
-                              }
-                            >
-                              {(
-                                row.status === 'submitted'
-                                  ? (['submitted', ...ADMIN_PROPOSAL_STATUSES] as const)
-                                  : ADMIN_PROPOSAL_STATUSES
-                              ).map((status) => (
-                                <option key={status} value={status}>
-                                  {t.enums.status[status]}
-                                </option>
-                              ))}
-                              {row.status !== 'submitted' &&
-                                !(ADMIN_PROPOSAL_STATUSES as readonly string[]).includes(row.status) && (
-                                <option value={row.status} disabled>
-                                  {t.enums.status[row.status]}
-                                </option>
-                              )}
-                            </select>
-                            {saving && (
-                              <span className="decision-control__saving" role="status">
-                                {t.admin.savingDecision}
-                              </span>
-                            )}
-                            {rowError && (
-                              <span className="field__error decision-control__error" role="alert">
-                                {rowError}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </td>
+                      <td data-label={t.admin.colStatus}>{decision(row)}</td>
                     </tr>
                   );
                 })}
@@ -1635,6 +1670,17 @@ export function Proposals({
           </ul>
         )}
       </section>
+
+      {detailRow && (
+        <ProposalDetailDialog
+          cfpId={cfpId}
+          shape={scopedShape}
+          proposal={detailRow}
+          viewerUid={viewerUid}
+          decision={decision(detailRow)}
+          onClose={closeProposalDetail}
+        />
+      )}
 
       {managedProposalId && (
         <CoSpeakerRosterDialog

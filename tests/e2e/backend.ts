@@ -522,11 +522,13 @@ export async function seedReview(
   score: number,
   cfpId = CFP_ID,
   conflictOfInterest = false,
+  comment?: string,
 ) {
   await patch(`cfps/${cfpId}/proposals/${proposalId}/reviews/${reviewerUid}`, {
     cfpId: { stringValue: cfpId },
     score: { integerValue: String(score) },
     conflictOfInterest: { booleanValue: conflictOfInterest },
+    ...(comment ? { comment: { stringValue: comment } } : {}),
   });
 }
 

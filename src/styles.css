@@ -9391,6 +9391,83 @@ body:has(.consent) .editorbar {
   font-size: var(--text-sm);
 }
 
+/* A drawer, not a centred dialog: the header stays put while a long abstract
+   and its reviews scroll, and on a phone it simply fills the screen. */
+.proposal-detail-backdrop {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(5 12 20 / 66%);
+  backdrop-filter: blur(4px);
+}
+
+.proposal-detail {
+  width: min(46rem, 100%);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 35%);
+  animation: proposal-detail-in 0.18s ease-out;
+}
+
+.proposal-detail__header {
+  min-width: 0;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-4) clamp(var(--s-4), 4vw, var(--s-6));
+  border-bottom: 1px solid var(--line);
+}
+
+.proposal-detail__header h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.proposal-detail__eyebrow {
+  margin: 0 0 var(--s-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.proposal-detail__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--s-4) clamp(var(--s-4), 4vw, var(--s-6)) var(--s-6);
+}
+
+.proposal-detail__decision {
+  display: grid;
+  gap: var(--s-1);
+  max-width: 20rem;
+  margin-bottom: var(--s-4);
+}
+
+.proposal-detail__decision > span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.proposal-detail .selection-metrics {
+  margin: 0 0 var(--s-5);
+  box-shadow: none;
+}
+
+.decision-table__details {
+  justify-self: start;
+  margin-top: var(--s-2);
+}
+
+@keyframes proposal-detail-in { from { opacity: 0; transform: translateX(24px); } }
+
 .co-speaker-invitation {
   display: grid;
   gap: var(--s-5);
