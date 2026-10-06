@@ -1755,6 +1755,8 @@ export const fr: Dictionary = {
     filterAllStatuses: 'Tous les statuts',
     filterCategory: 'Catégorie',
     filterAllCategories: 'Toutes les catégories',
+    filterFormat: 'Type de session',
+    filterAllFormats: 'Tous les types de session',
     filterScoreStatus: 'État des notes',
     filterAllScores: 'Toutes les propositions',
     filterScored: 'Évaluées',

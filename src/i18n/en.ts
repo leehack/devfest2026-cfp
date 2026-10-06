@@ -1733,6 +1733,8 @@ export const en = {
     filterAllStatuses: 'All statuses',
     filterCategory: 'Category',
     filterAllCategories: 'All categories',
+    filterFormat: 'Session type',
+    filterAllFormats: 'All session types',
     filterScoreStatus: 'Talk score status',
     filterAllScores: 'All proposals',
     filterScored: 'Scored',

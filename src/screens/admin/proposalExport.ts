@@ -90,6 +90,7 @@ export function selectedSpeakersCsv(
   shape: SubmissionForm,
   confirmation: readonly ConfirmField[],
   locale: 'en' | 'fr',
+  emails: Readonly<Record<string, string>> = {},
 ): string {
   const submissionKeys = answerKeys(shape.fields, rows, (row) => row.answers);
   const confirmationKeys = answerKeys(confirmation, rows, confirmationAnswers);
@@ -113,6 +114,7 @@ export function selectedSpeakersCsv(
     'assigned_language',
     'assigned_language_label',
     'speaker_names',
+    'speaker_emails',
     'speaker_bios',
     'speaker_companies',
     'speaker_job_titles',
@@ -163,6 +165,7 @@ export function selectedSpeakersCsv(
         ? labelOf(shape.deliveryLanguage, row.assignedLanguage, locale)
         : '',
       speakers.map((speaker) => speaker.name).filter(Boolean).join('; '),
+      (row.speakerIds ?? []).map((uid) => emails[uid]).filter(Boolean).join('; '),
       speakers.map((speaker) => speaker.bio).filter(Boolean).join('\n---\n'),
       speakers.map((speaker) => speaker.company).filter(Boolean).join('; '),
       speakers.map((speaker) => speaker.jobTitle).filter(Boolean).join('; '),
@@ -226,10 +229,12 @@ export function downloadSelectedSpeakersCsv(
   shape: SubmissionForm,
   confirmation: readonly ConfirmField[],
   locale: 'en' | 'fr',
+  emails: Readonly<Record<string, string>>,
 ): void {
-  const blob = new Blob([`\uFEFF${selectedSpeakersCsv(rows, shape, confirmation, locale)}`], {
-    type: 'text/csv;charset=utf-8',
-  });
+  const blob = new Blob(
+    [`\uFEFF${selectedSpeakersCsv(rows, shape, confirmation, locale, emails)}`],
+    { type: 'text/csv;charset=utf-8' },
+  );
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

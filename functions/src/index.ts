@@ -3768,6 +3768,39 @@ export const reviewCoverage = onCall(CALLABLE, async (request) => {
   };
 });
 
+/**
+ * Contact addresses for the selected-speakers export. `speakers/{uid}` is
+ * global and closed to the committee, so the address is released only for
+ * speakers on a talk this CFP has accepted, and only to its admins.
+ */
+export const selectedSpeakerEmails = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  await requireAdmin(request, cfpId, 'export speaker contact details');
+
+  const proposals = await db
+    .collection(`cfps/${cfpId}/proposals`)
+    .where('status', 'in', ['accepted', 'confirmed'])
+    .get();
+  const speakerUids = [
+    ...new Set(
+      proposals.docs.flatMap((proposal) =>
+        ((proposal.get('speakerIds') as unknown[]) ?? []).filter(
+          (uid): uid is string => typeof uid === 'string' && /^[^/]{1,128}$/.test(uid),
+        ),
+      ),
+    ),
+  ];
+  const profiles = speakerUids.length
+    ? await db.getAll(...speakerUids.map((uid) => db.doc(`speakers/${uid}`)))
+    : [];
+  const emails: Record<string, string> = {};
+  for (const profile of profiles) {
+    const email = profile.get('email');
+    if (typeof email === 'string' && email) emails[profile.id] = email;
+  }
+  return { ok: true, emails };
+});
+
 interface AggregateRefresh {
   reviewCount: number;
   proposalCount: number;

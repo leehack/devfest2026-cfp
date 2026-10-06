@@ -83,9 +83,15 @@ const row: ProposalRow = {
 
 describe('selected speaker CSV', () => {
   it('exports programme, speaker, travel, scoring, and current and historical answers', () => {
-    const csv = selectedSpeakersCsv([row], shape, confirmation, 'fr');
+    const csv = selectedSpeakersCsv([row], shape, confirmation, 'fr', {
+      'speaker-1': 'sam@example.org',
+      'someone-else': 'other@example.org',
+    });
     const [header] = csv.split('\r\n');
 
+    expect(header).toContain('speaker_names,speaker_emails,');
+    expect(csv).toContain(',Sam Speaker,sam@example.org,');
+    expect(csv).not.toContain('other@example.org');
     expect(header).toContain('speaker_names');
     expect(header).toContain('speaker_is_gde');
     expect(header).toContain('speaker_past_talks');
