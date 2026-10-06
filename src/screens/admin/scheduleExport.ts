@@ -1,5 +1,5 @@
 import type { ProposalRow } from '../../lib/roles';
-import { resolvedScheduleLanguage, type ScheduleConfig, type ScheduleEntry } from '@shared/schedule';
+import { resolvedScheduleLanguage, scheduleEntryAllRooms, type ScheduleConfig, type ScheduleEntry } from '@shared/schedule';
 import { localised } from '@shared/confirmForm';
 import { labelOf, type SubmissionForm } from '@shared/submissionForm';
 
@@ -42,11 +42,11 @@ export function scheduleCsv(
     'proposal_id', 'proposal_status', 'title', 'speakers',
     'category', 'category_label', 'format', 'format_label', 'level', 'level_label',
     'delivery_language', 'delivery_language_label', 'assigned_language',
-    'scheduled_language', 'scheduled_language_label', 'custom_type',
+    'scheduled_language', 'scheduled_language_label', 'custom_type', 'all_rooms',
   ];
   const rows = entries
     .slice()
-    .sort((a, b) => `${a.date}${a.startsAt}${a.roomId}`.localeCompare(`${b.date}${b.startsAt}${b.roomId}`))
+    .sort((a, b) => `${a.date}${a.startsAt}${a.roomId ?? ''}`.localeCompare(`${b.date}${b.startsAt}${b.roomId ?? ''}`))
     .map((entry) => {
       const proposal = entry.kind === 'proposal' ? proposals.get(entry.proposalId) : undefined;
       const scheduledLanguage = entry.kind === 'proposal' && proposal
@@ -61,7 +61,7 @@ export function scheduleCsv(
         entry.startsAt,
         entry.durationMinutes,
         entry.roomId,
-        rooms.get(entry.roomId),
+        entry.roomId ? rooms.get(entry.roomId) : '',
         proposal?.id,
         proposal?.status,
         proposal?.title ?? (entry.kind === 'custom' ? localised(entry.title, locale) : ''),
@@ -81,6 +81,7 @@ export function scheduleCsv(
         scheduledLanguage,
         scheduledLanguage ? scheduleLanguageLabel(scheduledLanguage, locale, languageLabels) : '',
         entry.kind === 'custom' ? entry.customType : '',
+        scheduleEntryAllRooms(entry) ? 'yes' : '',
       ].map(cell).join(',');
     });
   return [header.map(cell).join(','), ...rows].join('\r\n');

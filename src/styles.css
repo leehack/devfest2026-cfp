@@ -427,6 +427,9 @@
 .schedule-grid__time--hour { color: var(--fg); font-size: .7rem; font-weight: 800; }
 .schedule-grid__time--half { color: var(--muted); font-weight: 650; }
 .schedule-grid__track { grid-row: 2; position: relative; border-right: 1px solid var(--line); background: var(--surface-2); }
+.schedule-grid__span { grid-row: 2; grid-column: 2 / -1; position: relative; pointer-events: none; }
+.schedule-grid__span .schedule-card { pointer-events: auto; }
+.schedule-grid__span--dragging .schedule-card { pointer-events: none; }
 .schedule-grid__slot { position: absolute; left: 0; width: 100%; padding: 0; border: 0; border-top: 1px solid var(--line); background: transparent; cursor: cell; }
 .schedule-grid__slot--hour { border-top: 2px solid var(--line-strong); }
 .schedule-grid__slot--half { border-top-color: color-mix(in srgb, var(--line-strong) 68%, var(--line)); }
@@ -573,6 +576,8 @@
 .agenda-group__sessions { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr)); gap: var(--s-3); margin: 0; padding: 0; list-style: none; }
 .agenda-item--card { min-width: 0; min-height: 6.5rem; display: block; }
 .agenda-item--card .agenda-item__body { height: 100%; padding: var(--s-3) var(--s-4); border: 1px solid var(--line); border-left: 4px solid var(--g-blue); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-1); }
+.agenda-item--all-rooms { grid-column: 1 / -1; }
+.agenda-item--all-rooms .agenda-item__body { border-left-color: var(--muted); }
 .agenda-item--room-1 .agenda-item__body { border-left-color: var(--g-green); }
 .agenda-item--room-2 .agenda-item__body { border-left-color: var(--g-yellow); }
 .agenda-item--room-3 .agenda-item__body { border-left-color: var(--g-red); }

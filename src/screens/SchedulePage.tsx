@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link } from '../components/Link';
 import { sessionDocumentTitle } from '../components/AppNavigation';
@@ -28,6 +28,9 @@ import { localised } from '@shared/confirmForm';
 import { publicEntryTitle, scheduleIcs } from '@shared/calendar';
 import {
   SCHEDULE_LANGUAGES,
+  scheduleEntryAllRooms,
+  scheduleEntryOccupiesRoom,
+  scheduleEntryRoomName,
   scheduleEndTime,
   type PublishedProposalSession,
   type PublishedScheduleEntry,
@@ -487,6 +490,15 @@ function PublicAgenda({
     () => new Map(schedule.rooms.map((item, index) => [item.id, index])),
     [schedule.rooms],
   );
+  const roomRank = useCallback(
+    (entry: PublishedScheduleEntry) =>
+      scheduleEntryAllRooms(entry)
+        ? -1
+        : (roomOrder.get(entry.roomId ?? '') ?? Number.MAX_SAFE_INTEGER),
+    [roomOrder],
+  );
+  const roomLabel = (entry: PublishedScheduleEntry) =>
+    scheduleEntryRoomName(entry, rooms, t.schedule.allRooms);
   const availableLanguages = SCHEDULE_LANGUAGES.filter((value) =>
     entries.some((entry) =>
       entry.kind === 'proposal' ? entry.session.language === value : entry.language === value,
@@ -496,7 +508,7 @@ function PublicAgenda({
     () =>
       entries
         .filter((entry) => entry.date === day)
-        .filter((entry) => room === 'all' || entry.roomId === room)
+        .filter((entry) => room === 'all' || scheduleEntryOccupiesRoom(entry, room))
         .filter(
           (entry) =>
             language === 'all' ||
@@ -507,10 +519,9 @@ function PublicAgenda({
         .sort(
           (a, b) =>
             a.startsAt.localeCompare(b.startsAt) ||
-            (roomOrder.get(a.roomId) ?? Number.MAX_SAFE_INTEGER) -
-              (roomOrder.get(b.roomId) ?? Number.MAX_SAFE_INTEGER),
+            roomRank(a) - roomRank(b),
         ),
-    [day, entries, language, room, roomOrder],
+    [day, entries, language, room, roomRank],
   );
   const timeGroups = useMemo(() => {
     const groups = new Map<string, PublishedScheduleEntry[]>();
@@ -623,7 +634,7 @@ function PublicAgenda({
                     {group.entries.map((entry) => (
                       <li
                         key={entry.id}
-                        className={`agenda-item agenda-item--card agenda-item--room-${(roomOrder.get(entry.roomId) ?? 0) % 4}${entry.kind === 'proposal' && entry.cancelled ? ' agenda-item--cancelled' : ''}`}
+                        className={`agenda-item agenda-item--card ${scheduleEntryAllRooms(entry) ? 'agenda-item--all-rooms' : `agenda-item--room-${(roomOrder.get(entry.roomId ?? '') ?? 0) % 4}`}${entry.kind === 'proposal' && entry.cancelled ? ' agenda-item--cancelled' : ''}`}
                       >
                         <AgendaEntryBody
                           cfpId={cfpId}
@@ -631,7 +642,7 @@ function PublicAgenda({
                           photosEnabled={!preview}
                           filters={filters}
                           entry={entry}
-                          roomName={rooms.get(entry.roomId) ?? entry.roomId}
+                          roomName={roomLabel(entry)}
                           showRange
                         />
                       </li>
@@ -654,7 +665,7 @@ function PublicAgenda({
                     photosEnabled={!preview}
                     filters={filters}
                     entry={entry}
-                    roomName={rooms.get(entry.roomId) ?? entry.roomId}
+                    roomName={roomLabel(entry)}
                   />
                 </li>
               ))}
@@ -744,7 +755,11 @@ function AgendaEntryBody({
 
 function SessionDetail({ cfpId, cfpName, bundle, entry, preview }: { cfpId: string; cfpName: string; bundle: PublishedScheduleBundle; entry: PublishedScheduleEntry; preview: boolean }) {
   const { t, locale } = useI18n();
-  const room = bundle.schedule.rooms.find((candidate) => candidate.id === entry.roomId);
+  const roomName = scheduleEntryRoomName(
+    entry,
+    new Map(bundle.schedule.rooms.map((room) => [room.id, localised(room.name, locale)])),
+    t.schedule.allRooms,
+  );
   const speakers = entry.kind === 'proposal' ? entry.session.speakers : entry.speakers ?? [];
   const category = entry.kind === 'proposal'
     ? taxonomyLabel(entry.session.category, entry.session.categoryLabel, locale)
@@ -782,7 +797,7 @@ function SessionDetail({ cfpId, cfpName, bundle, entry, preview }: { cfpId: stri
       </Link>
       <div className="session-detail__meta">
         <time dateTime={`${entry.date}T${entry.startsAt}`}>{formatCalendarDay(calendarDate(entry.date)!, locale)} · {entry.startsAt}–{scheduleEndTime(entry)}</time>
-        <span>{room ? localised(room.name, locale) : entry.roomId}</span>
+        <span>{roomName}</span>
         {entry.kind === 'custom' && (
           <span className="taxonomy-chip" aria-label={`${t.schedule.itemType}: ${category}`}>
             {category}

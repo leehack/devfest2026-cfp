@@ -13,7 +13,7 @@ import {
   type SetStateAction,
 } from 'react';
 
-import { SelectField, TextAreaField, TextField } from '../../components/fields';
+import { Checkbox, SelectField, TextAreaField, TextField } from '../../components/fields';
 import { CustomScheduleSpeakerPhoto } from '../../components/CustomScheduleSpeakerPhoto';
 import { Link } from '../../components/Link';
 import { useI18n } from '../../i18n/context';
@@ -30,6 +30,8 @@ import {
   scheduleDurationBounds,
   scheduleEndTime,
   scheduleConflicts,
+  scheduleEntryAllRooms,
+  scheduleEntryRoomName,
   scheduleRoomIdsInUse,
   scheduleProposalEligible,
   snapScheduleDuration,
@@ -827,7 +829,13 @@ export function Schedule({
       if (proposal) startProposal(proposal, selectedDay, roomId, startsAt);
     } else {
       const entry = entries.find((candidate) => candidate.id === dragging.entryId);
-      if (entry) void saveEntry({ ...entry, date: selectedDay, roomId, startsAt });
+      if (entry) {
+        void saveEntry(
+          scheduleEntryAllRooms(entry)
+            ? { ...entry, date: selectedDay, startsAt }
+            : { ...entry, date: selectedDay, roomId, startsAt },
+        );
+      }
     }
     setDragging(null);
   }
@@ -1568,16 +1576,22 @@ function TimeGrid({
   const dayEntries = entries
     .filter((entry) => entry.date === date)
     .sort((left, right) =>
-      left.startsAt.localeCompare(right.startsAt) || left.roomId.localeCompare(right.roomId),
+      left.startsAt.localeCompare(right.startsAt) ||
+      (left.roomId ?? '').localeCompare(right.roomId ?? ''),
     );
   const selectedEntry = dayEntries.find((entry) => entry.id === selectedEntryId) ?? dayEntries[0] ?? null;
+  const roomNames = new Map(config.rooms.map((room) => [room.id, roomName(room, locale)]));
+  const roomLabelFor = (entry: ScheduleEntry) =>
+    scheduleEntryRoomName(entry, roomNames, t.schedule.allRooms);
 
   function factsFor(entry: ScheduleEntry) {
     if (entry.kind === 'custom') {
       const speaker = customSpeakerNames(entry);
       return {
         speaker,
-        category: t.schedule.types[entry.customType],
+        category: scheduleEntryAllRooms(entry)
+          ? `${t.schedule.types[entry.customType]} · ${roomLabelFor(entry)}`
+          : t.schedule.types[entry.customType],
         categoryLabel: t.schedule.itemType,
         language: entry.language
           ? t.schedule.languageNames[entry.language]
@@ -1655,7 +1669,9 @@ function TimeGrid({
     if (dragging.kind === 'entry') {
       const entry = entries.find((item) => item.id === dragging.entryId);
       if (entry) {
-        candidate = { ...entry, date, roomId: target.roomId, startsAt: target.startsAt };
+        candidate = scheduleEntryAllRooms(entry)
+          ? { ...entry, date, startsAt: target.startsAt }
+          : { ...entry, date, roomId: target.roomId, startsAt: target.startsAt };
         title = entryTitle(entry, proposals, locale);
       }
     } else {
@@ -1675,8 +1691,7 @@ function TimeGrid({
     }
     if (!candidate) return null;
     const range = `${candidate.startsAt}–${scheduleEndTime(candidate)}`;
-    const room = config.rooms.find((item) => item.id === target.roomId);
-    const roomLabel = room ? roomName(room, locale) : target.roomId;
+    const roomLabel = roomLabelFor(candidate);
     const pastEnd = minutes(candidate.startsAt) + candidate.durationMinutes > dayEnd;
     const candidateEntries = [
       ...entries.filter((entry) => entry.id !== candidate?.id),
@@ -1701,6 +1716,23 @@ function TimeGrid({
   }
 
   const dropPreview = dropPreviewFor(dropTarget);
+  const dropSpansRooms = dropPreview ? scheduleEntryAllRooms(dropPreview.candidate) : false;
+  const dropGuide = dropPreview && (
+    <div
+      className={`schedule-drop-guide${dropPreview.invalidReason ? ' schedule-drop-guide--invalid' : ''}`}
+      style={{
+        top: (minutes(dropPreview.candidate.startsAt) - dayStart) * PIXELS_PER_MINUTE,
+        height: dropPreview.candidate.durationMinutes * PIXELS_PER_MINUTE,
+      }}
+      aria-hidden="true"
+    >
+      <span className="schedule-drop-guide__label">
+        <time>{dropPreview.range}</time>
+        <strong>{dropPreview.title}</strong>
+        <span>{dropPreview.roomLabel}</span>
+      </span>
+    </div>
+  );
 
   function resizeConflicts(entry: ScheduleEntry): boolean {
     const candidates = [...entries.filter((item) => item.id !== entry.id), entry];
@@ -1916,6 +1948,74 @@ function TimeGrid({
     });
   }
 
+  function renderCard(entry: ScheduleEntry) {
+    const top = ((minutes(entry.startsAt) - minutes(day.startsAt)) / SLOT_MINUTES) * SLOT_HEIGHT;
+    const displayDuration = resizing?.entryId === entry.id
+      ? resizing.durationMinutes
+      : entry.durationMinutes;
+    const height = displayDuration * PIXELS_PER_MINUTE;
+    const proposal = entry.kind === 'proposal' ? proposals.get(entry.proposalId) : undefined;
+    const eligible = placementEligible(entry);
+    const title = entryTitle(entry, proposals, locale);
+    const range = `${entry.startsAt}–${scheduleEndTime({ ...entry, durationMinutes: displayDuration })}`;
+    const facts = factsFor(entry);
+    const factsId = `schedule-card-facts-${entry.id}`;
+    const description = factDescription(entry);
+    return (
+      <div
+        id={`schedule-grid-entry-${entry.id}`}
+        key={entry.id}
+        className={`schedule-card schedule-card--${entry.kind}${selectedEntry?.id === entry.id ? ' schedule-card--selected' : ''}${displayDuration < 15 ? ' schedule-card--micro' : displayDuration <= 20 ? ' schedule-card--compact' : ''}${displayDuration <= 45 ? ' schedule-card--condensed' : ''}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}${!eligible ? ' schedule-card--ineligible' : ''}${dragging?.kind === 'entry' && dragging.entryId === entry.id ? ' schedule-card--dragging' : ''}${resizing?.entryId === entry.id ? ' schedule-card--resizing' : ''}`}
+        style={{ top, height }}
+      >
+        <button
+          type="button"
+          className="schedule-card__body"
+          draggable={!busy && interactive && eligible}
+          disabled={busy || !interactive}
+          aria-label={`${moveLabel}: ${title}, ${range}`}
+          aria-describedby={factsId}
+          title={`${title} · ${range} · ${description}`}
+          onDragStart={(event: DragEvent<HTMLButtonElement>) => {
+            if (!eligible) {
+              event.preventDefault();
+              return;
+            }
+            setSelectedEntryId(entry.id);
+            onDrag({ kind: 'entry', entryId: entry.id });
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', title);
+          }}
+          onDragEnd={() => onDrag(null)}
+          onClick={() => {
+            setSelectedEntryId(entry.id);
+            onEdit(entry);
+          }}
+        >
+          <time>{range}</time>
+          <strong title={title}>{title}</strong>
+          <span className="schedule-card__facts" aria-hidden="true">
+            {facts.speaker && <span className="schedule-card__speaker">{facts.speaker}</span>}
+            {facts.category && <span className="schedule-card__category">{facts.category}</span>}
+            <span className="schedule-card__language">{facts.language}</span>
+            {facts.status && <span className="schedule-card__status">{facts.status}</span>}
+          </span>
+          <span id={factsId} className="visually-hidden">{description}</span>
+        </button>
+        {interactive && !busy && eligible && displayDuration >= SLOT_MINUTES && (
+          <span
+            className="schedule-card__resize-direct"
+            aria-hidden="true"
+            title={t.schedule.resizeHint}
+            onPointerDown={(event) => startPointerResize(event, entry, 'vertical')}
+          >
+            <span />
+          </span>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
       {selectedEntry && selectedDuration !== null && selectedBounds && (
@@ -1930,11 +2030,10 @@ function TimeGrid({
               onChange={(event) => selectEntry(event.target.value, true)}
             >
               {dayEntries.map((entry) => {
-                const room = config.rooms.find((candidate) => candidate.id === entry.roomId);
                 const range = `${entry.startsAt}–${scheduleEndTime(entry)}`;
                 return (
                   <option key={entry.id} value={entry.id}>
-                    {entryTitle(entry, proposals, locale)} · {range} · {room ? roomName(room, locale) : entry.roomId}
+                    {entryTitle(entry, proposals, locale)} · {range} · {roomLabelFor(entry)}
                   </option>
                 );
               })}
@@ -2050,7 +2149,10 @@ function TimeGrid({
           ))}
         </div>
         {config.rooms.map((room, roomIndex) => {
-          const roomEntries = entries.filter((entry) => entry.date === date && entry.roomId === room.id);
+          const roomEntries = entries.filter(
+            (entry) =>
+              entry.date === date && !scheduleEntryAllRooms(entry) && entry.roomId === room.id,
+          );
           return (
             <div
               className="schedule-grid__track"
@@ -2104,92 +2206,18 @@ function TimeGrid({
                 />
                 );
               })}
-              {dropPreview && dropTarget?.roomId === room.id && (
-                <div
-                  className={`schedule-drop-guide${dropPreview.invalidReason ? ' schedule-drop-guide--invalid' : ''}`}
-                  style={{
-                    top: (minutes(dropPreview.candidate.startsAt) - dayStart) * PIXELS_PER_MINUTE,
-                    height: dropPreview.candidate.durationMinutes * PIXELS_PER_MINUTE,
-                  }}
-                  aria-hidden="true"
-                >
-                  <span className="schedule-drop-guide__label">
-                    <time>{dropPreview.range}</time>
-                    <strong>{dropPreview.title}</strong>
-                    <span>{dropPreview.roomLabel}</span>
-                  </span>
-                </div>
-              )}
-              {roomEntries.map((entry) => {
-                const top = ((minutes(entry.startsAt) - minutes(day.startsAt)) / SLOT_MINUTES) * SLOT_HEIGHT;
-                const displayDuration = resizing?.entryId === entry.id
-                  ? resizing.durationMinutes
-                  : entry.durationMinutes;
-                const height = displayDuration * PIXELS_PER_MINUTE;
-                const proposal = entry.kind === 'proposal' ? proposals.get(entry.proposalId) : undefined;
-                const eligible = placementEligible(entry);
-                const title = entryTitle(entry, proposals, locale);
-                const range = `${entry.startsAt}–${scheduleEndTime({ ...entry, durationMinutes: displayDuration })}`;
-                const facts = factsFor(entry);
-                const factsId = `schedule-card-facts-${entry.id}`;
-                const description = factDescription(entry);
-                return (
-                  <div
-                    id={`schedule-grid-entry-${entry.id}`}
-                    key={entry.id}
-                    className={`schedule-card schedule-card--${entry.kind}${selectedEntry?.id === entry.id ? ' schedule-card--selected' : ''}${displayDuration < 15 ? ' schedule-card--micro' : displayDuration <= 20 ? ' schedule-card--compact' : ''}${displayDuration <= 45 ? ' schedule-card--condensed' : ''}${proposal?.status === 'accepted' ? ' schedule-card--tentative' : ''}${!eligible ? ' schedule-card--ineligible' : ''}${dragging?.kind === 'entry' && dragging.entryId === entry.id ? ' schedule-card--dragging' : ''}${resizing?.entryId === entry.id ? ' schedule-card--resizing' : ''}`}
-                    style={{ top, height }}
-                  >
-                    <button
-                      type="button"
-                      className="schedule-card__body"
-                      draggable={!busy && interactive && eligible}
-                      disabled={busy || !interactive}
-                      aria-label={`${moveLabel}: ${title}, ${range}`}
-                      aria-describedby={factsId}
-                      title={`${title} · ${range} · ${description}`}
-                      onDragStart={(event: DragEvent<HTMLButtonElement>) => {
-                        if (!eligible) {
-                          event.preventDefault();
-                          return;
-                        }
-                        setSelectedEntryId(entry.id);
-                        onDrag({ kind: 'entry', entryId: entry.id });
-                        event.dataTransfer.effectAllowed = 'move';
-                        event.dataTransfer.setData('text/plain', title);
-                      }}
-                      onDragEnd={() => onDrag(null)}
-                      onClick={() => {
-                        setSelectedEntryId(entry.id);
-                        onEdit(entry);
-                      }}
-                    >
-                      <time>{range}</time>
-                      <strong title={title}>{title}</strong>
-                      <span className="schedule-card__facts" aria-hidden="true">
-                        {facts.speaker && <span className="schedule-card__speaker">{facts.speaker}</span>}
-                        {facts.category && <span className="schedule-card__category">{facts.category}</span>}
-                        <span className="schedule-card__language">{facts.language}</span>
-                        {facts.status && <span className="schedule-card__status">{facts.status}</span>}
-                      </span>
-                      <span id={factsId} className="visually-hidden">{description}</span>
-                    </button>
-                    {interactive && !busy && eligible && displayDuration >= SLOT_MINUTES && (
-                      <span
-                        className="schedule-card__resize-direct"
-                        aria-hidden="true"
-                        title={t.schedule.resizeHint}
-                        onPointerDown={(event) => startPointerResize(event, entry, 'vertical')}
-                      >
-                        <span />
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+              {dropTarget?.roomId === room.id && !dropSpansRooms && dropGuide}
+              {roomEntries.map(renderCard)}
             </div>
           );
         })}
+        <div
+          className={`schedule-grid__span${dragging ? ' schedule-grid__span--dragging' : ''}`}
+          style={{ height: trackHeight }}
+        >
+          {dropSpansRooms && dropGuide}
+          {dayEntries.filter(scheduleEntryAllRooms).map(renderCard)}
+        </div>
         </div>
       </div>
     </>
@@ -2355,6 +2383,27 @@ function EntryEditor({
             </Link>
           </div>
         )}
+        {entry.kind === 'custom' && (
+          <Checkbox
+            label={t.schedule.spanAllRooms}
+            help={t.schedule.spanAllRoomsHelp}
+            checked={entry.allRooms === true}
+            onChange={(allRooms) => {
+              const next: Extract<ScheduleEntry, { kind: 'custom' }> = {
+                ...entry,
+                roomId: entry.roomId ?? config.rooms[0].id,
+              };
+              if (!allRooms) delete next.allRooms;
+              else {
+                next.allRooms = true;
+                // A meal or break is rarely held in one room, so it starts without a host.
+                if (['meal', 'break', 'social'].includes(entry.customType)) delete next.roomId;
+              }
+              onChange(next);
+            }}
+            disabled={busy}
+          />
+        )}
         <div className="grid grid--2">
           <SelectField
             label={t.schedule.date}
@@ -2367,14 +2416,31 @@ function EntryEditor({
             disabled={busy || placementLocked}
             required
           />
-          <SelectField
-            label={t.schedule.room}
-            value={entry.roomId}
-            options={config.rooms.map((room) => ({ value: room.id, label: roomName(room, locale) }))}
-            onChange={(roomId) => onChange({ ...entry, roomId })}
-            disabled={busy || placementLocked}
-            required
-          />
+          {entry.kind === 'custom' && entry.allRooms ? (
+            <SelectField
+              label={t.schedule.hostRoom}
+              value={entry.roomId ?? ''}
+              options={[
+                { value: '', label: t.schedule.noHostRoom },
+                ...config.rooms.map((room) => ({ value: room.id, label: roomName(room, locale) })),
+              ]}
+              onChange={(roomId) => {
+                const next: Extract<ScheduleEntry, { kind: 'custom' }> = { ...entry, roomId };
+                if (!roomId) delete next.roomId;
+                onChange(next);
+              }}
+              disabled={busy || placementLocked}
+            />
+          ) : (
+            <SelectField
+              label={t.schedule.room}
+              value={entry.roomId ?? ''}
+              options={config.rooms.map((room) => ({ value: room.id, label: roomName(room, locale) }))}
+              onChange={(roomId) => onChange({ ...entry, roomId })}
+              disabled={busy || placementLocked}
+              required
+            />
+          )}
           <TextField
             label={t.schedule.startsAt}
             type="time"

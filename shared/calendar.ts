@@ -184,7 +184,9 @@ export function scheduleIcs(
       `DTSTART;TZID=${schedule.timeZone}:${compactDateTime(entry.date, entry.startsAt)}`,
       `DTEND;TZID=${schedule.timeZone}:${compactDateTime(entry.date, scheduleEndTime(entry))}`,
       `SUMMARY:${escapeIcs(publicEntryTitle(entry, locale))}`,
-      `LOCATION:${escapeIcs(rooms.get(entry.roomId) ?? entry.roomId)}`,
+      ...(entry.roomId
+        ? [`LOCATION:${escapeIcs(rooms.get(entry.roomId) ?? entry.roomId)}`]
+        : []),
       `DESCRIPTION:${escapeIcs(description)}`,
       `URL:${detailUrl}`,
       ...(entry.kind === 'proposal' && entry.cancelled ? ['STATUS:CANCELLED'] : []),

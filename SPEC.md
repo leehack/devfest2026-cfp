@@ -365,6 +365,8 @@ config/schedule
 
 scheduleDraft/{entryId}
   kind, date, startsAt, durationMinutes, roomId
+  allRooms?                                 // custom item only: occupies every room;
+                                            // roomId is then an optional host room
   proposalId, assignedLanguage?             // proposal item; assignment only for `either`
   customType, title, description?            // custom item
   language?                                 // optional custom-item attendee language
@@ -575,6 +577,23 @@ rolling event may publish confirmed sessions while submissions remain open, but
 the admin review warns before doing so. The public agenda supports day, room and
 language filters, stable session URLs, bilingual labels, and whole-event or
 per-session iCalendar downloads in the event time zone.
+
+A custom item (keynote, meal, break, ceremony) may span all rooms. It conflicts
+with anything overlapping it in any room, appears under every room filter, and
+may name one host room; without one it is shown as "All rooms".
+
+The published release is also served read-only over HTTP, with CORS open, for
+an event website or app. `?lang=en|fr` resolves localized text (default `en`):
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/c/{cfpId}/schedule.json` | Event, time zone, days, rooms and every session with its speakers |
+| `GET /api/c/{cfpId}/sessions.json` | The sessions array alone |
+| `GET /api/c/{cfpId}/speakers.json` | One row per speaker appearance, with `sessionId` |
+| `GET /api/c/{cfpId}/schedule.ics` | The whole programme as a subscribable calendar |
+
+Each answers 404 until a programme is published. A speaker's `photoUrl` points
+at a release-scoped image endpoint under the same prefix.
 
 Schedule assignment, movement and cancellation messages use the held email
 queue when a preview is shared, never while the draft is being edited and never

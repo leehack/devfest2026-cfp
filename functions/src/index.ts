@@ -8631,12 +8631,13 @@ function scheduleEntryFrom(value: unknown): ScheduleEntry {
     date: String(data.date ?? '').trim(),
     startsAt: String(data.startsAt ?? '').trim(),
     durationMinutes: Number(data.durationMinutes),
-    roomId: String(data.roomId ?? '').trim(),
   };
+  const roomId = String(data.roomId ?? '').trim();
   if (data.kind === 'proposal') {
     const assigned = String(data.assignedLanguage ?? '');
     return {
       ...base,
+      roomId,
       kind: 'proposal',
       proposalId: String(data.proposalId ?? '').trim(),
       ...(assigned === 'en' || assigned === 'fr' ? { assignedLanguage: assigned } : {}),
@@ -8649,6 +8650,7 @@ function scheduleEntryFrom(value: unknown): ScheduleEntry {
   return {
     ...base,
     kind: 'custom',
+    ...(data.allRooms === true ? { allRooms: true, ...(roomId ? { roomId } : {}) } : { roomId }),
     customType: String(data.customType ?? '') as ScheduleEntry & never,
     ...(language ? { language: language as ScheduleLanguage } : {}),
     ...(speakers !== undefined ? { speakers } : {}),

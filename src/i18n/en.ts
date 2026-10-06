@@ -2433,6 +2433,11 @@ export const en = {
     notPublic: 'Not public',
     publicHelp: 'Choose a day, room, or language. Times are shown in the event time zone.',
     allRooms: 'All rooms',
+    spanAllRooms: 'Spans all rooms',
+    spanAllRoomsHelp:
+      'For keynotes, meals and breaks. Nothing else can be scheduled in any room during this time.',
+    hostRoom: 'Host room',
+    noHostRoom: 'No specific room',
     allLanguages: 'All languages',
     languageNames: {
       en: 'English',
