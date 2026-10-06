@@ -398,3 +398,63 @@ test('custom programme photos are immutable per public release through replace a
     }),
   ).toEqual({ ok: false, code: 'NOT_FOUND' });
 });
+
+test('the public programme API serves only the published release and its speaker photos', async ({
+  request,
+}) => {
+  const { admin, revision } = await configureSchedule();
+  const asset = await callJson(admin.idToken, 'uploadCustomScheduleSpeakerPhoto', {
+    contentType: 'image/png',
+    base64: (await portrait(960, 840, { r: 45, g: 135, b: 105 })).toString('base64'),
+  });
+  const saved = await callJson(admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: revision,
+    entry: customEntry(asset.assetRef),
+  });
+  const shared = await callJson(admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: saved.revision,
+  });
+  const api = `/api/c/${CFP_ID}`;
+  const photoPath = `${api}/schedule/photos/${shared.releaseId}/community-keynote/0`;
+
+  for (const path of ['schedule.json', 'sessions.json', 'speakers.json', 'schedule.ics']) {
+    expect((await request.get(`${api}/${path}`)).status()).toBe(404);
+  }
+  expect((await request.get(photoPath)).status()).toBe(404);
+
+  await callJson(admin.idToken, 'publishSchedule', { expectedRevision: shared.revision });
+
+  const scheduleResponse = await request.get(`${api}/schedule.json`);
+  expect(scheduleResponse.status()).toBe(200);
+  expect(scheduleResponse.headers()).toMatchObject({
+    'access-control-allow-origin': '*',
+    'content-type': 'application/json; charset=utf-8',
+  });
+  const schedule = await scheduleResponse.json();
+  expect(schedule.event.id).toBe(CFP_ID);
+  const keynote = schedule.sessions.find(
+    (session: { id: string }) => session.id === 'community-keynote',
+  );
+  expect(keynote.speakers[0]).toMatchObject({ name: 'Jordan Guest', company: 'Community Lab' });
+  expect(new URL(keynote.speakers[0].photoUrl).pathname).toBe(photoPath);
+  expect(JSON.stringify(schedule)).not.toContain(asset.assetRef);
+  expect(JSON.stringify(schedule)).not.toContain('photoRef');
+
+  expect(await (await request.get(`${api}/sessions.json`)).json()).toEqual(schedule.sessions);
+  expect(await (await request.get(`${api}/speakers.json`)).json()).toEqual([
+    { ...keynote.speakers[0], sessionId: 'community-keynote' },
+  ]);
+
+  const photo = await request.get(photoPath);
+  expect(photo.status()).toBe(200);
+  expect(photo.headers()['content-type']).toBe('image/webp');
+  expect(await sharp(await photo.body()).metadata()).toMatchObject({
+    format: 'webp',
+    width: FORM_LIMITS.speakerPhotoPublicSize,
+  });
+  expect((await request.get(`${api}/schedule/photos/${shared.releaseId}/community-keynote/1`)).status()).toBe(404);
+
+  const ics = await request.get(`${api}/schedule.ics`);
+  expect(ics.headers()['content-type']).toBe('text/calendar; charset=utf-8');
+  expect(await ics.text()).toContain('BEGIN:VEVENT');
+});

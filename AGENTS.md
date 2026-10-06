@@ -597,6 +597,19 @@ collection — the rule names the two readable documents one at a time.
   status change marks shared and public copies cancelled rather than deleting
   them, so links and calendar UIDs remain stable. Schedule emails are held when
   sharing, not while editing or promoting, and dedupe by release id.
+- **A custom schedule item may set `allRooms`; a proposal never can.** `roomId`
+  is then optional and means the host room, so every reader goes through
+  `scheduleEntryAllRooms` / `scheduleEntryOccupiesRoom` / `scheduleEntryRoomName`
+  in `shared/schedule.ts` rather than comparing `roomId` directly. The planner
+  draws these in `.schedule-grid__span`, an overlay across the room columns, not
+  inside a room track.
+- **`/api/c/{cfpId}/*` is the published programme over HTTP and nothing else.**
+  The JSON and ICS routes read through `src/server/publicCfps.ts`, so they see
+  only the release `publishedScheduleId` names; the shapes are built by pure
+  functions in `shared/publicApi.ts`. The photo route proxies the anonymous
+  `publicSchedulePhoto` callable instead of reading Storage, which keeps the
+  release, cancellation and deletion fences in one place. Responses are cached
+  for a minute (photos five) because unpublishing has no invalidation hook.
 - **Custom programme photos have two opaque identities.** The admin editor keeps
   only a server-generated `photoAssetRef`; its callable-owned metadata binds the
   exact private object and generation. Sharing replaces it with a release-only
