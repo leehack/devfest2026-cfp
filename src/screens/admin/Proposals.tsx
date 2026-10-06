@@ -1585,7 +1585,7 @@ export function Proposals({
                 <tr>
                   <th scope="col">{t.admin.colTitle}</th>
                   <th scope="col">{t.admin.colSpeaker}</th>
-                  <th scope="col">{t.admin.filterFormat}</th>
+                  <th scope="col">{t.admin.colFormat}</th>
                   <th scope="col">{t.admin.colScore}</th>
                   <th scope="col">{t.admin.colReviews}</th>
                   <th scope="col">{t.admin.colSpread}</th>
@@ -1641,7 +1641,7 @@ export function Proposals({
                           )}
                         </div>
                       </td>
-                      <td data-label={t.admin.filterFormat}>
+                      <td data-label={t.admin.colFormat}>
                         {labelOf(scopedShape.format, row.format, locale) || '—'}
                       </td>
                       <td data-label={t.admin.colScore}>

@@ -1916,6 +1916,7 @@ export const en = {
       `${live} in front of the committee · ${accepted} accepted · ${waitlisted} waitlisted · ${live - decided} still to decide`,
     noneAccepted: 'Nothing accepted yet.',
     colSpeaker: 'Speaker',
+    colFormat: 'Session type',
     noProposals: 'No proposals yet.',
     reviewerCoverage: 'Review progress',
     reviewerCoverageHelp:

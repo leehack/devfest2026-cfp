@@ -1946,6 +1946,7 @@ export const fr: Dictionary = {
       `${live} devant le comité · ${accepted} acceptées · ${waitlisted} en liste d’attente · ${live - decided} à décider`,
     noneAccepted: 'Aucune acceptation pour l’instant.',
     colSpeaker: 'Conférencier',
+    colFormat: 'Type de session',
     noProposals: 'Aucune proposition pour l’instant.',
     reviewerCoverage: 'Progression des évaluations',
     reviewerCoverageHelp:

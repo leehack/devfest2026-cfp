@@ -145,6 +145,8 @@ export function selectedSpeakersCsv(
 
   const lines = rows.map((row) => {
     const speakers = row.speakerSnapshot ?? [];
+    // Blanks are kept so each address stays in its speaker's position.
+    const speakerEmails = (row.speakerIds ?? []).map((uid) => emails[uid] ?? '');
     const values = [
       row.id,
       row.status,
@@ -165,7 +167,7 @@ export function selectedSpeakersCsv(
         ? labelOf(shape.deliveryLanguage, row.assignedLanguage, locale)
         : '',
       speakers.map((speaker) => speaker.name).filter(Boolean).join('; '),
-      (row.speakerIds ?? []).map((uid) => emails[uid]).filter(Boolean).join('; '),
+      speakerEmails.some(Boolean) ? speakerEmails.join('; ') : '',
       speakers.map((speaker) => speaker.bio).filter(Boolean).join('\n---\n'),
       speakers.map((speaker) => speaker.company).filter(Boolean).join('; '),
       speakers.map((speaker) => speaker.jobTitle).filter(Boolean).join('; '),
