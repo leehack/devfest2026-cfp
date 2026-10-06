@@ -2473,6 +2473,11 @@ export const fr: Dictionary = {
     notPublic: 'Non public',
     publicHelp: 'Choisissez un jour, une salle ou une langue. Les heures suivent le fuseau de l’événement.',
     allRooms: 'Toutes les salles',
+    spanAllRooms: 'Occupe toutes les salles',
+    spanAllRoomsHelp:
+      'Pour les conférences d’ouverture, les repas et les pauses. Rien d’autre ne peut être planifié dans une salle pendant ce temps.',
+    hostRoom: 'Salle hôte',
+    noHostRoom: 'Aucune salle précise',
     allLanguages: 'Toutes les langues',
     languageNames: {
       en: 'Anglais',

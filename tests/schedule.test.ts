@@ -7,6 +7,7 @@ import {
   resolvedScheduleLanguage,
   scheduleDurationBounds,
   scheduleEndTime,
+  scheduleEntryRoomName,
   scheduleProposalEligible,
   scheduleConflicts,
   scheduleRoomIdsInUse,
@@ -327,6 +328,57 @@ describe('schedule conflicts', () => {
         speakers,
       ),
     ).toEqual([{ kind: 'speaker', entryIds: ['talk-one', 'talk-two'] }]);
+  });
+});
+
+describe('all-room items', () => {
+  const lunch = (extra: Partial<Extract<ScheduleEntry, { kind: 'custom' }>> = {}): ScheduleEntry => ({
+    id: 'lunch',
+    kind: 'custom',
+    customType: 'meal',
+    allRooms: true,
+    title: { en: 'Lunch' },
+    date: '2026-11-14',
+    startsAt: '12:00',
+    durationMinutes: 60,
+    ...extra,
+  });
+
+  it('accepts an all-room item with or without a host room', () => {
+    expect(validateScheduleEntry(lunch(), config)).toBeNull();
+    expect(validateScheduleEntry(lunch({ roomId: 'blue' }), config)).toBeNull();
+    expect(validateScheduleEntry(lunch({ roomId: 'missing' }), config)).toBe('entryRoom');
+  });
+
+  it('still requires a room for single-room custom items and proposals', () => {
+    expect(validateScheduleEntry(lunch({ allRooms: undefined }), config)).toBe('entryRoom');
+    expect(
+      validateScheduleEntry(
+        { ...entry('talk', 'blue', '10:00'), allRooms: true, roomId: undefined } as unknown as ScheduleEntry,
+        config,
+      ),
+    ).toBe('entryRoom');
+  });
+
+  it('blocks every room for its duration', () => {
+    expect(
+      scheduleConflicts([lunch(), entry('a', 'blue', '11:30'), entry('b', 'green', '12:30')]),
+    ).toEqual([
+      { kind: 'room', entryIds: ['lunch', 'a'] },
+      { kind: 'room', entryIds: ['lunch', 'b'] },
+    ]);
+    expect(scheduleConflicts([lunch(), entry('a', 'blue', '13:00')])).toEqual([]);
+  });
+
+  it('holds only its host room against removal', () => {
+    expect([...scheduleRoomIdsInUse([lunch()])]).toEqual([]);
+    expect([...scheduleRoomIdsInUse([lunch({ roomId: 'green' })])]).toEqual(['green']);
+  });
+
+  it('names the host room, falling back to the all-rooms label', () => {
+    const names = new Map([['blue', 'Blue room']]);
+    expect(scheduleEntryRoomName(lunch(), names, 'All rooms')).toBe('All rooms');
+    expect(scheduleEntryRoomName(lunch({ roomId: 'blue' }), names, 'All rooms')).toBe('Blue room');
   });
 });
 

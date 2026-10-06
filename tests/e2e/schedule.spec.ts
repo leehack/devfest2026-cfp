@@ -14,6 +14,7 @@ import {
   readEmailLog,
   readPublicScheduleEntry,
   readPublicScheduleRelease,
+  readScheduleConfigDirect,
   readScheduleEntry,
   readScheduleReleaseIds,
   reviewedEmailConfiguration,
@@ -328,6 +329,67 @@ test('custom item language is validated, filterable, and frozen into each schedu
   await languageFilter.selectOption('all');
   await page.getByRole('link', { name: 'Coffee break' }).click();
   await expect(page.getByRole('article').locator('.language-chip')).toHaveText('Bilingual');
+});
+
+test('an all-room item blocks every room, spans the planner, and reaches the public agenda', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  const lunch = {
+    id: 'lunch',
+    kind: 'custom',
+    customType: 'meal',
+    allRooms: true,
+    title: { en: 'Lunch', fr: 'Dîner' },
+    date: '2026-11-14',
+    durationMinutes: 60,
+  };
+
+  expect(
+    await callAs(fixture.admin.idToken, 'upsertScheduleEntry', {
+      expectedRevision: fixture.revision,
+      entry: { ...lunch, startsAt: '10:00' },
+    }),
+  ).toMatchObject({ ok: false });
+  await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: fixture.revision,
+    entry: { ...lunch, startsAt: '13:00' },
+  });
+
+  await signInAs(page, ADMIN, at('/admin/schedule'));
+  const band = page.locator('.schedule-grid__span .schedule-card').filter({ hasText: 'Lunch' });
+  await expect(band).toContainText('All rooms');
+  await band.getByRole('button').first().click();
+  await expect(page.getByRole('checkbox', { name: 'Spans all rooms' })).toBeChecked();
+  await page.getByRole('combobox', { name: 'Host room' }).selectOption('amber');
+  await page.getByRole('button', { name: 'Save item' }).click();
+  await expect(band).toContainText('Amber room');
+  await page.reload();
+  await expect(band).toContainText('Amber room');
+
+  await page.getByRole('button', { name: 'Add programme item' }).click();
+  await page.getByRole('checkbox', { name: 'Spans all rooms' }).check();
+  await expect(page.getByRole('combobox', { name: 'Host room' })).toHaveValue('');
+  await page.getByRole('combobox', { name: 'Item type' }).selectOption('keynote');
+  await page.getByRole('checkbox', { name: 'Spans all rooms' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Spans all rooms' }).check();
+  await expect(page.getByRole('combobox', { name: 'Host room' })).toHaveValue('blue');
+  await page.getByRole('button', { name: 'Cancel' }).first().click();
+
+  const state = await readScheduleConfigDirect();
+  const shared = await callJson(fixture.admin.idToken, 'shareSchedulePreview', {
+    expectedRevision: state?.revision,
+  });
+  expect(await readScheduleEntry(shared.releaseId, lunch.id)).toMatchObject({
+    allRooms: true,
+    roomId: 'amber',
+  });
+  await callJson(fixture.admin.idToken, 'publishSchedule', { expectedRevision: shared.revision });
+
+  await page.goto(at('/schedule'));
+  await page.getByRole('combobox', { name: 'Room / track' }).selectOption('blue');
+  const lunchLink = page.getByRole('link', { name: 'Lunch' });
+  await expect(page.getByRole('listitem').filter({ has: lunchLink })).toContainText('Amber room');
 });
 
 test('an admin shares and publishes without duplicating notices, and cancellations stay stable', async ({

@@ -60,12 +60,12 @@ interface ScheduleEntryBase {
   date: string;
   startsAt: string;
   durationMinutes: number;
-  roomId: string;
   updatedAt?: unknown;
 }
 
 export interface ProposalScheduleEntry extends ScheduleEntryBase {
   kind: 'proposal';
+  roomId: string;
   proposalId: string;
   /** Required only when the proposal was submitted as `either`. */
   assignedLanguage?: ResolvedLanguage;
@@ -73,6 +73,9 @@ export interface ProposalScheduleEntry extends ScheduleEntryBase {
 
 export interface CustomScheduleEntry extends ScheduleEntryBase {
   kind: 'custom';
+  /** Occupies every room at once; `roomId` then names an optional host room. */
+  allRooms?: true;
+  roomId?: string;
   customType: CustomScheduleType;
   /** Omitted for language-neutral items such as breaks or meals. */
   language?: ScheduleLanguage;
@@ -152,12 +155,15 @@ export type PublishedScheduleEntry = ScheduleEntryBase &
   (
     | {
         kind: 'proposal';
+        roomId: string;
         proposalId: string;
         session: PublishedProposalSession;
         cancelled?: boolean;
       }
     | {
         kind: 'custom';
+        allRooms?: true;
+        roomId?: string;
         customType: CustomScheduleType;
         language?: ScheduleLanguage;
         title: Localised;
@@ -221,12 +227,33 @@ export function sharedScheduleForEntries(
   entries: readonly PublishedScheduleEntry[],
 ): SharedSchedule {
   const dates = new Set(entries.map((entry) => entry.date));
-  const roomIds = new Set(entries.map((entry) => entry.roomId));
   return {
     ...schedule,
     days: schedule.days.filter((day) => dates.has(day.date)),
-    rooms: schedule.rooms.filter((room) => roomIds.has(room.id)),
+    rooms: schedule.rooms.filter((room) =>
+      entries.some((entry) => scheduleEntryOccupiesRoom(entry, room.id)),
+    ),
   };
+}
+
+type RoomPlacement = { kind: 'proposal' | 'custom'; roomId?: string; allRooms?: true };
+
+export function scheduleEntryAllRooms(entry: RoomPlacement): boolean {
+  return entry.kind === 'custom' && entry.allRooms === true;
+}
+
+export function scheduleEntryOccupiesRoom(entry: RoomPlacement, roomId: string): boolean {
+  return scheduleEntryAllRooms(entry) || entry.roomId === roomId;
+}
+
+/** A host room wins over the all-rooms label because it is where attendees should go. */
+export function scheduleEntryRoomName(
+  entry: RoomPlacement,
+  roomNames: ReadonlyMap<string, string>,
+  allRoomsLabel: string,
+): string {
+  if (entry.roomId) return roomNames.get(entry.roomId) ?? entry.roomId;
+  return allRoomsLabel;
 }
 
 /** The local end time attendees need alongside the stored start and duration. */
@@ -324,7 +351,7 @@ export function snapScheduleDuration(
 
 /** Room ids referenced by the live draft; those rooms cannot be removed yet. */
 export function scheduleRoomIdsInUse(entries: readonly ScheduleEntry[]): ReadonlySet<string> {
-  return new Set(entries.map((entry) => entry.roomId));
+  return new Set(entries.flatMap((entry) => (entry.roomId ? [entry.roomId] : [])));
 }
 
 /** Generates a collision-free id that remains independent of room ordering. */
@@ -388,7 +415,16 @@ export function validateScheduleEntry(
   ) {
     return 'entryDuration';
   }
-  if (!config.rooms.some((room) => room.id === entry.roomId)) return 'entryRoom';
+  const allRooms = scheduleEntryAllRooms(entry);
+  if (entry.kind === 'custom' && entry.allRooms !== undefined && entry.allRooms !== true) {
+    return 'entryRoom';
+  }
+  if (
+    !(allRooms && entry.roomId === undefined) &&
+    !config.rooms.some((room) => room.id === entry.roomId)
+  ) {
+    return 'entryRoom';
+  }
   if (entry.kind === 'proposal') {
     return typeof entry.proposalId === 'string' && ENTRY_ID.test(entry.proposalId)
       ? null
@@ -466,7 +502,9 @@ export function scheduleConflicts(
         continue;
       }
       if (!overlaps(a, b)) continue;
-      if (a.roomId === b.roomId) conflicts.push({ kind: 'room', entryIds: [a.id, b.id] });
+      if (scheduleEntryAllRooms(a) || scheduleEntryAllRooms(b) || a.roomId === b.roomId) {
+        conflicts.push({ kind: 'room', entryIds: [a.id, b.id] });
+      }
       if (a.kind !== 'proposal' || b.kind !== 'proposal') continue;
       const aSpeakers = new Set(speakersByProposal.get(a.proposalId) ?? []);
       if ((speakersByProposal.get(b.proposalId) ?? []).some((uid) => aSpeakers.has(uid))) {
