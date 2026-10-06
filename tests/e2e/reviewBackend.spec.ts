@@ -9,6 +9,7 @@ import {
   seedMember,
   seedProposal,
   seedReview,
+  seedSpeaker,
   seedSpeakerParticipant,
   setSubmissionFormDirect,
   setProposalStatusDirect,
@@ -105,6 +106,40 @@ test.describe('review backend operations', () => {
     });
 
     expect(await callAs(first.idToken, 'reviewCoverage', {})).toMatchObject({
+      ok: false,
+      code: 'PERMISSION_DENIED',
+    });
+  });
+
+  test('releases contact addresses only for selected speakers, and only to an admin', async () => {
+    const [admin, reviewer, speaker, other] = await Promise.all([
+      createAccount(ADMIN),
+      createAccount(FIRST),
+      createAccount(SPEAKER),
+      createAccount(SECOND),
+    ]);
+    await Promise.all([
+      seedMember(admin.uid, 'admin', undefined, ADMIN.email),
+      seedMember(reviewer.uid, 'reviewer', undefined, FIRST.email),
+      seedSpeaker(speaker.uid, { name: SPEAKER.name, email: SPEAKER.email }),
+      seedSpeaker(other.uid, { name: SECOND.name, email: SECOND.email }),
+      seedProposal('selected', {
+        speakerUid: speaker.uid,
+        title: 'Selected',
+        status: 'accepted',
+      }),
+      seedProposal('rejected', {
+        speakerUid: other.uid,
+        title: 'Not selected',
+        status: 'rejected',
+      }),
+    ]);
+
+    expect(await callJson(admin.idToken, 'selectedSpeakerEmails', {})).toEqual({
+      ok: true,
+      emails: { [speaker.uid]: SPEAKER.email },
+    });
+    expect(await callAs(reviewer.idToken, 'selectedSpeakerEmails', {})).toMatchObject({
       ok: false,
       code: 'PERMISSION_DENIED',
     });

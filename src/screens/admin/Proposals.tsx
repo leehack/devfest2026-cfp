@@ -10,6 +10,7 @@ import {
   headshotImage,
   loadAllProposals,
   reviewCoverage,
+  selectedSpeakerEmails,
   setProposalStatus,
   type ProposalRow,
   type ReviewCoverageResult,
@@ -776,6 +777,9 @@ export function Proposals({
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('current');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [formatFilter, setFormatFilter] = useState('all');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [profileFilter, setProfileFilter] = useState<ProfileAttentionFilter>('all');
   const [sort, setSort] = useState<ProposalSort>('score');
@@ -866,6 +870,8 @@ export function Proposals({
       setSearch('');
       setStatusFilter('current');
       setCategoryFilter('all');
+      setFormatFilter('all');
+      setExportError('');
       setScoreFilter('all');
       setProfileFilter('all');
       setSort('score');
@@ -1223,6 +1229,11 @@ export function Proposals({
     return [...new Set([...configured, ...scopedRows.map((row) => row.category).filter(Boolean)])];
   }, [scopedRows, scopedShape.category]);
 
+  const formats = useMemo(() => {
+    const configured = scopedShape.format.map((option) => option.value);
+    return [...new Set([...configured, ...scopedRows.map((row) => row.format).filter(Boolean)])];
+  }, [scopedRows, scopedShape.format]);
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase(locale);
     const result = scopedRows.filter((row) => {
@@ -1243,6 +1254,7 @@ export function Proposals({
         return false;
       }
       if (categoryFilter !== 'all' && row.category !== categoryFilter) return false;
+      if (formatFilter !== 'all' && row.format !== formatFilter) return false;
       if (
         !proposalHasProfileUpdateAttention(
           profileRequestsByProposal.get(row.id) ?? [],
@@ -1279,6 +1291,7 @@ export function Proposals({
     });
   }, [
     categoryFilter,
+    formatFilter,
     locale,
     names,
     profileFilter,
@@ -1295,6 +1308,7 @@ export function Proposals({
     search !== '' ||
     statusFilter !== 'current' ||
     categoryFilter !== 'all' ||
+    formatFilter !== 'all' ||
     scoreFilter !== 'all' ||
     profileFilter !== 'all' ||
     sort !== 'score';
@@ -1309,6 +1323,20 @@ export function Proposals({
   const detailRow = detailProposalId
     ? scopedRows.find((row) => row.id === detailProposalId)
     : undefined;
+  async function exportSelectedSpeakers() {
+    setExporting(true);
+    setExportError('');
+    try {
+      const { data } = await selectedSpeakerEmails({ cfpId });
+      if (activeCfp.current !== cfpId) return;
+      downloadSelectedSpeakersCsv(cfpId, accepted, scopedShape, questions, locale, data.emails);
+    } catch (exportFailure) {
+      if (activeCfp.current === cfpId) setExportError(adminError(exportFailure, t));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const undoHasDecisionEmail =
     undo !== null && (DECISION_KINDS as readonly string[]).includes(undo.next);
 
@@ -1448,6 +1476,22 @@ export function Proposals({
           </label>
 
           <label className="decision-filter">
+            <span>{t.admin.filterFormat}</span>
+            <select
+              className="field__input field__input--select"
+              value={formatFilter}
+              onChange={(event) => setFormatFilter(event.target.value)}
+            >
+              <option value="all">{t.admin.filterAllFormats}</option>
+              {formats.map((format) => (
+                <option key={format} value={format}>
+                  {labelOf(scopedShape.format, format, locale)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="decision-filter">
             <span>{t.admin.filterScoreStatus}</span>
             <select
               className="field__input field__input--select"
@@ -1506,6 +1550,7 @@ export function Proposals({
                 setSearch('');
                 setStatusFilter('current');
                 setCategoryFilter('all');
+                setFormatFilter('all');
                 setScoreFilter('all');
                 setProfileFilter('all');
                 setSort('score');
@@ -1540,6 +1585,7 @@ export function Proposals({
                 <tr>
                   <th scope="col">{t.admin.colTitle}</th>
                   <th scope="col">{t.admin.colSpeaker}</th>
+                  <th scope="col">{t.admin.colFormat}</th>
                   <th scope="col">{t.admin.colScore}</th>
                   <th scope="col">{t.admin.colReviews}</th>
                   <th scope="col">{t.admin.colSpread}</th>
@@ -1595,6 +1641,9 @@ export function Proposals({
                           )}
                         </div>
                       </td>
+                      <td data-label={t.admin.colFormat}>
+                        {labelOf(scopedShape.format, row.format, locale) || '—'}
+                      </td>
                       <td data-label={t.admin.colScore}>
                         {row.aggregate ? row.aggregate.avgScore.toFixed(2) : '—'}
                       </td>
@@ -1621,14 +1670,14 @@ export function Proposals({
             <button
               type="button"
               className="btn btn--ghost"
-              onClick={() =>
-                downloadSelectedSpeakersCsv(cfpId, accepted, scopedShape, questions, locale)
-              }
+              disabled={exporting}
+              onClick={() => void exportSelectedSpeakers()}
             >
               CSV · {t.admin.results}
             </button>
           )}
         </div>
+        <Result ok="" error={inCurrentScope ? exportError : ''} />
         <p className="section__help">
           {t.admin.tally(
             decidable.length,

@@ -276,6 +276,12 @@ export const reviewCoverage = httpsCallable<Just, ReviewCoverageResult>(
   'reviewCoverage',
 );
 
+/** Speaker uid to contact address, for speakers on accepted or confirmed talks. */
+export const selectedSpeakerEmails = httpsCallable<
+  Just,
+  { ok: boolean; emails: Record<string, string> }
+>(functions, 'selectedSpeakerEmails');
+
 // ------------------------------------------------------------ the CFP itself
 
 export const createCfp = httpsCallable<

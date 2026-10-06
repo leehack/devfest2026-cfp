@@ -1733,6 +1733,8 @@ export const en = {
     filterAllStatuses: 'All statuses',
     filterCategory: 'Category',
     filterAllCategories: 'All categories',
+    filterFormat: 'Session type',
+    filterAllFormats: 'All session types',
     filterScoreStatus: 'Talk score status',
     filterAllScores: 'All proposals',
     filterScored: 'Scored',
@@ -1914,6 +1916,7 @@ export const en = {
       `${live} in front of the committee · ${accepted} accepted · ${waitlisted} waitlisted · ${live - decided} still to decide`,
     noneAccepted: 'Nothing accepted yet.',
     colSpeaker: 'Speaker',
+    colFormat: 'Session type',
     noProposals: 'No proposals yet.',
     reviewerCoverage: 'Review progress',
     reviewerCoverageHelp:

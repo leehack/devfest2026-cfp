@@ -83,10 +83,15 @@ const row: ProposalRow = {
 
 describe('selected speaker CSV', () => {
   it('exports programme, speaker, travel, scoring, and current and historical answers', () => {
-    const csv = selectedSpeakersCsv([row], shape, confirmation, 'fr');
+    const csv = selectedSpeakersCsv([row], shape, confirmation, 'fr', {
+      'speaker-1': 'sam@example.org',
+      'someone-else': 'other@example.org',
+    });
     const [header] = csv.split('\r\n');
 
-    expect(header).toContain('speaker_names');
+    expect(header).toContain('speaker_names,speaker_emails,');
+    expect(csv).toContain(',Sam Speaker,sam@example.org,');
+    expect(csv).not.toContain('other@example.org');
     expect(header).toContain('speaker_is_gde');
     expect(header).toContain('speaker_past_talks');
     expect(header).toContain('attendance_status');
@@ -108,6 +113,18 @@ describe('selected speaker CSV', () => {
     expect(csv).toContain('Keep this too');
     expect(csv).toContain('2026-07-01T12:00:00.000Z');
     expect(csv).toContain('2026-07-03T12:00:00.000Z');
+  });
+
+  it('keeps each address in its speaker’s position when one is missing', () => {
+    const speakerIds = ['speaker-1', 'speaker-2', 'speaker-3'];
+    const emails = { 'speaker-1': 'sam@example.org', 'speaker-3': 'third@example.org' };
+
+    expect(selectedSpeakersCsv([{ ...row, speakerIds }], shape, confirmation, 'en', emails)).toContain(
+      ',sam@example.org; ; third@example.org,',
+    );
+    expect(selectedSpeakersCsv([{ ...row, speakerIds }], shape, confirmation, 'en')).toContain(
+      ',Sam Speaker,,',
+    );
   });
 
   it('keeps a stable header-only file when there are no selected talks', () => {
