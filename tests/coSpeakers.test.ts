@@ -55,10 +55,15 @@ describe('proposal session link parsing', () => {
 });
 
 describe('co-speaker invitation delivery validity', () => {
-  it('clears both terminal timestamps before a retry records its next attempt', () => {
+  it('clears both terminal timestamps and batch state before a retry records its next attempt', () => {
     const update = coSpeakerInvitationRetryEmailUpdate();
 
     expect(update.status).toBe('queued');
+    expect(update.batchId.constructor.name).toBe('DeleteTransform');
+    expect(update.batchStaged.constructor.name).toBe('DeleteTransform');
+    expect(update.batchStagedAt.constructor.name).toBe('DeleteTransform');
+    expect(update.batchConfigurationFingerprint.constructor.name).toBe('DeleteTransform');
+    expect(update.batchReviewed.constructor.name).toBe('DeleteTransform');
     expect(update.attemptedAt.constructor.name).toBe('DeleteTransform');
     expect(update.sentAt.constructor.name).toBe('DeleteTransform');
     expect(update.retryRequestedAt.constructor.name).toBe('ServerTimestampTransform');

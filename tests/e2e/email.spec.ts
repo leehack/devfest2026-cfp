@@ -22,6 +22,7 @@ import {
   readEventEmailConfigurationDirect,
   readEmailLog,
   reset,
+  seedEmailBatch,
   seedEmailLog,
   seedProposal,
   seedSpeaker,
@@ -1775,6 +1776,47 @@ test.describe('email pipeline', () => {
       .poll(async () => (await readEmailLog()).find((row) => row.id === 'stalled-receipt'))
       .toMatchObject({ status: 'dry_run', attempts: 2 });
     await expect(page.getByText('Delivery stalled — retry available')).toHaveCount(0);
+  });
+
+  test('a stranded deferred batch with an expired lease is drained and recoverable from the email workspace', async ({
+    page,
+  }) => {
+    await stage();
+    await setEmailDeliveryReadyDirect();
+    const expiredAt = new Date(Date.now() - 11 * 60 * 1_000);
+    await seedEmailLog('stranded-batch-receipt', {
+      status: 'sending',
+      kind: 'submission_received',
+      proposalId: 'talk-1',
+      attempts: 1,
+      sendingClaimId: 'batch-claim',
+      providerAttemptId: 'attempt-stranded-batch-receipt',
+      batchId: 'stranded-batch-1',
+      sendingStartedAt: expiredAt,
+    });
+    await seedEmailBatch('stranded-batch-1', {
+      logIds: ['stranded-batch-receipt'],
+      attempts: 1,
+      createdAt: expiredAt,
+      nextAttemptAt: new Date(Date.now() - 60_000),
+    });
+
+    await signInAs(page, admin);
+    await page.goto(at('/admin/email'));
+    const retry = page.getByRole('button', { name: 'Review 1 for retry' });
+    await expect(retry).toBeEnabled();
+    await retry.click();
+    await page
+      .getByRole('dialog', { name: 'Retry unresolved deliveries' })
+      .getByRole('button', { name: 'Retry 1 delivery' })
+      .click();
+
+    await expect
+      .poll(async () => (await readEmailLog()).find((row) => row.id === 'stranded-batch-receipt'))
+      .toMatchObject({ status: 'dry_run', attempts: 2 });
+    expect(
+      (await readEmailLog()).find((row) => row.id === 'stranded-batch-receipt')?.batchId,
+    ).toBeUndefined();
   });
 
   test('resending something that was never queued says so', async () => {
