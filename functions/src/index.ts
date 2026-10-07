@@ -2621,8 +2621,13 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
   const cfpId = requireCfpId(request.data);
   const uid = requireUid(request, 'answer a decision');
   const proposalId = requireProposalId(request.data);
-  const data = (request.data ?? {}) as { response?: unknown; answers?: unknown };
+  const data = (request.data ?? {}) as {
+    response?: unknown;
+    answers?: unknown;
+    adoptProfilePhoto?: unknown;
+  };
   const response = String(data.response ?? '');
+  const adoptProfilePhoto = data.adoptProfilePhoto !== false;
 
   if (response !== 'confirm' && response !== 'decline') {
     throw new HttpsError('invalid-argument', 'Answer must be "confirm" or "decline".');
@@ -2648,6 +2653,7 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
   let frozenSpeakerPhoto: ConfirmedSpeakerPhoto | undefined;
   let perSpeakerLifecycle = false;
   let migratedFromLegacy = false;
+  let keepExistingSessionPhoto = false;
   if (speakerResponse === 'confirmed') {
     leaseId = await acquireCfpMutation(cfpId, 'speaker-confirmation', async (tx) => {
       const proposal = await readOwnProposal(tx, proposalRef, uid);
@@ -2662,6 +2668,16 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
         confirmationRef.get(),
         db.doc(`speakers/${uid}`).get(),
       ]);
+      const alreadyConfirmed = perSpeakerLifecycle
+        ? currentConfirmation.get('response') === 'confirmed'
+        : currentProposal.get('status') === 'confirmed';
+      const currentSpeakerPhoto = perSpeakerLifecycle
+        ? currentConfirmation.get('speakerPhoto')
+        : currentProposal.get('speakerPhoto');
+      keepExistingSessionPhoto =
+        !adoptProfilePhoto &&
+        alreadyConfirmed &&
+        (Boolean(currentSpeakerPhoto) || !form.speakerPhoto?.required);
       migratedFromLegacy =
         perSpeakerLifecycle &&
         currentConfirmation.get('migratedFromLegacy') === true &&
@@ -2702,7 +2718,7 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
       frozenUploads = perSpeakerLifecycle
         ? await freezeSpeakerUploadedHeadshots(bucket, cfpId, proposalId, uid, uploads)
         : await freezeUploadedHeadshots(bucket, cfpId, proposalId, uploads);
-      if (form.speakerPhoto) {
+      if (form.speakerPhoto && !keepExistingSessionPhoto) {
         profilePhotoSource = speakerProfilePhotoFrom(currentProfile.get('profilePhoto'), uid);
         if (!profilePhotoSource && form.speakerPhoto.required) {
           throw new HttpsError('invalid-argument', 'Add a speaker photo before confirming.', {
@@ -2763,9 +2779,29 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
         );
       const confirmationSnaps = personalSnapshots.slice(0, confirmationRefs.length);
       const profileUpdateRequests = personalSnapshots.slice(confirmationRefs.length);
+      const previousConfirmationSnap = currentPerSpeakerLifecycle
+        ? confirmationSnaps[speakerIds.indexOf(uid)]
+        : undefined;
+      const previousSpeakerPhoto = currentPerSpeakerLifecycle
+        ? previousConfirmationSnap?.get('speakerPhoto')
+        : proposal.speakerPhoto;
+      let nextSpeakerPhoto: ConfirmedSpeakerPhoto | undefined;
 
       if (speakerResponse === 'confirmed') {
         const latestForm = confirmFormFrom(latestFormSnap);
+        const alreadyConfirmedInTx = currentPerSpeakerLifecycle
+          ? previousConfirmationSnap?.get('response') === 'confirmed'
+          : proposal.status === 'confirmed';
+        const keepExistingInTx =
+          !adoptProfilePhoto &&
+          alreadyConfirmedInTx &&
+          (Boolean(previousSpeakerPhoto) || !latestForm.speakerPhoto?.required);
+        if (keepExistingInTx !== keepExistingSessionPhoto) {
+          throw new HttpsError(
+            'aborted',
+            'The confirmation state changed while the answer was being saved. Try again.',
+          );
+        }
         const checked = validateAnswers(
           latestForm,
           (data.answers ?? {}) as Answers,
@@ -2779,34 +2815,40 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
           if (Object.prototype.hasOwnProperty.call(answers, key)) answers[key] = path;
         }
         if (latestForm.speakerPhoto) {
-          const latestPhoto = speakerProfilePhotoFrom(latestProfile.get('profilePhoto'), uid);
-          if (!latestPhoto && latestForm.speakerPhoto.required) {
+          if (!keepExistingSessionPhoto) {
+            const latestPhoto = speakerProfilePhotoFrom(latestProfile.get('profilePhoto'), uid);
+            if (!latestPhoto && latestForm.speakerPhoto.required) {
+              throw new HttpsError('invalid-argument', 'Add a speaker photo before confirming.', {
+                speakerPhoto: 'required',
+              });
+            }
+            if (
+              (latestPhoto &&
+                (!profilePhotoSource ||
+                  !frozenSpeakerPhoto ||
+                  !speakerProfilePhotoMatches(latestPhoto, uid, profilePhotoSource))) ||
+              (!latestPhoto && (profilePhotoSource || frozenSpeakerPhoto))
+            ) {
+              throw new HttpsError(
+                'aborted',
+                'The profile photo changed while the answer was being saved. Try again.',
+              );
+            }
+          }
+          nextSpeakerPhoto = keepExistingSessionPhoto
+            ? previousSpeakerPhoto
+            : frozenSpeakerPhoto;
+          if (!nextSpeakerPhoto && latestForm.speakerPhoto.required) {
             throw new HttpsError('invalid-argument', 'Add a speaker photo before confirming.', {
               speakerPhoto: 'required',
             });
           }
-          if (
-            (latestPhoto &&
-              (!profilePhotoSource ||
-                !frozenSpeakerPhoto ||
-                !speakerProfilePhotoMatches(latestPhoto, uid, profilePhotoSource))) ||
-            (!latestPhoto && (profilePhotoSource || frozenSpeakerPhoto))
-          ) {
-            throw new HttpsError(
-              'aborted',
-              'The profile photo changed while the answer was being saved. Try again.',
-            );
-          }
         } else {
           frozenSpeakerPhoto = undefined;
+          nextSpeakerPhoto = undefined;
         }
       }
 
-      const previousSpeakerPhoto = currentPerSpeakerLifecycle
-        ? confirmationSnaps[speakerIds.indexOf(uid)]?.get('speakerPhoto')
-        : proposal.speakerPhoto;
-      const nextSpeakerPhoto =
-        speakerResponse === 'confirmed' ? frozenSpeakerPhoto : undefined;
       const speakerPhotoChanged =
         JSON.stringify(stableScheduleValue(previousSpeakerPhoto ?? null)) !==
         JSON.stringify(stableScheduleValue(nextSpeakerPhoto ?? null));

@@ -774,6 +774,7 @@ function ProposalFormPage({
   const [profileRequestRefresh, setProfileRequestRefresh] = useState(0);
   const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
   const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
+  const [talkSessionKey, setTalkSessionKey] = useState(0);
 
   const transitionFocus = useRef<
     'join-waiting' | 'join-loading' | 'leave-waiting' | 'leave-loading' | null
@@ -786,6 +787,7 @@ function ProposalFormPage({
   const answerDirty = useRef(false);
   const answerRevision = useRef(0);
   const activeAnswerSave = useRef<Promise<boolean> | null>(null);
+  const photoApprovedInSession = useRef(false);
   const currentProfilePhotoGeneration = useRef<string | null>(null);
   const sessionPhotoGenerations = useRef(new Map<string, string | null>());
   const confirmFormRef = useRef(confirmForm);
@@ -1117,7 +1119,41 @@ function ProposalFormPage({
 
   const { showToast } = useToast();
 
+  const markOwnResponse = useCallback(
+    (id: string, response: 'confirmed' | 'declined', responseAnswers: Answers) => {
+      const updated = talksRef.current.map((talk) =>
+        talk.id === id
+          ? {
+              ...talk,
+              ownConfirmation: {
+                ...talk.ownConfirmation,
+                response,
+                answers: responseAnswers,
+              },
+            }
+          : talk,
+      );
+      talksRef.current = updated;
+      setTalks(updated);
+    },
+    [],
+  );
+
   const setConfirmationAnswer = useCallback((key: string, value: AnswerValue) => {
+    setAnswerFaults((previous) => {
+      if (!Object.prototype.hasOwnProperty.call(previous, key)) return previous;
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
+    if (key === SPEAKER_PHOTO_KEY && speakerStatusRef.current === 'confirmed') {
+      if (typeof value !== 'string' || value === '') {
+        // Removing the reusable account photo on an already-confirmed session
+        // waits for the explicit "Remove photo from this session" action.
+        return;
+      }
+      photoApprovedInSession.current = true;
+    }
     armHistoryGuard();
     answerDirty.current = true;
     answerRevision.current += 1;
@@ -1127,10 +1163,12 @@ function ProposalFormPage({
     const id = proposalIdRef.current;
     if (
       id &&
+      speakerStatusRef.current !== 'confirmed' &&
       typeof value === 'string' &&
       value.startsWith(`cfps/${cfpId}/workingHeadshots/${id}/`) &&
       value.includes(`/${key}/`)
     ) {
+      savedAnswersRef.current = { ...savedAnswersRef.current, [key]: value };
       const updated = talksRef.current.map((talk) =>
         talk.id === id
           ? {
@@ -1181,6 +1219,13 @@ function ProposalFormPage({
       const savedRevision = answerRevision.current;
       const snapshot = answersRef.current;
       const id = proposalIdRef.current;
+      const adoptPhoto =
+        force ||
+        photoApprovedInSession.current ||
+        Boolean(
+          confirmFormRef.current.speakerPhoto?.required &&
+            !sessionPhotoGenerations.current.get(id),
+        );
       setAnswerSaveState('saving');
 
       const request = (async () => {
@@ -1190,6 +1235,7 @@ function ProposalFormPage({
             proposalId: id,
             response: 'confirm',
             answers: snapshot,
+            adoptProfilePhoto: adoptPhoto,
           });
           invalidateCache('myProposals');
           invalidateCache(`allProposals:${cfpId}`);
@@ -1198,10 +1244,14 @@ function ProposalFormPage({
           if (answerRevision.current === savedRevision) {
             answerDirty.current = false;
             savedAnswersRef.current = snapshot;
-            if (confirmFormRef.current.speakerPhoto) {
-              const generation = currentProfilePhotoGeneration.current;
-              sessionPhotoGenerations.current.set(id, generation);
-              if (proposalIdRef.current === id) setSessionPhotoGeneration(generation);
+            markOwnResponse(id, 'confirmed', snapshot);
+            if (adoptPhoto) {
+              photoApprovedInSession.current = false;
+              if (confirmFormRef.current.speakerPhoto) {
+                const generation = currentProfilePhotoGeneration.current;
+                sessionPhotoGenerations.current.set(id, generation);
+                if (proposalIdRef.current === id) setSessionPhotoGeneration(generation);
+              }
             }
             setProfileRequestRefresh((value) => value + 1);
             setAnswerSaveState('saved');
@@ -1230,7 +1280,7 @@ function ProposalFormPage({
         ? saveConfirmationAnswers(source)
         : true;
     },
-    [archived, cfpId, collapseHistoryGuard, showToast],
+    [archived, cfpId, collapseHistoryGuard, markOwnResponse, showToast],
   );
 
   useEffect(() => {
@@ -1587,27 +1637,6 @@ function ProposalFormPage({
     setTalks(updated);
   }
 
-  function markOwnResponse(
-    id: string,
-    response: 'confirmed' | 'declined',
-    responseAnswers: Answers,
-  ) {
-    const updated = talksRef.current.map((talk) =>
-      talk.id === id
-        ? {
-            ...talk,
-            ownConfirmation: {
-              ...talk.ownConfirmation,
-              response,
-              answers: responseAnswers,
-            },
-          }
-        : talk,
-    );
-    talksRef.current = updated;
-    setTalks(updated);
-  }
-
   function applyRoster(next: ProposalSpeakerRoster | null) {
     setSpeakerRoster(next);
     const id = proposalIdRef.current;
@@ -1652,6 +1681,7 @@ function ProposalFormPage({
     revision.current += 1;
     if (!preserveRoster || talk?.id !== proposalIdRef.current) {
       setSpeakerRoster(undefined);
+      setTalkSessionKey((current) => current + 1);
     }
     if (talk) {
       setForm(fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current));
@@ -1677,6 +1707,7 @@ function ProposalFormPage({
       setAnswers({});
       savedAnswersRef.current = {};
     }
+    photoApprovedInSession.current = false;
     answerDirty.current = false;
     setAnswerSaveState('idle');
     setAnswerSaveError('');
@@ -1906,6 +1937,7 @@ function ProposalFormPage({
       sessionPhotoGenerations.current.set(proposalId, nextPhotoGeneration);
       setSessionPhotoGeneration(nextPhotoGeneration);
       if (response === 'confirm') savedAnswersRef.current = responseAnswers;
+      photoApprovedInSession.current = false;
       answerDirty.current = false;
       setAnswerSaveState(response === 'confirm' ? 'saved' : 'idle');
       setAnswerSaveError('');
@@ -1934,6 +1966,7 @@ function ProposalFormPage({
   function cancelConfirmationAnswers() {
     setAnswers(savedAnswersRef.current);
     answersRef.current = savedAnswersRef.current;
+    photoApprovedInSession.current = false;
     answerDirty.current = false;
     setAnswerFaults({});
     setAnswerSaveState('idle');
@@ -2347,6 +2380,7 @@ function ProposalFormPage({
         it would have saved.
       */}
       <SessionizeImport
+        key={talkSessionKey}
         form={form}
         disabled={talkDisabled}
         onApply={(patch) => {

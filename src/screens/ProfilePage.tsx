@@ -17,6 +17,7 @@ import type { User } from 'firebase/auth';
 import { SpeakerFields } from '../components/SpeakerFields';
 import { SpeakerProfilePhoto } from '../components/SpeakerProfilePhoto';
 import { useI18n } from '../i18n/context';
+import { validationMessage } from '../i18n/validation';
 import { friendlyError } from '../lib/errors';
 import { emptyForm, fromDocuments, toSubmission, type FormState } from '../lib/formState';
 import { loadProfile, saveProfile } from '../lib/proposals';
@@ -34,8 +35,7 @@ function faultsIn(form: FormState, t: ReturnType<typeof useI18n>['t']): Record<s
   const faults: Record<string, string> = {};
   for (const issue of result.error.issues) {
     const path = `speaker.${issue.path.join('.')}`;
-    const key = (issue as { params?: { key?: string } }).params?.key;
-    faults[path] = (key && t.errors.rules[key]) || t.errors.incomplete;
+    if (!faults[path]) faults[path] = validationMessage(issue, t);
   }
   return faults;
 }
@@ -48,6 +48,7 @@ export function ProfilePage({ user }: { user: User }) {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [showErrors, setShowErrors] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
   const dirty = useRef(false);
@@ -230,7 +231,7 @@ export function ProfilePage({ user }: { user: User }) {
 
       <form className="profile-editor" onSubmit={save} noValidate>
         <div className="section profile-editor__fields">
-          <SpeakerProfilePhoto disabled={busy} />
+          <SpeakerProfilePhoto disabled={busy} onBusyChange={setPhotoBusy} />
           <SpeakerFields form={form} set={set} err={err} disabled={busy} />
         </div>
 
@@ -249,7 +250,7 @@ export function ProfilePage({ user }: { user: User }) {
               </span>
             )}
           </div>
-          <button type="submit" className="btn btn--primary" disabled={busy}>
+          <button type="submit" className="btn btn--primary" disabled={busy || photoBusy}>
             {busy ? t.profile.saving : t.profile.save}
           </button>
         </footer>

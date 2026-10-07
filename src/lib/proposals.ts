@@ -557,7 +557,13 @@ export const workingHeadshotImage = httpsCallable<
 >(functions, 'headshotImage');
 
 export const respondToDecision = httpsCallable<
-  { cfpId: string; proposalId: string; response: 'confirm' | 'decline'; answers?: Answers },
+  {
+    cfpId: string;
+    proposalId: string;
+    response: 'confirm' | 'decline';
+    answers?: Answers;
+    adoptProfilePhoto?: boolean;
+  },
   CallableResult & {
     status: ProposalStatus;
     response: 'confirmed' | 'declined';

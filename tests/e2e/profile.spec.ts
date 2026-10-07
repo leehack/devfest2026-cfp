@@ -90,6 +90,7 @@ test.describe('the speaker profile', () => {
     await page.getByRole('button', { name: 'Save profile' }).click();
 
     await expect(alerts(page).first()).toBeVisible();
+    await expect(page.getByText('At least 50 characters.')).toBeVisible();
     await expect(page.getByText('Saved.')).toHaveCount(0);
     await expect(field(page, 'Bio')).toBeFocused();
     expect(await readSpeaker((await createAccount(SPEAKER)).uid)).toBeUndefined();
