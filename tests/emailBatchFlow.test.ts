@@ -442,14 +442,16 @@ describe('email batch drain', () => {
     const deps = { ...instant, send, now: () => clock };
 
     await flushEmailBatches(db, CFP, null, deps);
+    expect((await batchDocs())[0].get('requestedPayloads')).toHaveLength(1);
     // Organiser renames the event between Attempt 1 and Attempt 2.
     await db.doc(`cfps/${CFP}`).update({ name: 'Renamed Event After First Attempt' });
 
     clock += EMAIL_BATCH.retryDelayMs + 1;
-    await drainDueEmailBatches(db, CFP, deps);
+    await expect(drainDueEmailBatches(db, CFP, deps)).resolves.toBe(true);
 
     expect(payloads).toHaveLength(2);
     expect(payloads[1]).toEqual(payloads[0]);
+    expect((await batchDocs())[0].get('requestedPayloads')).toBeUndefined();
     const stored = await row('a');
     expect(stored).toMatchObject({ status: 'sent', providerId: 'p-1' });
     expect(stored.batchId).toBeUndefined();
@@ -466,10 +468,11 @@ describe('email batch drain', () => {
 
     // Advance past the 10-minute sending lease without intermediate wakeups.
     clock += EMAIL_SENDING_LEASE_MS + 1_000;
-    await drainDueEmailBatches(db, CFP, deps);
+    await expect(drainDueEmailBatches(db, CFP, deps)).resolves.toBe(true);
 
     expect(send).toHaveBeenCalledTimes(2);
     expect(await pendingBatchMemberIds(db, CFP)).toEqual(new Set());
+    expect((await batchDocs())[0].get('requestedPayloads')).toBeUndefined();
     const stored = await row('a');
     expect(stored).toMatchObject({
       status: 'failed',

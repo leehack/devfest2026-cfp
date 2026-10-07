@@ -475,6 +475,7 @@ export async function flushEmailBatches(
     if (live.length === 0) {
       await batchRef.update({
         status: 'completed' satisfies BatchStatus,
+        requestedPayloads: FieldValue.delete(),
         nextAttemptAt: FieldValue.delete(),
         resolvedAt: FieldValue.serverTimestamp(),
       });
@@ -515,7 +516,7 @@ export async function flushEmailBatches(
         )
       : { ok: false as const, error: 'provider key unavailable', ambiguous: true };
 
-    await renewLock();
+    const stillOwnsLock = await renewLock();
 
     if (result.ok) {
       let sent = 0;
@@ -528,6 +529,7 @@ export async function flushEmailBatches(
         status: 'completed' satisfies BatchStatus,
         sent,
         failed: live.length - sent,
+        requestedPayloads: FieldValue.delete(),
         nextAttemptAt: FieldValue.delete(),
         resolvedAt: FieldValue.serverTimestamp(),
       });
@@ -535,10 +537,10 @@ export async function flushEmailBatches(
       return;
     }
 
-    if (result.acceptedEarlier) {
-      // The provider holds an earlier request under this key that it accepted,
-      // and our re-rendered payload no longer matches it. The rows went out;
-      // only their provider ids are lost.
+    if (result.acceptedEarlier && replay) {
+      // Legacy batches created before `requestedPayloads` existed re-render on
+      // replay; a 409 payload mismatch there means the earlier attempt under
+      // this batch key was already accepted by the provider.
       for (const member of live) {
         await finalizeMember(member.logId, batchId, { status: 'sent' }, false);
       }
@@ -547,6 +549,7 @@ export async function flushEmailBatches(
         sent: live.length,
         failed: 0,
         lastError: result.error,
+        requestedPayloads: FieldValue.delete(),
         nextAttemptAt: FieldValue.delete(),
         resolvedAt: FieldValue.serverTimestamp(),
       });
@@ -558,6 +561,8 @@ export async function flushEmailBatches(
       });
       return;
     }
+
+    if (!stillOwnsLock) return;
 
     const createdAt = batch.get('createdAt') as Timestamp | undefined;
     const leaseExpired =
@@ -581,6 +586,7 @@ export async function flushEmailBatches(
     await batchRef.update({
       status: 'failed' satisfies BatchStatus,
       lastError: result.error,
+      requestedPayloads: FieldValue.delete(),
       nextAttemptAt: FieldValue.delete(),
       resolvedAt: FieldValue.serverTimestamp(),
     });
@@ -625,7 +631,7 @@ export async function drainDueEmailBatches(
   db: Firestore,
   cfpId: string,
   deps: FlushDeps = {},
-): Promise<void> {
+): Promise<boolean> {
   const now = deps.now ?? Date.now;
   const [dueBatch, stagedRow] = await Promise.all([
     db
@@ -639,8 +645,9 @@ export async function drainDueEmailBatches(
       .limit(1)
       .get(),
   ]);
-  if (dueBatch.empty && stagedRow.empty) return;
-  await flushEmailBatches(db, cfpId, null, { coalesceMs: 0, ...deps });
+  if (dueBatch.empty && stagedRow.empty) return false;
+  const summary = await flushEmailBatches(db, cfpId, null, { coalesceMs: 0, ...deps });
+  return summary.batches > 0;
 }
 
 /** Rows a pending batch may still deliver; an admin retry must not reclaim them. */

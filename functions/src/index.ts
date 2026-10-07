@@ -6454,21 +6454,35 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
 
   const log = db.collection(`cfps/${cfpId}/emailLog`);
   if (action === 'summary') {
-    await drainDueEmailBatches(db, cfpId);
-    const [stillBatched, [held, failed, dryRun, sending]] = await Promise.all([
-      pendingBatchMemberIds(db, cfpId),
-      Promise.all(
-        (['held', 'failed', 'dry_run', 'sending'] as const).map((status) =>
-          log.where('status', '==', status).get(),
-        ),
+    const [held, initialFailed, dryRun, initialSending] = await Promise.all(
+      (['held', 'failed', 'dry_run', 'sending'] as const).map((status) =>
+        log.where('status', '==', status).get(),
       ),
-    ]);
-    const expiredSending = sending.docs.filter(
+    );
+    let failedDocs = initialFailed.docs;
+    let sendingDocs = initialSending.docs;
+    let stillBatched = new Set<string>();
+    if (!initialSending.empty) {
+      const drained = await drainDueEmailBatches(db, cfpId);
+      if (drained) {
+        const [freshFailed, freshSending, freshBatched] = await Promise.all([
+          log.where('status', '==', 'failed').get(),
+          log.where('status', '==', 'sending').get(),
+          pendingBatchMemberIds(db, cfpId),
+        ]);
+        failedDocs = freshFailed.docs;
+        sendingDocs = freshSending.docs;
+        stillBatched = freshBatched;
+      } else {
+        stillBatched = await pendingBatchMemberIds(db, cfpId);
+      }
+    }
+    const expiredSending = sendingDocs.filter(
       (doc) =>
         !stillBatched.has(doc.id) &&
         sendingLeaseExpired(doc.get('sendingStartedAt') ?? doc.updateTime),
     );
-    const candidates = [...held.docs, ...failed.docs, ...dryRun.docs, ...expiredSending].filter(
+    const candidates = [...held.docs, ...failedDocs, ...dryRun.docs, ...expiredSending].filter(
       (doc) => !isCoSpeakerInvitationEmail(doc.get('kind')),
     );
     const pending = await currentDecisionEmails(
