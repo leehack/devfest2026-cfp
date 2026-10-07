@@ -9076,7 +9076,11 @@ function sharedProjection(
     const data = proposal.data()!;
     const language = resolvedScheduleLanguage(data.deliveryLanguage, entry.assignedLanguage);
     if (!language) {
-      throw new HttpsError('failed-precondition', 'Assign a language to every flexible session.');
+      throw new HttpsError(
+        'failed-precondition',
+        'Assign a language to every flexible session.',
+        { reason: 'schedule-language-required' },
+      );
     }
     eligibleDraft.push(entry);
     const category = String(data.category ?? '');

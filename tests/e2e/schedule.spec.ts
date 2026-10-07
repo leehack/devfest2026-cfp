@@ -331,6 +331,55 @@ test('custom item language is validated, filterable, and frozen into each schedu
   await expect(page.getByRole('article').locator('.language-chip')).toHaveText('Bilingual');
 });
 
+test('requires a scheduled language for flexible sessions before saving in the editor or sharing a release', async ({
+  page,
+}) => {
+  const fixture = await seedDisclosureSchedule();
+  await seedProposal('flexible-talk', {
+    speakerUid: fixture.speaker.uid,
+    title: 'Flexible bilingual talk',
+    status: 'confirmed',
+    deliveryLanguage: 'either',
+    speaker: { name: SPEAKER.name },
+  });
+  await callJson(fixture.admin.idToken, 'upsertScheduleEntry', {
+    expectedRevision: fixture.revision,
+    entry: {
+      id: 'flexible-talk',
+      kind: 'proposal',
+      proposalId: 'flexible-talk',
+      date: '2026-11-14',
+      startsAt: '14:00',
+      durationMinutes: 40,
+      roomId: 'blue',
+    },
+  });
+
+  await signInAs(page, ADMIN, at('/admin/schedule'));
+  await page.getByRole('button', { name: 'Review and share' }).click();
+  const shareReview = page.getByRole('dialog', { name: 'Share this confirmed preview?' });
+  await shareReview.getByRole('button', { name: 'Share preview' }).click();
+  await expect(
+    page.getByText('Assign a scheduled language to every flexible session before sharing.'),
+  ).toBeVisible();
+  await shareReview.getByRole('button', { name: 'Cancel' }).first().click();
+
+  await page.getByRole('button', { name: /Move or edit: Flexible bilingual talk/ }).click();
+  const editor = page.getByRole('dialog');
+  const saveButton = editor.getByRole('button', { name: 'Save item' });
+  await expect(saveButton).toBeDisabled();
+  await editor.getByRole('combobox', { name: /Scheduled language/ }).selectOption('fr');
+  await expect(saveButton).toBeEnabled();
+  await saveButton.click();
+
+  await page.getByRole('button', { name: 'Review and share' }).click();
+  await page
+    .getByRole('dialog', { name: 'Share this confirmed preview?' })
+    .getByRole('button', { name: 'Share preview' })
+    .click();
+  await expect(page.getByText(/Preview shared\. Shared version 1/)).toBeVisible();
+});
+
 test('an all-room item blocks every room, spans the planner, and reaches the public agenda', async ({
   page,
 }) => {

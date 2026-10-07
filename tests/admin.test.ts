@@ -472,6 +472,15 @@ describe('scheduleError', () => {
         scheduleError(
           {
             code: 'functions/failed-precondition',
+            details: { reason: 'schedule-language-required' },
+          },
+          dict,
+        ),
+      ).toBe(dict.schedule.languageRequired);
+      expect(
+        scheduleError(
+          {
+            code: 'functions/failed-precondition',
             details: { speakerPhoto: 'required', speakers: ['Private name'] },
           },
           dict,
