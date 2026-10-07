@@ -378,6 +378,17 @@ test('a confirmed speaker explicitly adopts a newer profile photo without upload
   const original = await portrait(920, 860, { r: 35, g: 125, b: 185 });
   const replacement = await portrait(860, 920, { r: 185, g: 75, b: 95 });
 
+  await callJson(admin.idToken, 'setConfirmForm', {
+    fields: [
+      {
+        key: 'dietary',
+        type: 'text',
+        required: false,
+        label: { en: 'Dietary notes', fr: 'Notes alimentaires' },
+      },
+    ],
+    speakerPhoto: { required: true },
+  });
   const firstUpload = await callJson(speaker.idToken, 'uploadProfilePhoto', {
     contentType: 'image/png',
     base64: original.toString('base64'),
@@ -424,6 +435,20 @@ test('a confirmed speaker explicitly adopts a newer profile photo without upload
     firstUpload.generation,
   );
   expect((await readScheduleConfigDirect())?.needsAttention).toBe(false);
+
+  // Editing an unrelated confirmation answer must not silently adopt the
+  // unapproved account photo before the speaker clicks "Use this photo for this session".
+  await page.getByLabel(/^Dietary notes/).fill('Vegetarian');
+  await page.getByRole('button', { name: 'Save details' }).click();
+  await expect
+    .poll(async () => (await readProposalById('portrait-session'))?.confirmAnswers?.dietary)
+    .toBe('Vegetarian');
+  expect((await readProposalById('portrait-session'))?.speakerPhoto?.sourceGeneration).toBe(
+    firstUpload.generation,
+  );
+  expect((await readScheduleConfigDirect())?.needsAttention).toBe(false);
+  await expect(page.getByRole('button', { name: 'Use this photo for this session' })).toBeVisible();
+
   await page.getByRole('button', { name: 'Use this photo for this session' }).click();
   await expect(page.getByText('Photo approved for this session')).toBeVisible();
   await expect(
