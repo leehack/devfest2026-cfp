@@ -2509,6 +2509,8 @@ export const fr: Dictionary = {
       'Une annulation d’horaire précédente est toujours en cours de traitement. Attendez un instant, puis partagez de nouveau.',
     speakerPhotoRequired:
       'Chaque conférencier à l’horaire doit confirmer une photo pour le programme avant le partage de cet aperçu.',
+    languageRequired:
+      'Choisissez la langue programmée de chaque séance à langue flexible avant le partage.',
     badInput: 'Vérifiez les jours, les salles, les heures, la durée et les titres obligatoires.',
     reload: 'Recharger l’horaire',
     types: {

@@ -277,6 +277,8 @@ export function scheduleError(error: unknown, t: Dictionary): string {
         return t.schedule.cancellationDeliveryPending;
       case 'schedule-cancellation-processing':
         return t.schedule.cancellationProcessing;
+      case 'schedule-language-required':
+        return t.schedule.languageRequired;
       case 'schedule-preview-stale':
         return t.schedule.publishNeedsReshare;
     }

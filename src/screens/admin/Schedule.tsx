@@ -802,7 +802,9 @@ export function Schedule({
       startsAt: startsAt ?? day.startsAt,
       durationMinutes: suggestedDuration(proposal.format),
       roomId,
-      ...(proposal.deliveryLanguage === 'either' ? {} : undefined),
+      ...(proposal.deliveryLanguage === 'either' && proposal.assignedLanguage
+        ? { assignedLanguage: proposal.assignedLanguage }
+        : {}),
     });
   }
 
@@ -2256,6 +2258,8 @@ function EntryEditor({
   const proposalLanguage = proposal && entry.kind === 'proposal'
     ? scheduledProposalLanguage(proposal, entry)
     : null;
+  const proposalLanguageReady =
+    entry.kind !== 'proposal' || !proposal || Boolean(proposalLanguage);
   const placementLocked =
     entry.kind === 'proposal' && !scheduleProposalEligible(proposal?.status);
   const dialogRef = useModalFocus(() => {
@@ -2664,7 +2668,20 @@ function EntryEditor({
           </button>
           <span className="schedule-dialog__actions-spacer" />
           <button type="button" className="btn" disabled={busy || photoBusy} onClick={onCancel}>{t.schedule.cancelEdit}</button>
-          <button type="button" className="btn btn--primary" disabled={busy || photoBusy || placementLocked || !customSpeakerNamesReady} onClick={onSave}>{t.schedule.saveItem}</button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={
+              busy ||
+              photoBusy ||
+              placementLocked ||
+              !customSpeakerNamesReady ||
+              !proposalLanguageReady
+            }
+            onClick={onSave}
+          >
+            {t.schedule.saveItem}
+          </button>
         </div>
       </section>
     </div>

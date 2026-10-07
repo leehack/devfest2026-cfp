@@ -2469,6 +2469,8 @@ export const en = {
       'A previous schedule cancellation is still being processed. Wait a moment, then share again.',
     speakerPhotoRequired:
       'Every scheduled speaker must confirm a programme photo before this preview can be shared.',
+    languageRequired:
+      'Assign a scheduled language to every flexible session before sharing.',
     badInput: 'Check the event days, rooms, times, duration, and required titles.',
     reload: 'Reload schedule',
     types: {
