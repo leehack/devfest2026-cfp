@@ -36,7 +36,12 @@ import {
   emailTransportConfigurationFingerprint,
   resolveEmailConfiguration,
 } from './emailConfig';
-import { RESEND_RATE_LIMIT_RETRY, rateLimitWaitMs, renderQueuedEmail } from './email';
+import {
+  RESEND_RATE_LIMIT_RETRY,
+  rateLimitWaitMs,
+  renderQueuedEmail,
+  sendingLeaseExpired,
+} from './email';
 import { readResendKey } from './secrets';
 
 export const EMAIL_BATCH = {
@@ -227,6 +232,15 @@ function lockHeld(lock: FirebaseFirestore.DocumentSnapshot, now: number): boolea
   return lock.exists && expiresAt instanceof Timestamp && expiresAt.toMillis() > now;
 }
 
+/** Clears batch staging and manifest fields when a row leaves a batch or is re-queued. */
+export const clearBatchRowState = () => ({
+  batchId: FieldValue.delete(),
+  batchStaged: FieldValue.delete(),
+  batchStagedAt: FieldValue.delete(),
+  batchConfigurationFingerprint: FieldValue.delete(),
+  batchReviewed: FieldValue.delete(),
+});
+
 const terminalRowUpdate = (
   outcome: MemberOutcome,
   preserveProviderAttempt: boolean,
@@ -241,10 +255,7 @@ const terminalRowUpdate = (
   sentAt: outcome.status === 'sent' ? FieldValue.serverTimestamp() : FieldValue.delete(),
   sendingClaimId: FieldValue.delete(),
   sendingStartedAt: FieldValue.delete(),
-  batchStaged: FieldValue.delete(),
-  batchStagedAt: FieldValue.delete(),
-  batchConfigurationFingerprint: FieldValue.delete(),
-  batchReviewed: FieldValue.delete(),
+  ...clearBatchRowState(),
   ...(preserveProviderAttempt ? {} : { providerAttemptId: FieldValue.delete() }),
 });
 
@@ -295,6 +306,14 @@ export async function flushEmailBatches(
   const ownsLock = (lock: FirebaseFirestore.DocumentSnapshot) =>
     lock.exists && lock.get('owner') === owner;
 
+  const renewLock = (): Promise<boolean> =>
+    db.runTransaction(async (tx) => {
+      const lock = await tx.get(lockRef);
+      if (!ownsLock(lock)) return false;
+      tx.update(lockRef, { expiresAt: Timestamp.fromMillis(now() + EMAIL_BATCH.lockMs) });
+      return true;
+    });
+
   /**
    * Claims up to `maxMembers` staged rows into a new manifest. Releases the
    * lock in the same transaction that finds nothing left, closing the window a
@@ -324,7 +343,7 @@ export async function flushEmailBatches(
           providerAttemptId: String(doc.get('providerAttemptId') ?? ''),
         })),
         attempts: 0,
-        createdAt: FieldValue.serverTimestamp(),
+        createdAt: Timestamp.fromMillis(now()),
         nextAttemptAt: Timestamp.fromMillis(now()),
       });
       for (const doc of live) {
@@ -355,94 +374,103 @@ export async function flushEmailBatches(
     });
 
   const sendBatch = async (batchRef: DocumentReference): Promise<void> => {
+    if (!(await renewLock())) return;
     const batch = await batchRef.get();
     if (batch.get('status') !== 'pending') return;
     const batchId = batchRef.id;
     const members = (batch.get('members') ?? []) as Array<{ logId: string }>;
-    // Once a request has gone on the wire its composition is fixed: a replay
-    // under the same key must carry the same rows, whatever their state now.
+    // Once a request has gone on the wire its composition and rendered payload
+    // are fixed: a replay under the same key must carry the exact same wire
+    // body even if templates or event settings changed in the meantime.
     const requested = batch.get('requested') as string[] | undefined;
+    const requestedPayloads = batch.get('requestedPayloads') as
+      | Array<{ logId: string; payload: BatchEmailPayload }>
+      | undefined;
     const replay = Array.isArray(requested);
     const attempt = Number(batch.get('attempts') ?? 0) + 1;
 
-    const [config, cfpSnap, platformSnap] = await Promise.all([
-      resolveEmailConfiguration(db, cfpId),
-      db.doc(`cfps/${cfpId}`).get(),
-      db.doc('config/platform').get(),
-    ]);
-    const eventUnavailable =
-      !replay &&
-      (!cfpSnap.exists || cfpSnap.get('deleting') === true || cfpSnap.get('archived') === true);
-    const settings = config.settings;
-    if (eventUnavailable || !settings.from) {
-      const outcome: MemberOutcome = {
-        status: 'failed',
-        error: eventUnavailable
-          ? 'This notification is superseded because the event is unavailable.'
-          : 'Email delivery is blocked because its sending identity is not assigned.',
-      };
-      for (const member of members) {
-        await finalizeMember(
-          member.logId,
-          batchId,
-          outcome,
-          false,
-          eventUnavailable ? 'superseded' : 'email_domain_unbound',
-        );
-      }
-      await batchRef.update({
-        status: 'failed' satisfies BatchStatus,
-        lastError: outcome.error,
-        nextAttemptAt: FieldValue.delete(),
-        resolvedAt: FieldValue.serverTimestamp(),
-      });
-      return;
-    }
-
-    const context = emailContentContext(cfpId, cfpSnap.data() ?? {}, platformSnap.data() ?? {});
-    const cfp = { id: cfpId, name: context.cfpName, publicUrl: context.publicUrl };
-    const fingerprints = {
-      reviewed: emailConfigurationFingerprint(config, context),
-      transport: emailTransportConfigurationFingerprint(config),
-    };
-    const live: Array<{ logId: string; payload: BatchEmailPayload }> = [];
-    for (const logId of replay ? requested : members.map((member) => member.logId)) {
-      const row = await db.doc(`cfps/${cfpId}/emailLog/${logId}`).get();
-      if (!row.exists) continue;
-      if (!replay) {
-        if (row.get('status') !== 'sending' || row.get('batchId') !== batchId) continue;
-        // The trigger validated the row against one configuration; a change in
-        // the seconds since is the same refusal the single send makes at handoff.
-        const expected = row.get('batchConfigurationFingerprint');
-        const current =
-          row.get('batchReviewed') === true ? fingerprints.reviewed : fingerprints.transport;
-        if (typeof expected === 'string' && expected !== current) {
+    let live: Array<{ logId: string; payload: BatchEmailPayload }> = [];
+    if (replay && Array.isArray(requestedPayloads) && requestedPayloads.length > 0) {
+      live = requestedPayloads;
+    } else {
+      const [config, cfpSnap, platformSnap] = await Promise.all([
+        resolveEmailConfiguration(db, cfpId),
+        db.doc(`cfps/${cfpId}`).get(),
+        db.doc('config/platform').get(),
+      ]);
+      const eventUnavailable =
+        !replay &&
+        (!cfpSnap.exists || cfpSnap.get('deleting') === true || cfpSnap.get('archived') === true);
+      const settings = config.settings;
+      if (eventUnavailable || !settings.from) {
+        const outcome: MemberOutcome = {
+          status: 'failed',
+          error: eventUnavailable
+            ? 'This notification is superseded because the event is unavailable.'
+            : 'Email delivery is blocked because its sending identity is not assigned.',
+        };
+        for (const member of members) {
           await finalizeMember(
-            logId,
+            member.logId,
             batchId,
-            {
-              status: 'failed',
-              error:
-                'Email delivery setup changed before provider handoff. Review and retry this message.',
-            },
+            outcome,
             false,
-            'email_configuration_changed',
+            eventUnavailable ? 'superseded' : 'email_domain_unbound',
           );
-          continue;
         }
+        await batchRef.update({
+          status: 'failed' satisfies BatchStatus,
+          lastError: outcome.error,
+          nextAttemptAt: FieldValue.delete(),
+          resolvedAt: FieldValue.serverTimestamp(),
+        });
+        return;
       }
-      const rendered = renderQueuedEmail(row.data()!, cfp, config.templates);
-      live.push({
-        logId,
-        payload: {
-          from: settings.from,
-          to: [String(row.get('to'))],
-          subject: rendered.subject,
-          text: rendered.text,
-          html: rendered.html,
-          ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
-        },
-      });
+
+      const context = emailContentContext(cfpId, cfpSnap.data() ?? {}, platformSnap.data() ?? {});
+      const cfp = { id: cfpId, name: context.cfpName, publicUrl: context.publicUrl };
+      const fingerprints = {
+        reviewed: emailConfigurationFingerprint(config, context),
+        transport: emailTransportConfigurationFingerprint(config),
+      };
+      for (const logId of replay ? requested : members.map((member) => member.logId)) {
+        const row = await db.doc(`cfps/${cfpId}/emailLog/${logId}`).get();
+        if (!row.exists) continue;
+        if (!replay) {
+          if (row.get('status') !== 'sending' || row.get('batchId') !== batchId) continue;
+          // The trigger validated the row against one configuration; a change in
+          // the seconds since is the same refusal the single send makes at handoff.
+          const expected = row.get('batchConfigurationFingerprint');
+          const current =
+            row.get('batchReviewed') === true ? fingerprints.reviewed : fingerprints.transport;
+          if (typeof expected === 'string' && expected !== current) {
+            await finalizeMember(
+              logId,
+              batchId,
+              {
+                status: 'failed',
+                error:
+                  'Email delivery setup changed before provider handoff. Review and retry this message.',
+              },
+              false,
+              'email_configuration_changed',
+            );
+            continue;
+          }
+        }
+        const rendered = renderQueuedEmail(row.data()!, cfp, config.templates);
+        live.push({
+          logId,
+          payload: {
+            from: settings.from,
+            to: [String(row.get('to'))],
+            subject: rendered.subject,
+            text: rendered.text,
+            html: rendered.html,
+            ...(settings.replyTo ? { reply_to: settings.replyTo } : {}),
+          },
+        });
+      }
     }
     if (live.length === 0) {
       await batchRef.update({
@@ -454,20 +482,40 @@ export async function flushEmailBatches(
     }
 
     // Recorded before the request so a crash between provider acceptance and
-    // finalisation replays exactly this composition.
-    await batchRef.update({
-      attempts: attempt,
-      ...(replay ? {} : { requested: live.map((member) => member.logId) }),
+    // finalisation replays the exact same composition and rendered wire payload.
+    const recorded = await db.runTransaction(async (tx) => {
+      const [lock, current] = await tx.getAll(lockRef, batchRef);
+      if (!ownsLock(lock) || current.get('status') !== 'pending') return false;
+      tx.update(lockRef, { expiresAt: Timestamp.fromMillis(now() + EMAIL_BATCH.lockMs) });
+      tx.update(batchRef, {
+        attempts: attempt,
+        ...(replay
+          ? {}
+          : {
+              requested: live.map((member) => member.logId),
+              requestedPayloads: live,
+            }),
+      });
+      return true;
     });
+    if (!recorded) return;
+
     const apiKey = await readKey();
     const result = apiKey
       ? await send(
           live.map((member) => member.payload),
           apiKey,
           batchIdempotencyKey(cfpId, batchId),
-          { wait },
+          {
+            wait: async (ms) => {
+              await wait(ms);
+              await renewLock();
+            },
+          },
         )
       : { ok: false as const, error: 'provider key unavailable', ambiguous: true };
+
+    await renewLock();
 
     if (result.ok) {
       let sent = 0;
@@ -511,7 +559,10 @@ export async function flushEmailBatches(
       return;
     }
 
-    if (result.ambiguous && attempt < EMAIL_BATCH.maxAttempts) {
+    const createdAt = batch.get('createdAt') as Timestamp | undefined;
+    const leaseExpired =
+      createdAt instanceof Timestamp && sendingLeaseExpired(createdAt, now());
+    if (result.ambiguous && attempt < EMAIL_BATCH.maxAttempts && !leaseExpired) {
       await batchRef.update({
         lastError: result.error,
         nextAttemptAt: Timestamp.fromMillis(now() + EMAIL_BATCH.retryDelayMs),
@@ -540,6 +591,7 @@ export async function flushEmailBatches(
   try {
     if (coalesceMs > 0) await wait(coalesceMs);
     for (let round = 0; round < EMAIL_BATCH.maxRounds; round += 1) {
+      if (!(await renewLock())) return { role: 'drained', batches: drained };
       // Only pending batches carry `nextAttemptAt`, so one range query finds
       // the due ones without a composite index.
       const due = await batches
@@ -562,6 +614,33 @@ export async function flushEmailBatches(
       if (ownsLock(lock)) tx.delete(lockRef);
     });
   }
+}
+
+/**
+ * Drains due pending batches or orphaned staged rows before queue inspection or
+ * recovery so deferred batches do not stay stranded waiting for an unrelated
+ * email write.
+ */
+export async function drainDueEmailBatches(
+  db: Firestore,
+  cfpId: string,
+  deps: FlushDeps = {},
+): Promise<void> {
+  const now = deps.now ?? Date.now;
+  const [dueBatch, stagedRow] = await Promise.all([
+    db
+      .collection(`cfps/${cfpId}/emailBatches`)
+      .where('nextAttemptAt', '<=', Timestamp.fromMillis(now()))
+      .limit(1)
+      .get(),
+    db
+      .collection(`cfps/${cfpId}/emailLog`)
+      .where('batchStaged', '==', true)
+      .limit(1)
+      .get(),
+  ]);
+  if (dueBatch.empty && stagedRow.empty) return;
+  await flushEmailBatches(db, cfpId, null, { coalesceMs: 0, ...deps });
 }
 
 /** Rows a pending batch may still deliver; an admin retry must not reclaim them. */

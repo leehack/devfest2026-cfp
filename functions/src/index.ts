@@ -149,7 +149,12 @@ import {
   verifiedStaffUser,
   type EmailStatus,
 } from './email';
-import { flushEmailBatches, pendingBatchMemberIds } from './emailBatch';
+import {
+  clearBatchRowState,
+  drainDueEmailBatches,
+  flushEmailBatches,
+  pendingBatchMemberIds,
+} from './emailBatch';
 import {
   decodeHeadshotUpload,
   decodeSpeakerProfilePhotoUpload,
@@ -1598,6 +1603,7 @@ async function advanceEmailQueue(
           reviewedEmailConfigurationFingerprint: configurationFingerprint,
           sendingClaimId: FieldValue.delete(),
           sendingStartedAt: FieldValue.delete(),
+          ...clearBatchRowState(),
           attemptedAt: FieldValue.delete(),
           sentAt: FieldValue.delete(),
           providerId: FieldValue.delete(),
@@ -6429,6 +6435,7 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
         reviewedEmailConfigurationFingerprint: reviewedConfigurationFingerprint,
         sendingClaimId: FieldValue.delete(),
         sendingStartedAt: FieldValue.delete(),
+        ...clearBatchRowState(),
         // A one-row resend is an explicit new delivery. Bulk retry retains an
         // ambiguous provider attempt so its Resend idempotency key stays stable.
         providerAttemptId: FieldValue.delete(),
@@ -6447,13 +6454,19 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
 
   const log = db.collection(`cfps/${cfpId}/emailLog`);
   if (action === 'summary') {
-    const [held, failed, dryRun, sending] = await Promise.all(
-      (['held', 'failed', 'dry_run', 'sending'] as const).map((status) =>
-        log.where('status', '==', status).get(),
+    await drainDueEmailBatches(db, cfpId);
+    const [stillBatched, [held, failed, dryRun, sending]] = await Promise.all([
+      pendingBatchMemberIds(db, cfpId),
+      Promise.all(
+        (['held', 'failed', 'dry_run', 'sending'] as const).map((status) =>
+          log.where('status', '==', status).get(),
+        ),
       ),
-    );
-    const expiredSending = sending.docs.filter((doc) =>
-      sendingLeaseExpired(doc.get('sendingStartedAt') ?? doc.updateTime),
+    ]);
+    const expiredSending = sending.docs.filter(
+      (doc) =>
+        !stillBatched.has(doc.id) &&
+        sendingLeaseExpired(doc.get('sendingStartedAt') ?? doc.updateTime),
     );
     const candidates = [...held.docs, ...failed.docs, ...dryRun.docs, ...expiredSending].filter(
       (doc) => !isCoSpeakerInvitationEmail(doc.get('kind')),
@@ -6472,7 +6485,11 @@ export const emailQueue = onCall(CALLABLE, async (request) => {
   // A batch the provider may still have accepted is resolved before any of
   // its rows can be reclaimed; reclaiming one would send it a second time
   // under a fresh key that Resend cannot dedupe against the batch.
-  if (action === 'retry') await flushEmailBatches(db, cfpId, null, { coalesceMs: 0 });
+  if (action === 'retry') {
+    await flushEmailBatches(db, cfpId, null, { coalesceMs: 0 });
+  } else {
+    await drainDueEmailBatches(db, cfpId);
+  }
   const stillBatched = await pendingBatchMemberIds(db, cfpId);
   const snap = await log.get();
   const queueDocs = snap.docs.filter(

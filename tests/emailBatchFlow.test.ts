@@ -14,11 +14,13 @@ import type { Firestore } from 'firebase-admin/firestore';
 import {
   EMAIL_BATCH,
   batchIdempotencyKey,
+  drainDueEmailBatches,
   flushEmailBatches,
   pendingBatchMemberIds,
   type BatchEmailPayload,
   type BatchSendResult,
 } from '../functions/src/emailBatch';
+import { EMAIL_SENDING_LEASE_MS } from '../functions/src/email';
 import {
   emailTransportConfigurationFingerprint,
   resolveEmailConfiguration,
@@ -421,5 +423,86 @@ describe('email batch drain', () => {
     expect(provider.calls.map((call) => call.emails.length).sort()).toEqual([3, EMAIL_BATCH.maxMembers]);
     const sent = (await db.collection(`cfps/${CFP}/emailLog`).where('status', '==', 'sent').get()).size;
     expect(sent).toBe(total);
+  });
+
+  it('freezes the rendered wire payload on the first attempt so template or event edits cannot cause an idempotency mismatch on replay', async () => {
+    await seedStaged('a', 'a@example.org');
+    const payloads: BatchEmailPayload[][] = [];
+    let attempt = 0;
+    const send = vi.fn(async (emails: readonly BatchEmailPayload[]) => {
+      payloads.push(emails.map((email) => ({ ...email })));
+      attempt += 1;
+      if (attempt === 1) return { ok: false as const, error: '503: transient', ambiguous: true };
+      return {
+        ok: true as const,
+        outcomes: emails.map(() => ({ status: 'sent' as const, providerId: 'p-1' })),
+      };
+    });
+    let clock = Date.now();
+    const deps = { ...instant, send, now: () => clock };
+
+    await flushEmailBatches(db, CFP, null, deps);
+    // Organiser renames the event between Attempt 1 and Attempt 2.
+    await db.doc(`cfps/${CFP}`).update({ name: 'Renamed Event After First Attempt' });
+
+    clock += EMAIL_BATCH.retryDelayMs + 1;
+    await drainDueEmailBatches(db, CFP, deps);
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]).toEqual(payloads[0]);
+    const stored = await row('a');
+    expect(stored).toMatchObject({ status: 'sent', providerId: 'p-1' });
+    expect(stored.batchId).toBeUndefined();
+  });
+
+  it('expires a deferred batch into failed rows when the sending lease has elapsed and the replay is still ambiguous', async () => {
+    await seedStaged('a', 'a@example.org');
+    const send = vi.fn(async () => ({ ok: false as const, error: '503: still down', ambiguous: true }));
+    let clock = Date.now();
+    const deps = { ...instant, send, now: () => clock };
+
+    await flushEmailBatches(db, CFP, null, deps);
+    expect(await pendingBatchMemberIds(db, CFP)).toEqual(new Set(['a']));
+
+    // Advance past the 10-minute sending lease without intermediate wakeups.
+    clock += EMAIL_SENDING_LEASE_MS + 1_000;
+    await drainDueEmailBatches(db, CFP, deps);
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(await pendingBatchMemberIds(db, CFP)).toEqual(new Set());
+    const stored = await row('a');
+    expect(stored).toMatchObject({
+      status: 'failed',
+      error: '503: still down',
+      providerAttemptId: 'claim-a',
+    });
+    expect(stored.batchId).toBeUndefined();
+  });
+
+  it('renews the batch lock across provider retry waits and aborts if lock ownership is lost', async () => {
+    await seedStaged('a', 'a@example.org');
+    let clock = Date.now();
+    let lockDuringSend = 0;
+    const send = vi.fn(
+      async (
+        emails: readonly BatchEmailPayload[],
+        _api: string,
+        _key: string,
+        retry?: { wait?: (ms: number) => Promise<void> },
+      ) => {
+        clock += 60_000;
+        await retry?.wait?.(5_000);
+        const snap = await lock();
+        lockDuringSend = (snap.get('expiresAt') as InstanceType<typeof Timestamp>).toMillis();
+        return {
+          ok: true as const,
+          outcomes: emails.map(() => ({ status: 'sent' as const, providerId: 'p-renewed' })),
+        };
+      },
+    );
+
+    await flushEmailBatches(db, CFP, null, { ...instant, send, now: () => clock });
+    expect(lockDuringSend).toBeGreaterThanOrEqual(clock + EMAIL_BATCH.lockMs);
+    expect(await row('a')).toMatchObject({ status: 'sent', providerId: 'p-renewed' });
   });
 });

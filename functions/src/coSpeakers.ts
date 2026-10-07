@@ -27,6 +27,7 @@ import {
   sendingLeaseExpired,
   staffMemberIsActive,
 } from './email';
+import { clearBatchRowState } from './emailBatch';
 import {
   coSpeakerInvitationStillTrue,
   currentScheduleReleaseContainsProposal,
@@ -49,12 +50,13 @@ const INVITATION_REVIEWER_CONFLICT = {
   reason: 'co_speaker_invitation_reviewer_conflict',
 } as const;
 
-/** Clears terminal timestamps before the trigger records the next attempt. */
+/** Clears terminal timestamps and batch staging state before the trigger records the next attempt. */
 export function coSpeakerInvitationRetryEmailUpdate() {
   return {
     status: 'queued',
     sendingClaimId: FieldValue.delete(),
     sendingStartedAt: FieldValue.delete(),
+    ...clearBatchRowState(),
     attemptedAt: FieldValue.delete(),
     sentAt: FieldValue.delete(),
     providerId: FieldValue.delete(),
@@ -719,8 +721,15 @@ export const retryCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     }
 
     const status = String(delivery.get('status') ?? '');
+    const batchId = String(delivery.get('batchId') ?? '');
+    const batchSnap =
+      status === 'sending' && batchId
+        ? await tx.get(db.doc(`cfps/${cfpId}/emailBatches/${batchId}`))
+        : null;
+    const stillBatched = batchSnap?.exists === true && batchSnap.get('status') === 'pending';
     const expiredSending =
       status === 'sending' &&
+      !stillBatched &&
       sendingLeaseExpired(delivery.get('sendingStartedAt') ?? delivery.updateTime);
     if (delivery.exists && ['queued', 'sent'].includes(status)) return;
     if (delivery.exists && status === 'sending' && !expiredSending) return;
