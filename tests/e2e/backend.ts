@@ -1050,6 +1050,7 @@ export async function seedEmailLog(
     sendingStartedAt,
     sendingClaimId,
     providerAttemptId,
+    batchId,
     recipientUid,
     to = 'speaker@example.org',
     reviewedTo,
@@ -1069,6 +1070,7 @@ export async function seedEmailLog(
     sendingStartedAt?: Date;
     sendingClaimId?: string;
     providerAttemptId?: string;
+    batchId?: string;
     recipientUid?: string;
     to?: string;
     reviewedTo?: string;
@@ -1111,6 +1113,7 @@ export async function seedEmailLog(
       : {}),
     ...(sendingClaimId ? { sendingClaimId: { stringValue: sendingClaimId } } : {}),
     ...(providerAttemptId ? { providerAttemptId: { stringValue: providerAttemptId } } : {}),
+    ...(batchId ? { batchId: { stringValue: batchId } } : {}),
     data: {
       mapValue: {
         fields: {
@@ -1120,6 +1123,35 @@ export async function seedEmailLog(
         },
       },
     },
+  });
+}
+
+export async function seedEmailBatch(
+  batchId: string,
+  {
+    status = 'pending',
+    logIds,
+    attempts = 1,
+    createdAt,
+    nextAttemptAt,
+  }: {
+    status?: string;
+    logIds: string[];
+    attempts?: number;
+    createdAt: Date;
+    nextAttemptAt: Date;
+  },
+  cfpId = CFP_ID,
+) {
+  await patch(`cfps/${cfpId}/emailBatches/${batchId}`, {
+    status: { stringValue: status },
+    attempts: { integerValue: String(attempts) },
+    createdAt: { timestampValue: createdAt.toISOString() },
+    nextAttemptAt: { timestampValue: nextAttemptAt.toISOString() },
+    members: encode(
+      logIds.map((logId) => ({ logId, providerAttemptId: `attempt-${logId}` })),
+    ),
+    requested: encode(logIds),
   });
 }
 
