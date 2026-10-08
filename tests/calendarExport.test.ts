@@ -80,4 +80,16 @@ describe('schedule calendar export', () => {
     const ics = scheduleIcs('event', 'Event', schedule, [{ ...entry, cancelled: true }], 'en', 'https://x');
     expect(ics).toContain('STATUS:CANCELLED');
   });
+
+  it('rolls DTEND date forward when an entry crosses midnight', () => {
+    const lateEntry: PublishedScheduleEntry = {
+      ...entry,
+      startsAt: '23:30',
+      durationMinutes: 90,
+    };
+    const ics = scheduleIcs('event', 'Event', schedule, [lateEntry], 'en', 'https://x');
+    expect(ics).toContain('DTSTART;TZID=America/Toronto:20261114T233000');
+    expect(ics).toContain('DTEND;TZID=America/Toronto:20261115T010000');
+  });
 });
+

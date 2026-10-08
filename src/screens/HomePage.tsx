@@ -169,7 +169,7 @@ export function HomePage({
     const query = publicSearch.trim().toLocaleLowerCase();
     if (!query) return open;
     return open.filter((cfp) =>
-      [cfp.name, cfp.id, cfp.orgId ?? '', cfp.location ?? ''].some((value) =>
+      [cfp.name, cfp.id, cfp.orgName ?? '', cfp.orgId ?? '', cfp.location ?? ''].some((value) =>
         value.toLocaleLowerCase().includes(query),
       ),
     );
@@ -563,7 +563,7 @@ function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
           <span className={`cfp-card__status cfp-card__status--${state}`}>{stateLabel}</span>
           {cfp.orgId && (
             <span className="org-badge org-badge--card">
-              {cfp.orgId}
+              {cfp.orgName || cfp.orgId}
             </span>
           )}
           {cfp.features?.blindReview && (

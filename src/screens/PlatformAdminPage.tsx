@@ -170,7 +170,7 @@ export function PlatformAdminPage({
       window.removeEventListener('popstate', confirmHistoryNavigation);
       document.removeEventListener('click', confirmInternalNavigation, true);
     };
-  }, [t.admin.unsaved]);
+  }, [section, t.admin.unsaved]);
 
   async function grantAdmin() {
     const target = adminEmail.trim();

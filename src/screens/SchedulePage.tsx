@@ -504,25 +504,33 @@ function PublicAgenda({
       entry.kind === 'proposal' ? entry.session.language === value : entry.language === value,
     ),
   );
-  const visible = useMemo(
-    () =>
-      entries
-        .filter((entry) => entry.date === day)
-        .filter((entry) => room === 'all' || scheduleEntryOccupiesRoom(entry, room))
-        .filter(
-          (entry) =>
-            language === 'all' ||
-            (entry.kind === 'custom'
-              ? entry.language === undefined || entry.language === language
-              : entry.session.language === language),
-        )
-        .sort(
-          (a, b) =>
-            a.startsAt.localeCompare(b.startsAt) ||
-            roomRank(a) - roomRank(b),
-        ),
-    [day, entries, language, room, roomRank],
-  );
+  const visible = useMemo(() => {
+    const filtered = entries
+      .filter((entry) => entry.date === day)
+      .filter((entry) => room === 'all' || scheduleEntryOccupiesRoom(entry, room))
+      .filter(
+        (entry) =>
+          language === 'all' ||
+          (entry.kind === 'custom'
+            ? entry.language === undefined || entry.language === language
+            : entry.session.language === language),
+      );
+    if (
+      language !== 'all' &&
+      !filtered.some((entry) =>
+        entry.kind === 'proposal'
+          ? entry.session.language === language
+          : entry.language === language,
+      )
+    ) {
+      return [];
+    }
+    return filtered.sort(
+      (a, b) =>
+        a.startsAt.localeCompare(b.startsAt) ||
+        roomRank(a) - roomRank(b),
+    );
+  }, [day, entries, language, room, roomRank]);
   const timeGroups = useMemo(() => {
     const groups = new Map<string, PublishedScheduleEntry[]>();
     for (const entry of visible) {
@@ -731,7 +739,7 @@ function AgendaEntryBody({
       {speakers.length > 0 && (
         <div className="agenda-item__speakers">
           <span className="agenda-item__speaker-photos">
-            {speakers.slice(0, 3).map((speaker, index) => (
+            {speakers.slice(0, 4).map((speaker, index) => (
               <PublicSpeakerPhoto
                 key={`${speaker.name}-${index}`}
                 cfpId={cfpId}

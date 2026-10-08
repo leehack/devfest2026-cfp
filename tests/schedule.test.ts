@@ -560,4 +560,12 @@ describe('shared schedule disclosure', () => {
     });
     expect(sharedScheduleForEntries(schedule, [])).toMatchObject({ days: [], rooms: [] });
   });
+
+  it('wraps scheduleEndTime across midnight into valid 24-hour HH:MM', () => {
+    expect(scheduleEndTime({ startsAt: '23:00', durationMinutes: 60 })).toBe('00:00');
+    expect(scheduleEndTime({ startsAt: '23:30', durationMinutes: 90 })).toBe('01:00');
+    expect(scheduleEndTime({ startsAt: '09:15', durationMinutes: 45 })).toBe('10:00');
+  });
 });
+
+

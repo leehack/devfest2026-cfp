@@ -40,8 +40,11 @@ import { consent, type Consent } from './lib/consent';
 import {
   arrivingFromLink,
   completeSignInFromLink,
+  consumeSignInReturnPath,
+  getRoleInviteTokenFromLocation,
   pendingEmail,
   rememberPendingEmail,
+  rememberSignInReturnPath,
   requestSignInLink,
   type SignInDestination,
 } from './lib/signIn';
@@ -94,8 +97,6 @@ const JoinCommitteePage = lazy(() =>
     default: JoinCommitteePage,
   })),
 );
-
-const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
 
 export function App({
   initialPath,
@@ -334,15 +335,10 @@ export function App({
     const previousIdentity = focusedIdentity.current;
     focusedIdentity.current = identity;
     if (previousIdentity === null && identity) {
-      try {
-        const returnPath = window.sessionStorage.getItem(SIGN_IN_RETURN_PATH);
-        window.sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
-        if (returnPath?.startsWith('/') && !returnPath.startsWith('//')) {
-          goTo(returnPath);
-          return;
-        }
-      } catch {
-        // Sign-in still succeeds when session storage is unavailable.
+      const returnPath = consumeSignInReturnPath();
+      if (returnPath) {
+        goTo(returnPath);
+        return;
       }
     }
     window.scrollTo({ top: 0, behavior: 'auto' });
@@ -548,14 +544,9 @@ export function App({
                       } else if (cfpId) {
                         navigate('form', { cfpId });
                       } else {
-                        try {
-                          window.sessionStorage.setItem(
-                            SIGN_IN_RETURN_PATH,
-                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
-                          );
-                        } catch {
-                          // The account page remains a safe fallback.
-                        }
+                        rememberSignInReturnPath(
+                          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                        );
                         navigate('me');
                       }
                     }}
@@ -703,21 +694,26 @@ function Routed({
           ? 'review'
           : route === 'schedule' || route === 'session'
             ? 'schedule'
-            : undefined;
+            : route === 'join'
+              ? 'join'
+              : undefined;
     const purpose =
-      route === 'admin' || route === 'review' || route === 'schedule' || route === 'session'
+      route === 'admin' || route === 'review' || route === 'schedule' || route === 'session' || route === 'join'
         ? 'committee'
         : route === 'new'
           ? 'organising'
           : route === 'form' || route === 'cfp'
             ? 'speaker'
             : 'account';
+    const roleInviteToken =
+      route === 'join' ? getRoleInviteTokenFromLocation() || undefined : undefined;
     return (
       <SignIn
         cfp={cfpId ? cfp : null}
         cfpId={cfpId}
         purpose={purpose}
         destination={destination}
+        roleInviteToken={roleInviteToken}
       />
     );
   }
@@ -840,10 +836,7 @@ function Routed({
   }
 
   if (route === 'join') {
-    const inviteToken =
-      typeof window !== 'undefined'
-        ? new URLSearchParams(window.location.search).get('invite') ?? undefined
-        : undefined;
+    const inviteToken = getRoleInviteTokenFromLocation() || undefined;
     return (
       <JoinCommitteePage
         user={user}
@@ -1110,10 +1103,7 @@ export function SignIn({
           : null;
       const roleInvite =
         destination === 'join'
-          ? roleInviteToken ??
-            (typeof window !== 'undefined'
-              ? new URLSearchParams(window.location.search).get('invite') ?? undefined
-              : undefined)
+          ? roleInviteToken ?? (getRoleInviteTokenFromLocation() || undefined)
           : undefined;
       await requestSignInLink({
         email: email.trim(),
@@ -1129,6 +1119,16 @@ export function SignIn({
             ? { proposalId }
             : {}),
       });
+      if (
+        !cfpId &&
+        typeof window !== 'undefined' &&
+        window.location.pathname !== '/' &&
+        window.location.pathname !== '/me'
+      ) {
+        rememberSignInReturnPath(
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        );
+      }
       // Stored before the confirmation is shown: this is what lets the link
       // complete without asking again when it is opened in this browser.
       rememberPendingEmail(email.trim());

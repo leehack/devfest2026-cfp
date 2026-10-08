@@ -417,7 +417,8 @@
   .schedule-board__status { height: 5rem; }
 }
 
-.schedule-grid-scroll { overflow: auto; max-height: 72vh; }
+#schedule-admin-grid { min-width: 0; }
+.schedule-grid-scroll { min-width: 0; max-width: 100%; overflow: auto; max-height: 72vh; }
 .schedule-grid { --room-width: 15rem; display: grid; grid-template-columns: 4rem repeat(var(--schedule-rooms), minmax(var(--room-width), 1fr)); min-width: calc(4rem + var(--schedule-rooms) * var(--room-width)); position: relative; }
 .schedule-grid__corner, .schedule-grid__room { position: sticky; top: 0; z-index: 4; min-height: 3rem; border-bottom: 1px solid var(--line-strong); background: var(--surface); }
 .schedule-grid__corner { left: 0; z-index: 5; display: grid; place-items: center; color: var(--muted); font-size: .65rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }

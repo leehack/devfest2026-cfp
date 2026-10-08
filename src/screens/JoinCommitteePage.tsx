@@ -14,19 +14,11 @@ import type { RoleInviteLinkPublicInfo } from '@shared/types';
 import type { CfpRole } from '@shared/cfp';
 import type { CfpWindow } from '../lib/proposals';
 
-const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
-
-function getInviteToken(): string {
-  if (typeof window === 'undefined') return '';
-  const params = new URLSearchParams(window.location.search);
-  const fromQuery = params.get('invite') ?? params.get('token') ?? '';
-  if (fromQuery) return fromQuery;
-  const parts = window.location.pathname.replace(/^\/+|\/+$/g, '').split('/');
-  if ((parts[2] === 'invite' || parts[2] === 'join') && parts[3]) {
-    return decodeURIComponent(parts[3]);
-  }
-  return '';
-}
+import {
+  clearSignInReturnPath,
+  getRoleInviteTokenFromLocation,
+  rememberSignInReturnPath,
+} from '../lib/signIn';
 
 export function JoinCommitteePage({
   user,
@@ -44,7 +36,7 @@ export function JoinCommitteePage({
   const { t } = useI18n();
   const tRef = useRef(t);
   tRef.current = t;
-  const token = getInviteToken();
+  const token = getRoleInviteTokenFromLocation();
   const userRoleState = useRole(user, cfpId);
   const [loading, setLoading] = useState(true);
   const [info, setInfo] = useState<RoleInviteLinkPublicInfo | null>(null);
@@ -55,17 +47,13 @@ export function JoinCommitteePage({
   const [fetchAttempt, setFetchAttempt] = useState(0);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.sessionStorage) {
-      if (user) {
-        window.sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
-      } else {
-        window.sessionStorage.setItem(
-          SIGN_IN_RETURN_PATH,
-          window.location.pathname + window.location.search,
-        );
-      }
+    if (typeof window === 'undefined') return;
+    if (user || (!loading && (!token || loadError || !info?.isValid))) {
+      clearSignInReturnPath();
+    } else if (info?.isValid) {
+      rememberSignInReturnPath(window.location.pathname + window.location.search);
     }
-  }, [user]);
+  }, [info, loadError, loading, token, user]);
 
   useEffect(() => {
     if (!token) {

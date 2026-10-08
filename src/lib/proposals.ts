@@ -65,6 +65,7 @@ export interface CfpWindow {
   theme?: Cfp['theme'];
   features?: Cfp['features'];
   orgId?: string;
+  orgName?: string;
 }
 
 /**
@@ -124,6 +125,7 @@ export async function loadCfpWindow(
         theme: data.theme,
         features: data.features,
         orgId: data.orgId,
+        orgName: data.orgName,
       };
     },
     {
