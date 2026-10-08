@@ -41,6 +41,7 @@ import {
   arrivingFromLink,
   completeSignInFromLink,
   consumeSignInReturnPath,
+  getRoleInviteTokenFromLocation,
   pendingEmail,
   rememberPendingEmail,
   rememberSignInReturnPath,
@@ -705,9 +706,7 @@ function Routed({
             ? 'speaker'
             : 'account';
     const roleInviteToken =
-      route === 'join' && typeof window !== 'undefined'
-        ? new URLSearchParams(window.location.search).get('invite') ?? undefined
-        : undefined;
+      route === 'join' ? getRoleInviteTokenFromLocation() || undefined : undefined;
     return (
       <SignIn
         cfp={cfpId ? cfp : null}
@@ -837,10 +836,7 @@ function Routed({
   }
 
   if (route === 'join') {
-    const inviteToken =
-      typeof window !== 'undefined'
-        ? new URLSearchParams(window.location.search).get('invite') ?? undefined
-        : undefined;
+    const inviteToken = getRoleInviteTokenFromLocation() || undefined;
     return (
       <JoinCommitteePage
         user={user}
@@ -1107,10 +1103,7 @@ export function SignIn({
           : null;
       const roleInvite =
         destination === 'join'
-          ? roleInviteToken ??
-            (typeof window !== 'undefined'
-              ? new URLSearchParams(window.location.search).get('invite') ?? undefined
-              : undefined)
+          ? roleInviteToken ?? (getRoleInviteTokenFromLocation() || undefined)
           : undefined;
       await requestSignInLink({
         email: email.trim(),

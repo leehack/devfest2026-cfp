@@ -64,11 +64,30 @@ function forgetPendingEmail() {
   }
 }
 
-export function rememberSignInReturnPath(path: string) {
+const RETURN_PATH_TTL_MS = 30 * 60 * 1000;
+
+export function getRoleInviteTokenFromLocation(
+  pathname = typeof window !== 'undefined' ? window.location.pathname : '',
+  search = typeof window !== 'undefined' ? window.location.search : '',
+): string {
+  const params = new URLSearchParams(search);
+  const fromQuery = params.get('invite') ?? params.get('token') ?? '';
+  if (fromQuery) return fromQuery;
+  const parts = pathname.replace(/^\/+|\/+$/g, '').split('/');
+  if ((parts[2] === 'invite' || parts[2] === 'join') && parts[3]) {
+    return decodeURIComponent(parts[3]);
+  }
+  return '';
+}
+
+export function rememberSignInReturnPath(path: string, now = Date.now()) {
   if (!path.startsWith('/') || path.startsWith('//')) return;
   try {
-    localStorage.setItem(SIGN_IN_RETURN_PATH, path);
     sessionStorage.setItem(SIGN_IN_RETURN_PATH, path);
+    localStorage.setItem(
+      SIGN_IN_RETURN_PATH,
+      JSON.stringify({ path, expiresAt: now + RETURN_PATH_TTL_MS }),
+    );
   } catch {
     /* storage may be unavailable in private browsing */
   }
@@ -83,15 +102,30 @@ export function clearSignInReturnPath() {
   }
 }
 
-export function consumeSignInReturnPath(): string {
+export function consumeSignInReturnPath(now = Date.now()): string {
   try {
-    const returnPath =
-      localStorage.getItem(SIGN_IN_RETURN_PATH) ??
-      sessionStorage.getItem(SIGN_IN_RETURN_PATH) ??
-      '';
-    localStorage.removeItem(SIGN_IN_RETURN_PATH);
+    const sessionPath = sessionStorage.getItem(SIGN_IN_RETURN_PATH);
+    const rawLocal = localStorage.getItem(SIGN_IN_RETURN_PATH);
     sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
-    return returnPath.startsWith('/') && !returnPath.startsWith('//') ? returnPath : '';
+    localStorage.removeItem(SIGN_IN_RETURN_PATH);
+    if (sessionPath && sessionPath.startsWith('/') && !sessionPath.startsWith('//')) {
+      return sessionPath;
+    }
+    if (!rawLocal) return '';
+    if (rawLocal.startsWith('/') && !rawLocal.startsWith('//')) {
+      return rawLocal;
+    }
+    const parsed = JSON.parse(rawLocal) as { path?: unknown; expiresAt?: unknown };
+    if (
+      typeof parsed?.path === 'string' &&
+      parsed.path.startsWith('/') &&
+      !parsed.path.startsWith('//') &&
+      typeof parsed.expiresAt === 'number' &&
+      parsed.expiresAt >= now
+    ) {
+      return parsed.path;
+    }
+    return '';
   } catch {
     return '';
   }
