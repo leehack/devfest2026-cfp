@@ -768,7 +768,7 @@ function Routed({
         : route === 'platformEmail'
           ? 'email'
           : 'home';
-    return <PlatformAdminPage user={user} section={section} />;
+    return <PlatformAdminPage user={user} section={section} onRoleChange={retryPlatform} />;
   }
   if (route === 'me') {
     return user ? (
@@ -962,6 +962,7 @@ function Routed({
       role={role!}
       isPlatformAdmin={platformStatus?.isPlatformAdmin === true}
       onCfpChange={() => void refreshCfp()}
+      onRoleChange={retryRole}
     />
   ) : (
     <ReviewPage user={user} cfpId={cfpId} />

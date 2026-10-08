@@ -488,12 +488,14 @@ export async function acceptEventOwnershipTransfer(
   const cfpRef = db.doc(`cfps/${cfpId}`);
   const transferRef = db.doc(`cfps/${cfpId}/transfers/current`);
   const newOwnerMemberRef = memberDoc(db, cfpId, uid);
+  const newOwnerGrantRef = grantDoc(db, cfpId, email);
 
   return await db.runTransaction(async (tx) => {
-    const [cfp, transferSnap, newMemberSnap] = await tx.getAll(
+    const [cfp, transferSnap, newMemberSnap, newGrantSnap] = await tx.getAll(
       cfpRef,
       transferRef,
       newOwnerMemberRef,
+      newOwnerGrantRef,
     );
     if (!cfp.exists) throw new RoleError('not-found', 'No such call for proposals.');
     if (cfp.get('deleting') === true) {
@@ -557,6 +559,13 @@ export async function acceptEventOwnershipTransfer(
       },
       { merge: true },
     );
+
+    if (newGrantSnap.exists && !newGrantSnap.get('claimedBy')) {
+      tx.update(newOwnerGrantRef, {
+        claimedBy: uid,
+        claimedAt: now,
+      });
+    }
 
     tx.update(cfpRef, {
       ownerUid: uid,
@@ -900,6 +909,11 @@ export async function claimInviteLink(
 
     const targetRole = normalizeRole(link.get('role'));
     const currentRole = member.exists ? (member.get('role') as CfpRole) : null;
+    const pendingGrantRole =
+      grant.exists && !grant.get('claimedBy') ? normalizeRole(grant.get('role')) : null;
+    const effectiveRole: CfpRole =
+      pendingGrantRole === 'admin' || targetRole === 'admin' ? 'admin' : targetRole;
+    const preservedPendingAdmin = pendingGrantRole === 'admin' && targetRole === 'reviewer';
 
     if (currentRole === 'owner') {
       return { ok: true as const, role: 'owner' as const, cfpId, alreadyMember: true };
@@ -930,18 +944,25 @@ export async function claimInviteLink(
       });
     }
 
+    const grantedBy = preservedPendingAdmin
+      ? String(grant.get('createdBy') ?? `invite_link:${token}`)
+      : `invite_link:${token}`;
+    const storedLocale = grant.get('locale');
+
     tx.set(
       memberRef,
       {
         cfpId,
         uid,
-        role: targetRole,
+        role: effectiveRole,
         email,
         ...(name ? { name } : {}),
-        createdAt: member.exists ? member.get('createdAt') : FieldValue.serverTimestamp(),
-        grantedBy: `invite_link:${token}`,
+        createdAt:
+          (member.exists ? member.get('createdAt') : undefined) ?? FieldValue.serverTimestamp(),
+        grantedBy,
         inviteLinkId: token,
         roleUpdatedAt: FieldValue.serverTimestamp(),
+        ...(storedLocale === 'en' || storedLocale === 'fr' ? { locale: storedLocale } : {}),
       },
       { merge: true },
     );
@@ -951,15 +972,16 @@ export async function claimInviteLink(
       {
         cfpId,
         email,
-        role: targetRole,
-        createdAt: grant.exists ? grant.get('createdAt') : FieldValue.serverTimestamp(),
-        createdBy: `invite_link:${token}`,
+        role: effectiveRole,
+        createdAt:
+          (grant.exists ? grant.get('createdAt') : undefined) ?? FieldValue.serverTimestamp(),
+        createdBy: grantedBy,
         claimedBy: uid,
         claimedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
     );
 
-    return { ok: true as const, role: targetRole, cfpId };
+    return { ok: true as const, role: effectiveRole, cfpId };
   });
 }

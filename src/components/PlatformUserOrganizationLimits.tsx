@@ -214,8 +214,20 @@ export function PlatformUserOrganizationLimits({
           </form>
 
           {(searchedUser ? [searchedUser] : users).length === 0 ? (
-            <div className="platform-limits-empty-box" role="status">
-              <p className="muted platform-limits-empty">{t.platformAdmin.userLimitsEmpty}</p>
+            <div className="platform-org-limits">
+              <div className="platform-limits-empty-box" role="status">
+                <p className="muted platform-limits-empty">{t.platformAdmin.userLimitsEmpty}</p>
+              </div>
+              {!searchedUser && (page > 0 || Boolean(nextPageToken)) && (
+                <AdminPagination
+                  page={page}
+                  hasPrevious={page > 0}
+                  hasNext={Boolean(nextPageToken)}
+                  busy={users === null || Boolean(busy) || dirty}
+                  onPrevious={previousPage}
+                  onNext={nextPage}
+                />
+              )}
             </div>
           ) : (
             <div className="platform-org-limits">

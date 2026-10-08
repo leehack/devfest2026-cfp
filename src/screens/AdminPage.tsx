@@ -51,6 +51,7 @@ export function AdminPage({
   role,
   isPlatformAdmin = false,
   onCfpChange,
+  onRoleChange,
 }: {
   user: User;
   cfpId: string;
@@ -60,6 +61,7 @@ export function AdminPage({
   role: CfpRole;
   isPlatformAdmin?: boolean;
   onCfpChange?: () => void;
+  onRoleChange?: () => void;
 }) {
   const { t } = useI18n();
   const [dirty, setDirty] = useState(false);
@@ -437,7 +439,14 @@ export function AdminPage({
             }}
           />
         )}
-        {tab === 'committee' && <Committee user={user} cfpId={cfpId} readOnly={archived} />}
+        {tab === 'committee' && (
+          <Committee
+            user={user}
+            cfpId={cfpId}
+            readOnly={archived}
+            onRoleChange={onRoleChange}
+          />
+        )}
         {tab === 'settings' && (
           <Settings
             cfpId={cfpId}

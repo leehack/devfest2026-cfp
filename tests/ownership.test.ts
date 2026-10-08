@@ -14,11 +14,14 @@ import {
   effectiveOrgOwnershipLimit,
   type Org,
 } from '@shared/org';
-import { Timestamp, type DocumentSnapshot } from 'firebase-admin/firestore';
+import { Timestamp, type DocumentSnapshot, type Firestore } from 'firebase-admin/firestore';
+import type { Auth } from 'firebase-admin/auth';
 import {
   OWNERSHIP_TRANSFER_TTL_MS,
   ownershipTransferIsPending,
 } from '../functions/src/ownership';
+import { claimInviteLink, acceptEventOwnershipTransfer } from '../functions/src/roles';
+import { acceptPlatformOwnershipTransfer } from '../functions/src/platform';
 import {
   filterPlatformOrgLimits,
   filterPlatformUserLimits,
@@ -312,6 +315,209 @@ describe('Single-Owner Access Control & Ownership Transfers', () => {
       expect(filterPlatformOrgLimits(orgs, 'gamma-org')[0]?.name).toBe('Gamma Meetup');
       expect(filterPlatformOrgLimits(orgs, 'no-match')).toHaveLength(0);
       expect(filterPlatformOrgLimits(orgs, '')).toHaveLength(3);
+    });
+  });
+
+  describe('Role invite link & ownership transfer grant reconciliation', () => {
+    function createMockDb(initialDocs: Record<string, Record<string, unknown>>) {
+      const store = new Map<string, Record<string, unknown>>(
+        Object.entries(initialDocs).map(([k, v]) => [k, { ...v }]),
+      );
+      const makeRef = (path: string) => ({
+        path,
+        id: path.split('/').pop() ?? '',
+      });
+      const makeSnap = (path: string) => {
+        const data = store.get(path);
+        return {
+          exists: Boolean(data),
+          id: path.split('/').pop() ?? '',
+          ref: makeRef(path),
+          data: () => (data ? { ...data } : undefined),
+          get: (field: string) => data?.[field],
+        };
+      };
+      const tx = {
+        get: async (refOrQuery: { path?: string; docs?: unknown[] }) => {
+          if (Array.isArray(refOrQuery.docs)) return { docs: refOrQuery.docs };
+          return makeSnap(refOrQuery.path!);
+        },
+        getAll: async (...refs: Array<{ path: string }>) => refs.map((r) => makeSnap(r.path)),
+        set: (ref: { path: string }, data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+          const prev = opts?.merge ? (store.get(ref.path) ?? {}) : {};
+          store.set(ref.path, { ...prev, ...data });
+        },
+        update: (ref: { path: string }, data: Record<string, unknown>) => {
+          const prev = store.get(ref.path) ?? {};
+          store.set(ref.path, { ...prev, ...data });
+        },
+        delete: (ref: { path: string }) => {
+          store.delete(ref.path);
+        },
+      };
+      const db = {
+        doc: (path: string) => makeRef(path),
+        collection: (colPath: string) => ({
+          where: (field: string, _op: string, value: unknown) => {
+            const matching = [...store.entries()]
+              .filter(([path, data]) => {
+                const parent = path.slice(0, path.lastIndexOf('/'));
+                return parent === colPath && data[field] === value;
+              })
+              .map(([path]) => makeSnap(path));
+            return { docs: matching };
+          },
+        }),
+        runTransaction: async <T>(fn: (t: typeof tx) => Promise<T>) => fn(tx),
+      } as unknown as Firestore;
+      return { db, store };
+    }
+
+    it('preserves an unclaimed admin email grant when claiming a reviewer invite link (#42)', async () => {
+      const token = '11111111-1111-4111-8111-111111111111';
+      const { db, store } = createMockDb({
+        'cfps/devfest-2026': { name: 'DevFest 2026', archived: false },
+        [`cfps/devfest-2026/roleInviteLinks/${token}`]: {
+          role: 'reviewer',
+          claimedCount: 0,
+          claimedUids: {},
+          maxClaims: 5,
+          expiresAt: null,
+          revokedAt: null,
+        },
+        'cfps/devfest-2026/roleGrants/admin-invitee@example.org': {
+          cfpId: 'devfest-2026',
+          email: 'admin-invitee@example.org',
+          role: 'admin',
+          createdBy: 'owner-uid',
+          locale: 'fr',
+        },
+      });
+
+      const res = await claimInviteLink(db, {
+        cfpId: 'devfest-2026',
+        token,
+        uid: 'new-admin-uid',
+        email: 'admin-invitee@example.org',
+        name: 'Admin Invitee',
+      });
+
+      expect(res).toEqual({
+        ok: true,
+        role: 'admin',
+        cfpId: 'devfest-2026',
+      });
+      expect(store.get('cfps/devfest-2026/members/new-admin-uid')).toMatchObject({
+        role: 'admin',
+        email: 'admin-invitee@example.org',
+        grantedBy: 'owner-uid',
+        locale: 'fr',
+      });
+      expect(store.get('cfps/devfest-2026/roleGrants/admin-invitee@example.org')).toMatchObject({
+        role: 'admin',
+        createdBy: 'owner-uid',
+        claimedBy: 'new-admin-uid',
+      });
+    });
+
+    it('marks an unclaimed event roleGrant as claimed when accepting event ownership (#53)', async () => {
+      const now = Date.now();
+      const { db, store } = createMockDb({
+        'cfps/devfest-2026': {
+          name: 'DevFest 2026',
+          archived: false,
+          ownerUid: 'owner-uid',
+        },
+        'cfps/devfest-2026/members/owner-uid': {
+          uid: 'owner-uid',
+          email: 'owner@example.org',
+          role: 'owner',
+        },
+        'cfps/devfest-2026/roleGrants/successor@example.org': {
+          cfpId: 'devfest-2026',
+          email: 'successor@example.org',
+          role: 'admin',
+          createdBy: 'owner-uid',
+        },
+        'cfps/devfest-2026/transfers/current': {
+          id: 'tr-1',
+          scope: 'event',
+          scopeId: 'devfest-2026',
+          targetEmail: 'successor@example.org',
+          targetUid: 'successor-uid',
+          initiatedBy: 'owner-uid',
+          initiatedAt: Timestamp.fromMillis(now - 1000),
+          expiresAt: Timestamp.fromMillis(now + 60_000),
+          status: 'pending',
+        },
+      });
+      const mockAuth = {
+        getUser: async (uid: string) => ({
+          uid,
+          email: 'successor@example.org',
+          displayName: 'Successor',
+          emailVerified: true,
+          disabled: false,
+        }),
+      } as unknown as Auth;
+
+      await acceptEventOwnershipTransfer(db, mockAuth, {
+        cfpId: 'devfest-2026',
+        uid: 'successor-uid',
+        email: 'successor@example.org',
+      });
+
+      expect(store.get('cfps/devfest-2026/members/successor-uid')).toMatchObject({
+        role: 'owner',
+      });
+      expect(store.get('cfps/devfest-2026/roleGrants/successor@example.org')).toMatchObject({
+        claimedBy: 'successor-uid',
+      });
+    });
+
+    it('deletes an unclaimed platformRoleGrant when accepting platform ownership (#53)', async () => {
+      const now = Date.now();
+      const { db, store } = createMockDb({
+        'platformMembers/owner-uid': {
+          uid: 'owner-uid',
+          email: 'owner@example.org',
+          role: 'owner',
+        },
+        'platformRoleGrants/successor@example.org': {
+          email: 'successor@example.org',
+          role: 'admin',
+          createdBy: 'owner-uid',
+        },
+        'config/platformOwnershipTransfer': {
+          id: 'tr-plat-1',
+          scope: 'platform',
+          targetEmail: 'successor@example.org',
+          targetUid: 'successor-uid',
+          initiatedBy: 'owner-uid',
+          initiatedAt: Timestamp.fromMillis(now - 1000),
+          expiresAt: Timestamp.fromMillis(now + 60_000),
+          status: 'pending',
+        },
+      });
+      const mockAuth = {
+        getUser: async (uid: string) => ({
+          uid,
+          email: 'successor@example.org',
+          displayName: 'Successor',
+          emailVerified: true,
+          disabled: false,
+        }),
+      } as unknown as Auth;
+
+      await acceptPlatformOwnershipTransfer(db, mockAuth, {
+        uid: 'successor-uid',
+        email: 'successor@example.org',
+      });
+
+      expect(store.get('platformMembers/successor-uid')).toMatchObject({
+        role: 'owner',
+      });
+      expect(store.has('platformRoleGrants/successor@example.org')).toBe(false);
     });
   });
 });

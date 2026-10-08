@@ -3,7 +3,7 @@ import type { User } from 'firebase/auth';
 
 import { SelectField, TextField } from '../../components/fields';
 import { useI18n } from '../../i18n/context';
-import { isAuthError } from '../../lib/cache';
+import { invalidateCache, isAuthError } from '../../lib/cache';
 import { adminError, roleAdminError, transferError } from '../../lib/errors';
 import {
   acceptEventOwnershipTransfer,
@@ -64,10 +64,12 @@ export function Committee({
   user,
   cfpId,
   readOnly = false,
+  onRoleChange,
 }: {
   user: User;
   cfpId: string;
   readOnly?: boolean;
+  onRoleChange?: () => void;
 }) {
   const { t } = useI18n();
   const tRef = useLatest(t);
@@ -311,6 +313,9 @@ export function Committee({
     setError('');
     try {
       await acceptEventOwnershipTransfer({ cfpId });
+      invalidateCache(`role:${cfpId}:${user.uid}`);
+      invalidateCache(`cfp:${cfpId}`);
+      onRoleChange?.();
       setNote(tRef.current.transfer.transferred);
       await refresh(false, true);
     } catch (e) {
