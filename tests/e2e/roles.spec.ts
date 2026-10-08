@@ -892,6 +892,23 @@ test.describe('reviewing', () => {
       role: 'reviewer',
       email: 'link-reviewer@example.org',
     });
+
+    // Verify a pending admin email grant is not downgraded when claiming a reviewer invite link (#42)
+    await inviteRole('pending-admin@example.org', 'admin');
+    const pendingAdminAccount = await createAccount({
+      sub: 'pending-admin-sub',
+      email: 'pending-admin@example.org',
+      name: 'Pending Admin',
+    });
+    const claimRes = await callJson(pendingAdminAccount.idToken, 'claimRoleInviteLink', {
+      cfpId: CFP_ID,
+      token,
+    });
+    expect(claimRes).toMatchObject({ ok: true, role: 'admin', cfpId: CFP_ID });
+    expect(await readMember(pendingAdminAccount.uid)).toMatchObject({
+      role: 'admin',
+      email: 'pending-admin@example.org',
+    });
   });
 
   test('revoked or exhausted invite link refuses new claims', async ({ page }) => {

@@ -8,6 +8,7 @@ import { PlatformGlobalLimits } from '../components/PlatformGlobalLimits';
 import { PlatformOrganizationLimits } from '../components/PlatformOrganizationLimits';
 import { PlatformUserOrganizationLimits } from '../components/PlatformUserOrganizationLimits';
 import { useI18n } from '../i18n/context';
+import { invalidateCache } from '../lib/cache';
 import { platformAdminError, transferError } from '../lib/errors';
 import { goTo } from '../lib/router';
 import {
@@ -27,9 +28,11 @@ type PlatformAdminSection = 'home' | 'access' | 'limits' | 'email';
 export function PlatformAdminPage({
   user,
   section,
+  onRoleChange,
 }: {
   user: User;
   section: PlatformAdminSection;
+  onRoleChange?: () => void;
 }) {
   const { t } = useI18n();
   const tRef = useLatest(t);
@@ -245,6 +248,8 @@ export function PlatformAdminPage({
     setNote('');
     try {
       await acceptPlatformOwnershipTransfer({});
+      invalidateCache(`platformAccess:${user.uid}`);
+      onRoleChange?.();
       setNote(tRef.current.transfer.transferred);
       await refresh(false);
     } catch (caught) {

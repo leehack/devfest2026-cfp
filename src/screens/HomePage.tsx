@@ -12,6 +12,7 @@ import type { User } from 'firebase/auth';
 
 import { formatCalendarDay, formatDay } from '../i18n';
 import { useI18n } from '../i18n/context';
+import { invalidateCache } from '../lib/cache';
 import { href } from '../lib/router';
 import { Link } from '../components/Link';
 import {
@@ -156,6 +157,13 @@ export function HomePage({
   const elsewhere = helping.filter((cfp) => !owned.has(cfp.id));
   const hasActivity = proposals.length > 0 || mine.length > 0 || elsewhere.length > 0;
   const platformTransfer = platformStatus?.pendingTransfer ?? null;
+  const isPlatformTransferTarget = Boolean(
+    user &&
+      platformTransfer &&
+      ((user.email &&
+        platformTransfer.targetEmail.toLowerCase() === user.email.toLowerCase()) ||
+        platformTransfer.targetUid === user.uid),
+  );
   const visiblePublic = useMemo(() => {
     if (!open) return [];
     const query = publicSearch.trim().toLocaleLowerCase();
@@ -173,6 +181,7 @@ export function HomePage({
     setTransferFailure('');
     try {
       await acceptPlatformOwnershipTransfer({});
+      invalidateCache(`platformAccess:${user.uid}`);
       retryPlatform();
     } catch (error) {
       setTransferFailure(transferError(error, t));
@@ -183,7 +192,7 @@ export function HomePage({
 
   return (
     <div className="home-discovery">
-      {user && platformTransfer && (
+      {isPlatformTransferTarget && platformTransfer && (
         <section className="ownership-transfer-card" aria-labelledby="platform-transfer-title">
           <div>
             <p className="home-activity__eyebrow">{t.transfer.acceptTitle}</p>

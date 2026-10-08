@@ -4657,6 +4657,25 @@ function pageSize(value: unknown, fallback = 5): number {
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 20 ? parsed : fallback;
 }
 
+const USER_LIMITS_OFFSET_PREFIX = 'offset:';
+const MAX_AUTH_SCAN_BATCHES = 10;
+
+function parseUserLimitsCursor(rawPageToken: unknown): { skip: number; pageToken?: string } {
+  if (typeof rawPageToken !== 'string' || !rawPageToken) return { skip: 0 };
+  if (rawPageToken.startsWith(USER_LIMITS_OFFSET_PREFIX)) {
+    const rest = rawPageToken.slice(USER_LIMITS_OFFSET_PREFIX.length);
+    const sep = rest.indexOf(':');
+    if (sep > 0) {
+      const skip = Number(rest.slice(0, sep));
+      const token = rest.slice(sep + 1);
+      if (Number.isInteger(skip) && skip > 0) {
+        return { skip, ...(token ? { pageToken: token } : {}) };
+      }
+    }
+  }
+  return { skip: 0, pageToken: rawPageToken };
+}
+
 async function ownedOrganizationCount(uid: string): Promise<number> {
   const owned = await db.collection('orgs').where('ownerUid', '==', uid).get();
   return owned.size;
@@ -4667,24 +4686,69 @@ export const listUserOrgLimits = onCall(CALLABLE, async (request) => {
   await requirePlatformAdmin(request, 'list user organization limits');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const requestedSize = pageSize(data.pageSize);
-  const pageToken = typeof data.pageToken === 'string' && data.pageToken ? data.pageToken : undefined;
-  const [accounts, defaultsSnap] = await Promise.all([
-    getAuth().listUsers(requestedSize, pageToken),
-    db.doc('config/platformLimits').get(),
+  const { skip: initialSkip, pageToken: initialToken } = parseUserLimitsCursor(data.pageToken);
+  const defaultsPromise = db.doc('config/platformLimits').get();
+  const visibleAccounts: UserRecord[] = [];
+  let currentToken: string | undefined = initialToken;
+  let skipInBatch = initialSkip;
+  let nextPageToken: string | null = null;
+
+  for (let batch = 0; batch < MAX_AUTH_SCAN_BATCHES; batch++) {
+    const batchStartToken = currentToken;
+    const accounts = await getAuth().listUsers(requestedSize, batchStartToken);
+    const batchVerified = accounts.users.filter(
+      (account) => account.emailVerified && !account.disabled,
+    );
+    const available = batchVerified.slice(skipInBatch);
+    const needed = requestedSize - visibleAccounts.length;
+
+    if (available.length > needed) {
+      visibleAccounts.push(...available.slice(0, needed));
+      const consumedInBatch = skipInBatch + needed;
+      nextPageToken = `${USER_LIMITS_OFFSET_PREFIX}${consumedInBatch}:${batchStartToken ?? ''}`;
+      break;
+    }
+
+    visibleAccounts.push(...available);
+    skipInBatch = 0;
+
+    if (!accounts.pageToken) {
+      nextPageToken = null;
+      break;
+    }
+
+    currentToken = accounts.pageToken;
+    nextPageToken = currentToken;
+
+    if (visibleAccounts.length >= requestedSize) {
+      break;
+    }
+  }
+
+  const [defaultsSnap, ownedCounts, limitSnaps] = await Promise.all([
+    defaultsPromise,
+    Promise.all(visibleAccounts.map((account) => ownedOrganizationCount(account.uid))),
+    visibleAccounts.length > 0
+      ? db.getAll(...visibleAccounts.map((account) => db.doc(`platformUserLimits/${account.uid}`)))
+      : Promise.resolve([]),
   ]);
   const ownershipDefault = effectiveOrgOwnershipLimit(
     defaultsSnap.get('organizationOwnershipDefault'),
   );
-  const visibleAccounts = accounts.users.filter((account) => account.emailVerified && !account.disabled);
   const users = await Promise.all(
-    visibleAccounts.map(async (account) =>
-      platformUserLimitSummary(account.uid, await ownedOrganizationCount(account.uid),
-        await db.doc(`platformUserLimits/${account.uid}`).get(), ownershipDefault, account),
+    visibleAccounts.map((account, index) =>
+      platformUserLimitSummary(
+        account.uid,
+        ownedCounts[index] ?? 0,
+        limitSnaps[index]!,
+        ownershipDefault,
+        account,
+      ),
     ),
   );
   return {
     users: users.sort((a, b) => (a.name || a.email || a.uid).localeCompare(b.name || b.email || b.uid)),
-    nextPageToken: accounts.pageToken ?? null,
+    nextPageToken,
   };
 });
 
@@ -5155,7 +5219,12 @@ export const initiateOrgOwnershipTransfer = onCall(CALLABLE, async (request) => 
   const uid = requireVerifiedUid(request, 'initiate organization ownership transfer');
   const data = (request.data ?? {}) as Record<string, unknown>;
   const orgId = requireOrgId(data);
-  const targetEmail = normalizeEmail(data.email);
+  let targetEmail: string;
+  try {
+    targetEmail = normalizeEmail(data.email);
+  } catch (error) {
+    throw asHttpsError(error);
+  }
 
   let targetUser: UserRecord | undefined;
   try {

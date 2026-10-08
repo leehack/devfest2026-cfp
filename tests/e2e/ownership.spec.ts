@@ -14,7 +14,7 @@ import {
   seedOrgEvent,
   seedPlatformMember,
 } from './backend';
-import type { Identity } from './form';
+import { signInAs, type Identity } from './form';
 
 const OWNER: Identity = {
   sub: 'transfer-owner',
@@ -35,7 +35,9 @@ const ADMIN: Identity = {
 test.describe('single-owner transfer boundaries', () => {
   test.beforeEach(async () => reset());
 
-  test('platform transfer requires acceptance and atomically demotes the former owner', async () => {
+  test('platform transfer requires acceptance and atomically demotes the former owner', async ({
+    page,
+  }) => {
     const owner = await createAccount(OWNER);
     const successor = await createAccount(SUCCESSOR);
     const admin = await createAccount(ADMIN);
@@ -54,7 +56,17 @@ test.describe('single-owner transfer boundaries', () => {
       transfer: null,
     });
 
-    await callJson(successor.idToken, 'acceptPlatformOwnershipTransfer', {});
+    // Initiating owner must NOT see the Accept Ownership Transfer banner on HomePage (#50)
+    await signInAs(page, OWNER, '/');
+    await expect(page.locator('.ownership-transfer-card')).toHaveCount(0);
+
+    // Intended successor sees the Accept Ownership Transfer banner on HomePage and can accept (#50, #53)
+    await signInAs(page, SUCCESSOR, '/');
+    const banner = page.locator('.ownership-transfer-card');
+    await expect(banner).toBeVisible();
+    await banner.getByRole('button', { name: /Accept ownership/i }).click();
+    await expect(banner).toHaveCount(0);
+
     expect(await readPlatformMember(successor.uid)).toMatchObject({ role: 'owner' });
     expect(await readPlatformMember(owner.uid)).toMatchObject({ role: 'admin' });
     expect(await readPlatformMember(admin.uid)).toMatchObject({ role: 'admin' });
@@ -73,6 +85,12 @@ test.describe('single-owner transfer boundaries', () => {
       email: ADMIN.email,
       role: 'admin',
     });
+    expect(
+      await callAs(owner.idToken, 'initiateOrgOwnershipTransfer', {
+        orgId: 'transfer-community',
+        email: 'not-an-email',
+      }),
+    ).toMatchObject({ ok: false, code: 'INVALID_ARGUMENT' });
     await callJson(owner.idToken, 'initiateOrgOwnershipTransfer', {
       orgId: 'transfer-community',
       email: SUCCESSOR.email,
@@ -98,7 +116,7 @@ test.describe('single-owner transfer boundaries', () => {
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   });
 
-  test('event transfer accepts from a nonmember landing page account', async () => {
+  test('event transfer accepts from a nonmember landing page account', async ({ page }) => {
     const owner = await createAccount(OWNER);
     const successor = await createAccount(SUCCESSOR);
     const admin = await createAccount(ADMIN);
@@ -116,9 +134,17 @@ test.describe('single-owner transfer boundaries', () => {
       }),
     ).toMatchObject({ transfer: null });
 
-    await callJson(successor.idToken, 'acceptEventOwnershipTransfer', {
-      cfpId: 'devfest-mtl-2026',
-    });
+    // Initiating event owner must NOT see the Accept Ownership Transfer banner on CfpPage (#50)
+    await signInAs(page, OWNER, '/c/devfest-mtl-2026');
+    await expect(page.locator('.ownership-transfer-card')).toHaveCount(0);
+
+    // Intended successor sees the Accept Ownership Transfer banner on CfpPage and can accept (#50, #53)
+    await signInAs(page, SUCCESSOR, '/c/devfest-mtl-2026');
+    const banner = page.locator('.ownership-transfer-card');
+    await expect(banner).toBeVisible();
+    await banner.getByRole('button', { name: /Accept ownership/i }).click();
+    await expect(banner.getByRole('button')).toHaveCount(0);
+
     expect(await readCfp()).toMatchObject({
       ownerUid: successor.uid,
     });

@@ -421,6 +421,7 @@ export async function acceptPlatformOwnershipTransfer(
 
   const transferRef = transferDoc(db);
   const newOwnerRef = memberDoc(db, uid);
+  const pendingGrantRef = grantDoc(db, email);
 
   return await db.runTransaction(async (tx) => {
     const transferSnap = await tx.get(transferRef);
@@ -442,9 +443,10 @@ export async function acceptPlatformOwnershipTransfer(
     }
 
     const initiatedBy = String(transferSnap.get('initiatedBy') ?? '');
-    const [currentMemberSnap, initiatingOwner] = await tx.getAll(
+    const [currentMemberSnap, initiatingOwner, pendingGrantSnap] = await tx.getAll(
       newOwnerRef,
       memberDoc(db, initiatedBy),
+      pendingGrantRef,
     );
     const ownersSnap = await tx.get(
       db.collection('platformMembers').where('role', '==', 'owner'),
@@ -486,6 +488,10 @@ export async function acceptPlatformOwnershipTransfer(
       },
       { merge: true },
     );
+
+    if (pendingGrantSnap.exists) {
+      tx.delete(pendingGrantRef);
+    }
 
     tx.update(transferRef, {
       status: 'accepted',
