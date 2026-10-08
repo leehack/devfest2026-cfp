@@ -262,7 +262,8 @@ export function scheduleEndTime(
 ): string {
   const start = Number(entry.startsAt.slice(0, 2)) * 60 + Number(entry.startsAt.slice(3));
   const end = start + entry.durationMinutes;
-  return `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`;
+  const normalized = ((end % 1440) + 1440) % 1440;
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
 }
 
 export type ScheduleProblem =

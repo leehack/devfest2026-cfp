@@ -167,13 +167,12 @@ export function CfpPage({
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
             <p className="cfp-hero__eyebrow" style={{ margin: 0 }}>{t.cfpPage.eyebrow}</p>
             {cfp.orgId && (
-              <Link
-                to={`/orgs/${cfp.orgId}`}
+              <span
                 className="org-badge"
-                style={{ textDecoration: 'none', fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}
+                style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}
               >
-                🏢 {cfp.orgId}
-              </Link>
+                🏢 {cfp.orgName || cfp.orgId}
+              </span>
             )}
             {cfp.features?.blindReview && (
               <span className="blind-review-badge" style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}>

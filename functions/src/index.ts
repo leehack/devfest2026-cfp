@@ -4361,11 +4361,13 @@ export const createCfp = onCall(CALLABLE, async (request) => {
     if (existing.exists) {
       throw new HttpsError('already-exists', 'That address is taken.');
     }
+    const orgName = String(orgSnap.get('name') ?? orgId).trim() || orgId;
     tx.set(ref, {
       name: input.name,
       visibility: input.visibility,
       ownerUid: uid,
       orgId,
+      orgName,
       archived: false,
       opensAt,
       closesAt,
@@ -5045,8 +5047,13 @@ export const updateOrg = onCall(CALLABLE, async (request) => {
 
   const orgRef = db.doc(`orgs/${orgId}`);
   const memberRef = db.doc(`orgs/${orgId}/members/${uid}`);
+  const orgEvents = db.collection('cfps').where('orgId', '==', orgId);
   await db.runTransaction(async (tx) => {
-    const [org, member] = await tx.getAll(orgRef, memberRef);
+    const [org, member, events] = await Promise.all([
+      tx.get(orgRef),
+      tx.get(memberRef),
+      name ? tx.get(orgEvents) : Promise.resolve(null),
+    ]);
     if (!org.exists) throw new HttpsError('not-found', 'Organization not found.');
     const role = member.exists ? member.get('role') : null;
     if (role !== 'owner' && role !== 'admin') {
@@ -5056,6 +5063,11 @@ export const updateOrg = onCall(CALLABLE, async (request) => {
       );
     }
     tx.update(orgRef, update);
+    if (name && events) {
+      for (const eventDoc of events.docs) {
+        tx.update(eventDoc.ref, { orgName: name });
+      }
+    }
   });
   logger.info('organization updated', { orgId, uid });
   return { ok: true };

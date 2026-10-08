@@ -149,7 +149,8 @@ export function href(place: {
 
 /** The one place that moves the address bar. `Link` and `navigate` both land here. */
 export function goTo(path: string, state: unknown = null): void {
-  if (path === window.location.pathname) return;
+  const current = `${window.location.pathname}${window.location.search ?? ''}${window.location.hash ?? ''}`;
+  if (path === current) return;
   window.history.pushState(state, '', path);
   // `pushState` deliberately fires nothing, so the subscribers below would
   // never hear about our own navigations without this.

@@ -14,7 +14,7 @@ import type { RoleInviteLinkPublicInfo } from '@shared/types';
 import type { CfpRole } from '@shared/cfp';
 import type { CfpWindow } from '../lib/proposals';
 
-const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
+import { clearSignInReturnPath, rememberSignInReturnPath } from '../lib/signIn';
 
 function getInviteToken(): string {
   if (typeof window === 'undefined') return '';
@@ -55,14 +55,11 @@ export function JoinCommitteePage({
   const [fetchAttempt, setFetchAttempt] = useState(0);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.sessionStorage) {
+    if (typeof window !== 'undefined') {
       if (user) {
-        window.sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
+        clearSignInReturnPath();
       } else {
-        window.sessionStorage.setItem(
-          SIGN_IN_RETURN_PATH,
-          window.location.pathname + window.location.search,
-        );
+        rememberSignInReturnPath(window.location.pathname + window.location.search);
       }
     }
   }, [user]);

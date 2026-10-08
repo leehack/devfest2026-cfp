@@ -78,6 +78,7 @@ export interface Cfp extends CfpProfile {
   name: string;
   /** Optional parent organization for multi-tenant team management. */
   orgId?: string;
+  orgName?: string;
   theme?: CfpTheme;
   features?: CfpFeatures;
   supportedLanguages?: string[];

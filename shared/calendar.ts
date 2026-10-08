@@ -176,13 +176,22 @@ export function scheduleIcs(
       entry.kind === 'proposal'
         ? entry.session.abstract
         : localised(entry.description, locale);
+    const startMinutes =
+      Number(entry.startsAt.slice(0, 2)) * 60 + Number(entry.startsAt.slice(3));
+    const dayOverflow = Math.floor((startMinutes + entry.durationMinutes) / 1440);
+    let endDate = entry.date;
+    if (dayOverflow > 0) {
+      const [year, month, day] = entry.date.split('-').map(Number);
+      const next = new Date(Date.UTC(year!, (month ?? 1) - 1, (day ?? 1) + dayOverflow));
+      endDate = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
+    }
     lines.push(
       'BEGIN:VEVENT',
       `UID:${escapeIcs(`${cfpId}-${entry.id}@cfp.gdgmontreal.com`)}`,
       `SEQUENCE:${schedule.version}`,
       `DTSTAMP:${stamp}`,
       `DTSTART;TZID=${schedule.timeZone}:${compactDateTime(entry.date, entry.startsAt)}`,
-      `DTEND;TZID=${schedule.timeZone}:${compactDateTime(entry.date, scheduleEndTime(entry))}`,
+      `DTEND;TZID=${schedule.timeZone}:${compactDateTime(endDate, scheduleEndTime(entry))}`,
       `SUMMARY:${escapeIcs(publicEntryTitle(entry, locale))}`,
       ...(entry.roomId
         ? [`LOCATION:${escapeIcs(rooms.get(entry.roomId) ?? entry.roomId)}`]

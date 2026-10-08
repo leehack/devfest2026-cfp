@@ -18,6 +18,7 @@ import type { AdminTab } from './adminTabs';
 import { proposalSelectionQuery } from './proposalLinks';
 
 const PENDING = 'cfp.signInEmail';
+export const SIGN_IN_RETURN_PATH = 'cfp.signInReturnPath';
 
 export type SignInDestination = 'submit' | 'join' | 'review' | 'schedule' | `admin/${AdminTab}`;
 
@@ -60,6 +61,39 @@ function forgetPendingEmail() {
     localStorage.removeItem(PENDING);
   } catch {
     /* see above */
+  }
+}
+
+export function rememberSignInReturnPath(path: string) {
+  if (!path.startsWith('/') || path.startsWith('//')) return;
+  try {
+    localStorage.setItem(SIGN_IN_RETURN_PATH, path);
+    sessionStorage.setItem(SIGN_IN_RETURN_PATH, path);
+  } catch {
+    /* storage may be unavailable in private browsing */
+  }
+}
+
+export function clearSignInReturnPath() {
+  try {
+    localStorage.removeItem(SIGN_IN_RETURN_PATH);
+    sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
+  } catch {
+    /* see above */
+  }
+}
+
+export function consumeSignInReturnPath(): string {
+  try {
+    const returnPath =
+      localStorage.getItem(SIGN_IN_RETURN_PATH) ??
+      sessionStorage.getItem(SIGN_IN_RETURN_PATH) ??
+      '';
+    localStorage.removeItem(SIGN_IN_RETURN_PATH);
+    sessionStorage.removeItem(SIGN_IN_RETURN_PATH);
+    return returnPath.startsWith('/') && !returnPath.startsWith('//') ? returnPath : '';
+  } catch {
+    return '';
   }
 }
 

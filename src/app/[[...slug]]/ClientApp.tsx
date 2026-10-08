@@ -28,6 +28,7 @@ export interface InitialPublicCfp {
   visibility: 'public' | 'private';
   state: CfpState;
   orgId?: string;
+  orgName?: string;
   theme?: {
     primaryColor?: string;
     accentColor?: string;
@@ -61,6 +62,7 @@ function toCfpWindow(cfp: InitialPublicCfp): CfpWindow {
     theme: cfp.theme,
     features: cfp.features,
     orgId: cfp.orgId,
+    orgName: cfp.orgName,
   };
 }
 

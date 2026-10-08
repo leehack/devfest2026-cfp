@@ -659,6 +659,9 @@ export function Schedule({
       setWorkingConfig((current) =>
         current ? { ...current, revision: data.revision, needsAttention: true } : current,
       );
+      setSelectedDay((current) =>
+        config.days.some((day) => day.date === entry.date) ? entry.date : current,
+      );
       invalidateCache(`scheduleDraft:${cfpId}`);
       setEditing(null);
       return true;
@@ -1393,6 +1396,15 @@ export function Schedule({
                   tabIndex={selectedDay === day.date ? 0 : -1}
                   className={selectedDay === day.date ? 'schedule-day-tab schedule-day-tab--active' : 'schedule-day-tab'}
                   onClick={() => setSelectedDay(day.date)}
+                  onDragEnter={() => {
+                    if (dragging && selectedDay !== day.date) setSelectedDay(day.date);
+                  }}
+                  onDragOver={(event) => {
+                    if (!dragging) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    if (selectedDay !== day.date) setSelectedDay(day.date);
+                  }}
                   onKeyDown={(event) => {
                     let next = index;
                     if (event.key === 'ArrowRight') next = (index + 1) % config.days.length;

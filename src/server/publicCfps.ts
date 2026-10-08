@@ -61,6 +61,7 @@ export interface PublicCfp {
   archived: boolean;
   visibility: 'public' | 'private';
   orgId?: string;
+  orgName?: string;
   theme?: {
     primaryColor?: string;
     accentColor?: string;
@@ -111,6 +112,7 @@ function shape(id: string, data: Record<string, unknown>): PublicCfp {
     archived: data.archived === true,
     visibility: data.visibility === 'private' ? 'private' : 'public',
     orgId: typeof data.orgId === 'string' ? data.orgId : undefined,
+    orgName: typeof data.orgName === 'string' ? data.orgName : undefined,
     theme: data.theme as PublicCfp['theme'],
     features: data.features as PublicCfp['features'],
   };
