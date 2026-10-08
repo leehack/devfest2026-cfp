@@ -16,6 +16,7 @@ import type { User } from 'firebase/auth';
 
 import { formatCalendarDay, formatDate } from '../i18n';
 import { useI18n } from '../i18n/context';
+import { invalidateCache } from '../lib/cache';
 import { href } from '../lib/router';
 import { Link } from '../components/Link';
 import { transferError } from '../lib/errors';
@@ -52,6 +53,13 @@ export function CfpPage({
   const ends = eventEndDate ?? starts;
   const day = starts ? calendarDate(starts) : null;
   const endDay = ends && ends !== starts ? calendarDate(ends) : null;
+  const isTransferTarget = Boolean(
+    user &&
+      transfer &&
+      ((user.email &&
+        transfer.targetEmail.toLowerCase() === user.email.toLowerCase()) ||
+        transfer.targetUid === user.uid),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -70,11 +78,14 @@ export function CfpPage({
   }, [cfpId, user]);
 
   async function acceptTransfer() {
-    if (!transfer || transferBusy) return;
+    if (!user || !isTransferTarget || transferBusy) return;
     setTransferBusy(true);
     setTransferFailure('');
     try {
       await acceptEventOwnershipTransfer({ cfpId });
+      invalidateCache(`role:${cfpId}:${user.uid}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`committee:${cfpId}:${user.uid}`);
       setTransfer(null);
       setTransferAccepted(true);
       onRoleChanged();
@@ -125,7 +136,7 @@ export function CfpPage({
 
   return (
     <div className="cfp-landing">
-      {(transfer || transferAccepted) && (
+      {(isTransferTarget || transferAccepted) && (
         <section className="ownership-transfer-card" aria-labelledby="event-transfer-title">
           <div>
             <p className="home-activity__eyebrow">{t.transfer.acceptTitle}</p>
@@ -137,7 +148,7 @@ export function CfpPage({
             </p>
             {transferFailure && <p className="field__error" role="alert">{transferFailure}</p>}
           </div>
-          {transfer && (
+          {isTransferTarget && (
             <button
               type="button"
               className="btn btn--primary"

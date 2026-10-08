@@ -4687,10 +4687,7 @@ export const listUserOrgLimits = onCall(CALLABLE, async (request) => {
   const data = (request.data ?? {}) as Record<string, unknown>;
   const requestedSize = pageSize(data.pageSize);
   const { skip: initialSkip, pageToken: initialToken } = parseUserLimitsCursor(data.pageToken);
-  const defaultsSnap = await db.doc('config/platformLimits').get();
-  const ownershipDefault = effectiveOrgOwnershipLimit(
-    defaultsSnap.get('organizationOwnershipDefault'),
-  );
+  const defaultsPromise = db.doc('config/platformLimits').get();
   const visibleAccounts: UserRecord[] = [];
   let currentToken: string | undefined = initialToken;
   let skipInBatch = initialSkip;
@@ -4728,10 +4725,25 @@ export const listUserOrgLimits = onCall(CALLABLE, async (request) => {
     }
   }
 
+  const [defaultsSnap, ownedCounts, limitSnaps] = await Promise.all([
+    defaultsPromise,
+    Promise.all(visibleAccounts.map((account) => ownedOrganizationCount(account.uid))),
+    visibleAccounts.length > 0
+      ? db.getAll(...visibleAccounts.map((account) => db.doc(`platformUserLimits/${account.uid}`)))
+      : Promise.resolve([]),
+  ]);
+  const ownershipDefault = effectiveOrgOwnershipLimit(
+    defaultsSnap.get('organizationOwnershipDefault'),
+  );
   const users = await Promise.all(
-    visibleAccounts.map(async (account) =>
-      platformUserLimitSummary(account.uid, await ownedOrganizationCount(account.uid),
-        await db.doc(`platformUserLimits/${account.uid}`).get(), ownershipDefault, account),
+    visibleAccounts.map((account, index) =>
+      platformUserLimitSummary(
+        account.uid,
+        ownedCounts[index] ?? 0,
+        limitSnaps[index]!,
+        ownershipDefault,
+        account,
+      ),
     ),
   );
   return {

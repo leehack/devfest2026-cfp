@@ -116,7 +116,7 @@ test.describe('single-owner transfer boundaries', () => {
     ).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
   });
 
-  test('event transfer accepts from a nonmember landing page account', async () => {
+  test('event transfer accepts from a nonmember landing page account', async ({ page }) => {
     const owner = await createAccount(OWNER);
     const successor = await createAccount(SUCCESSOR);
     const admin = await createAccount(ADMIN);
@@ -134,9 +134,17 @@ test.describe('single-owner transfer boundaries', () => {
       }),
     ).toMatchObject({ transfer: null });
 
-    await callJson(successor.idToken, 'acceptEventOwnershipTransfer', {
-      cfpId: 'devfest-mtl-2026',
-    });
+    // Initiating event owner must NOT see the Accept Ownership Transfer banner on CfpPage (#50)
+    await signInAs(page, OWNER, '/c/devfest-mtl-2026');
+    await expect(page.locator('.ownership-transfer-card')).toHaveCount(0);
+
+    // Intended successor sees the Accept Ownership Transfer banner on CfpPage and can accept (#50, #53)
+    await signInAs(page, SUCCESSOR, '/c/devfest-mtl-2026');
+    const banner = page.locator('.ownership-transfer-card');
+    await expect(banner).toBeVisible();
+    await banner.getByRole('button', { name: /Accept ownership/i }).click();
+    await expect(banner.getByRole('button')).toHaveCount(0);
+
     expect(await readCfp()).toMatchObject({
       ownerUid: successor.uid,
     });
