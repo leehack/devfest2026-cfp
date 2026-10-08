@@ -71,7 +71,7 @@ export function Committee({
   readOnly?: boolean;
   onRoleChange?: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const tRef = useLatest(t);
   const [people, setPeople] = useState<Person[]>([]);
   const [pending, setPending] = useState<RoleGrant[]>([]);
@@ -434,7 +434,7 @@ export function Committee({
             ? new Date(raw).getTime()
             : null;
     if (!time || isNaN(time)) return null;
-    return new Date(time).toLocaleDateString();
+    return new Date(time).toLocaleDateString(locale === 'fr' ? 'fr-CA' : 'en-CA');
   }
 
   return (

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ORG_LIMITS, type PlatformUserOrgLimitSummary } from '@shared/org';
 import { AdminPagination } from './AdminPagination';
 import { useI18n } from '../i18n/context';
+import { platformLimitError } from '../lib/errors';
 import {
   findUserOrgLimit,
   listUserOrgLimits,
@@ -56,8 +57,10 @@ export function PlatformUserOrganizationLimits({
       }));
       setNextPageToken(data.nextPageToken);
       setPage(targetPage);
-    } catch {
-      setError(tRef.current.platformAdmin.userLimitsLoadError);
+    } catch (caught) {
+      setError(
+        platformLimitError(caught, tRef.current.platformAdmin.userLimitsLoadError, tRef.current),
+      );
     }
   }, [tRef]);
 
@@ -82,9 +85,9 @@ export function PlatformUserOrganizationLimits({
         ...current,
         [data.user.uid]: String(data.user.organizationLimit),
       }));
-    } catch {
+    } catch (caught) {
       setSearchedUser(null);
-      setError(t.platformAdmin.userLimitsLookupError);
+      setError(platformLimitError(caught, t.platformAdmin.userLimitsLookupError, t));
     } finally {
       setBusy('');
     }
@@ -142,8 +145,8 @@ export function PlatformUserOrganizationLimits({
       setSearchedUser((current) => current?.uid === data.user.uid ? data.user : current);
       setDrafts((current) => ({ ...current, [data.user.uid]: String(limit) }));
       setNote(t.platformAdmin.userLimitSaved.replace('{email}', data.user.email));
-    } catch {
-      setError(t.platformAdmin.userLimitSaveError);
+    } catch (caught) {
+      setError(platformLimitError(caught, t.platformAdmin.userLimitSaveError, t));
     } finally {
       setBusy('');
     }
@@ -166,8 +169,8 @@ export function PlatformUserOrganizationLimits({
         : current);
       setDrafts((current) => ({ ...current, [user.uid]: String(data.limit) }));
       setNote(t.platformAdmin.userLimitResetDone.replace('{email}', user.email));
-    } catch {
-      setError(t.platformAdmin.userLimitSaveError);
+    } catch (caught) {
+      setError(platformLimitError(caught, t.platformAdmin.userLimitSaveError, t));
     } finally {
       setBusy('');
     }

@@ -313,6 +313,17 @@ export function platformAdminError(error: unknown, t: Dictionary): string {
   }
 }
 
+export function platformLimitError(error: unknown, fallback: string, t: Dictionary): string {
+  switch (codeOf(error)) {
+    case 'unauthenticated':
+      return t.errors.signedOut;
+    case 'permission-denied':
+      return t.nav.forbidden;
+    default:
+      return fallback;
+  }
+}
+
 /**
  * Resend's failures, which are about a third party and not about the caller.
  *

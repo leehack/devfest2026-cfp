@@ -60,7 +60,15 @@ export function AccountMenu({
   }, [open]);
 
   return (
-    <div className="account-menu" ref={root}>
+    <div
+      className="account-menu"
+      ref={root}
+      onBlur={(event) => {
+        if (event.relatedTarget instanceof Node && !root.current?.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
       <button
         type="button"
         ref={trigger}

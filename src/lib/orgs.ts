@@ -189,7 +189,7 @@ export function useOrg(orgId: string | undefined, user: User | null) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (showLoading = false) => {
     if (!orgId) {
       setOrg(null);
       setRole(null);
@@ -199,7 +199,7 @@ export function useOrg(orgId: string | undefined, user: User | null) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (showLoading) setLoading(true);
     setError(null);
     try {
       if (user) await user.getIdToken();
@@ -220,12 +220,12 @@ export function useOrg(orgId: string | undefined, user: User | null) {
     } catch (e) {
       setError(e);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [orgId, user]);
 
   useEffect(() => {
-    void refresh();
+    void refresh(true);
   }, [refresh]);
 
   return { org, role, pendingTransfer, events, members, loading, error, refresh };

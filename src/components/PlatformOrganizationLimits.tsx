@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ORG_LIMITS, type PlatformOrgLimitSummary } from '@shared/org';
 import { AdminPagination } from './AdminPagination';
 import { useI18n } from '../i18n/context';
+import { platformLimitError } from '../lib/errors';
 import { listOrgLimits, setOrgActiveEventLimit } from '../lib/orgs';
 import { useLatest } from '../lib/useLatest';
 import { Result } from '../screens/admin/Result';
@@ -53,8 +54,10 @@ export function PlatformOrganizationLimits({
       }));
       setNextCursor(data.nextCursor);
       setPage(targetPage);
-    } catch {
-      setError(tRef.current.platformAdmin.orgLimitsLoadError);
+    } catch (caught) {
+      setError(
+        platformLimitError(caught, tRef.current.platformAdmin.orgLimitsLoadError, tRef.current),
+      );
     }
   }, [tRef]);
 
@@ -111,8 +114,8 @@ export function PlatformOrganizationLimits({
         current?.map((item) => item.id === org.id ? { ...item, activeEventLimit: limit } : item) ?? null,
       );
       setNote(t.platformAdmin.orgLimitSaved.replace('{name}', org.name));
-    } catch {
-      setError(t.platformAdmin.orgLimitSaveError);
+    } catch (caught) {
+      setError(platformLimitError(caught, t.platformAdmin.orgLimitSaveError, t));
     } finally {
       setBusy('');
     }

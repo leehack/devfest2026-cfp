@@ -52,7 +52,6 @@ export function FormProgress({ items }: { items: FormProgressItem[] }) {
               <a
                 className="form-progress__link"
                 href={`#${item.id}`}
-                aria-label={`${item.label} — ${stateLabel}`}
                 onClick={() => {
                   requestAnimationFrame(() => {
                     document.getElementById(item.id)?.focus({ preventScroll: true });
@@ -62,7 +61,10 @@ export function FormProgress({ items }: { items: FormProgressItem[] }) {
                 <span className="form-progress__marker" aria-hidden="true">
                   {item.complete ? '✓' : index + 1}
                 </span>
-                <span className="form-progress__label">{item.label}</span>
+                <span className="form-progress__label">
+                  {item.label}
+                  <span className="sr-only"> — {stateLabel}</span>
+                </span>
               </a>
             </li>
           );

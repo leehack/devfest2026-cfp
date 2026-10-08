@@ -112,15 +112,15 @@ export function JoinCommitteePage({
 
   if (loading) {
     return (
-      <main className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
+      <div className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
         <p className="muted">{t.app.loading}</p>
-      </main>
+      </div>
     );
   }
 
   if (loadError) {
     return (
-      <main className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
+      <div className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
         <div className="panel" style={{ textAlign: 'center', padding: '2rem' }}>
           <h2 style={{ marginBottom: '0.75rem' }}>{t.errors.unavailable}</h2>
           <p className="muted" style={{ marginBottom: '1.5rem' }}>{loadError}</p>
@@ -132,7 +132,7 @@ export function JoinCommitteePage({
             {t.errors.reload}
           </button>
         </div>
-      </main>
+      </div>
     );
   }
 
@@ -151,7 +151,7 @@ export function JoinCommitteePage({
     }
 
     return (
-      <main className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
+      <div className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
         <div className="panel" style={{ textAlign: 'center', padding: '2rem' }}>
           <h2 style={{ marginBottom: '0.75rem' }}>{errorTitle}</h2>
           <p className="muted" style={{ marginBottom: '1.5rem' }}>{errorHelp}</p>
@@ -159,12 +159,12 @@ export function JoinCommitteePage({
             {cfp?.name ?? t.app.title}
           </a>
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
+    <div className="container" style={{ padding: '3rem 1rem', maxWidth: '36rem' }}>
       <div className="panel" style={{ padding: '2rem' }}>
         <h2 style={{ marginBottom: '0.5rem' }}>
           {t.join.heading(eventName, roleName)}
@@ -227,6 +227,11 @@ export function JoinCommitteePage({
           </div>
         ) : (
           <div>
+            {(user.email || user.displayName) && (
+              <p className="muted" style={{ marginBottom: '1rem' }}>
+                {t.app.signedInAs}: <strong>{user.email ?? user.displayName}</strong>
+              </p>
+            )}
             <button
               type="button"
               className="btn btn--primary"
@@ -238,6 +243,6 @@ export function JoinCommitteePage({
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

@@ -615,7 +615,7 @@ export const fr: Dictionary = {
     pastTalksHelp:
       "Liens facultatifs vers des enregistrements. Un contexte utile, pas une exigence — nous acceptons les nouvelles conférencières et nouveaux conférenciers.",
     email: 'Courriel',
-    emailHelp: 'Provient de votre compte Google. Toute la correspondance y sera envoyée.',
+    emailHelp: 'Provient de votre compte connecté. Toute la correspondance y sera envoyée.',
     gdeGuidance:
       "Les GDE doivent communiquer avec leur gestionnaire de programme GDE concernant le soutien aux déplacements. L'événement ne l'offre pas directement.",
   },

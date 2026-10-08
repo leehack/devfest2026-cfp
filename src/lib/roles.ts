@@ -714,22 +714,14 @@ export async function loadCommittee(
   return swrFetch(
     `committee:${cfpId}:${viewerUid}`,
     async () => {
-      const col = collection(db, 'cfps', cfpId, 'roleInviteLinks');
       const [members, grants] = await Promise.all([
         getDocs(collection(db, 'cfps', cfpId, 'members')),
         getDocs(collection(db, 'cfps', cfpId, 'roleGrants')),
       ]);
 
       const people = members.docs.map((d) => ({ ...(d.data() as CfpMember), uid: d.id }));
-      const linksSnap = await getDocs(col).catch(async () => {
-        return getDocs(query(col, where('role', '==', 'reviewer'))).catch(() => ({ docs: [] }));
-      });
-
-      const inviteLinks: import('@shared/types').RoleInviteLink[] = linksSnap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>),
-      }));
-      inviteLinks.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
+      const isOwner = people.some((p) => p.uid === viewerUid && p.role === 'owner');
+      const inviteLinks = await loadInviteLinks(cfpId, isOwner).catch(() => []);
 
       return {
         people,

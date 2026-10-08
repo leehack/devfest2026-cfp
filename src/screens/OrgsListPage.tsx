@@ -38,7 +38,7 @@ export function OrgsListPage({ user }: { user: User }) {
     setSlugError('');
 
     if (!name.trim()) {
-      setFormError(t.orgs.nameLabel);
+      setFormError(t.errors.rules.required);
       return;
     }
 
@@ -208,7 +208,11 @@ export function OrgsListPage({ user }: { user: User }) {
               <div className="org-card__content">
                 <div className="org-card__header">
                   <div className="org-avatar org-avatar--sm" aria-hidden="true">
-                    {getInitials(org.name)}
+                    {org.logoUrl ? (
+                      <img className="org-avatar__img" src={org.logoUrl} alt="" />
+                    ) : (
+                      getInitials(org.name)
+                    )}
                   </div>
                   <div className="org-card__identity">
                     <h2 className="org-card__title">
@@ -226,7 +230,8 @@ export function OrgsListPage({ user }: { user: User }) {
                   <span className={`org-badge org-badge--${org.membershipRole}`}>
                     {t.orgs.yourRole}: {t.orgs.roles[org.membershipRole]}
                   </span>
-                  {org.websiteUrl ? (
+                  <span className="org-badge">{t.orgs.eventActive}</span>
+                  {org.websiteUrl && (
                     <a
                       className="org-badge org-badge--link"
                       href={org.websiteUrl}
@@ -236,8 +241,6 @@ export function OrgsListPage({ user }: { user: User }) {
                     >
                       ↗ {t.orgs.website}
                     </a>
-                  ) : (
-                    <span className="org-badge">{t.orgs.eventActive}</span>
                   )}
                 </span>
                 <button

@@ -1406,9 +1406,7 @@ p {
     justify-content: space-between;
     justify-self: stretch;
   }
-}
 
-@media (max-width: 34rem) {
   .preferences-menu__panel {
     right: auto;
     left: 0;
@@ -9934,6 +9932,7 @@ body:has(.consent) .editorbar {
   place-items: center;
   width: 3.5rem;
   height: 3.5rem;
+  overflow: hidden;
   border-radius: var(--r-lg);
   background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, var(--primary-hover)) 100%);
   color: var(--accent-fg);
@@ -9942,6 +9941,13 @@ body:has(.consent) .editorbar {
   font-weight: 750;
   box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent);
   flex: none;
+}
+
+.org-avatar__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .org-avatar--sm {

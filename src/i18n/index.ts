@@ -35,10 +35,14 @@ export function formatDate(
  * The timezone is named rather than left to the host, so a server in another
  * region does not shift a Montréal deadline by its own offset.
  */
-export function formatDay(value: Date, locale: Locale): string {
+export function formatDay(
+  value: Date,
+  locale: Locale,
+  timeZone = 'America/Toronto',
+): string {
   return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
     dateStyle: 'long',
-    timeZone: 'America/Toronto',
+    timeZone,
   }).format(value);
 }
 

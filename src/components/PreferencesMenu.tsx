@@ -86,7 +86,15 @@ export function PreferencesMenu() {
   const theme = resolvedTheme ?? 'light';
 
   return (
-    <div className="preferences-menu" ref={root}>
+    <div
+      className="preferences-menu"
+      ref={root}
+      onBlur={(event) => {
+        if (event.relatedTarget instanceof Node && !root.current?.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
       <button
         type="button"
         ref={trigger}

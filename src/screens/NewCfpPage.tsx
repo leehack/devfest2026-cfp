@@ -11,6 +11,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
 import { useI18n } from '../i18n/context';
+import { invalidateCache } from '../lib/cache';
+import { orgError } from '../lib/errors';
 import { goTo, navigate } from '../lib/router';
 import { createCfp } from '../lib/roles';
 import { useMyOrgs } from '../lib/orgs';
@@ -32,7 +34,7 @@ const inWeeks = (weeks: number) => {
 
 export function NewCfpPage({ user }: { user: User }) {
   const { t } = useI18n();
-  const { orgs, loading: orgsLoading, refresh: refreshOrgs } = useMyOrgs(user);
+  const { orgs, loading: orgsLoading, error: orgsError, refresh: refreshOrgs } = useMyOrgs(user);
   const manageableOrgs = useMemo(
     () =>
       orgs.filter(
@@ -107,6 +109,9 @@ export function NewCfpPage({ user }: { user: User }) {
         closesAt: new Date(closesAt).toISOString(),
         orgId: selectedOrgId,
       });
+      invalidateCache(`cfpWindow:${cfpId}`);
+      invalidateCache(`cfp:${cfpId}`);
+      invalidateCache(`role:${cfpId}:${user.uid}`);
       navigate('admin', { cfpId, tab: 'overview' });
     } catch (err: any) {
       const code = String(err?.code ?? '');
@@ -131,6 +136,25 @@ export function NewCfpPage({ user }: { user: User }) {
 
   if (orgsLoading) {
     return <p className="muted">{t.app.loading}</p>;
+  }
+
+  if (orgsError !== null) {
+    return (
+      <div className="panel platform-access-gate">
+        <p className="field__error" role="alert">
+          {orgError(orgsError, t)}
+        </p>
+        <div className="platform-access-gate__actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void refreshOrgs()}
+          >
+            {t.platformAdmin.checkAgain}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (manageableOrgs.length === 0) {
@@ -173,9 +197,9 @@ export function NewCfpPage({ user }: { user: User }) {
           void create();
         }}
       >
-        <section className="create-form__section">
+        <section className="create-form__section" aria-labelledby="create-org-section-title">
             <header className="create-form__section-header">
-              <h3 className="create-form__section-title">
+              <h3 className="create-form__section-title" id="create-org-section-title">
                 {t.orgs.title}
               </h3>
             </header>
@@ -187,6 +211,7 @@ export function NewCfpPage({ user }: { user: User }) {
                   value: o.slug,
                   label: `${o.name} (${o.slug})`,
                 }))}
+              disabled={busy}
             />
         </section>
 
