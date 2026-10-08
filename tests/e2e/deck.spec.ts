@@ -719,5 +719,27 @@ test.describe('the review deck', () => {
     await page.getByRole('button', { name: /Needs response/ }).click();
     await expect(heading(page, TITLES[1])).toBeVisible();
   });
+
+  test('scoring a skipped talk after Next unscored proposal finishes the queue without stepping onto scored talks', async ({
+    page,
+  }) => {
+    await stage(page);
+
+    // Skip the first talk, then score the remaining two talks.
+    await page.keyboard.press('ArrowRight');
+    await expect(heading(page, TITLES[1])).toBeVisible();
+    await page.keyboard.press('3');
+    await expect(page.getByText('1 of 3 responded')).toBeVisible();
+    await expect(heading(page, TITLES[2])).toBeVisible();
+    await page.keyboard.press('4');
+    await expect(page.getByText('2 of 3 responded')).toBeVisible();
+
+    // At the end of the pass, jump back to the skipped talk and score it.
+    await page.getByRole('button', { name: 'Next unanswered' }).click();
+    await expect(heading(page, TITLES[0])).toBeVisible();
+    await page.keyboard.press('2');
+    await expect(page.getByText('3 of 3 responded')).toBeVisible();
+    await expect(heading(page, 'You’re all caught up!')).toBeVisible();
+  });
 });
 

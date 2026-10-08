@@ -413,11 +413,22 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     [scopedOrder, selectedCategory],
   );
 
+  const searchMatchedOrder = useMemo(
+    () => categoryOrder.filter((p) => matchesQuery(p, query)),
+    [categoryOrder, query],
+  );
+
+  const unreviewedSearchCount = useMemo(
+    () => searchMatchedOrder.filter((p) => !mine.has(p.id)).length,
+    [searchMatchedOrder, mine],
+  );
+
   const deckOrder = useMemo(() => {
-    const matching = categoryOrder.filter((p) => matchesQuery(p, query));
-    return statusFilter === 'unreviewed' ? matching.filter((p) => !mine.has(p.id)) : matching;
+    return statusFilter === 'unreviewed'
+      ? searchMatchedOrder.filter((p) => !mine.has(p.id))
+      : searchMatchedOrder;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categoryOrder, statusFilter, query, filterEpoch]);
+  }, [searchMatchedOrder, statusFilter, filterEpoch]);
 
   const isComplete = deckOrder.length === 0 || index >= deckOrder.length;
   const current = !isComplete ? deckOrder[index] : null;
@@ -445,10 +456,24 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     [deckOrder.length],
   );
 
-  const advance = useCallback(() => {
-    setIndex((i) => Math.min(i + 1, deckOrder.length));
-    setSavedId('');
-  }, [deckOrder.length]);
+  const advance = useCallback(
+    (scoredId?: string) => {
+      setIndex((i) => {
+        if (statusFilter === 'unreviewed') {
+          for (let j = i + 1; j < deckOrder.length; j += 1) {
+            const candidate = deckOrder[j];
+            if (!mine.has(candidate.id) && candidate.id !== scoredId) {
+              return j;
+            }
+          }
+          return deckOrder.length;
+        }
+        return Math.min(i + 1, deckOrder.length);
+      });
+      setSavedId('');
+    },
+    [deckOrder, mine, statusFilter],
+  );
 
   const patch = useCallback((id: string, part: Partial<Draft>) => {
     const draft = { ...draftOf(), ...draftsRef.current.get(id), ...part };
@@ -564,7 +589,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       };
       patch(current.id, { score, conflictOfInterest: false });
       void persist(current.id, draft, current.title || t.review.untitled);
-      advance();
+      advance(current.id);
     },
     [current, drafts, mine, patch, persist, advance, savingIds, t.review.untitled],
   );
@@ -583,7 +608,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     };
     patch(current.id, { score: null, conflictOfInterest: true });
     void persist(current.id, draft, current.title || t.review.untitled);
-    advance();
+    advance(current.id);
   }, [current, drafts, mine, patch, persist, advance, savingIds, t.review.untitled]);
 
   /** Save and advance on button click. */
@@ -592,16 +617,16 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     const currentDraft = drafts.get(current.id) ?? draftOf(mine.get(current.id));
     if (currentDraft.score === null && !currentDraft.conflictOfInterest) return;
     void persist(current.id, currentDraft, current.title || t.review.untitled);
-    advance();
+    advance(current.id);
   }, [current, drafts, mine, persist, advance, savingIds, t.review.untitled]);
 
   const showFailure = useCallback(
     (id: string) => {
+      const failedIndex = scopedOrder.findIndex((proposal) => proposal.id === id);
+      if (failedIndex < 0) return;
       setStatusFilter('all');
       setQuery('');
       setFilterEpoch((e) => e + 1);
-      const failedIndex = scopedOrder.findIndex((proposal) => proposal.id === id);
-      if (failedIndex < 0) return;
       setSelectedCategory(null);
       setIndex(failedIndex);
       setSavedId('');
@@ -610,6 +635,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
   );
 
   useEffect(() => {
+    let resetTimer: ReturnType<typeof setTimeout> | null = null;
     function onKey(event: KeyboardEvent) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
 
@@ -626,8 +652,14 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
       }
 
       const key = event.key.toLowerCase();
-      setActiveKey(key);
-      setTimeout(() => setActiveKey(null), 250);
+      if (
+        (help || key === '?') &&
+        ['0', '1', '2', '3', '4', 'arrowleft', 'arrowright', 'j', 'k', '?'].includes(key)
+      ) {
+        if (resetTimer) clearTimeout(resetTimer);
+        setActiveKey(key);
+        resetTimer = setTimeout(() => setActiveKey(null), 250);
+      }
 
       if (event.key === '0') {
         event.preventDefault();
@@ -656,8 +688,11 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
     }
 
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [scoreAndAdvance, conflictAndAdvance, go]);
+    return () => {
+      if (resetTimer) clearTimeout(resetTimer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [scoreAndAdvance, conflictAndAdvance, go, help]);
 
   if (loadedFor !== scopeKey || loading) return <p className="muted">{t.app.loading}</p>;
   if (error && order.length === 0) {
@@ -751,7 +786,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
               setSavedId('');
             }}
           >
-            {t.review.filterNeedsResponse} ({remaining})
+            {t.review.filterNeedsResponse} ({unreviewedSearchCount})
           </button>
           <button
             type="button"
@@ -765,7 +800,7 @@ export function ReviewPage({ user, cfpId }: { user: User; cfpId: string }) {
               setSavedId('');
             }}
           >
-            {t.review.filterAll} ({categoryOrder.length})
+            {t.review.filterAll} ({searchMatchedOrder.length})
           </button>
         </div>
 

@@ -223,7 +223,10 @@ function SpeakerConfirmations({
     <div className="speaker-confirmations">
       {ids.map((uid, index) => {
         const confirmation = row.speakerConfirmations?.find((item) => item.uid === uid);
-        const name = snapshots[index]?.name || uid;
+        const name =
+          snapshots.find((speaker) => speaker.uid === uid)?.name ||
+          snapshots[index]?.name ||
+          uid;
         const response = confirmation?.response;
         return (
           <section className="speaker-confirmation" key={uid}>
@@ -265,6 +268,7 @@ function SpeakerConfirmations({
 function OperationalDetails({ row, shape }: { row: ProposalRow; shape: SubmissionForm }) {
   const { t, locale } = useI18n();
   const speakers = row.speakerSnapshot ?? [];
+  const hasPersonalLogistics = (row.speakerParticipants?.length ?? 0) > 0;
   const delivery = labelOf(shape.deliveryLanguage, row.deliveryLanguage, locale);
   const scheduledDelivery = row.assignedLanguage
     ? `${delivery} → ${labelOf(shape.deliveryLanguage, row.assignedLanguage, locale)}`
@@ -296,19 +300,22 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
     [t.proposal.level, labelOf(shape.level, row.level, locale)],
     [t.language.delivery, scheduledDelivery],
     row.languagePreference ? [t.review.languagePreference, row.languagePreference] : null,
-    shape.attendance.enabled && row.attendance?.status
+    !hasPersonalLogistics && shape.attendance.enabled && row.attendance?.status
       ? [attendanceTitle, labelOf(shape.attendance.statuses, row.attendance.status, locale)]
       : null,
+    !hasPersonalLogistics &&
     shape.attendance.enabled &&
     shape.attendance.fundingSource.enabled &&
     row.attendance?.fundingSource
       ? [fundingLabel, row.attendance.fundingSource]
       : null,
+    !hasPersonalLogistics &&
     shape.attendance.enabled &&
     shape.attendance.decisionBy.enabled &&
     row.attendance?.decisionBy
       ? [decisionLabel, row.attendance.decisionBy]
       : null,
+    !hasPersonalLogistics &&
     shape.attendance.enabled &&
     shape.attendance.needsVisa.enabled &&
     typeof row.attendance?.needsVisa === 'boolean'
@@ -340,7 +347,10 @@ function OperationalDetails({ row, shape }: { row: ProposalRow; shape: Submissio
     const index = (row.speakerIds ?? []).indexOf(participant.uid);
     return {
       ...participant,
-      name: speakers[index]?.name || participant.uid,
+      name:
+        speakers.find((speaker) => speaker.uid === participant.uid)?.name ||
+        (index >= 0 ? speakers[index]?.name : undefined) ||
+        participant.uid,
     };
   });
 
@@ -1019,6 +1029,19 @@ export function Proposals({
     [],
   );
 
+  const refreshCoverageInBackground = useCallback(
+    (scope: string) => {
+      void reviewCoverage({ cfpId: scope })
+        .then(({ data }) => {
+          if (activeCfp.current !== scope) return;
+          setCoverage(data);
+          setCoverageError('');
+        })
+        .catch(() => {});
+    },
+    [],
+  );
+
   async function decide(row: ProposalRow, next: ProposalStatus) {
     if (readOnly) return;
     const previous = row.status;
@@ -1072,6 +1095,24 @@ export function Proposals({
         next,
       } : null;
       if (clearsSpeakerResponses) {
+        setRows((current) =>
+          current.map((proposal) =>
+            proposal.id === row.id
+              ? {
+                  ...proposal,
+                  status: next,
+                  confirmedAnswers: undefined,
+                  confirmedSpeakerPhoto: undefined,
+                  speakerConfirmations: proposal.speakerConfirmations ? [] : undefined,
+                }
+              : proposal,
+          ),
+        );
+        if (next !== 'accepted') {
+          setProfileRequests((current) =>
+            current.filter((summary) => summary.proposalId !== row.id),
+          );
+        }
         // The undo banner is another proposal's after this, so it cannot double
         // as the confirmation for the one just reset. Say so in its own words.
         setNote(t.admin.decisionReset(row.title || t.admin.untitled, t.enums.status[next]));
@@ -1086,6 +1127,7 @@ export function Proposals({
       invalidateCache(`reviewQueue:${cfpId}`);
       invalidateCache(`scheduleDraft:${cfpId}`);
       invalidateCache(`sharedSchedule:${cfpId}`);
+      refreshCoverageInBackground(scope);
       void onEmailQueueChange?.();
     } catch (e) {
       if (activeCfp.current !== scope) return;
@@ -1131,6 +1173,26 @@ export function Proposals({
         status: snapshot.previous,
       });
       if (activeCfp.current !== scope) return;
+      if (snapshot.next === 'accepted' || inStatusSet('speakerResponse', snapshot.next)) {
+        setRows((current) =>
+          current.map((proposal) =>
+            proposal.id === snapshot.proposalId
+              ? {
+                  ...proposal,
+                  status: snapshot.previous,
+                  confirmedAnswers: undefined,
+                  confirmedSpeakerPhoto: undefined,
+                  speakerConfirmations: proposal.speakerConfirmations ? [] : undefined,
+                }
+              : proposal,
+          ),
+        );
+        if (snapshot.previous !== 'accepted') {
+          setProfileRequests((current) =>
+            current.filter((summary) => summary.proposalId !== snapshot.proposalId),
+          );
+        }
+      }
       committedDecisions.current.delete(snapshot.action);
       const remaining = [...committedDecisions.current.keys()];
       const latest = remaining.length > 0 ? Math.max(...remaining) : null;
@@ -1140,6 +1202,7 @@ export function Proposals({
       invalidateCache(`reviewQueue:${cfpId}`);
       invalidateCache(`scheduleDraft:${cfpId}`);
       invalidateCache(`sharedSchedule:${cfpId}`);
+      refreshCoverageInBackground(scope);
       setNote(t.admin.decisionUndone(snapshot.title));
       void onEmailQueueChange?.();
     } catch (e) {
@@ -1387,6 +1450,14 @@ export function Proposals({
             <p className="section__help">{t.admin.proposalsHelp}</p>
             <p className="decision-panel__guardrail">{t.admin.speakerResponseGuardrail}</p>
           </div>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={loading}
+            onClick={() => void refresh(false, true)}
+          >
+            {t.admin.emailRefresh}
+          </button>
         </div>
 
         {inCurrentScope && undo && (
@@ -1774,6 +1845,7 @@ export function Proposals({
             });
           }}
           onSnapshotRefreshed={onSnapshotRefreshed}
+          onRosterMutated={() => void refresh(false, true)}
           onClose={closeSpeakerManagement}
         />
       )}

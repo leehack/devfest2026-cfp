@@ -31,6 +31,7 @@ export interface CoSpeakerRosterProps {
   canRequestProfileUpdate?: boolean;
   autoReviewSpeakerUid?: string;
   onChange?: (roster: ProposalSpeakerRoster | null) => void;
+  onRosterMutated?: (roster: ProposalSpeakerRoster | null) => void;
   onProfileUpdateRequestChanged?: (
     speakerUid: string,
     request: SpeakerProfileUpdateRequestState,
@@ -72,6 +73,7 @@ export function CoSpeakerRoster({
   canRequestProfileUpdate = false,
   autoReviewSpeakerUid,
   onChange,
+  onRosterMutated,
   onProfileUpdateRequestChanged,
   onSnapshotRefreshed,
   onLeft,
@@ -79,6 +81,7 @@ export function CoSpeakerRoster({
   const { t } = useI18n();
   const tRef = useRef(t);
   const onChangeRef = useRef(onChange);
+  const onRosterMutatedRef = useRef(onRosterMutated);
   const loadedTarget = useRef('');
   const manualRefresh = useRef(false);
   const refreshButton = useRef<HTMLButtonElement>(null);
@@ -100,6 +103,7 @@ export function CoSpeakerRoster({
 
   tRef.current = t;
   onChangeRef.current = onChange;
+  onRosterMutatedRef.current = onRosterMutated;
 
   useEffect(() => {
     if (
@@ -137,6 +141,7 @@ export function CoSpeakerRoster({
         loadedTarget.current = target;
         setRoster(next);
         onChangeRef.current?.(next);
+        if (!initial) onRosterMutatedRef.current?.(next);
         if (announceRefresh) {
           setNotice(tRef.current.coSpeakers.refreshed);
           focusWhenIdle.current = 'refresh';
@@ -167,6 +172,7 @@ export function CoSpeakerRoster({
   function replaceRoster(next: ProposalSpeakerRoster) {
     setRoster(next);
     onChangeRef.current?.(next);
+    onRosterMutatedRef.current?.(next);
   }
 
   async function onInvite() {
@@ -244,6 +250,7 @@ export function CoSpeakerRoster({
       const next = await removeProposalSpeaker(cfpId, proposalId, item.uid);
       if (!next) {
         onChangeRef.current?.(null);
+        onRosterMutatedRef.current?.(null);
         onLeft?.();
         return;
       }
@@ -580,6 +587,7 @@ export function CoSpeakerRosterDialog({
   readOnly = false,
   canRequestProfileUpdate = false,
   autoReviewSpeakerUid,
+  onRosterMutated,
   onSnapshotRefreshed,
   onProfileUpdateRequestChanged,
   onClose,
@@ -591,6 +599,7 @@ export function CoSpeakerRosterDialog({
   readOnly?: boolean;
   canRequestProfileUpdate?: boolean;
   autoReviewSpeakerUid?: string;
+  onRosterMutated?: (roster: ProposalSpeakerRoster | null) => void;
   onSnapshotRefreshed?: (speakerUid: string, snapshot: SpeakerSnapshot) => void;
   onProfileUpdateRequestChanged?: (
     speakerUid: string,
@@ -634,6 +643,7 @@ export function CoSpeakerRosterDialog({
           readOnly={readOnly}
           canRequestProfileUpdate={canRequestProfileUpdate}
           autoReviewSpeakerUid={autoReviewSpeakerUid}
+          onRosterMutated={onRosterMutated}
           onSnapshotRefreshed={onSnapshotRefreshed}
           onProfileUpdateRequestChanged={onProfileUpdateRequestChanged}
         />
