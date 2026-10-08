@@ -148,4 +148,57 @@ describe('selected speaker CSV', () => {
       expect(csv).toContain(encodedCell);
     },
   );
+
+  it('omits literal undefined for optional isGde and falls back to primary speaker participant attendance', () => {
+    const rosterRow: ProposalRow = {
+      ...row,
+      primarySpeakerId: 'speaker-1',
+      speakerIds: ['speaker-1', 'speaker-2'],
+      speakerSnapshot: [
+        {
+          uid: 'speaker-2',
+          name: 'Alex CoSpeaker',
+          basedIn: 'Toronto, Canada',
+          bio: 'Co-speaker bio.',
+          socials: [],
+          isGde: undefined as unknown as boolean,
+        },
+        {
+          uid: 'speaker-1',
+          name: 'Sam Speaker',
+          basedIn: 'Montréal, Canada',
+          bio: 'Lead speaker bio.',
+          socials: [],
+          isGde: true,
+        },
+      ],
+      attendance: undefined,
+      speakerParticipants: [
+        {
+          uid: 'speaker-1',
+          role: 'primary',
+          attendance: {
+            status: 'pending',
+            fundingSource: 'GDE Program',
+            decisionBy: '2026-09-15',
+            needsVisa: false,
+          },
+          acks: { coc: true },
+        },
+        {
+          uid: 'speaker-2',
+          role: 'coSpeaker',
+          attendance: {
+            status: 'secured',
+          },
+          acks: { coc: true },
+        },
+      ],
+    };
+
+    const csv = selectedSpeakersCsv([rosterRow], shape, confirmation, 'en');
+    expect(csv).not.toContain('undefined');
+    expect(csv).toContain('Sam Speaker: pending; Alex CoSpeaker: secured');
+    expect(csv).toContain(',pending,GDE Program,2026-09-15,false,');
+  });
 });

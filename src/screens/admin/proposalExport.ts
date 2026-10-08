@@ -53,6 +53,8 @@ function answerKeys(
 }
 
 const speakerName = (row: ProposalRow, uid: string): string => {
+  const byUid = row.speakerSnapshot?.find((speaker) => speaker.uid === uid)?.name;
+  if (byUid) return byUid;
   const index = (row.speakerIds ?? []).indexOf(uid);
   return row.speakerSnapshot?.[index]?.name || uid;
 };
@@ -147,6 +149,14 @@ export function selectedSpeakersCsv(
     const speakers = row.speakerSnapshot ?? [];
     // Blanks are kept so each address stays in its speaker's position.
     const speakerEmails = (row.speakerIds ?? []).map((uid) => emails[uid] ?? '');
+    const speakerIsGde = speakers.map((speaker) =>
+      typeof speaker.isGde === 'boolean' ? String(speaker.isGde) : '',
+    );
+    const primaryUid = row.primarySpeakerId ?? row.speakerIds?.[0];
+    const primaryParticipant =
+      (row.speakerParticipants ?? []).find((item) => item.uid === primaryUid) ??
+      row.speakerParticipants?.[0];
+    const primaryAttendance = row.attendance ?? primaryParticipant?.attendance;
     const values = [
       row.id,
       row.status,
@@ -172,7 +182,7 @@ export function selectedSpeakersCsv(
       speakers.map((speaker) => speaker.company).filter(Boolean).join('; '),
       speakers.map((speaker) => speaker.jobTitle).filter(Boolean).join('; '),
       speakers.map((speaker) => speaker.basedIn).filter(Boolean).join('; '),
-      speakers.map((speaker) => String(speaker.isGde)).join('; '),
+      speakerIsGde.some(Boolean) ? speakerIsGde.join('; ') : '',
       speakers.map((speaker) => speaker.pastTalks).filter(Boolean).join('\n---\n'),
       speakers
         .flatMap((speaker) =>
@@ -202,10 +212,10 @@ export function selectedSpeakersCsv(
             .join('|')}`,
         )
         .join('; '),
-      row.attendance?.status,
-      row.attendance?.fundingSource,
-      row.attendance?.decisionBy,
-      row.attendance ? String(row.attendance.needsVisa) : '',
+      primaryAttendance?.status,
+      primaryAttendance?.fundingSource,
+      primaryAttendance?.decisionBy,
+      primaryAttendance?.needsVisa !== undefined ? String(primaryAttendance.needsVisa) : '',
       dateValue(row.submittedAt),
       dateValue(row.confirmedAt),
       row.aggregate?.avgScore,
