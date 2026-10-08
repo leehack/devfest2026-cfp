@@ -176,7 +176,7 @@ export function CfpPage({
             )}
             {cfp.features?.blindReview && (
               <span className="blind-review-badge" style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem' }}>
-                🛡️ Blind Review
+                {t.platform.blindReviewBadge}
               </span>
             )}
           </div>

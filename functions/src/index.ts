@@ -3914,10 +3914,30 @@ async function refreshAggregates(cfpId: string): Promise<AggregateRefresh> {
       .filter((proposal) => aggregateScorable(proposal.get('status')))
       .map((proposal) => proposal.id),
   );
+  const conflictedSpeakersByProposal = new Map<string, Set<string>>();
+  for (const proposal of proposalSnaps.docs) {
+    const data = proposal.data();
+    const speakerIds = proposalSpeakerIds(data);
+    const formerSpeakerIds = Array.isArray(data.formerSpeakerIds)
+      ? data.formerSpeakerIds.filter(
+          (uid): uid is string => typeof uid === 'string' && Boolean(uid),
+        )
+      : [];
+    conflictedSpeakersByProposal.set(
+      proposal.id,
+      new Set([...speakerIds, ...formerSpeakerIds]),
+    );
+  }
   const reviews = reviewSnaps.docs.flatMap<ReviewRecord>((review) => {
     const proposalId = review.ref.parent.parent?.id ?? '';
     const score = review.get('score') as unknown;
-    if (!scorableIds.has(proposalId) || !isKnownScore(score)) return [];
+    if (
+      !scorableIds.has(proposalId) ||
+      !isKnownScore(score) ||
+      conflictedSpeakersByProposal.get(proposalId)?.has(review.id)
+    ) {
+      return [];
+    }
     return [
       {
         proposalId,
@@ -5513,9 +5533,11 @@ export const deleteOrg = onCall(CALLABLE, async (request) => {
       );
     }
 
-    const [events, members, transfers] = await Promise.all([
+    const [events, members, roleGrants, roleInviteLinks, transfers] = await Promise.all([
       tx.get(db.collection('cfps').where('orgId', '==', orgId).limit(1)),
       tx.get(db.collection(`orgs/${orgId}/members`).limit(401)),
+      tx.get(db.collection(`orgs/${orgId}/roleGrants`).limit(51)),
+      tx.get(db.collection(`orgs/${orgId}/roleInviteLinks`).limit(51)),
       tx.get(db.collection(`orgs/${orgId}/transfers`).limit(51)),
     ]);
     if (!events.empty) {
@@ -5525,7 +5547,13 @@ export const deleteOrg = onCall(CALLABLE, async (request) => {
         { reason: 'org_has_events' },
       );
     }
-    if (members.size > 400 || transfers.size > 50) {
+    if (
+      members.size > 400 ||
+      roleGrants.size > 50 ||
+      roleInviteLinks.size > 50 ||
+      transfers.size > 50 ||
+      members.size + roleGrants.size + roleInviteLinks.size + transfers.size > 450
+    ) {
       throw new HttpsError(
         'failed-precondition',
         'This organization is too large for self-service deletion.',
@@ -5533,6 +5561,8 @@ export const deleteOrg = onCall(CALLABLE, async (request) => {
       );
     }
     for (const member of members.docs) tx.delete(member.ref);
+    for (const grant of roleGrants.docs) tx.delete(grant.ref);
+    for (const link of roleInviteLinks.docs) tx.delete(link.ref);
     for (const transfer of transfers.docs) tx.delete(transfer.ref);
     tx.delete(orgRef);
   });
@@ -11111,7 +11141,12 @@ export const cancelPublishedSession = onDocumentWritten(
           }
         }
       }
-      if (freshProposal.get('scheduleCancellationRequired') === true) {
+      const shouldQueueCancellationEmail =
+        cancelNow && hasReleaseEntry && Boolean(scheduleEmailReleaseId(freshCfp));
+      if (
+        freshProposal.get('scheduleCancellationRequired') === true &&
+        !shouldQueueCancellationEmail
+      ) {
         tx.update(freshProposal.ref, {
           scheduleCancellationRequired: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
@@ -11174,9 +11209,17 @@ export const cancelPublishedSession = onDocumentWritten(
         !freshCfp.exists ||
         freshCfp.get('archived') === true ||
         freshCfp.get('deleting') === true ||
-        scheduleEmailReleaseId(freshCfp) !== cancellationReleaseId ||
         !proposalEventIsCurrent(event.data!.after, freshProposal)
       ) {
+        return;
+      }
+      if (scheduleEmailReleaseId(freshCfp) !== cancellationReleaseId) {
+        if (freshProposal.get('scheduleCancellationRequired') === true) {
+          tx.update(freshProposal.ref, {
+            scheduleCancellationRequired: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
         return;
       }
       const proposal = event.data!.after.data();
@@ -11217,6 +11260,12 @@ export const cancelPublishedSession = onDocumentWritten(
           },
         })),
       );
+      if (freshProposal.get('scheduleCancellationRequired') === true) {
+        tx.update(freshProposal.ref, {
+          scheduleCancellationRequired: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
     });
     logger.info('shared and public session cancelled', {
       cfpId,

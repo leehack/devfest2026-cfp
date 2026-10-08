@@ -608,7 +608,7 @@ export const en = {
     pastTalksHelp:
       'Optional links to recordings. Helpful context, not a requirement — we accept first-time speakers.',
     email: 'Email',
-    emailHelp: 'From your Google account. All CFP correspondence goes here.',
+    emailHelp: 'From your signed-in account. All CFP correspondence goes here.',
     gdeGuidance:
       'GDEs should contact their GDE program manager regarding travel support. This event does not provide it directly.',
   },

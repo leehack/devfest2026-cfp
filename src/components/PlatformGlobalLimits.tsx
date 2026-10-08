@@ -6,6 +6,7 @@ import {
   getPlatformLimitsConfiguration,
   setPlatformLimitsConfiguration,
 } from '../lib/orgs';
+import { platformLimitError } from '../lib/errors';
 import { useLatest } from '../lib/useLatest';
 import { Result } from '../screens/admin/Result';
 
@@ -34,8 +35,10 @@ export function PlatformGlobalLimits({
       setCurrent(data.organizationOwnershipDefault);
       setDraft(String(data.organizationOwnershipDefault));
       setError('');
-    } catch {
-      setError(tRef.current.platformAdmin.globalLimitsLoadError);
+    } catch (caught) {
+      setError(
+        platformLimitError(caught, tRef.current.platformAdmin.globalLimitsLoadError, tRef.current),
+      );
     }
   }, [tRef]);
 
@@ -64,8 +67,8 @@ export function PlatformGlobalLimits({
       setDraft(String(data.organizationOwnershipDefault));
       setNote(t.platformAdmin.globalLimitsSaved);
       onSaved();
-    } catch {
-      setError(t.platformAdmin.globalLimitsSaveError);
+    } catch (caught) {
+      setError(platformLimitError(caught, t.platformAdmin.globalLimitsSaveError, t));
     } finally {
       setBusy(false);
     }

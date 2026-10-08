@@ -13,7 +13,7 @@
  * warning attached to it, for a string nobody outside this panel ever reads.
  */
 
-import { Fragment } from 'react';
+import { Fragment, useRef } from 'react';
 
 import { Checkbox, SelectField, TextAreaField, TextField } from './fields';
 import { useI18n } from '../i18n/context';
@@ -81,9 +81,28 @@ export function FieldRows({
   labels,
 }: FieldRowsProps) {
   const { t } = useI18n();
+  const fieldIds = useRef(new WeakMap<EditableField, string>());
+  const nextId = useRef(0);
+
+  function getFieldId(field: EditableField): string {
+    let id = fieldIds.current.get(field);
+    if (!id) {
+      nextId.current += 1;
+      id = `${field.key || 'draft'}:${nextId.current}`;
+      fieldIds.current.set(field, id);
+    }
+    return id;
+  }
 
   const patch = (index: number, part: Partial<EditableField>) =>
-    onChange(fields.map((field, i) => (i === index ? { ...field, ...part } : field)));
+    onChange(
+      fields.map((field, i) => {
+        if (i !== index) return field;
+        const updated = { ...field, ...part };
+        fieldIds.current.set(updated, getFieldId(field));
+        return updated;
+      }),
+    );
 
   function add() {
     onChange([
@@ -136,7 +155,7 @@ export function FieldRows({
             {fields.map((field, index) => {
               const which = field.label.en || labels.untitled;
               return (
-                <Fragment key={index}>
+                <Fragment key={getFieldId(field)}>
                   <span className="optionlist__cell">
                     <span className="optionlist__mobile-label">{labels.labelEn}</span>
                     <input
@@ -218,7 +237,7 @@ export function FieldRows({
       {fields.length === 0 && <p className="muted">{labels.empty}</p>}
 
       {fields.map((field, index) => (
-        <fieldset key={index} className="fieldset formfield">
+        <fieldset key={getFieldId(field)} className="fieldset formfield">
           <legend>{field.label.en || labels.untitled}</legend>
 
           <div className="grid grid--2 grid--align-controls">

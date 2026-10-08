@@ -50,6 +50,7 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
   const [inviteNotice, setInviteNotice] = useState('');
   const [inviteError, setInviteError] = useState('');
   const [removingUid, setRemovingUid] = useState('');
+  const [changingRoleUid, setChangingRoleUid] = useState('');
 
   // Transfer state
   const [transferEmail, setTransferEmail] = useState('');
@@ -65,6 +66,24 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
       setLogoUrl(org.logoUrl || '');
     }
   }, [org]);
+
+  const settingsDirty = Boolean(
+    org &&
+      (name !== (org.name || '') ||
+        description !== (org.description || '') ||
+        websiteUrl !== (org.websiteUrl || '') ||
+        logoUrl !== (org.logoUrl || '')),
+  );
+
+  useEffect(() => {
+    if (!settingsDirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [settingsDirty]);
 
   const isOwner = role === 'owner';
   const isAdmin = role === 'admin';
@@ -158,8 +177,28 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
     }
   }
 
+  async function handleChangeMemberRole(memberUid: string, memberEmail: string, nextRole: OrgRole) {
+    if (!isOwner || changingRoleUid || removingUid) return;
+    setChangingRoleUid(memberUid);
+    setInviteNotice('');
+    setInviteError('');
+    try {
+      await grantOrgRole({
+        orgId,
+        email: memberEmail.toLowerCase(),
+        role: nextRole,
+      });
+      setInviteNotice(t.orgs.memberAdded.replace('{email}', memberEmail));
+      await refresh();
+    } catch (error) {
+      setInviteError(orgError(error, t));
+    } finally {
+      setChangingRoleUid('');
+    }
+  }
+
   async function handleRemoveMember(uid: string, label: string) {
-    if (!canManage || removingUid) return;
+    if (!canManage || removingUid || changingRoleUid) return;
     if (!window.confirm(t.orgs.removeMemberConfirm(label))) return;
     setRemovingUid(uid);
     setInviteNotice('');
@@ -288,7 +327,11 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
       <header className="org-hero">
         <div className="org-hero__info">
           <div className="org-avatar" aria-hidden="true">
-            {getInitials(org.name)}
+            {org.logoUrl ? (
+              <img className="org-avatar__img" src={org.logoUrl} alt="" />
+            ) : (
+              getInitials(org.name)
+            )}
           </div>
           <div className="org-hero__details">
             <div className="org-hero__title-row">
@@ -447,6 +490,8 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
             <ul className="people" aria-label={t.orgs.membersListTitle}>
               {members.map((member) => {
                 const label = member.name || member.email;
+                const canChangeRole =
+                  isOwner && member.role !== 'owner' && member.uid !== user?.uid;
                 const removable = isOwner
                   ? member.role !== 'owner' && member.uid !== user?.uid
                   : isAdmin
@@ -459,14 +504,31 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
                       {member.name && <div className="muted">{member.email}</div>}
                     </div>
                     <div className="card__actions">
-                      <span className={`org-badge org-badge--${member.role}`}>
-                        {t.orgs.roles[member.role]}
-                      </span>
+                      {canChangeRole ? (
+                        <select
+                          className="people__role"
+                          aria-label={t.admin.roleFor(label)}
+                          value={member.role}
+                          disabled={Boolean(changingRoleUid || removingUid)}
+                          onChange={(e) => {
+                            const nextRole = e.target.value as OrgRole;
+                            if (nextRole === member.role) return;
+                            void handleChangeMemberRole(member.uid, member.email, nextRole);
+                          }}
+                        >
+                          <option value="member">{t.orgs.roles.member}</option>
+                          <option value="admin">{t.orgs.roles.admin}</option>
+                        </select>
+                      ) : (
+                        <span className={`org-badge org-badge--${member.role}`}>
+                          {t.orgs.roles[member.role]}
+                        </span>
+                      )}
                       {removable && (
                         <button
                           type="button"
                           className="btn btn--ghost btn--sm"
-                          disabled={Boolean(removingUid)}
+                          disabled={Boolean(removingUid || changingRoleUid)}
                           onClick={() => void handleRemoveMember(member.uid, label)}
                         >
                           {removingUid === member.uid
@@ -540,7 +602,7 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
               <p className="org-section-card__help">
                 {t.transfer.initiateHelp.replace('{scope}', org.name)}
               </p>
-              {transferNotice && <Result ok={transferNotice} error="" />}
+              {transferNotice && !pendingTransfer && <Result ok={transferNotice} error="" />}
               {transferErr && <Result ok="" error={transferErr} />}
               {pendingTransfer ? (
                 <div>

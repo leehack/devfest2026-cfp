@@ -527,11 +527,11 @@ function CfpCard({ cfp, link }: { cfp: CfpSummary; link?: CardLink }) {
 
   const when =
     state === 'upcoming' && opensAt
-      ? t.platform.opensOn.replace('{date}', formatDay(opensAt, locale))
+      ? t.platform.opensOn.replace('{date}', formatDay(opensAt, locale, cfp.timeZone))
       : state === 'open' && closesAt
-        ? t.platform.closesOn.replace('{date}', formatDay(closesAt, locale))
+        ? t.platform.closesOn.replace('{date}', formatDay(closesAt, locale, cfp.timeZone))
         : state === 'closed' && closesAt
-          ? t.platform.closedOn.replace('{date}', formatDay(closesAt, locale))
+          ? t.platform.closedOn.replace('{date}', formatDay(closesAt, locale, cfp.timeZone))
           : state === 'paused'
             ? t.platform.paused
             : state === 'archived'
