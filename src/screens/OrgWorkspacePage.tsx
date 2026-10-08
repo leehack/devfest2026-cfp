@@ -510,13 +510,11 @@ export function OrgWorkspacePage({ orgId, user }: { orgId: string; user: User | 
                           aria-label={t.admin.roleFor(label)}
                           value={member.role}
                           disabled={Boolean(changingRoleUid || removingUid)}
-                          onChange={(e) =>
-                            void handleChangeMemberRole(
-                              member.uid,
-                              member.email,
-                              e.target.value as OrgRole,
-                            )
-                          }
+                          onChange={(e) => {
+                            const nextRole = e.target.value as OrgRole;
+                            if (nextRole === member.role) return;
+                            void handleChangeMemberRole(member.uid, member.email, nextRole);
+                          }}
                         >
                           <option value="member">{t.orgs.roles.member}</option>
                           <option value="admin">{t.orgs.roles.admin}</option>

@@ -199,8 +199,10 @@ export function useOrg(orgId: string | undefined, user: User | null) {
       setLoading(false);
       return;
     }
-    if (showLoading) setLoading(true);
-    setError(null);
+    if (showLoading) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       if (user) await user.getIdToken();
       const [orgRes, eventsRes] = await Promise.all([
@@ -211,6 +213,7 @@ export function useOrg(orgId: string | undefined, user: User | null) {
       setRole(orgRes.data.role);
       setPendingTransfer(orgRes.data.pendingTransfer ?? null);
       setEvents(eventsRes.data.events);
+      setError(null);
       if (orgRes.data.role) {
         const membersRes = await listOrgMembers({ orgId });
         setMembers(membersRes.data.members);
@@ -218,9 +221,9 @@ export function useOrg(orgId: string | undefined, user: User | null) {
         setMembers([]);
       }
     } catch (e) {
-      setError(e);
+      if (showLoading) setError(e);
     } finally {
-      if (showLoading) setLoading(false);
+      setLoading(false);
     }
   }, [orgId, user]);
 

@@ -15,6 +15,17 @@ export type Locale = 'en' | 'fr';
 
 export const dictionaries: Record<Locale, Dictionary> = { en, fr };
 
+function resolveTimeZone(timeZone?: string): string {
+  const trimmed = timeZone?.trim();
+  if (!trimmed) return 'America/Toronto';
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: trimmed });
+    return trimmed;
+  } catch {
+    return 'America/Toronto';
+  }
+}
+
 export function formatDate(
   value: Date,
   locale: Locale,
@@ -23,7 +34,7 @@ export function formatDate(
   return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
     dateStyle: 'long',
     timeStyle: 'short',
-    timeZone,
+    timeZone: resolveTimeZone(timeZone),
   }).format(value);
 }
 
@@ -42,7 +53,7 @@ export function formatDay(
 ): string {
   return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-CA' : 'en-CA', {
     dateStyle: 'long',
-    timeZone,
+    timeZone: resolveTimeZone(timeZone),
   }).format(value);
 }
 
