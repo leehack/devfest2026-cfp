@@ -1042,6 +1042,42 @@ export function Proposals({
     [],
   );
 
+  const refreshProposalsInBackground = useCallback(
+    (scope: string) => {
+      refreshCoverageInBackground(scope);
+      void loadAllProposals(scope, { speakerDetails: true, force: true })
+        .then((updated) => {
+          if (activeCfp.current !== scope) return;
+          setRows(
+            pendingStatuses.current.size === 0
+              ? updated
+              : updated.map((r) => {
+                  const pendingStatus = pendingStatuses.current.get(r.id);
+                  return pendingStatus ? { ...r, status: pendingStatus } : r;
+                }),
+          );
+        })
+        .catch(() => {});
+    },
+    [refreshCoverageInBackground],
+  );
+
+  function clearProposalConfirmationState(
+    proposal: ProposalRow,
+    status: ProposalStatus,
+  ): ProposalRow {
+    return {
+      ...proposal,
+      status,
+      confirmedAt: undefined,
+      confirmAnswers: undefined,
+      speakerPhoto: undefined,
+      lateSpeakerPendingIds: undefined,
+      lateSpeakerPendingInvitations: undefined,
+      speakerConfirmations: proposal.speakerConfirmations ? [] : undefined,
+    };
+  }
+
   async function decide(row: ProposalRow, next: ProposalStatus) {
     if (readOnly) return;
     const previous = row.status;
@@ -1098,13 +1134,7 @@ export function Proposals({
         setRows((current) =>
           current.map((proposal) =>
             proposal.id === row.id
-              ? {
-                  ...proposal,
-                  status: next,
-                  confirmedAnswers: undefined,
-                  confirmedSpeakerPhoto: undefined,
-                  speakerConfirmations: proposal.speakerConfirmations ? [] : undefined,
-                }
+              ? clearProposalConfirmationState(proposal, next)
               : proposal,
           ),
         );
@@ -1177,13 +1207,7 @@ export function Proposals({
         setRows((current) =>
           current.map((proposal) =>
             proposal.id === snapshot.proposalId
-              ? {
-                  ...proposal,
-                  status: snapshot.previous,
-                  confirmedAnswers: undefined,
-                  confirmedSpeakerPhoto: undefined,
-                  speakerConfirmations: proposal.speakerConfirmations ? [] : undefined,
-                }
+              ? clearProposalConfirmationState(proposal, snapshot.previous)
               : proposal,
           ),
         );
@@ -1845,7 +1869,7 @@ export function Proposals({
             });
           }}
           onSnapshotRefreshed={onSnapshotRefreshed}
-          onRosterMutated={() => void refresh(false, true)}
+          onRosterMutated={() => refreshProposalsInBackground(cfpId)}
           onClose={closeSpeakerManagement}
         />
       )}
