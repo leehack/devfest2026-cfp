@@ -110,6 +110,8 @@ export function Email({
     action: Exclude<EmailReviewAction, 'compose'>;
     rows: EmailReviewRow[];
   } | null>(null);
+  const [selectedHeldIds, setSelectedHeldIds] = useState<Set<string> | null>(null);
+  const selectAllHeldRef = useRef<HTMLInputElement>(null);
   const editing = useRef(false);
   const configurationFingerprint = useRef('');
   const activeCfp = useRef(cfpId);
@@ -172,6 +174,12 @@ export function Email({
           setTally(data.tally ?? {});
           setStaleHeld(data.staleHeld ?? 0);
           setHeld(nextHeld);
+          setSelectedHeldIds((current) => {
+            if (current === null) return null;
+            const validIds = new Set(nextHeld.map((row) => row.logId));
+            const filtered = new Set([...current].filter((id) => validIds.has(id)));
+            return filtered.size === validIds.size ? null : filtered;
+          });
           setHeldRemaining(data.heldRemaining ?? 0);
           setRetryable(data.retryable ?? []);
           setRetryableRemaining(data.retryableRemaining ?? 0);
@@ -217,6 +225,7 @@ export function Email({
           setTally(after.tally ?? {});
           setStaleHeld(after.staleHeld ?? 0);
           setHeld(nextHeld);
+          if (action === 'release') setSelectedHeldIds(null);
           setHeldRemaining(after.heldRemaining ?? 0);
           setRetryable(after.retryable ?? []);
           setRetryableRemaining(after.retryableRemaining ?? 0);
@@ -310,6 +319,8 @@ export function Email({
     setMessageDirty(false);
     configurationFingerprint.current = '';
     setReview(null);
+    setSelectedHeldIds(null);
+    lastToggledHeldIndexRef.current = null;
   }, [cfpId]);
 
   useEffect(() => {
@@ -350,6 +361,62 @@ export function Email({
     'address' in parsedEffectiveSender ? parsedEffectiveSender.address : '—';
 
   const waiting = held.length + heldRemaining;
+  const selectedHeld =
+    selectedHeldIds === null
+      ? held
+      : held.filter((row) => selectedHeldIds.has(row.logId));
+  const allHeldSelected = held.length > 0 && selectedHeld.length === held.length;
+  const someHeldSelected = selectedHeld.length > 0 && selectedHeld.length < held.length;
+  const heldKinds = Array.from(
+    held.reduce((counts, row) => {
+      counts.set(row.kind, (counts.get(row.kind) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>()),
+  );
+  const lastToggledHeldIndexRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (selectAllHeldRef.current) {
+      selectAllHeldRef.current.indeterminate = someHeldSelected;
+    }
+  }, [someHeldSelected]);
+
+  function toggleHeldRow(
+    logId: string,
+    checked: boolean,
+    index: number,
+    shiftKey = false,
+  ) {
+    const previousIndex = lastToggledHeldIndexRef.current;
+    lastToggledHeldIndexRef.current = index;
+    setSelectedHeldIds((current) => {
+      const next = new Set(
+        current === null ? held.map((row) => row.logId) : current,
+      );
+      const start =
+        shiftKey && previousIndex !== null ? Math.min(previousIndex, index) : index;
+      const end =
+        shiftKey && previousIndex !== null ? Math.max(previousIndex, index) : index;
+      for (let i = start; i <= end; i += 1) {
+        const targetId = held[i]?.logId;
+        if (!targetId) continue;
+        if (checked) {
+          next.add(targetId);
+        } else {
+          next.delete(targetId);
+        }
+      }
+      if (!shiftKey || previousIndex === null) {
+        if (checked) {
+          next.add(logId);
+        } else {
+          next.delete(logId);
+        }
+      }
+      return next.size === held.length ? null : next;
+    });
+  }
+
   const unsent = retryable.length + retryableRemaining;
   const inProgress = count('queued') + count('sending');
   const delivered = count('sent');
@@ -843,6 +910,66 @@ export function Email({
           </p>
         )}
 
+        {held.length > 1 && (
+          <div className="email-queue-card__selection">
+            <span className="muted">
+              {t.admin.emailHeldSelectedCount(selectedHeld.length, held.length)}
+            </span>
+            <div className="row row--wrap">
+              <button
+                type="button"
+                className="btn btn--ghost btn--compact"
+                disabled={busy || readOnly || allHeldSelected}
+                onClick={() => {
+                  lastToggledHeldIndexRef.current = null;
+                  setSelectedHeldIds(null);
+                }}
+              >
+                {t.admin.emailSelectAll}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--compact"
+                disabled={busy || readOnly || selectedHeld.length === 0}
+                onClick={() => {
+                  lastToggledHeldIndexRef.current = null;
+                  setSelectedHeldIds(new Set());
+                }}
+              >
+                {t.admin.emailClearSelection}
+              </button>
+              {heldKinds.length > 1 &&
+                heldKinds.map(([kind, kindCount]) => {
+                  const kindLabel = t.admin.emailKinds[kind] ?? kind;
+                  const onlyKindSelected =
+                    selectedHeld.length === kindCount &&
+                    selectedHeld.every((row) => row.kind === kind);
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      className="btn btn--ghost btn--compact"
+                      aria-pressed={onlyKindSelected}
+                      disabled={busy || readOnly}
+                      onClick={() => {
+                        lastToggledHeldIndexRef.current = null;
+                        setSelectedHeldIds(
+                          new Set(
+                            held
+                              .filter((row) => row.kind === kind)
+                              .map((row) => row.logId),
+                          ),
+                        );
+                      }}
+                    >
+                      {t.admin.emailSelectOnlyKind(kindLabel, kindCount)}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        )}
+
         {held.length > 0 && (
           <div
             className="table__scroll table__scroll--focusable"
@@ -853,25 +980,76 @@ export function Email({
             <table className="table table--held">
               <thead>
                 <tr>
+                  <th scope="col" className="table__select-col">
+                    <input
+                      ref={selectAllHeldRef}
+                      type="checkbox"
+                      className="table__checkbox"
+                      aria-label={t.admin.emailSelectAllHeld}
+                      checked={allHeldSelected}
+                      disabled={busy || readOnly}
+                      onChange={(event) => {
+                        lastToggledHeldIndexRef.current = null;
+                        setSelectedHeldIds(event.target.checked ? null : new Set());
+                      }}
+                    />
+                  </th>
                   <th scope="col">{t.admin.emailKind}</th>
                   <th scope="col">{t.admin.emailTo}</th>
                   <th scope="col">{t.proposal.title}</th>
                 </tr>
               </thead>
               <tbody>
-                {held.map((row) => (
-                  <tr key={row.logId}>
-                    <td data-label={t.admin.emailKind}>
-                      {t.admin.emailKinds[row.kind] ?? row.kind}
-                    </td>
-                    <td className="table__wrap" data-label={t.admin.emailTo}>
-                      {row.to}
-                    </td>
-                    <td className="table__wrap" data-label={t.proposal.title}>
-                      {row.title}
-                    </td>
-                  </tr>
-                ))}
+                {held.map((row, index) => {
+                  const isSelected =
+                    selectedHeldIds === null || selectedHeldIds.has(row.logId);
+                  const kindLabel = t.admin.emailKinds[row.kind] ?? row.kind;
+                  return (
+                    <tr
+                      key={row.logId}
+                      className={isSelected ? undefined : 'table__row--unselected'}
+                      onClick={(event) => {
+                        if (
+                          busy ||
+                          readOnly ||
+                          (event.target instanceof Element &&
+                            event.target.closest('input'))
+                        ) {
+                          return;
+                        }
+                        toggleHeldRow(row.logId, !isSelected, index, event.shiftKey);
+                      }}
+                    >
+                      <td className="table__select-cell" data-label={t.admin.emailSelectHeld}>
+                        <input
+                          type="checkbox"
+                          className="table__checkbox"
+                          aria-label={t.admin.emailSelectRow(
+                            [kindLabel, row.to, row.title].filter(Boolean).join(' · '),
+                          )}
+                          checked={isSelected}
+                          disabled={busy || readOnly}
+                          onChange={(event) =>
+                            toggleHeldRow(
+                              row.logId,
+                              event.target.checked,
+                              index,
+                              event.nativeEvent instanceof MouseEvent &&
+                                event.nativeEvent.shiftKey,
+                            )
+                          }
+                        />
+                      </td>
+                      <td data-label={t.admin.emailKind}>{kindLabel}</td>
+                      <td className="table__wrap" data-label={t.admin.emailTo}>
+                        {row.to}
+                      </td>
+                      <td className="table__wrap" data-label={t.proposal.title}>
+                        {row.title}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -889,13 +1067,15 @@ export function Email({
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy || readOnly || held.length === 0 || !deliveryReady}
+            disabled={busy || readOnly || selectedHeld.length === 0 || !deliveryReady}
             aria-describedby={!deliveryReady ? 'email-action-setup-reason' : undefined}
-            onClick={() => setReview({ action: 'release', rows: held })}
+            onClick={() => setReview({ action: 'release', rows: selectedHeld })}
           >
             {held.length === 0
               ? t.admin.emailNothing
-              : t.admin.emailRelease(held.length)}
+              : selectedHeld.length === 0
+                ? t.admin.emailSelectToRelease
+                : t.admin.emailRelease(selectedHeld.length)}
           </button>
         </div>
 

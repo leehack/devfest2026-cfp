@@ -1616,6 +1616,15 @@ export const en = {
     emailRelease: (count: number) =>
       `Review ${count} ${count === 1 ? 'notification' : 'notifications'}`,
     emailNothing: 'Nothing to send',
+    emailSelectHeld: 'Include',
+    emailSelectAllHeld: 'Select all held notifications',
+    emailSelectRow: (summary: string) => `Include ${summary}`,
+    emailSelectAll: 'Select all',
+    emailClearSelection: 'Clear selection',
+    emailSelectOnlyKind: (kind: string, count: number) => `Only ${kind} (${count})`,
+    emailHeldSelectedCount: (selected: number, total: number) =>
+      `${selected} of ${total} selected`,
+    emailSelectToRelease: 'Select notifications to review',
     emailStaleHeld:
       'Superseded notifications retained: {count}. They stay in the history and can be sent only if they become current again.',
     emailStaleStatus: 'Retained — superseded',
