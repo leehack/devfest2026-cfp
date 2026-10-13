@@ -229,6 +229,19 @@ export async function getLateSubmissionLinkInfo(
       const propSnap = await db.doc(`cfps/${cfpId}/proposals/${candidateProposalId}`).get();
       if (propSnap.exists) {
         claimedProposalId = candidateProposalId;
+        const speakerIds = propSnap.get('speakerIds');
+        if (
+          propSnap.get('primarySpeakerId') &&
+          (!Array.isArray(speakerIds) || speakerIds.length <= 1)
+        ) {
+          const participantSnap = await propSnap.ref
+            .collection('speakerParticipants')
+            .doc(uid)
+            .get();
+          if (!participantSnap.exists) {
+            await propSnap.ref.update({ primarySpeakerId: FieldValue.delete() });
+          }
+        }
       }
     }
   }
@@ -308,6 +321,18 @@ export async function claimLateSubmissionLink(
       const existingProposalRef = db.doc(`cfps/${cfpId}/proposals/${existingClaim.proposalId}`);
       const existingProposalSnap = await tx.get(existingProposalRef);
       if (existingProposalSnap.exists) {
+        const speakerIds = existingProposalSnap.get('speakerIds');
+        if (
+          existingProposalSnap.get('primarySpeakerId') &&
+          (!Array.isArray(speakerIds) || speakerIds.length <= 1)
+        ) {
+          const participantSnap = await tx.get(
+            existingProposalRef.collection('speakerParticipants').doc(uid),
+          );
+          if (!participantSnap.exists) {
+            tx.update(existingProposalRef, { primarySpeakerId: FieldValue.delete() });
+          }
+        }
         return {
           ok: true as const,
           cfpId,
@@ -343,11 +368,12 @@ export async function claimLateSubmissionLink(
       );
     }
 
+    // Solo drafts do not set `primarySpeakerId` until roster mode is entered
+    // (`inviteCoSpeaker`), matching client-side `saveDraft` and `keepsPersonalDetailsPrivate()`.
     const proposalRef = db.collection(`cfps/${cfpId}/proposals`).doc();
     tx.set(proposalRef, {
       cfpId,
       speakerIds: [uid],
-      primarySpeakerId: uid,
       status: 'draft',
       lateSubmissionLinkId: token,
       title: '',

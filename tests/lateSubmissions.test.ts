@@ -62,7 +62,6 @@ describe('lateSubmissionLinkOpenForProposal', () => {
   const cfp = fakeSnap('devfest-2026', true, { archived: false, deleting: false });
   const proposal = fakeSnap('p-1', true, {
     lateSubmissionLinkId: 'token-1',
-    primarySpeakerId: 'u-1',
     speakerIds: ['u-1'],
   });
   const activeLink = fakeSnap('token-1', true, {
@@ -70,7 +69,7 @@ describe('lateSubmissionLinkOpenForProposal', () => {
     expiresAt: Timestamp.fromMillis(now + 60_000),
   });
 
-  it('returns true for a matching active claim on a non-archived CFP', () => {
+  it('returns true for a matching active claim on a non-archived CFP (solo without primarySpeakerId)', () => {
     expect(lateSubmissionLinkOpenForProposal(cfp, proposal, activeLink, now)).toBe(true);
   });
 
@@ -96,7 +95,6 @@ describe('lateSubmissionLinkOpenForProposal', () => {
   it('returns false when the claimed proposalId does not match the proposal', () => {
     const otherProposal = fakeSnap('p-2', true, {
       lateSubmissionLinkId: 'token-1',
-      primarySpeakerId: 'u-1',
       speakerIds: ['u-1'],
     });
     expect(lateSubmissionLinkOpenForProposal(cfp, otherProposal, activeLink, now)).toBe(false);

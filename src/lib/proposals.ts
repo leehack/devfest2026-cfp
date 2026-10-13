@@ -242,13 +242,21 @@ export async function loadMyProposals(
 
       return {
         talks: snap.docs.map((d, index) => {
-          const proposal = d.data();
+          const rawProposal = d.data();
           const confirmation = confirmationSnaps[index];
           const participation = participationSnaps[index];
           const lateLinkInfo = lateLinkInfos[index];
-          const rawLinkId = proposal.lateSubmissionLinkId;
+          const rawLinkId = rawProposal.lateSubmissionLinkId;
           const lateLinkId = typeof rawLinkId === 'string' ? rawLinkId.trim() : '';
-          const ids = Array.isArray(proposal.speakerIds) ? proposal.speakerIds : [];
+          const ids = Array.isArray(rawProposal.speakerIds) ? rawProposal.speakerIds : [];
+          const proposal =
+            rawProposal.primarySpeakerId && ids.length <= 1 && !participation.exists()
+              ? (() => {
+                  const copy = { ...rawProposal };
+                  delete copy.primarySpeakerId;
+                  return copy;
+                })()
+              : rawProposal;
           const usesPersonalConfirmation = Boolean(proposal.primarySpeakerId) || ids.length > 1;
           const legacyResponse =
             proposal.status === 'confirmed' || proposal.status === 'declined'
