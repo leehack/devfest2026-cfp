@@ -2134,7 +2134,16 @@ describe('late submission links', () => {
     });
 
     await assertSucceeds(
-      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { title: 'Late edit allowed' }),
+      setDoc(
+        doc(asApplicant(), `${CFP}/proposals/p-anna`),
+        {
+          title: 'Late edit allowed',
+          acks: { noTravelSupport: true, coc: true, recording: true },
+          attendance: { status: 'pending', fundingSource: 'employer', needsVisa: true },
+          updatedAt: new Date(),
+        },
+        { merge: true },
+      ),
     );
 
     // Revoking the link closes edits immediately.

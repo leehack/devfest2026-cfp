@@ -987,6 +987,7 @@ function ProposalFormPage({
   const savedAnswersRef = useRef<Answers>({});
   const tRef = useRef(t);
   const localeRef = useRef(locale);
+  const userRef = useRef(user);
   formRef.current = form;
   proposalIdRef.current = proposalId;
   scopeRef.current = scope;
@@ -1000,6 +1001,7 @@ function ProposalFormPage({
   confirmFormRef.current = confirmForm;
   tRef.current = t;
   localeRef.current = locale;
+  userRef.current = user;
   /** The talk itself: what the committee scores. */
   const readOnly = scope !== 'all';
   /** Travel answers: no bearing on the score, so they outlive the freeze. */
@@ -1204,7 +1206,11 @@ function ProposalFormPage({
               effectiveFound[0]));
         if (!dirty.current && !answerDirty.current) {
           if (open) {
-            const next = fromDocuments(proposalForCurrentSpeaker(open), effectiveProfile);
+            const next = {
+              ...fromDocuments(proposalForCurrentSpeaker(open), effectiveProfile),
+              name: effectiveProfile?.name || user.displayName || '',
+              email: effectiveProfile?.email || user.email || '',
+            };
             setForm(next);
             setSpeakerEditing(!speakerProfileComplete(next));
             setProposalId(open.id);
@@ -1808,32 +1814,35 @@ function ProposalFormPage({
       .filter((item) => item.kind === 'active')
       .map((item) => item.uid);
     const { proposalDoc } = toDocuments(formRef.current);
-    const updated = talksRef.current.map((talk) =>
-      talk.id === id
-        ? {
-            ...talk,
-            proposal: {
-              ...talk.proposal,
-              ...(next.usesPersonalLifecycle
-                ? { primarySpeakerId: next.primarySpeakerId }
-                : {}),
-              speakerIds: activeIds,
-            },
-            ownParticipation:
-              next.usesPersonalLifecycle && activeIds.includes(user.uid)
-              ? {
-                  ...talk.ownParticipation,
-                  role:
-                    next.primarySpeakerId === user.uid
-                      ? ('primary' as const)
-                      : ('coSpeaker' as const),
-                  acks: proposalDoc.acks,
-                  attendance: proposalDoc.attendance,
-                }
-              : talk.ownParticipation,
-          }
-        : talk,
-    );
+    const updated = talksRef.current.map((talk) => {
+      if (talk.id !== id) return talk;
+      const nextProposal = {
+        ...talk.proposal,
+        ...(next.usesPersonalLifecycle
+          ? { primarySpeakerId: next.primarySpeakerId }
+          : {}),
+        speakerIds: activeIds,
+      };
+      if (!next.usesPersonalLifecycle && activeIds.length <= 1) {
+        delete nextProposal.primarySpeakerId;
+      }
+      return {
+        ...talk,
+        proposal: nextProposal,
+        ownParticipation:
+          next.usesPersonalLifecycle && activeIds.includes(user.uid)
+          ? {
+              ...talk.ownParticipation,
+              role:
+                next.primarySpeakerId === user.uid
+                  ? ('primary' as const)
+                  : ('coSpeaker' as const),
+              acks: proposalDoc.acks,
+              attendance: proposalDoc.attendance,
+            }
+          : talk.ownParticipation,
+      };
+    });
     talksRef.current = updated;
     setTalks(updated);
   }
@@ -1847,7 +1856,11 @@ function ProposalFormPage({
       setTalkSessionKey((current) => current + 1);
     }
     if (talk) {
-      setForm(fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current));
+      setForm({
+        ...fromDocuments(proposalForCurrentSpeaker(talk), speakerRef.current),
+        name: speakerRef.current?.name || userRef.current.displayName || '',
+        email: speakerRef.current?.email || userRef.current.email || '',
+      });
       setProposalId(talk.id);
       proposalIdRef.current = talk.id;
       setStatus(talk.status);

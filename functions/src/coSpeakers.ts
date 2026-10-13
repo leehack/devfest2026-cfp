@@ -337,6 +337,12 @@ async function rosterFor(
     ((proposal.get('speakerSnapshot') ?? []) as SpeakerSnapshot[]).map((speaker) => [speaker.uid, speaker]),
   );
   const participantByUid = new Map(participants.docs.map((participant) => [participant.id, participant]));
+  if (proposal.get('primarySpeakerId') && speakerIds.length <= 1 && participants.empty) {
+    await proposalRef.update({ primarySpeakerId: FieldValue.delete() });
+  }
+  const personalLifecycle =
+    (Boolean(proposal.get('primarySpeakerId')) && !participants.empty) ||
+    speakerIds.length > 1;
   const confirmationByUid = new Map(
     confirmations.docs.map((confirmation) => [confirmation.id, confirmation]),
   );
@@ -352,7 +358,7 @@ async function rosterFor(
     const response =
       storedResponse === 'confirmed' || storedResponse === 'declined'
         ? storedResponse
-        : !usesPerSpeakerLifecycle(proposal.data() ?? {}) && uid === primarySpeakerId &&
+        : !personalLifecycle && uid === primarySpeakerId &&
             (proposal.get('status') === 'confirmed' || proposal.get('status') === 'declined')
           ? proposal.get('status')
           : undefined;
@@ -478,7 +484,7 @@ async function rosterFor(
     canInvite,
     invitePhase,
     canEditTalk: identity.uid === primarySpeakerId,
-    usesPersonalLifecycle: usesPerSpeakerLifecycle(proposal.data() ?? {}),
+    usesPersonalLifecycle: personalLifecycle,
     setupOpen,
     confirmationOpen: ['accepted', 'confirmed', 'declined'].includes(
       String(proposal.get('status') ?? ''),
