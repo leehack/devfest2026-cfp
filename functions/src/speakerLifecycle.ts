@@ -357,25 +357,30 @@ export function coSpeakerInvitationStillTrue(
   const opensAtMillis = millis(opensAt);
   const closesAtMillis = millis(closesAt);
   const proposalStatus = proposal?.get('status');
+  const rawLateLinkId = proposal?.get('lateSubmissionLinkId');
+  const hasLateLink = typeof rawLateLinkId === 'string' && rawLateLinkId.trim().length > 0;
   const phaseIsCurrent =
     phase === 'draft'
       ? proposalStatus === 'draft' &&
-        Number.isFinite(opensAtMillis) &&
-        Number.isFinite(closesAtMillis) &&
-        now >= opensAtMillis &&
-        now < closesAtMillis
+        (hasLateLink ||
+          (cfp?.get('paused') !== true &&
+            Number.isFinite(opensAtMillis) &&
+            Number.isFinite(closesAtMillis) &&
+            now >= opensAtMillis &&
+            now < closesAtMillis))
       : phase === 'postAcceptance' &&
+        cfp?.get('paused') !== true &&
         (proposalStatus === 'accepted' || proposalStatus === 'confirmed');
   return (
     kind === 'co_speaker_invited' &&
     cfp?.exists === true &&
     cfp.get('archived') !== true &&
     cfp.get('deleting') !== true &&
-    cfp.get('paused') !== true &&
     invitation?.exists === true &&
     proposal?.exists === true &&
     phaseIsCurrent &&
     invitation.get('cfpId') === cfpId &&
+    invitation.get('proposalId') !== undefined &&
     invitation.get('proposalId') === proposalId &&
     invitation.get('invitationId') === invitationId &&
     invitation.get('email') === invitationEmail &&

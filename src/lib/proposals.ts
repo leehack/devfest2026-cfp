@@ -141,6 +141,11 @@ export interface LoadedProposal {
   status: ProposalStatus;
   proposal: Record<string, any>;
   speaker: Record<string, any> | undefined;
+  lateSubmission?: {
+    linkId: string;
+    open: boolean;
+    expiresAt: Date | null;
+  };
   ownConfirmation?: {
     response?: 'confirmed' | 'declined';
     answers: Answers;
@@ -184,7 +189,11 @@ export async function loadMyProposals(
       ]);
 
       const speaker = speakerSnap.exists() ? speakerSnap.data() : undefined;
-      const [confirmationSnaps, participationSnaps] = await Promise.all([
+      const getLateLinkInfo = httpsCallable<
+        { cfpId: string; token: string },
+        import('@shared/types').LateSubmissionLinkPublicInfo
+      >(functions, 'getLateSubmissionLinkInfo');
+      const [confirmationSnaps, participationSnaps, lateLinkInfos] = await Promise.all([
         Promise.all(
           snap.docs.map((proposal) =>
             getDoc(
@@ -215,6 +224,20 @@ export async function loadMyProposals(
             ),
           ),
         ),
+        Promise.all(
+          snap.docs.map((proposal) => {
+            const data = proposal.data();
+            const status = (data.status ?? 'draft') as ProposalStatus;
+            const rawLinkId = data.lateSubmissionLinkId;
+            const linkId = typeof rawLinkId === 'string' ? rawLinkId.trim() : '';
+            if (!linkId || (status !== 'draft' && status !== 'submitted')) {
+              return Promise.resolve(null);
+            }
+            return getLateLinkInfo({ cfpId, token: linkId })
+              .then((res) => res.data)
+              .catch(() => null);
+          }),
+        ),
       ]);
 
       return {
@@ -222,6 +245,9 @@ export async function loadMyProposals(
           const proposal = d.data();
           const confirmation = confirmationSnaps[index];
           const participation = participationSnaps[index];
+          const lateLinkInfo = lateLinkInfos[index];
+          const rawLinkId = proposal.lateSubmissionLinkId;
+          const lateLinkId = typeof rawLinkId === 'string' ? rawLinkId.trim() : '';
           const ids = Array.isArray(proposal.speakerIds) ? proposal.speakerIds : [];
           const usesPersonalConfirmation = Boolean(proposal.primarySpeakerId) || ids.length > 1;
           const legacyResponse =
@@ -248,6 +274,17 @@ export async function loadMyProposals(
             status: (proposal.status ?? 'draft') as ProposalStatus,
             proposal,
             speaker,
+            ...(lateLinkId
+              ? {
+                  lateSubmission: {
+                    linkId: lateLinkId,
+                    open: Boolean(
+                      lateLinkInfo && !lateLinkInfo.isRevoked && !lateLinkInfo.isExpired,
+                    ),
+                    expiresAt: lateLinkInfo?.expiresAt ? new Date(lateLinkInfo.expiresAt) : null,
+                  },
+                }
+              : {}),
             ownConfirmation,
             ownParticipation: participation.exists()
             ? {

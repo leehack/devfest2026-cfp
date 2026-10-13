@@ -141,6 +141,17 @@ export function roleInviteError(error: unknown, t: Dictionary): string {
   return friendlyError(error, t);
 }
 
+export function lateInviteError(error: unknown, t: Dictionary): string {
+  const reason = reasonOf(error);
+  if (codeOf(error) === 'failed-precondition') {
+    if (reason === 'invite_link_revoked') return t.lateInvite.revokedHelp;
+    if (reason === 'invite_link_expired') return t.lateInvite.expiredHelp;
+    if (reason === 'invite_link_exhausted') return t.lateInvite.exhaustedHelp;
+  }
+  if (codeOf(error) === 'not-found') return t.lateInvite.invalidHelp;
+  return friendlyError(error, t);
+}
+
 export function transferError(error: unknown, t: Dictionary): string {
   if (codeOf(error) === 'failed-precondition') {
     switch (reasonOf(error)) {

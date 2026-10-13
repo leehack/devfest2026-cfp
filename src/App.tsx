@@ -59,7 +59,7 @@ import { themeForeground } from '@shared/cfpTheme';
 import type { PlatformAccessStatus } from '@shared/platform';
 import type { PublishedScheduleBundle } from './lib/schedule';
 import { coSpeakerInviteQuery } from './lib/coSpeakers';
-import { proposalSelectionQuery } from './lib/proposalLinks';
+import { lateSubmissionInviteQuery, proposalSelectionQuery } from './lib/proposalLinks';
 
 const SubmitPage = lazy(() =>
   import('./screens/SubmitPage').then(({ SubmitPage }) => ({ default: SubmitPage })),
@@ -1015,22 +1015,38 @@ function WindowNotice({ cfp }: { cfp: CfpWindow }) {
 }
 
 function FormRoute({ user, cfp, cfpId }: { user: User | null; cfp: CfpWindow; cfpId: string }) {
+  const { t } = useI18n();
+  const [hasLateInvite, setHasLateInvite] = useState(false);
+
+  useEffect(() => {
+    setHasLateInvite(Boolean(lateSubmissionInviteQuery(window.location.search)));
+  }, []);
+
   if (!user) {
     return (
       <>
-        {cfp.state !== 'open' && <WindowNotice cfp={cfp} />}
+        {hasLateInvite && cfp.state !== 'archived' ? (
+          <div className="panel">
+            <p>
+              <strong>{t.lateInvite.heading(cfp.name)}</strong>
+            </p>
+            <p>{t.lateInvite.invitedNotice}</p>
+            <p>{t.lateInvite.signInPrompt(cfp.name)}</p>
+          </div>
+        ) : (
+          cfp.state !== 'open' && <WindowNotice cfp={cfp} />
+        )}
         <SignIn cfp={cfp} cfpId={cfpId} />
       </>
     );
   }
 
-  if (cfp.state === 'before') return <WindowNotice cfp={cfp} />;
-
   // A closed call blocks creating a proposal, not opening one that already
-  // belongs to this account. SubmitPage decides which case this is after its
-  // scoped proposal query returns. The tenant id is also the component identity:
-  // a route change must not let an in-flight save from one CFP finish against
-  // the refs and state already reused for another one.
+  // belongs to this account or claiming a late-submission invitation link.
+  // SubmitPage decides which case this is after its scoped proposal query
+  // returns. The tenant id is also the component identity: a route change must
+  // not let an in-flight save from one CFP finish against the refs and state
+  // already reused for another one.
   return <SubmitPage key={cfpId} user={user} cfp={cfp} cfpId={cfpId} />;
 }
 
@@ -1097,8 +1113,12 @@ export function SignIn({
     try {
       const invite =
         destination === 'submit' ? coSpeakerInviteQuery(window.location.search) : null;
-      const proposalId =
+      const lateInvite =
         destination === 'submit' && !invite
+          ? lateSubmissionInviteQuery(window.location.search)
+          : null;
+      const proposalId =
+        destination === 'submit' && !invite && !lateInvite
           ? proposalSelectionQuery(window.location.search)
           : null;
       const roleInvite =
@@ -1115,9 +1135,11 @@ export function SignIn({
               proposalId: invite.proposalId,
               speakerInvitationId: invite.invitationId,
             }
-          : proposalId
-            ? { proposalId }
-            : {}),
+          : lateInvite
+            ? { lateInviteToken: lateInvite }
+            : proposalId
+              ? { proposalId }
+              : {}),
       });
       if (
         !cfpId &&
