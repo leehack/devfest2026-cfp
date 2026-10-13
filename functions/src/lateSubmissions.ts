@@ -381,7 +381,7 @@ export async function claimLateSubmissionLink(
       category: '',
       format: '',
       level: '',
-      deliveryLanguage: 'en',
+      deliveryLanguage: '',
       acks: {},
       answers: {},
       updatedAt: FieldValue.serverTimestamp(),

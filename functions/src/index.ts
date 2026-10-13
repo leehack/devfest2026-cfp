@@ -1672,6 +1672,9 @@ async function speakerEmailContexts(
     profileRefs.length,
     profileRefs.length + participantRefs.length,
   );
+  const effectivePerSpeakerLifecycle =
+    perSpeakerLifecycle &&
+    (speakerIds.length > 1 || participants.some((snap) => snap.exists));
   const formSnapshot = snapshots[profileRefs.length + participantRefs.length];
   const form = mergeSubmissionForm(formSnapshot.exists ? formSnapshot.data() : undefined);
   return profiles.flatMap((snapshot, index) => {
@@ -1690,7 +1693,7 @@ async function speakerEmailContexts(
         title: (proposal.title as string) ?? '',
         needsVisa: attendanceNeedsVisa(
           form,
-          perSpeakerLifecycle
+          effectivePerSpeakerLifecycle
             ? participant?.attendance
             : isPrimary
               ? proposal.attendance
@@ -1968,6 +1971,9 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
     const relatedSnaps = await tx.getAll(...speakerRefs, ...participantRefs);
     const speakerSnaps = relatedSnaps.slice(0, speakerRefs.length);
     const participantSnaps = relatedSnaps.slice(speakerRefs.length);
+    const effectivePerSpeakerLifecycle =
+      perSpeakerLifecycle &&
+      (speakerIds.length > 1 || participantSnaps.some((snap) => snap.exists));
     if (speakerSnaps.some((speaker) => !speaker.exists)) {
       throw new HttpsError(
         'failed-precondition',
@@ -2031,7 +2037,7 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
     // Against this call's own form, not against a taxonomy compiled into the
     // bundle — that is the whole point of the config being data.
     const parsed = submissionSchema(shape).safeParse(
-      assemble(proposal, primaryProfile, participationByUid.get(uid), perSpeakerLifecycle),
+      assemble(proposal, primaryProfile, participationByUid.get(uid), effectivePerSpeakerLifecycle),
     );
     if (!parsed.success) {
       throw new HttpsError('invalid-argument', 'The proposal is incomplete.', {
@@ -2045,7 +2051,7 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
           proposal,
           speakerByUid.get(speakerId)!,
           participationByUid.get(speakerId),
-          perSpeakerLifecycle,
+          effectivePerSpeakerLifecycle,
         ),
       );
       if (!coSpeaker.success) {
@@ -2103,9 +2109,11 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
       ),
       // Only what the form still asks for, which is what `clean` is.
       answers: clean,
-      ...(perSpeakerLifecycle
+      ...(effectivePerSpeakerLifecycle
         ? { acks: FieldValue.delete(), attendance: FieldValue.delete() }
-        : {}),
+        : proposal.primarySpeakerId
+          ? { primarySpeakerId: FieldValue.delete() }
+          : {}),
       submittedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
