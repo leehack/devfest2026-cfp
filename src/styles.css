@@ -7107,6 +7107,40 @@ body:has(.consent) .editorbar {
   margin: 0;
 }
 
+.email-queue-card__selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.table__select-col,
+.table__select-cell {
+  width: 2.5rem;
+}
+
+.table__checkbox {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.table__checkbox:disabled {
+  cursor: not-allowed;
+}
+
+.table--held tbody tr {
+  cursor: pointer;
+}
+
+.table--held tbody tr.table__row--unselected td {
+  color: var(--muted);
+}
+
 .email-queue-card > .muted,
 .email-queue-card > .note {
   margin: 0;
@@ -8979,6 +9013,10 @@ body:has(.consent) .editorbar {
 
   .email-log-table td:last-child .btn {
     justify-self: start;
+  }
+
+  .table--held .table__select-cell {
+    width: auto;
   }
 
   .decision-panel .table__scroll {

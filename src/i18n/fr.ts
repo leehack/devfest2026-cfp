@@ -1634,6 +1634,15 @@ export const fr: Dictionary = {
     emailRelease: (count: number) =>
       `Vérifier ${count} notification${count === 1 ? '' : 's'}`,
     emailNothing: 'Rien à envoyer',
+    emailSelectHeld: 'Inclure',
+    emailSelectAllHeld: 'Sélectionner toutes les notifications retenues',
+    emailSelectRow: (summary: string) => `Inclure ${summary}`,
+    emailSelectAll: 'Tout sélectionner',
+    emailClearSelection: 'Tout désélectionner',
+    emailSelectOnlyKind: (kind: string, count: number) => `Seulement ${kind} (${count})`,
+    emailHeldSelectedCount: (selected: number, total: number) =>
+      `${selected} sur ${total} sélectionnée${selected === 1 ? '' : 's'}`,
+    emailSelectToRelease: 'Sélectionnez des notifications à vérifier',
     emailStaleHeld:
       'Notifications remplacées conservées : {count}. Elles restent dans l’historique et ne peuvent être envoyées que si elles redeviennent actuelles.',
     emailStaleStatus: 'Conservé — remplacé',

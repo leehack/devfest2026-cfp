@@ -499,6 +499,60 @@ test.describe('email pipeline', () => {
     expect(next.held).toHaveLength(1);
   });
 
+  test('an admin can selectively release a subset of held notifications', async ({ page }) => {
+    const { chair } = await stage();
+    await Promise.all(
+      [0, 1, 2].map((index) =>
+        seedEmailLog(`selective-${index}`, {
+          status: 'held',
+          kind: 'message',
+          proposalId: `selective-talk-${index}`,
+          to: `speaker-${index}@example.test`,
+          subject: `Selective message ${index}`,
+          body: 'Only selected messages are released.',
+        }),
+      ),
+    );
+    await setEmailDeliveryReadyDirect();
+
+    await signInAs(page, admin, at('/admin/email'));
+    const queue = page.locator('.email-queue-card');
+    await expect(queue.locator('.table--held tbody tr')).toHaveCount(3);
+    await expect(queue.getByText('3 of 3 selected')).toBeVisible();
+    await expect(queue.getByRole('button', { name: 'Review 3 notifications' })).toBeEnabled();
+
+    await queue.getByRole('button', { name: 'Clear selection' }).click();
+    await expect(queue.getByText('0 of 3 selected')).toBeVisible();
+    await expect(
+      queue.getByRole('button', { name: 'Select notifications to review' }),
+    ).toBeDisabled();
+
+    await queue
+      .getByRole('checkbox', {
+        name: 'Include Message · speaker-1@example.test · Archived email subject',
+      })
+      .check();
+    await expect(queue.getByText('1 of 3 selected')).toBeVisible();
+
+    await queue.getByRole('button', { name: 'Review 1 notification' }).click();
+    const review = page.getByRole('dialog', { name: 'Release speaker notifications' });
+    await expect(review.locator('tbody tr')).toHaveCount(1);
+    await expect(review.getByText('speaker-1@example.test')).toBeVisible();
+    await review.getByRole('button', { name: 'Queue 1 notification' }).click();
+
+    await expect(review).toBeHidden({ timeout: 15_000 });
+    await expect(queue.getByText('1 email queued.')).toBeVisible();
+    await expect(queue.locator('.table--held tbody tr')).toHaveCount(2);
+    await expect(queue.getByText('2 of 2 selected')).toBeVisible();
+    await expect(queue.getByRole('button', { name: 'Review 2 notifications' })).toBeEnabled();
+
+    const next = await callJson(chair.idToken, 'emailQueue', { action: 'preview' });
+    expect(next.held.map((row: { logId: string }) => row.logId).sort()).toEqual([
+      'selective-0',
+      'selective-2',
+    ]);
+  });
+
   test('a decision is held until it is released', async () => {
     const { chair } = await stage();
 
