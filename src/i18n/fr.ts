@@ -1365,6 +1365,18 @@ export const fr: Dictionary = {
       'Gardez ceci désactivé jusqu’à la fin de l’évaluation — une note visible influence la suivante.',
     saveWindow: 'Enregistrer',
     windowSaved: 'Enregistré.',
+    lateSubmissionLinks: 'Liens de soumission tardive',
+    lateSubmissionLinksHelp:
+      'Générez un lien partageable pour permettre aux conférenciers invités de créer et soumettre une proposition lorsque la période principale est fermée.',
+    createLateSubmissionLink: 'Créer un lien de soumission tardive',
+    creatingLateSubmissionLink: 'Création…',
+    lateSubmissionLinkGenerated:
+      'Lien de soumission tardive créé et copié dans le presse-papiers.',
+    lateSubmissionLinkLabelPlaceholder: 'ex. Conférencier invité ou de remplacement',
+    lateSubmissionLinkRevokeConfirm:
+      'Révoquer ce lien de soumission tardive ? Il n’acceptera plus aucune nouvelle utilisation et fermera les brouillons non soumis créés avec ce lien.',
+    lateSubmissionLinkRevoked: 'Lien de soumission tardive révoqué.',
+    noLateSubmissionLinks: 'Aucun lien de soumission tardive créé pour le moment.',
 
     email: 'Courriels',
     emailStepKey: 'Clé API Resend partagée',
@@ -2555,6 +2567,30 @@ export const fr: Dictionary = {
     invalidTitle: 'Invitation invalide',
     invalidHelp: 'Ce lien d’invitation est invalide ou n’existe plus.',
     successToast: (role: string) => `Vous avez rejoint le comité en tant que ${role} !`,
+  },
+  lateInvite: {
+    eyebrow: 'Invitation à soumettre tardivement',
+    title: 'Soumission tardive',
+    heading: (event: string) => `Soumettre une proposition à ${event}`,
+    invitedNotice:
+      'Vous avez été invité à soumettre une proposition après la période régulière de soumission.',
+    expiresNotice: (date: string) => `Ce lien d’invitation est ouvert jusqu’au ${date}.`,
+    signInPrompt: (event: string) =>
+      `Connectez-vous avec votre compte Google ou votre courriel pour commencer votre proposition pour ${event}.`,
+    claimButton: 'Commencer la proposition',
+    continueButton: 'Continuer vers votre proposition',
+    claiming: 'Ouverture de la proposition…',
+    expiredTitle: 'Invitation expirée',
+    expiredHelp:
+      'Ce lien de soumission tardive a expiré et n’accepte plus de propositions.',
+    exhaustedTitle: 'Limite d’utilisations atteinte',
+    exhaustedHelp:
+      'Le nombre maximal de propositions a déjà été atteint pour ce lien d’invitation.',
+    revokedTitle: 'Invitation révoquée',
+    revokedHelp: 'Ce lien de soumission tardive a été révoqué par l’organisateur.',
+    invalidTitle: 'Invitation invalide',
+    invalidHelp: 'Ce lien de soumission tardive est invalide ou n’existe plus.',
+    backToEvent: 'Retour à la page de l’événement',
   },
   errors: {
     generic: 'Une erreur est survenue. Veuillez réessayer.',

@@ -2069,3 +2069,94 @@ describe('an archived CFP is read-only', () => {
     await assertSucceeds(getDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`)));
   });
 });
+
+describe('late submission links', () => {
+  const LINK_ID = 'late-link-1';
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, `${CFP}/lateSubmissionLinks/${LINK_ID}`), {
+        id: LINK_ID,
+        cfpId: CFP_ID,
+        label: 'Invited backup speaker',
+        maxClaims: 1,
+        claimedCount: 1,
+        claimedUids: {
+          [APPLICANT]: {
+            email: 'anna@example.org',
+            proposalId: 'p-anna',
+          },
+        },
+        expiresAt: new Date(Date.now() + 7 * 86_400_000),
+      });
+    });
+  });
+
+  it('allows only event admins and owners to read lateSubmissionLinks and denies all client writes', async () => {
+    await assertSucceeds(getDoc(doc(asOwner(), `${CFP}/lateSubmissionLinks/${LINK_ID}`)));
+    await assertSucceeds(getDocs(collection(asOwner(), `${CFP}/lateSubmissionLinks`)));
+    await assertFails(getDoc(doc(asReviewer(), `${CFP}/lateSubmissionLinks/${LINK_ID}`)));
+    await assertFails(getDoc(doc(asApplicant(), `${CFP}/lateSubmissionLinks/${LINK_ID}`)));
+    await assertFails(
+      setDoc(doc(asOwner(), `${CFP}/lateSubmissionLinks/forged`), { cfpId: CFP_ID }),
+    );
+  });
+
+  it('prevents clients from forging or changing lateSubmissionLinkId on proposals', async () => {
+    await assertFails(
+      addDoc(collection(asApplicant(), `${CFP}/proposals`), {
+        ...draft(APPLICANT),
+        lateSubmissionLinkId: LINK_ID,
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), {
+        lateSubmissionLinkId: LINK_ID,
+      }),
+    );
+  });
+
+  it('allows editing a claimed late-submission proposal while the CFP window is closed, until revoked, expired, or archived', async () => {
+    // Close the main CFP window.
+    await seedWindow(-10 * 86_400_000, -3_600_000);
+
+    // Without lateSubmissionLinkId on the proposal, edits are refused.
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { title: 'Closed edit' }),
+    );
+
+    // Attach lateSubmissionLinkId via backend (callable).
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/proposals/p-anna`), {
+        lateSubmissionLinkId: LINK_ID,
+      });
+    });
+
+    await assertSucceeds(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { title: 'Late edit allowed' }),
+    );
+
+    // Revoking the link closes edits immediately.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/lateSubmissionLinks/${LINK_ID}`), {
+        revokedAt: new Date(),
+      });
+    });
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { title: 'Revoked edit' }),
+    );
+
+    // Un-revoke, then expire the link: edits are refused.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), `${CFP}/lateSubmissionLinks/${LINK_ID}`), {
+        revokedAt: deleteField(),
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+    });
+    await assertFails(
+      updateDoc(doc(asApplicant(), `${CFP}/proposals/p-anna`), { title: 'Expired edit' }),
+    );
+  });
+});
+

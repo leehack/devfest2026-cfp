@@ -244,6 +244,30 @@ export const claimRoleInviteLink = httpsCallable<
   In<{ token: string }>,
   { ok: boolean; role: CfpRole; cfpId: string; alreadyMember?: boolean }
 >(functions, 'claimRoleInviteLink');
+
+export const createLateSubmissionLink = httpsCallable<
+  In<{
+    label?: string;
+    maxClaims?: number | null;
+    expiresAt?: string | number | null;
+  }>,
+  { ok: boolean; link: import('@shared/types').LateSubmissionLink }
+>(functions, 'createLateSubmissionLink');
+
+export const revokeLateSubmissionLink = httpsCallable<
+  In<{ token: string }>,
+  { ok: boolean; token: string }
+>(functions, 'revokeLateSubmissionLink');
+
+export const getLateSubmissionLinkInfo = httpsCallable<
+  In<{ token: string }>,
+  import('@shared/types').LateSubmissionLinkPublicInfo
+>(functions, 'getLateSubmissionLinkInfo');
+
+export const claimLateSubmissionLink = httpsCallable<
+  In<{ token: string }>,
+  { ok: boolean; cfpId: string; proposalId: string; alreadyClaimed?: boolean }
+>(functions, 'claimLateSubmissionLink');
 export const setCfpWindow = httpsCallable<
   In<{ opensAt?: string; closesAt?: string; paused?: boolean; reviewsVisible?: boolean }>,
   { ok: boolean }
@@ -689,6 +713,22 @@ export async function loadInviteLinks(
   const links: import('@shared/types').RoleInviteLink[] = [];
   snap.forEach((d) => {
     links.push({ id: d.id, ...(d.data() as Omit<import('@shared/types').RoleInviteLink, 'id'>) });
+  });
+  links.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
+  return links;
+}
+
+export async function loadLateSubmissionLinks(
+  cfpId: string,
+): Promise<import('@shared/types').LateSubmissionLink[]> {
+  const col = collection(db, 'cfps', cfpId, 'lateSubmissionLinks');
+  const snap = await getDocs(col);
+  const links: import('@shared/types').LateSubmissionLink[] = [];
+  snap.forEach((d) => {
+    links.push({
+      id: d.id,
+      ...(d.data() as Omit<import('@shared/types').LateSubmissionLink, 'id'>),
+    });
   });
   links.sort((a, b) => getLinkTimestamp(b.createdAt) - getLinkTimestamp(a.createdAt));
   return links;

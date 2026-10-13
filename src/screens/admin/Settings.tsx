@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Checkbox, RadioGroup, TextAreaField, TextField } from '../../components/fields';
+import {
+  Checkbox,
+  RadioGroup,
+  SelectField,
+  TextAreaField,
+  TextField,
+} from '../../components/fields';
 import { useI18n } from '../../i18n/context';
 import {
   addZonedCalendarDays,
@@ -9,14 +15,23 @@ import {
   zonedDateTimeToIso,
 } from '../../lib/dates';
 import { adminError } from '../../lib/errors';
-import { archiveCfp, deleteCfp, loadCfp, setCfpWindow, updateCfp } from '../../lib/roles';
+import {
+  archiveCfp,
+  createLateSubmissionLink,
+  deleteCfp,
+  loadCfp,
+  loadLateSubmissionLinks,
+  revokeLateSubmissionLink,
+  setCfpWindow,
+  updateCfp,
+} from '../../lib/roles';
 import { invalidateCache } from '../../lib/cache';
 import { navigate } from '../../lib/router';
 import { useLatest } from '../../lib/useLatest';
 import { Result } from './Result';
 import type { CfpRole, Visibility } from '@shared/cfp';
 import { CFP_LIMITS } from '@shared/cfp';
-import type { Cfp } from '@shared/types';
+import type { Cfp, LateSubmissionLink } from '@shared/types';
 
 export function Settings({
   cfpId,
@@ -51,6 +66,15 @@ export function Settings({
   const [reviewsVisible, setReviewsVisible] = useState(false);
   const [programmePublished, setProgrammePublished] = useState(false);
   const [windowTimeZone, setWindowTimeZone] = useState('America/Toronto');
+  const [lateLinks, setLateLinks] = useState<LateSubmissionLink[]>([]);
+  const [linkLabel, setLinkLabel] = useState('');
+  const [linkMaxClaims, setLinkMaxClaims] = useState('1');
+  const [linkExpiryOption, setLinkExpiryOption] = useState<
+    '7d' | '14d' | '30d' | 'never' | 'custom'
+  >('7d');
+  const [linkCustomDate, setLinkCustomDate] = useState('');
+  const [creatingLink, setCreatingLink] = useState(false);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [loadedCfp, setLoadedCfp] = useState('');
   const [failedCfp, setFailedCfp] = useState('');
   const [identityBaseline, setIdentityBaseline] = useState('');
@@ -186,15 +210,19 @@ export function Settings({
 
       try {
         const revalidatedCfp = { current: null as { value: Cfp | null } | null };
-        const cfp = await loadCfp(cfpId, {
-          force,
-          onRevalidate: (fresh) => {
-            if (current() && !dirtyRef.current) {
-              revalidatedCfp.current = { value: fresh };
-              applyCfp(fresh);
-            }
-          },
-        });
+        const [cfp, links] = await Promise.all([
+          loadCfp(cfpId, {
+            force,
+            onRevalidate: (fresh) => {
+              if (current() && !dirtyRef.current) {
+                revalidatedCfp.current = { value: fresh };
+                applyCfp(fresh);
+              }
+            },
+          }),
+          loadLateSubmissionLinks(cfpId).catch(() => [] as LateSubmissionLink[]),
+        ]);
+        if (current()) setLateLinks(links);
         return applyCfp(revalidatedCfp.current ? revalidatedCfp.current.value : cfp);
       } catch (e) {
         if (!current()) return false;
@@ -407,6 +435,127 @@ export function Settings({
     setReviewsVisible(false);
     setNote('');
     setError('');
+  }
+
+  async function generateLateLink() {
+    if (archived) return;
+    const scope = cfpId;
+    setCreatingLink(true);
+    setError('');
+    setNote('');
+    try {
+      let expiresAt: string | null = null;
+      const now = Date.now();
+      if (linkExpiryOption === '7d') {
+        expiresAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+      } else if (linkExpiryOption === '14d') {
+        expiresAt = new Date(now + 14 * 24 * 60 * 60 * 1000).toISOString();
+      } else if (linkExpiryOption === '30d') {
+        expiresAt = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+      } else if (linkExpiryOption === 'custom' && linkCustomDate.trim()) {
+        const [year, month, day] = linkCustomDate.trim().split('-').map(Number);
+        const dateObj = new Date(year, month - 1, day, 23, 59, 59, 999);
+        expiresAt = dateObj.toISOString();
+      }
+
+      const parsedMaxClaims = linkMaxClaims.trim() ? Number(linkMaxClaims.trim()) : null;
+
+      const { data } = await createLateSubmissionLink({
+        cfpId,
+        label: linkLabel.trim() || undefined,
+        maxClaims: parsedMaxClaims,
+        expiresAt,
+      });
+      if (activeCfp.current !== scope) return;
+      setNote(tRef.current.admin.lateSubmissionLinkGenerated);
+      setLinkLabel('');
+      setLinkMaxClaims('1');
+      setLinkExpiryOption('7d');
+      setLinkCustomDate('');
+
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        const fullUrl = `${window.location.origin}/c/${cfpId}/submit?lateInvite=${data.link.id}`;
+        void navigator.clipboard
+          .writeText(fullUrl)
+          .then(() => {
+            setCopiedLinkId(data.link.id);
+            setTimeout(() => setCopiedLinkId(null), 3000);
+          })
+          .catch(() => {});
+      }
+
+      const links = await loadLateSubmissionLinks(cfpId).catch(() => [] as LateSubmissionLink[]);
+      if (activeCfp.current === scope) setLateLinks(links);
+    } catch (e) {
+      if (activeCfp.current === scope) setError(adminError(e, tRef.current));
+    } finally {
+      if (activeCfp.current === scope) setCreatingLink(false);
+    }
+  }
+
+  async function revokeLateLink(token: string) {
+    if (archived) return;
+    if (!window.confirm(t.admin.lateSubmissionLinkRevokeConfirm)) return;
+    const scope = cfpId;
+    setBusy(true);
+    setError('');
+    setNote('');
+    try {
+      await revokeLateSubmissionLink({ cfpId, token });
+      if (activeCfp.current !== scope) return;
+      setNote(tRef.current.admin.lateSubmissionLinkRevoked);
+      const links = await loadLateSubmissionLinks(cfpId).catch(() => [] as LateSubmissionLink[]);
+      if (activeCfp.current === scope) setLateLinks(links);
+    } catch (e) {
+      if (activeCfp.current === scope) setError(adminError(e, tRef.current));
+    } finally {
+      if (activeCfp.current === scope) setBusy(false);
+    }
+  }
+
+  function copyLateLinkUrl(token: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      const fullUrl = `${window.location.origin}/c/${cfpId}/submit?lateInvite=${token}`;
+      void navigator.clipboard
+        .writeText(fullUrl)
+        .then(() => {
+          setCopiedLinkId(token);
+          setTimeout(() => setCopiedLinkId(null), 3000);
+        })
+        .catch(() => {});
+    }
+  }
+
+  function getLateLinkStatus(
+    link: LateSubmissionLink,
+  ): 'revoked' | 'expired' | 'exhausted' | 'active' {
+    if (link.revokedAt) return 'revoked';
+    const raw = link.expiresAt as any;
+    const expiresAt =
+      typeof raw?.toMillis === 'function'
+        ? raw.toMillis()
+        : typeof raw?.seconds === 'number'
+          ? raw.seconds * 1000
+          : typeof raw === 'string' || typeof raw === 'number'
+            ? new Date(raw).getTime()
+            : null;
+    if (expiresAt && expiresAt <= Date.now()) return 'expired';
+    if (link.maxClaims !== null && link.claimedCount >= link.maxClaims) return 'exhausted';
+    return 'active';
+  }
+
+  function formatExpiryDate(raw: unknown): string | null {
+    if (!raw) return null;
+    const time =
+      typeof (raw as any)?.toMillis === 'function'
+        ? (raw as any).toMillis()
+        : typeof (raw as any)?.seconds === 'number'
+          ? (raw as any).seconds * 1000
+          : typeof raw === 'string' || typeof raw === 'number'
+            ? new Date(raw).getTime()
+            : null;
+    if (!time || isNaN(time)) return null;
+    return new Date(time).toLocaleDateString();
   }
 
   if (loadedCfp !== cfpId) {
@@ -666,6 +815,149 @@ export function Settings({
         >
           {t.admin.saveWindow}
         </button>
+
+        <div
+          style={{
+            marginTop: '2.5rem',
+            paddingTop: '1.5rem',
+            borderTop: '1px solid var(--border)',
+          }}
+        >
+          <h3>{t.admin.lateSubmissionLinks}</h3>
+          <p className="section__help">{t.admin.lateSubmissionLinksHelp}</p>
+
+          {lateLinks.length > 0 && (
+            <ul className="people" style={{ marginBottom: '1.5rem' }}>
+              {lateLinks.map((link) => {
+                const status = getLateLinkStatus(link);
+                const isCopied = copiedLinkId === link.id;
+                const canRevoke = !link.revokedAt;
+                const expiresDate = formatExpiryDate(link.expiresAt);
+                const claimedEntries = Object.values(link.claimedUids ?? {});
+                return (
+                  <li
+                    key={link.id}
+                    className="people__row"
+                    style={{ flexWrap: 'wrap', gap: '0.5rem' }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <strong>{link.label || t.lateInvite.title}</strong>
+                        <span
+                          className={`chip chip--${
+                            status === 'active'
+                              ? 'success'
+                              : status === 'revoked'
+                                ? 'danger'
+                                : 'muted'
+                          }`}
+                          style={{ fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}
+                        >
+                          {t.admin.inviteLinkStatus[status]}
+                        </span>
+                      </div>
+                      <span className="people__meta">
+                        {t.admin.inviteLinkClaims(link.claimedCount, link.maxClaims)}
+                        {expiresDate && (
+                          <>
+                            {' '}
+                            · {t.admin.inviteLinkCustomDate} {expiresDate}
+                          </>
+                        )}
+                      </span>
+                      {claimedEntries.length > 0 && (
+                        <span className="people__meta">
+                          {claimedEntries
+                            .map((c) => (c.name ? `${c.name} (${c.email})` : c.email))
+                            .join(', ')}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="people__actions">
+                      <button
+                        type="button"
+                        className="btn btn--ghost"
+                        onClick={() => copyLateLinkUrl(link.id)}
+                      >
+                        {isCopied ? t.admin.inviteLinkCopied : t.admin.inviteLinkCopy}
+                      </button>
+                      {canRevoke && (
+                        <button
+                          type="button"
+                          className="btn btn--ghost"
+                          disabled={busy || archived}
+                          onClick={() => void revokeLateLink(link.id)}
+                        >
+                          {t.admin.inviteLinkRevoke}
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          <div className="grid grid--2" style={{ marginBottom: '1rem' }}>
+            <TextField
+              label={t.admin.inviteLinkLabel}
+              placeholder={t.admin.lateSubmissionLinkLabelPlaceholder}
+              value={linkLabel}
+              onChange={setLinkLabel}
+              disabled={creatingLink || busy || archived}
+            />
+            <TextField
+              label={t.admin.inviteLinkMaxClaims}
+              placeholder={t.admin.inviteLinkMaxClaimsPlaceholder}
+              type="number"
+              value={linkMaxClaims}
+              onChange={setLinkMaxClaims}
+              disabled={creatingLink || busy || archived}
+            />
+          </div>
+
+          <div className="grid grid--2" style={{ marginBottom: '1rem' }}>
+            <SelectField
+              label={t.admin.inviteLinkExpiry}
+              value={linkExpiryOption}
+              options={[
+                { value: '7d', label: t.admin.inviteLinkExpiry7d },
+                { value: '14d', label: t.admin.inviteLinkExpiry14d },
+                { value: '30d', label: t.admin.inviteLinkExpiry30d },
+                { value: 'never', label: t.admin.inviteLinkExpiryNever },
+                { value: 'custom', label: t.admin.inviteLinkExpiryCustom },
+              ]}
+              onChange={(val) => setLinkExpiryOption(val as any)}
+              required
+              disabled={creatingLink || busy || archived}
+            />
+            {linkExpiryOption === 'custom' && (
+              <TextField
+                label={t.admin.inviteLinkCustomDate}
+                type="date"
+                value={linkCustomDate}
+                onChange={setLinkCustomDate}
+                required
+                disabled={creatingLink || busy || archived}
+              />
+            )}
+          </div>
+
+          <button
+            type="button"
+            className="btn btn--secondary"
+            disabled={
+              creatingLink ||
+              busy ||
+              archived ||
+              (linkExpiryOption === 'custom' && !linkCustomDate.trim())
+            }
+            onClick={() => void generateLateLink()}
+          >
+            {creatingLink ? t.admin.creatingLateSubmissionLink : t.admin.createLateSubmissionLink}
+          </button>
+        </div>
       </section>
 
       <Lifecycle

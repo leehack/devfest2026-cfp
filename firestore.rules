@@ -145,6 +145,12 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // Shareable late-submission links, managed and viewable by event admins and owners.
+      match /lateSubmissionLinks/{linkId} {
+        allow get, list: if isAdmin(cfpId);
+        allow write: if false;
+      }
+
       // Ownership transfers are strictly managed via callables.
       match /transfers/{transferId} {
         allow read, write: if false;
@@ -222,6 +228,24 @@ service cloud.firestore {
             && doc.get('primarySpeakerId', doc.speakerIds[0]) == uid();
         }
 
+        function lateSubmissionLink(linkId) {
+          return get(/databases/$(database)/documents/cfps/$(cfpId)/lateSubmissionLinks/$(linkId)).data;
+        }
+
+        function lateSubmissionOpen(doc, proposalDocId) {
+          let linkId = doc.get('lateSubmissionLinkId', '');
+          let primaryUid = doc.get('primarySpeakerId', doc.speakerIds[0]);
+          return linkId is string
+            && linkId != ''
+            && !archived(cfpId)
+            && exists(/databases/$(database)/documents/cfps/$(cfpId)/lateSubmissionLinks/$(linkId))
+            && lateSubmissionLink(linkId).get('revokedAt', null) == null
+            && (lateSubmissionLink(linkId).get('expiresAt', null) == null
+                || request.time < lateSubmissionLink(linkId).expiresAt)
+            && primaryUid in lateSubmissionLink(linkId).get('claimedUids', {})
+            && lateSubmissionLink(linkId).claimedUids[primaryUid].get('proposalId', '') == proposalDocId;
+        }
+
         // Rules are evaluated against every document a query returns, so an
         // applicant's `where('speakerIds', 'array-contains', uid)` lookup passes
         // while an unconstrained listing of the collection is denied on the
@@ -257,7 +281,7 @@ service cloud.firestore {
                'formerSpeakerIds', 'formerSpeakerSnapshot',
                'lateSpeakerPendingIds', 'lateSpeakerPendingInvitations',
                'lateSpeakerScheduleBaselineIds', 'lateSpeakerSchedulePreserved',
-               'scheduleCancellationRequired'
+               'scheduleCancellationRequired', 'lateSubmissionLinkId'
              ]);
 
         // Keys the client may never write, on create or update. `status` and
@@ -271,7 +295,8 @@ service cloud.firestore {
             'headshotUploads', 'speakerPhoto', 'primarySpeakerId', 'speakerIds', 'formerSpeakerIds',
             'formerSpeakerSnapshot', 'lateSpeakerPendingIds',
             'lateSpeakerPendingInvitations', 'lateSpeakerScheduleBaselineIds',
-            'lateSpeakerSchedulePreserved', 'scheduleCancellationRequired'
+            'lateSpeakerSchedulePreserved', 'scheduleCancellationRequired',
+            'lateSubmissionLinkId'
           ]);
         }
 
@@ -311,7 +336,7 @@ service cloud.firestore {
           && !touchesProtected()
           && keepsPersonalDetailsPrivate()
           && !archived(cfpId)
-          && ((cfpOpen(cfpId) && beforeReview()) || (underConsideration() && onlyLogistics()));
+          && (((cfpOpen(cfpId) || lateSubmissionOpen(resource.data, proposalId)) && beforeReview()) || (underConsideration() && onlyLogistics()));
 
         // Submitted work is withdrawn rather than deleted so email and review
         // history stays intact. The narrowly guarded deleteDraftProposal
@@ -395,7 +420,7 @@ service cloud.firestore {
             && request.resource.data.role == resource.data.role
             && request.resource.data.status == resource.data.status
             && request.resource.data.get('invitationId', '') == resource.data.get('invitationId', '')
-            && ((cfpOpen(cfpId)
+            && (((cfpOpen(cfpId) || lateSubmissionOpen(participantProposal(), proposalId))
                   && personalDetailsBeforeReview()
                   && request.resource.data.diff(resource.data).affectedKeys()
                     .hasOnly(['acks', 'attendance', 'updatedAt']))

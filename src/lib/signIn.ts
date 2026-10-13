@@ -35,6 +35,7 @@ export const requestSignInLink = httpsCallable<
     proposalId?: string;
     speakerInvitationId?: string;
     roleInviteToken?: string;
+    lateInviteToken?: string;
   },
   { ok: boolean }
 >(functions, 'requestSignInLink');
@@ -157,6 +158,7 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
     const source = new URL(window.location.href);
     const proposalId = source.searchParams.get('proposal');
     const invitationId = source.searchParams.get('speakerInvite');
+    const lateInvite = source.searchParams.get('lateInvite');
     const selectedProposalId = proposalSelectionQuery(source.search);
     const invite = source.searchParams.get('invite');
     await signInWithEmailLink(auth, address, window.location.href);
@@ -167,6 +169,8 @@ export async function completeSignInFromLink(email?: string): Promise<LinkOutcom
     if (proposalId && invitationId) {
       retained.set('proposal', proposalId);
       retained.set('speakerInvite', invitationId);
+    } else if (lateInvite) {
+      retained.set('lateInvite', lateInvite);
     } else if (selectedProposalId) {
       retained.set('proposal', selectedProposalId);
     } else if (invite) {

@@ -33,7 +33,8 @@ export class RoleError extends Error {
       | 'invalid-argument'
       | 'failed-precondition'
       | 'not-found'
-      | 'permission-denied',
+      | 'permission-denied'
+      | 'resource-exhausted',
     message: string,
     readonly reason?: string,
   ) {

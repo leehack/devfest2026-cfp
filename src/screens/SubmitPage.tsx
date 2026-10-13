@@ -26,7 +26,7 @@ import { formatCalendarDay, formatDate, type Dictionary } from '../i18n';
 import { useI18n } from '../i18n/context';
 import { COC_URL } from '../lib/env';
 import { validationMessage } from '../i18n/validation';
-import { friendlyError } from '../lib/errors';
+import { friendlyError, lateInviteError } from '../lib/errors';
 import { track } from '../lib/analytics';
 import {
   editScope,
@@ -35,7 +35,9 @@ import {
 } from '../lib/lifecycle';
 import { goTo, href } from '../lib/router';
 import { coSpeakerInviteQuery } from '../lib/coSpeakers';
-import { proposalSelectionQuery } from '../lib/proposalLinks';
+import { lateSubmissionInviteQuery, proposalSelectionQuery } from '../lib/proposalLinks';
+import { claimLateSubmissionLink, getLateSubmissionLinkInfo } from '../lib/roles';
+import type { LateSubmissionLinkPublicInfo } from '@shared/types';
 import {
   listSpeakerProfileUpdateRequests,
   type ProfileUpdateRequestSummary,
@@ -692,13 +694,17 @@ export function SubmitPage(props: SubmitPageProps) {
   const [invite, setInvite] = useState<ReturnType<typeof coSpeakerInviteQuery> | undefined>(
     undefined,
   );
+  const [lateInvite, setLateInvite] = useState<string | null | undefined>(undefined);
   const [preferredProposalId, setPreferredProposalId] = useState<string | null>(null);
 
   useEffect(() => {
     setInvite(coSpeakerInviteQuery(window.location.search));
+    setLateInvite(lateSubmissionInviteQuery(window.location.search));
   }, []);
 
-  if (invite === undefined) return <p className="muted">{t.app.loading}</p>;
+  if (invite === undefined || lateInvite === undefined) {
+    return <p className="muted">{t.app.loading}</p>;
+  }
   if (invite) {
     return (
       <CoSpeakerInvitation
@@ -717,7 +723,161 @@ export function SubmitPage(props: SubmitPageProps) {
       />
     );
   }
+  if (lateInvite) {
+    return (
+      <LateSubmissionInvitation
+        cfp={props.cfp}
+        cfpId={props.cfpId}
+        token={lateInvite}
+        onClaimed={(claimedProposalId) => {
+          setPreferredProposalId(claimedProposalId);
+          const url = new URL(window.location.href);
+          url.searchParams.delete('lateInvite');
+          url.searchParams.set('proposal', claimedProposalId);
+          history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+          setLateInvite(null);
+        }}
+      />
+    );
+  }
   return <ProposalFormPage {...props} preferredProposalId={preferredProposalId} />;
+}
+
+function LateSubmissionInvitation({
+  cfp,
+  cfpId,
+  token,
+  onClaimed,
+}: {
+  cfp: CfpWindow;
+  cfpId: string;
+  token: string;
+  onClaimed: (proposalId: string) => void;
+}) {
+  const { t, locale } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
+  const [info, setInfo] = useState<LateSubmissionLinkPublicInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError('');
+    void getLateSubmissionLinkInfo({ cfpId, token })
+      .then((res) => {
+        if (!cancelled) {
+          setInfo(res.data);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setLoadError(lateInviteError(err, tRef.current));
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cfpId, token]);
+
+  async function handleClaim() {
+    setClaiming(true);
+    setClaimError('');
+    try {
+      const { data } = await claimLateSubmissionLink({ cfpId, token });
+      invalidateCache('myProposals');
+      onClaimed(data.proposalId);
+    } catch (err) {
+      setClaimError(lateInviteError(err, tRef.current));
+    } finally {
+      setClaiming(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="panel">
+        <p className="muted">{t.app.loading}</p>
+      </div>
+    );
+  }
+
+  if (!info || !info.isValid) {
+    const title = info?.isRevoked
+      ? t.lateInvite.revokedTitle
+      : info?.isExpired
+        ? t.lateInvite.expiredTitle
+        : info?.isExhausted
+          ? t.lateInvite.exhaustedTitle
+          : t.lateInvite.invalidTitle;
+    const help = info?.isRevoked
+      ? t.lateInvite.revokedHelp
+      : info?.isExpired
+        ? t.lateInvite.expiredHelp
+        : info?.isExhausted
+          ? t.lateInvite.exhaustedHelp
+          : loadError || t.lateInvite.invalidHelp;
+    return (
+      <section className="section">
+        <p className="eyebrow">{t.lateInvite.eyebrow}</p>
+        <h2>{title}</h2>
+        <p className="section__help">{help}</p>
+        <div className="actions__buttons" style={{ marginTop: '1rem' }}>
+          <Link to={href({ route: 'cfp', cfpId })} className="btn">
+            {t.lateInvite.backToEvent}
+          </Link>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="section">
+      <p className="eyebrow">{t.lateInvite.eyebrow}</p>
+      <h2>{t.lateInvite.heading(info.eventName || cfp.name)}</h2>
+      {info.label && (
+        <p>
+          <strong>{info.label}</strong>
+        </p>
+      )}
+      <p className="section__help">{t.lateInvite.invitedNotice}</p>
+      {info.expiresAt && (
+        <p className="muted">
+          {t.lateInvite.expiresNotice(
+            formatDate(
+              new Date(info.expiresAt),
+              locale,
+              cfp.profile.timeZone ?? 'America/Toronto',
+            ),
+          )}
+        </p>
+      )}
+      {claimError && (
+        <p className="field__error" role="alert">
+          {claimError}
+        </p>
+      )}
+      <div className="actions__buttons" style={{ marginTop: '1rem' }}>
+        <button
+          type="button"
+          className="btn btn--primary"
+          disabled={claiming}
+          onClick={() => void handleClaim()}
+        >
+          {claiming
+            ? t.lateInvite.claiming
+            : info.claimedProposalId
+              ? t.lateInvite.continueButton
+              : t.lateInvite.claimButton}
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function ProposalFormPage({
@@ -810,7 +970,9 @@ function ProposalFormPage({
     usesPersonalConfirmation && (status === 'accepted' || status === 'confirmed')
       ? (ownResponse ?? (status === 'confirmed' ? 'confirmed' : 'accepted'))
       : status;
-  const personalScope = editScope(status, cfp.state === 'open', archived);
+  const effectiveWindowOpen =
+    cfp.state === 'open' || Boolean(selectedTalk?.lateSubmission?.open);
+  const personalScope = editScope(status, effectiveWindowOpen, archived);
   const scope = isCoSpeaker ? 'none' : personalScope;
   const formRef = useRef(form);
   const proposalIdRef = useRef(proposalId);
@@ -1037,6 +1199,7 @@ function ProposalFormPage({
             ? (currentTalks.find((talk) => talk.status === 'draft') ?? currentTalks[0] ?? effectiveFound[0])
             : (currentTalks.find((talk) => talk.status === 'accepted') ??
               currentTalks.find((talk) => inStatusSet('speakerResponse', talk.status)) ??
+              currentTalks.find((talk) => talk.status === 'draft' && talk.lateSubmission?.open) ??
               currentTalks[0] ??
               effectiveFound[0]));
         if (!dirty.current && !answerDirty.current) {
@@ -2008,6 +2171,19 @@ function ProposalFormPage({
     );
   }
   if (cfp.state !== 'open' && talks.length === 0) {
+    if (cfp.state === 'before') {
+      return (
+        <div className="panel">
+          <p>{t.window.notOpen}</p>
+          <p>
+            {t.window.opensAt}{' '}
+            <strong>
+              {formatDate(cfp.opensAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+            </strong>
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="panel">
         <p>{cfp.state === 'paused' ? t.window.paused : t.window.closed}</p>
@@ -2211,12 +2387,12 @@ function ProposalFormPage({
   const lifecycleNext = archived
     ? t.form.nextSteps.archived
     : speakerStatus === 'draft'
-      ? cfp.state === 'paused'
-        ? t.form.nextSteps.draftPaused
-        : cfp.state === 'open'
-          ? isCoSpeaker
-            ? t.form.nextSteps.coSpeakerDraft
-            : t.form.nextSteps.draft
+      ? effectiveWindowOpen
+        ? isCoSpeaker
+          ? t.form.nextSteps.coSpeakerDraft
+          : t.form.nextSteps.draft
+        : cfp.state === 'paused'
+          ? t.form.nextSteps.draftPaused
           : t.form.nextSteps.draftClosed
       : speakerStatus === 'submitted'
         ? scope === 'all'
@@ -2251,6 +2427,10 @@ function ProposalFormPage({
                   : speakerStatus === 'declined'
                     ? t.form.nextSteps.declined
                     : t.form.nextSteps.withdrawn;
+  const effectiveDeadline =
+    cfp.state !== 'open' && selectedTalk?.lateSubmission?.expiresAt
+      ? selectedTalk.lateSubmission.expiresAt
+      : cfp.closesAt;
   return (
     <form className="form submission-form" onSubmit={onSubmit} noValidate>
       {picker}
@@ -2259,9 +2439,9 @@ function ProposalFormPage({
         <div className="submission-context__identity">
           <span className="submission-context__event">{cfp.name}</span>
           <span
-            className={`submission-context__status submission-context__status--${speakerStatus === 'draft' && cfp.state === 'open' ? 'open' : 'set'}`}
+            className={`submission-context__status submission-context__status--${speakerStatus === 'draft' && effectiveWindowOpen ? 'open' : 'set'}`}
           >
-            {speakerStatus === 'draft' && cfp.state === 'open'
+            {speakerStatus === 'draft' && effectiveWindowOpen
               ? t.form.acceptingNow
               : t.enums.status[speakerStatus]}
           </span>
@@ -2269,8 +2449,8 @@ function ProposalFormPage({
         <div className="submission-context__deadline">
           <span>{t.form.deadline}</span>
           <strong>
-            <time dateTime={cfp.closesAt.toISOString()}>
-              {formatDate(cfp.closesAt, locale, cfp.profile.timeZone ?? 'America/Toronto')}
+            <time dateTime={effectiveDeadline.toISOString()}>
+              {formatDate(effectiveDeadline, locale, cfp.profile.timeZone ?? 'America/Toronto')}
             </time>
           </strong>
           <span className="submission-context__timezone">

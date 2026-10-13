@@ -1355,6 +1355,17 @@ export const en = {
       'Keep this off until scoring is finished — a visible score anchors the next one.',
     saveWindow: 'Save window',
     windowSaved: 'Saved.',
+    lateSubmissionLinks: 'Late submission links',
+    lateSubmissionLinksHelp:
+      'Generate a shareable link to let invited speakers start and submit one proposal while the main submission window is closed.',
+    createLateSubmissionLink: 'Create late submission link',
+    creatingLateSubmissionLink: 'Creating link…',
+    lateSubmissionLinkGenerated: 'Late submission link created and copied to clipboard.',
+    lateSubmissionLinkLabelPlaceholder: 'e.g. Invited keynote or backup speaker',
+    lateSubmissionLinkRevokeConfirm:
+      'Revoke this late submission link? It will immediately stop accepting new claims and close unsubmitted drafts created with it.',
+    lateSubmissionLinkRevoked: 'Late submission link revoked.',
+    noLateSubmissionLinks: 'No late submission links created yet.',
 
     email: 'Email',
     emailStepKey: 'Shared Resend API key',
@@ -2515,6 +2526,30 @@ export const en = {
     invalidTitle: 'Invalid invitation',
     invalidHelp: 'This invitation link is not valid or no longer exists.',
     successToast: (role: string) => `You have joined the committee as a ${role}!`,
+  },
+  lateInvite: {
+    eyebrow: 'Late submission invitation',
+    title: 'Late submission',
+    heading: (event: string) => `Submit a proposal to ${event}`,
+    invitedNotice:
+      'You have been invited to submit a proposal after the regular submission window.',
+    expiresNotice: (date: string) => `This invitation link is open until ${date}.`,
+    signInPrompt: (event: string) =>
+      `Sign in with your Google account or email to start your proposal for ${event}.`,
+    claimButton: 'Start proposal',
+    continueButton: 'Continue to your proposal',
+    claiming: 'Opening proposal…',
+    expiredTitle: 'Invitation expired',
+    expiredHelp:
+      'This late submission link has expired and is no longer accepting proposals.',
+    exhaustedTitle: 'Claim limit reached',
+    exhaustedHelp:
+      'The maximum number of proposals have already been started with this invitation link.',
+    revokedTitle: 'Invitation revoked',
+    revokedHelp: 'This late submission link has been revoked by the event organiser.',
+    invalidTitle: 'Invalid invitation',
+    invalidHelp: 'This late submission link is not valid or no longer exists.',
+    backToEvent: 'Back to the event page',
   },
   errors: {
     generic: 'Something went wrong. Please try again.',

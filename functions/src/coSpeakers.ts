@@ -38,6 +38,10 @@ import {
   profileUpdateRequestRef,
   speakerSnapshotFrom,
 } from './profileSnapshots';
+import {
+  lateSubmissionLinkDoc,
+  lateSubmissionLinkOpenForProposal,
+} from './lateSubmissions';
 
 const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
 const DOCUMENT_ID = /^[A-Za-z0-9_-]{1,160}$/;
@@ -145,6 +149,32 @@ function assertOpen(cfp: DocumentSnapshot, details?: Record<string, string>): vo
   if (now >= closesAt.toMillis()) {
     throw new HttpsError('deadline-exceeded', 'The CFP has closed.', details);
   }
+}
+
+function lateLinkIdOf(proposal: DocumentSnapshot): string {
+  const raw = proposal.get('lateSubmissionLinkId');
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function isDraftWindowOpen(
+  cfp: DocumentSnapshot,
+  proposal: DocumentSnapshot,
+  lateLink?: DocumentSnapshot | null,
+  now = Date.now(),
+): boolean {
+  return isOpen(cfp, now) || lateSubmissionLinkOpenForProposal(cfp, proposal, lateLink, now);
+}
+
+function assertDraftWindowOpen(
+  cfp: DocumentSnapshot,
+  proposal: DocumentSnapshot,
+  lateLink?: DocumentSnapshot | null,
+  details?: Record<string, string>,
+): void {
+  if (lateSubmissionLinkOpenForProposal(cfp, proposal, lateLink)) {
+    return;
+  }
+  assertOpen(cfp, details);
 }
 
 function assertActive(cfp: DocumentSnapshot, details?: Record<string, string>): void {
@@ -294,6 +324,12 @@ async function rosterFor(
     throw new HttpsError('not-found', 'Proposal not found.');
   }
   const draft = proposal.get('status') === 'draft';
+  const lateLinkId = draft ? lateLinkIdOf(proposal) : '';
+  const lateLink =
+    draft && !isOpen(cfp) && lateLinkId
+      ? await lateSubmissionLinkDoc(db, cfpId, lateLinkId).get()
+      : null;
+  const draftOpen = draft && isDraftWindowOpen(cfp, proposal, lateLink);
   const profiles = draft && speakerIds.length
     ? await db.getAll(...speakerIds.map((uid) => db.doc(`speakers/${uid}`)))
     : [];
@@ -345,7 +381,7 @@ async function rosterFor(
         uid !== primarySpeakerId &&
         (((managerIdentity || uid === identity.uid) &&
           proposal.get('status') === 'draft' &&
-          isOpen(cfp)) ||
+          draftOpen) ||
           (managerIdentity &&
             (response === 'declined' ||
               removableUnconfirmedSpeaker) &&
@@ -354,7 +390,7 @@ async function rosterFor(
       isCurrentUser: uid === identity.uid,
     };
   });
-  const setupOpen = draft && isOpen(cfp);
+  const setupOpen = draftOpen;
   const lateInvitationOpen =
     postAcceptanceStatus(proposal) &&
     cfp.exists &&
@@ -438,7 +474,7 @@ async function rosterFor(
     cfpId,
     proposalId,
     primarySpeakerId,
-    canManage: managerIdentity && proposal.get('status') === 'draft' && isOpen(cfp),
+    canManage: managerIdentity && proposal.get('status') === 'draft' && draftOpen,
     canInvite,
     invitePhase,
     canEditTalk: identity.uid === primarySpeakerId,
@@ -490,8 +526,13 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
               'Co-speakers can only be invited before submission or after acceptance.',
             );
           })();
+    let lateLink: DocumentSnapshot | null = null;
     if (phase === 'draft') {
-      assertOpen(cfp);
+      const lateLinkId = lateLinkIdOf(proposal);
+      if (!isOpen(cfp) && lateLinkId) {
+        lateLink = await tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId));
+      }
+      assertDraftWindowOpen(cfp, proposal, lateLink);
       if (!canManage(identity, cfpId, proposal, member)) {
         throw new HttpsError(
           'permission-denied',
@@ -644,7 +685,10 @@ export const inviteCoSpeaker = onCall(CALLABLE, async (request) => {
       status: 'pending',
       expiresAt:
         phase === 'draft'
-          ? cfp.get('closesAt')
+          ? isOpen(cfp)
+            ? cfp.get('closesAt')
+            : (lateLink?.get('expiresAt') ??
+               Timestamp.fromMillis(Date.now() + POST_ACCEPTANCE_INVITATION_TTL_MS))
           : Timestamp.fromMillis(Date.now() + POST_ACCEPTANCE_INVITATION_TTL_MS),
       createdBy: identity.uid,
       createdAt: FieldValue.serverTimestamp(),
@@ -678,7 +722,12 @@ export const retryCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     if (!invitation.exists) throw new HttpsError('not-found', 'Invitation not found.');
     const phase = invitationPhase(invitation);
     if (phase === 'draft') {
-      assertOpen(cfp);
+      const lateLinkId = lateLinkIdOf(proposal);
+      const lateLink =
+        !isOpen(cfp) && lateLinkId
+          ? await tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId))
+          : null;
+      assertDraftWindowOpen(cfp, proposal, lateLink);
       assertDraft(proposal);
       if (!canManage(identity, cfpId, proposal, member)) {
         throw new HttpsError(
@@ -805,6 +854,12 @@ export const getCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
   const matchesSignedInEmail = email === identity.email;
   const phase = invitationPhase(invitation);
   if (!phase) throw new HttpsError('not-found', 'Invitation not found.');
+  const lateLinkId = phase === 'draft' ? lateLinkIdOf(proposal) : '';
+  const lateLink =
+    phase === 'draft' && !isOpen(cfp) && lateLinkId
+      ? await lateSubmissionLinkDoc(db, cfpId, lateLinkId).get()
+      : null;
+  const draftOpen = phase === 'draft' && isDraftWindowOpen(cfp, proposal, lateLink);
   const storedState = invitation.get('status') as SpeakerInvitationStatus;
   const acceptedSpeakerStillActive =
     storedState !== 'accepted' ||
@@ -818,14 +873,16 @@ export const getCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
         ? 'unavailable'
         : invitationHasExpired(invitation)
           ? 'expired'
-          : cfp.get('paused') === true
-            ? 'paused'
-            : cfp.get('archived') === true
-              ? 'unavailable'
-              : phase === 'draft'
-                ? proposal.get('status') === 'draft' && isOpen(cfp)
-                  ? 'pending'
+          : cfp.get('archived') === true
+            ? 'unavailable'
+            : phase === 'draft'
+              ? proposal.get('status') === 'draft' && draftOpen
+                ? 'pending'
+                : cfp.get('paused') === true
+                  ? 'paused'
                   : 'expired'
+              : cfp.get('paused') === true
+                ? 'paused'
                 : postAcceptanceStatus(proposal)
                   ? 'pending'
                   : 'unavailable';
@@ -906,7 +963,12 @@ export const respondToCoSpeakerInvitation = onCall(CALLABLE, async (request) => 
     if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
     const phase = invitationPhase(invitation);
     if (phase === 'draft') {
-      assertOpen(cfp, INVITATION_UNAVAILABLE);
+      const lateLinkId = lateLinkIdOf(proposal);
+      const lateLink =
+        !isOpen(cfp) && lateLinkId
+          ? await tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId))
+          : null;
+      assertDraftWindowOpen(cfp, proposal, lateLink, INVITATION_UNAVAILABLE);
       assertDraft(proposal, INVITATION_UNAVAILABLE);
     } else if (phase === 'postAcceptance') {
       assertLateInvitationWindow(cfp, INVITATION_UNAVAILABLE);
@@ -1208,7 +1270,12 @@ export const revokeCoSpeakerInvitation = onCall(CALLABLE, async (request) => {
     if (!proposal.exists) throw new HttpsError('not-found', 'Proposal not found.');
     const phase = invitationPhase(invitation);
     if (phase === 'draft') {
-      assertOpen(cfp);
+      const lateLinkId = lateLinkIdOf(proposal);
+      const lateLink =
+        !isOpen(cfp) && lateLinkId
+          ? await tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId))
+          : null;
+      assertDraftWindowOpen(cfp, proposal, lateLink);
       assertDraft(proposal);
       if (!canManage(identity, cfpId, proposal, member)) {
         throw new HttpsError(
@@ -1368,7 +1435,14 @@ export const removeCoSpeaker = onCall(CALLABLE, async (request) => {
         targetUid,
       ]),
     ];
-    if (currentStatus === 'draft') assertOpen(cfp);
+    if (currentStatus === 'draft') {
+      const lateLinkId = lateLinkIdOf(proposal);
+      const lateLink =
+        !isOpen(cfp) && lateLinkId
+          ? await tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId))
+          : null;
+      assertDraftWindowOpen(cfp, proposal, lateLink);
+    }
     leftProposal = selfLeavingDraft;
     const storedSnapshots = proposal.get('speakerSnapshot');
     const hasSpeakerSnapshots = Array.isArray(storedSnapshots);

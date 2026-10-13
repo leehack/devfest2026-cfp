@@ -120,6 +120,14 @@ import {
   getEventOwnershipTransfer as getEventOwnershipTransferImpl,
 } from './roles';
 import {
+  claimLateSubmissionLink as claimLateSubmissionLinkImpl,
+  createLateSubmissionLink as createLateSubmissionLinkImpl,
+  getLateSubmissionLinkInfo as getLateSubmissionLinkInfoImpl,
+  lateSubmissionLinkDoc,
+  lateSubmissionLinkOpenForProposal,
+  revokeLateSubmissionLink as revokeLateSubmissionLinkImpl,
+} from './lateSubmissions';
+import {
   claimPlatformRole,
   grantPlatformAdmin as grantPlatformAdministrator,
   listPlatformAccess,
@@ -1897,11 +1905,30 @@ export const submitProposal = onCall(CALLABLE, async (request) => {
   const proposalRef = db.doc(`cfps/${cfpId}/proposals/${proposalId}`);
 
   const result = await db.runTransaction(async (tx) => {
-    const [cfp, formSnap] = await tx.getAll(
+    const [cfp, formSnap, proposalSnap] = await tx.getAll(
       db.doc(`cfps/${cfpId}`),
       db.doc(`cfps/${cfpId}/config/submissionForm`),
+      proposalRef,
     );
-    assertCfpOpenSnapshot(cfp);
+    let lateAllowed = false;
+    if (
+      cfp.exists &&
+      cfp.get('deleting') !== true &&
+      cfp.get('archived') !== true &&
+      proposalSnap.exists &&
+      (proposalSnap.get('speakerIds') ?? []).includes(uid) &&
+      primarySpeakerId(proposalSnap.data()!) === uid
+    ) {
+      const rawLateLinkId = proposalSnap.get('lateSubmissionLinkId');
+      const lateLinkId = typeof rawLateLinkId === 'string' ? rawLateLinkId.trim() : '';
+      if (lateLinkId) {
+        const lateLinkSnap = await tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId));
+        lateAllowed = lateSubmissionLinkOpenForProposal(cfp, proposalSnap, lateLinkSnap);
+      }
+    }
+    if (!lateAllowed) {
+      assertCfpOpenSnapshot(cfp);
+    }
     // The form is part of the commit boundary. If an organiser adds a required
     // answer concurrently, Firestore retries and validates against that form.
     const shape = mergeSubmissionForm(formSnap.exists ? formSnap.data() : undefined);
@@ -2208,18 +2235,24 @@ export const deleteDraftProposal = onCall(CALLABLE, async (request) => {
     }
 
     const childLimit = 100;
-    const [reviews, emailHistory, invitations, participants, confirmations] = await Promise.all([
-      tx.get(proposalRef.collection('reviews').limit(1)),
-      tx.get(
-        db
-          .collection(`cfps/${cfpId}/emailLog`)
-          .where('proposalId', '==', proposalId)
-          .limit(25),
-      ),
-      tx.get(proposalRef.collection('speakerInvitations').limit(childLimit)),
-      tx.get(proposalRef.collection('speakerParticipants').limit(childLimit)),
-      tx.get(proposalRef.collection('speakerConfirmations').limit(childLimit)),
-    ]);
+    const rawLateLinkId = proposal.lateSubmissionLinkId;
+    const lateLinkId = typeof rawLateLinkId === 'string' ? rawLateLinkId.trim() : '';
+    const [reviews, emailHistory, invitations, participants, confirmations, lateLinkSnap] =
+      await Promise.all([
+        tx.get(proposalRef.collection('reviews').limit(1)),
+        tx.get(
+          db
+            .collection(`cfps/${cfpId}/emailLog`)
+            .where('proposalId', '==', proposalId)
+            .limit(25),
+        ),
+        tx.get(proposalRef.collection('speakerInvitations').limit(childLimit)),
+        tx.get(proposalRef.collection('speakerParticipants').limit(childLimit)),
+        tx.get(proposalRef.collection('speakerConfirmations').limit(childLimit)),
+        lateLinkId
+          ? tx.get(lateSubmissionLinkDoc(db, cfpId, lateLinkId))
+          : Promise.resolve(null),
+      ]);
     const nonInvitationEmail = emailHistory.docs.some(
       (email) => !isCoSpeakerInvitationEmail(email.get('kind')),
     );
@@ -2264,6 +2297,19 @@ export const deleteDraftProposal = onCall(CALLABLE, async (request) => {
         sendingStartedAt: FieldValue.delete(),
         providerAttemptId: FieldValue.delete(),
       });
+    }
+    if (lateLinkSnap?.exists) {
+      const claimedUids = (lateLinkSnap.get('claimedUids') ?? {}) as Record<
+        string,
+        { proposalId?: string } | undefined
+      >;
+      if (claimedUids[uid]?.proposalId === proposalId) {
+        const currentCount = Number(lateLinkSnap.get('claimedCount') ?? 0);
+        tx.update(lateLinkSnap.ref, {
+          claimedCount: Math.max(0, currentCount - 1),
+          [`claimedUids.${uid}`]: FieldValue.delete(),
+        });
+      }
     }
     tx.delete(proposalRef);
   });
@@ -6115,6 +6161,86 @@ export const claimRoleInviteLink = onCall(CALLABLE, async (request) => {
   }
 });
 
+export const createLateSubmissionLink = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'create late submission link');
+  const data = (request.data ?? {}) as {
+    label?: unknown;
+    maxClaims?: unknown;
+    expiresAt?: unknown;
+  };
+
+  try {
+    const link = await createLateSubmissionLinkImpl(db, {
+      cfpId,
+      label: data.label,
+      maxClaims: data.maxClaims,
+      expiresAt: data.expiresAt,
+      byUid,
+    });
+    logger.info('late submission link created', { cfpId, linkId: link.id, byUid });
+    return { ok: true, link };
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const revokeLateSubmissionLink = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const byUid = await requireAdmin(request, cfpId, 'revoke late submission link');
+  const data = (request.data ?? {}) as { token?: unknown };
+
+  try {
+    const result = await revokeLateSubmissionLinkImpl(db, {
+      cfpId,
+      token: data.token,
+      byUid,
+    });
+    logger.info('late submission link revoked', { cfpId, token: data.token, byUid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const getLateSubmissionLinkInfo = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const data = (request.data ?? {}) as { token?: unknown };
+
+  try {
+    return await getLateSubmissionLinkInfoImpl(db, {
+      cfpId,
+      token: data.token,
+      uid: request.auth?.uid,
+    });
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+export const claimLateSubmissionLink = onCall(CALLABLE, async (request) => {
+  const cfpId = requireCfpId(request.data);
+  const uid = requireVerifiedUid(request, 'claim late submission link');
+  const token = request.auth!.token;
+  const email = token.email as string;
+  const name = token.name as string | undefined;
+  const data = (request.data ?? {}) as { token?: unknown };
+
+  try {
+    const result = await claimLateSubmissionLinkImpl(db, {
+      cfpId,
+      token: data.token,
+      uid,
+      email,
+      name,
+    });
+    logger.info('late submission link claimed', { cfpId, proposalId: result.proposalId, uid });
+    return result;
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
 /**
  * The selection decision. Admin only, and a function rather than a rule because
  * `status` is what every other permission keys off — an applicant who could
@@ -6955,6 +7081,7 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
     proposalId?: unknown;
     speakerInvitationId?: unknown;
     roleInviteToken?: unknown;
+    lateInviteToken?: unknown;
   };
   const email = String(data.email ?? '').trim().toLowerCase();
   const locale: EmailLocale = data.locale === 'fr' ? 'fr' : 'en';
@@ -6978,6 +7105,8 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   const hasProposalSelection = Boolean(proposalId);
   const roleInviteToken = typeof data.roleInviteToken === 'string' ? data.roleInviteToken : '';
   const hasRoleInviteToken = Boolean(roleInviteToken);
+  const lateInviteToken = typeof data.lateInviteToken === 'string' ? data.lateInviteToken : '';
+  const hasLateInviteToken = Boolean(lateInviteToken);
 
   if (
     speakerInvitationProvided &&
@@ -6998,6 +7127,12 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
   if (
     hasRoleInviteToken &&
     (!cfpId || destination !== 'join' || !SIGN_IN_ROLE_INVITE_TOKEN.test(roleInviteToken))
+  ) {
+    throw new HttpsError('invalid-argument', 'A valid invitation token is required.');
+  }
+  if (
+    hasLateInviteToken &&
+    (!cfpId || destination !== 'submit' || !SIGN_IN_ROLE_INVITE_TOKEN.test(lateInviteToken))
   ) {
     throw new HttpsError('invalid-argument', 'A valid invitation token is required.');
   }
@@ -7069,6 +7204,10 @@ export const requestSignInLink = onCall(CALLABLE, async (request) => {
               proposal: proposalId,
               speakerInvite: speakerInvitationId,
             }).toString()}`
+          : hasLateInviteToken
+            ? `${cfpUrl(platform.publicUrl, cfpId)}?${new URLSearchParams({
+                lateInvite: lateInviteToken,
+              }).toString()}`
           : hasProposalSelection
             ? `${cfpUrl(platform.publicUrl, cfpId)}?${new URLSearchParams({
                 proposal: proposalId,

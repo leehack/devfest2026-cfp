@@ -315,6 +315,8 @@ export interface Proposal {
 
   /** Function-writable only — see firestore.rules. */
   status: ProposalStatus;
+  /** Set when created via a late-submission invitation link. Function-writable only. */
+  lateSubmissionLinkId?: string;
   confirmDeadline?: unknown;
   confirmedAt?: unknown;
   /** Function-only state while accepted late additions finish confirmation. */
@@ -390,6 +392,42 @@ export interface RoleInviteLinkPublicInfo {
   isExpired: boolean;
   isExhausted: boolean;
   isValid: boolean;
+}
+
+/**
+ * `cfps/{cfpId}/lateSubmissionLinks/{token}` — a shareable link that grants one
+ * late draft proposal per claimant while the official submission window is closed.
+ */
+export interface LateSubmissionLink {
+  id: string;
+  cfpId: string;
+  label?: string;
+  maxClaims: number | null;
+  claimedCount: number;
+  claimedUids?: Record<
+    string,
+    { email: string; name?: string; proposalId: string; claimedAt: unknown }
+  >;
+  expiresAt: unknown | null;
+  createdAt: unknown;
+  createdBy: string;
+  revokedAt?: unknown | null;
+  revokedBy?: string | null;
+}
+
+export interface LateSubmissionLinkPublicInfo {
+  cfpId: string;
+  eventName: string;
+  label?: string | null;
+  maxClaims: number | null;
+  claimedCount: number;
+  expiresAt: string | null;
+  isRevoked: boolean;
+  isExpired: boolean;
+  isExhausted: boolean;
+  isValid: boolean;
+  claimedProposalId?: string | null;
+  isOpenForClaimedProposal?: boolean;
 }
 
 /**
