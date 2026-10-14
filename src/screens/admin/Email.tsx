@@ -29,6 +29,7 @@ import {
   type EmailReviewAction,
   type EmailReviewRow,
 } from '../../components/EmailActionDialog';
+import { AdminPagination } from '../../components/AdminPagination';
 import { EmailSetup } from '../../components/EmailSetup';
 import { EmailPreview } from '../../components/EmailPreview';
 import { LIMITS } from '@shared/enums';
@@ -42,6 +43,8 @@ import {
 } from '@shared/emailSettings';
 import type { TemplateOverrides } from '@shared/emailTemplates';
 import { Result } from './Result';
+
+export const EMAIL_HISTORY_PAGE_SIZE = 10;
 
 /**
  * §8: preview before the first real batch. Decision mail is queued `held` as
@@ -93,6 +96,7 @@ export function Email({
   const [rows, setRows] = useState<EmailRow[]>([]);
   const [truncated, setTruncated] = useState(0);
   const [filter, setFilter] = useState('');
+  const [historyPage, setHistoryPage] = useState(0);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
@@ -306,6 +310,7 @@ export function Email({
     setRows([]);
     setTruncated(0);
     setFilter('');
+    setHistoryPage(0);
     setNote('');
     setError('');
     setSenderNote('');
@@ -421,6 +426,16 @@ export function Email({
   const inProgress = count('queued') + count('sending');
   const delivered = count('sent');
   const deliveryReady = delivery?.ready === true;
+  const filteredHistoryRows = rows.filter((r) => !filter || r.status === filter);
+  const historyPageCount = Math.max(
+    1,
+    Math.ceil(filteredHistoryRows.length / EMAIL_HISTORY_PAGE_SIZE),
+  );
+  const safeHistoryPage = Math.min(historyPage, historyPageCount - 1);
+  const pagedHistoryRows = filteredHistoryRows.slice(
+    safeHistoryPage * EMAIL_HISTORY_PAGE_SIZE,
+    (safeHistoryPage + 1) * EMAIL_HISTORY_PAGE_SIZE,
+  );
   const eventOverrideProblem = validateSettings({
     from: eventSettings.from,
     replyTo: eventSettings.replyTo ?? '',
@@ -1291,7 +1306,10 @@ export function Email({
                   label: t.admin.emailStatus[s],
                 })),
               ]}
-              onChange={setFilter}
+              onChange={(nextFilter) => {
+                setFilter(nextFilter);
+                setHistoryPage(0);
+              }}
               disabled={busy}
             />
           </div>
@@ -1315,76 +1333,85 @@ export function Email({
                 </tr>
               </thead>
               <tbody>
-                {rows
-                  .filter((r) => !filter || r.status === filter)
-                  .map((row) => {
-                    const historyError = emailHistoryError(row.error, row.errorReason, t);
-                    return (
-                      <tr key={row.logId}>
-                        <td className="table__wrap" data-label={t.admin.emailTo}>
-                          {row.to}
-                        </td>
-                        <td className="table__wrap" data-label={t.admin.emailKind}>
-                          {t.admin.emailKinds[row.kind] ?? row.kind}
-                          {/* Two messages to the same speaker are otherwise the
-                              same row twice. */}
-                          {row.subject && <span className="muted"> — {row.subject}</span>}
-                        </td>
-                        <td className="table__wrap" data-label={t.admin.emailStatusColumn}>
-                          {row.stale
-                            ? t.admin.emailStaleStatus
-                            : row.recoverable
-                              ? t.admin.emailRecoverableStatus
-                              : (t.admin.emailStatus as Record<string, string>)[row.status] ??
-                                row.status}
-                          {/* Provider diagnostics stay raw; our own reasons are
-                              translated from their stable code. */}
-                          {historyError && (
-                            <span className="muted">
-                              {' — '}
-                              {historyError}
-                            </span>
-                          )}
-                        </td>
-                        <td data-label={t.admin.emailSentAt}>
-                          {row.attemptedAt
-                            ? formatDate(new Date(row.attemptedAt), locale)
-                            : '—'}
-                        </td>
-                        <td data-label={t.admin.emailActions}>
-                          <button
-                            type="button"
-                            className="btn btn--ghost"
-                            aria-describedby={
-                              !deliveryReady ? 'email-action-setup-reason' : undefined
-                            }
-                            disabled={
-                              busy ||
-                              readOnly ||
-                              !deliveryReady ||
-                              row.stale ||
-                              row.status === 'held' ||
-                              row.status === 'queued' ||
-                              row.status === 'sending'
-                            }
-                            onClick={() =>
-                              setReview({
-                                action: 'resend',
-                                rows: [{ ...row, to: row.currentTo }],
-                              })
-                            }
-                          >
-                            {row.status === 'sent'
-                              ? t.admin.emailResend
-                              : t.admin.emailRetryOne}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                {pagedHistoryRows.map((row) => {
+                  const historyError = emailHistoryError(row.error, row.errorReason, t);
+                  return (
+                    <tr key={row.logId}>
+                      <td className="table__wrap" data-label={t.admin.emailTo}>
+                        {row.to}
+                      </td>
+                      <td className="table__wrap" data-label={t.admin.emailKind}>
+                        {t.admin.emailKinds[row.kind] ?? row.kind}
+                        {/* Two messages to the same speaker are otherwise the
+                            same row twice. */}
+                        {row.subject && <span className="muted"> — {row.subject}</span>}
+                      </td>
+                      <td className="table__wrap" data-label={t.admin.emailStatusColumn}>
+                        {row.stale
+                          ? t.admin.emailStaleStatus
+                          : row.recoverable
+                            ? t.admin.emailRecoverableStatus
+                            : (t.admin.emailStatus as Record<string, string>)[row.status] ??
+                              row.status}
+                        {/* Provider diagnostics stay raw; our own reasons are
+                            translated from their stable code. */}
+                        {historyError && (
+                          <span className="muted">
+                            {' — '}
+                            {historyError}
+                          </span>
+                        )}
+                      </td>
+                      <td data-label={t.admin.emailSentAt}>
+                        {row.attemptedAt
+                          ? formatDate(new Date(row.attemptedAt), locale)
+                          : '—'}
+                      </td>
+                      <td data-label={t.admin.emailActions}>
+                        <button
+                          type="button"
+                          className="btn btn--ghost"
+                          aria-describedby={
+                            !deliveryReady ? 'email-action-setup-reason' : undefined
+                          }
+                          disabled={
+                            busy ||
+                            readOnly ||
+                            !deliveryReady ||
+                            row.stale ||
+                            row.status === 'held' ||
+                            row.status === 'queued' ||
+                            row.status === 'sending'
+                          }
+                          onClick={() =>
+                            setReview({
+                              action: 'resend',
+                              rows: [{ ...row, to: row.currentTo }],
+                            })
+                          }
+                        >
+                          {row.status === 'sent'
+                            ? t.admin.emailResend
+                            : t.admin.emailRetryOne}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+
+          <AdminPagination
+            page={safeHistoryPage}
+            pageSize={EMAIL_HISTORY_PAGE_SIZE}
+            totalItems={filteredHistoryRows.length}
+            hasPrevious={safeHistoryPage > 0}
+            hasNext={safeHistoryPage < historyPageCount - 1}
+            busy={busy}
+            onPrevious={() => setHistoryPage(Math.max(0, safeHistoryPage - 1))}
+            onNext={() => setHistoryPage(Math.min(historyPageCount - 1, safeHistoryPage + 1))}
+          />
 
           {truncated > 0 && (
             <p className="muted">
