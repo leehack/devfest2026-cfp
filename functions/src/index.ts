@@ -289,6 +289,16 @@ import {
   requestStateFrom,
   speakerSnapshotFrom,
 } from './profileSnapshots';
+export {
+  cancelSessionUpdateRequest,
+  listSessionUpdateRequests,
+  resolveSessionUpdateRequest,
+  submitSessionUpdateRequest,
+} from './sessionUpdateRequests';
+import {
+  cancelPendingSessionUpdateRequest,
+  sessionUpdateRequestRef,
+} from './sessionUpdateRequests';
 import {
   SCHEDULE_LIMITS,
   publicScheduleSpeakers,
@@ -2181,7 +2191,10 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
         `A proposal with status "${proposal.status}" cannot be withdrawn.`,
       );
     }
-    const contexts = await speakerEmailContexts(tx, cfpId, proposalId, proposal);
+    const [contexts, sessionUpdateRequest] = await Promise.all([
+      speakerEmailContexts(tx, cfpId, proposalId, proposal),
+      tx.get(sessionUpdateRequestRef(db, cfpId, proposalId)),
+    ]);
     await queueEmails(
       db,
       tx,
@@ -2204,6 +2217,7 @@ export const withdrawProposal = onCall(CALLABLE, async (request) => {
       aggregate: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+    cancelPendingSessionUpdateRequest(tx, sessionUpdateRequest, uid, 'speaker-withdrawn');
   });
 
   logger.info('proposal withdrawn', { proposalId, uid });
@@ -2823,14 +2837,21 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
       const profileUpdateRequestRefs = speakerIds.map((speakerId) =>
         profileUpdateRequestRef(db, cfpId, proposalId, speakerId),
       );
-      const [latestFormSnap, scheduleConfig, latestProfile, ...personalSnapshots] =
-        await tx.getAll(
-          formRef,
-          configRef,
-          profileRef,
-          ...confirmationRefs,
-          ...profileUpdateRequestRefs,
-        );
+      const sessionUpdateRef = sessionUpdateRequestRef(db, cfpId, proposalId);
+      const [
+        latestFormSnap,
+        scheduleConfig,
+        latestProfile,
+        sessionUpdateRequest,
+        ...personalSnapshots
+      ] = await tx.getAll(
+        formRef,
+        configRef,
+        profileRef,
+        sessionUpdateRef,
+        ...confirmationRefs,
+        ...profileUpdateRequestRefs,
+      );
       const confirmationSnaps = personalSnapshots.slice(0, confirmationRefs.length);
       const profileUpdateRequests = personalSnapshots.slice(confirmationRefs.length);
       const previousConfirmationSnap = currentPerSpeakerLifecycle
@@ -2916,6 +2937,9 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
             : profileUpdateRequests.filter((_, index) => speakerIds[index] === uid);
 
       if (!currentPerSpeakerLifecycle) {
+        if (speakerResponse === 'declined') {
+          cancelPendingSessionUpdateRequest(tx, sessionUpdateRequest, uid, 'speaker-declined');
+        }
         for (const profileUpdateRequest of requestsToCancel) {
           cancelPendingProfileUpdateRequest(
             tx,
@@ -3006,6 +3030,9 @@ export const respondToDecision = onCall(EXTERNAL_MUTATION_CALLABLE, async (reque
         ? latePendingInvitations.filter((binding) => binding.uid !== uid)
         : latePendingInvitations;
 
+      if (speakerResponse === 'declined' && uid === primaryUid) {
+        cancelPendingSessionUpdateRequest(tx, sessionUpdateRequest, uid, 'speaker-declined');
+      }
       for (const profileUpdateRequest of requestsToCancel) {
         cancelPendingProfileUpdateRequest(
           tx,
@@ -6310,17 +6337,30 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
           speakerConfirmationRef(db, cfpId, proposalId, speakerId),
         )
       : [];
-    const profileUpdateRequestRefs =
-      current !== status && ['accepted', 'confirmed'].includes(current)
-        ? speakerIds.map((speakerId) =>
-            profileUpdateRequestRef(db, cfpId, proposalId, speakerId),
-          )
-        : [];
+    const resetLifecycleRequests =
+      current !== status && ['accepted', 'confirmed'].includes(current);
+    const profileUpdateRequestRefs = resetLifecycleRequests
+      ? speakerIds.map((speakerId) =>
+          profileUpdateRequestRef(db, cfpId, proposalId, speakerId),
+        )
+      : [];
+    const sessionUpdateRef = resetLifecycleRequests
+      ? sessionUpdateRequestRef(db, cfpId, proposalId)
+      : null;
+    const lifecycleRefs = [
+      ...confirmationRefs,
+      ...profileUpdateRequestRefs,
+      ...(sessionUpdateRef ? [sessionUpdateRef] : []),
+    ];
     const lifecycleSnapshots =
-      confirmationRefs.length + profileUpdateRequestRefs.length > 0
-        ? await tx.getAll(...confirmationRefs, ...profileUpdateRequestRefs)
-        : [];
-    const profileUpdateRequests = lifecycleSnapshots.slice(confirmationRefs.length);
+      lifecycleRefs.length > 0 ? await tx.getAll(...lifecycleRefs) : [];
+    const profileUpdateRequests = lifecycleSnapshots.slice(
+      confirmationRefs.length,
+      confirmationRefs.length + profileUpdateRequestRefs.length,
+    );
+    const sessionUpdateRequest = sessionUpdateRef
+      ? lifecycleSnapshots[confirmationRefs.length + profileUpdateRequestRefs.length]
+      : null;
     const pendingLateInvitations =
       current !== status
         ? await tx.get(
@@ -6348,6 +6388,14 @@ export const setProposalStatus = onCall(CALLABLE, async (request) => {
       );
     }
 
+    if (sessionUpdateRequest) {
+      cancelPendingSessionUpdateRequest(
+        tx,
+        sessionUpdateRequest,
+        byUid,
+        'decision-reset',
+      );
+    }
     for (const profileUpdateRequest of profileUpdateRequests) {
       cancelPendingProfileUpdateRequest(
         tx,

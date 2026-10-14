@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 
-import { LIMITS, inStatusSet, type AttendanceStatus } from '@shared/enums';
+import { LIMITS, inStatusSet, type AttendanceStatus, type DeliveryLanguage } from '@shared/enums';
 import { submissionSchema } from '@shared/schema';
 import {
   DEFAULT_SUBMISSION_FORM,
@@ -43,6 +43,11 @@ import {
   type ProfileUpdateRequestSummary,
 } from '../lib/profileUpdateRequests';
 import { profileUpdateRequestsByProposal } from '../lib/profileUpdateRequestSummary';
+import {
+  listSessionUpdateRequests,
+  type SessionUpdateRequestSummary,
+} from '../lib/sessionUpdateRequests';
+import { SessionUpdateRequestCard } from '../components/SessionUpdateRequest';
 import {
   loadPublishedSchedule,
   loadSharedSchedule,
@@ -137,6 +142,7 @@ interface TalkPickerProps {
   canAdd: boolean;
   atCap: boolean;
   profileRequests: ReadonlyMap<string, ProfileUpdateRequestSummary[]>;
+  sessionRequests: readonly SessionUpdateRequestSummary[];
   onOpen: (id: string) => void;
   onAdd: () => void;
 }
@@ -150,6 +156,7 @@ function TalkPicker({
   canAdd,
   atCap,
   profileRequests,
+  sessionRequests,
   onOpen,
   onAdd,
 }: TalkPickerProps) {
@@ -190,6 +197,9 @@ function TalkPicker({
         {(profileRequests.get(talk.id) ?? []).some((request) => request.state === 'waiting') && (
           <span className="talks__attention">{t.profileSnapshot.pickerBadge}</span>
         )}
+        {sessionRequests.some(
+          (request) => request.proposalId === talk.id && request.status === 'pending',
+        ) && <span className="talks__attention">{t.sessionUpdate.pickerBadge}</span>}
       </button>
     );
   };
@@ -934,6 +944,7 @@ function ProposalFormPage({
   const [profileRequestRefresh, setProfileRequestRefresh] = useState(0);
   const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
   const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
+  const [sessionRequests, setSessionRequests] = useState<SessionUpdateRequestSummary[]>([]);
   const [talkSessionKey, setTalkSessionKey] = useState(0);
 
   const transitionFocus = useRef<
@@ -1060,6 +1071,7 @@ function ProposalFormPage({
           publishedResult,
           sharedResult,
           requestResult,
+          sessionRequestResult,
         ] = await Promise.all([
           loadMyProposals(cfpId, user, {
             force: loadAttempt > 0,
@@ -1155,6 +1167,9 @@ function ProposalFormPage({
           listSpeakerProfileUpdateRequests({ cfpId })
             .then(({ data }) => ({ requests: data.own, failed: false }))
             .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
+          listSessionUpdateRequests({ cfpId })
+            .then(({ data }) => data.own)
+            .catch(() => [] as SessionUpdateRequestSummary[]),
         ]);
         if (cancelled) return;
         const effectiveFound = revalidatedFound ?? found;
@@ -1187,6 +1202,7 @@ function ProposalFormPage({
         setSharedScheduleFailed(effectiveShared.failed);
         setProfileRequests(requestResult.requests);
         setProfileRequestsFailed(requestResult.failed);
+        setSessionRequests(sessionRequestResult);
 
         // Open the one they can still work on rather than whichever came back
         // first — landing on a submitted talk looks like the form is broken.
@@ -2235,6 +2251,7 @@ function ProposalFormPage({
       }
       atCap={submittedCount >= LIMITS.maxTalksPerSpeaker}
       profileRequests={profileRequestsByProposal}
+      sessionRequests={sessionRequests}
       onOpen={openTalk}
       onAdd={startNewTalk}
     />
@@ -2724,6 +2741,40 @@ function ProposalFormPage({
           />
         </Reveal>
       </section>
+
+      {proposalId &&
+        isPrimarySpeaker &&
+        speakerStatus === 'confirmed' &&
+        (status === 'confirmed' || status === 'accepted') &&
+        !archived && (
+          <SessionUpdateRequestCard
+            cfpId={cfpId}
+            proposalId={proposalId}
+            currentFields={{
+              title: form.title,
+              abstract: form.abstract,
+              category: form.category,
+              level: form.level,
+              deliveryLanguage: (form.deliveryLanguage || 'en') as DeliveryLanguage,
+              ...(form.deliveryLanguage === 'either' && form.languagePreference
+                ? { languagePreference: form.languagePreference }
+                : {}),
+            }}
+            submissionForm={shape}
+            request={
+              sessionRequests.find((item) => item.proposalId === proposalId) ?? null
+            }
+            disabled={submitting}
+            onRequestUpdated={(updated) => {
+              setSessionRequests((current) => {
+                const withoutCurrent = current.filter(
+                  (item) => item.proposalId !== proposalId,
+                );
+                return updated ? [...withoutCurrent, updated] : withoutCurrent;
+              });
+            }}
+          />
+        )}
 
       {/*
         The speaker profile lives on the account (`speakers/{uid}`), not on any

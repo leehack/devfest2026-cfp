@@ -229,6 +229,43 @@ export interface SpeakerProfileUpdateRequestSummary {
   resolvedAt: number | null;
 }
 
+/** Session fields a confirmed primary speaker may propose updating. */
+export interface SessionUpdateFields {
+  title: string;
+  abstract: string;
+  category: string;
+  level: string;
+  deliveryLanguage: DeliveryLanguage;
+  languagePreference?: string;
+}
+
+export type SessionUpdateField = keyof SessionUpdateFields;
+
+export interface SessionUpdateChange {
+  field: SessionUpdateField;
+  before: string | null;
+  after: string | null;
+}
+
+export type SessionUpdateRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+/** Safe state for speaker and organiser views of a post-confirmation session update request. */
+export interface SessionUpdateRequestSummary {
+  proposalId: string;
+  speakerUid: string;
+  speakerName?: string;
+  requestId: string;
+  generation: number;
+  status: SessionUpdateRequestStatus;
+  before: SessionUpdateFields;
+  proposed: SessionUpdateFields;
+  changes: SessionUpdateChange[];
+  requestedAt: number | null;
+  resolvedAt: number | null;
+  resolvedBy?: string | null;
+  rejectionNote?: string | null;
+}
+
 /**
  * The consents this call asked for, keyed by the `acks` keys in its
  * `config/submissionForm`. Every one of them is `true` — the schema will not

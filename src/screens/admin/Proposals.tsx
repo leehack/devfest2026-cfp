@@ -53,6 +53,14 @@ import {
   type ProfileUpdateRequestAttention,
 } from '../../lib/profileUpdateRequestSummary';
 import {
+  listSessionUpdateRequests,
+  type SessionUpdateRequestSummary,
+} from '../../lib/sessionUpdateRequests';
+import {
+  SessionUpdateQueue,
+  SessionUpdateReviewDialog,
+} from '../../components/SessionUpdateRequest';
+import {
   invalidateProposalUndoHistory,
   type UndoDecision,
 } from './proposalDecisionUndo';
@@ -761,6 +769,7 @@ export function Proposals({
   pendingEmailCount,
   pendingEmailCheckFailed,
   onEmailQueueChange,
+  onAttentionCountChange,
 }: {
   cfpId: string;
   viewerUid: string;
@@ -768,6 +777,7 @@ export function Proposals({
   pendingEmailCount?: number | null;
   pendingEmailCheckFailed?: boolean;
   onEmailQueueChange?: () => void | Promise<void>;
+  onAttentionCountChange?: (count: number) => void;
 }) {
   const { t, locale } = useI18n();
   const [rows, setRows] = useState<ProposalRow[]>([]);
@@ -798,6 +808,9 @@ export function Proposals({
   const [detailProposalId, setDetailProposalId] = useState<string | null>(null);
   const [profileRequests, setProfileRequests] = useState<ProfileUpdateRequestSummary[]>([]);
   const [profileRequestsFailed, setProfileRequestsFailed] = useState(false);
+  const [sessionRequests, setSessionRequests] = useState<SessionUpdateRequestSummary[]>([]);
+  const [reviewingSessionRequest, setReviewingSessionRequest] =
+    useState<SessionUpdateRequestSummary | null>(null);
   const loadGeneration = useRef(0);
   const loadedScope = useRef<string | null>(null);
   const activeCfp = useRef(cfpId);
@@ -805,6 +818,11 @@ export function Proposals({
   const committedDecisions = useRef<Map<number, UndoDecision>>(new Map());
   const pendingStatuses = useRef<Map<string, ProposalStatus>>(new Map());
   activeCfp.current = cfpId;
+
+  useEffect(() => {
+    const readyProfileCount = profileRequests.filter((item) => item.state === 'ready').length;
+    onAttentionCountChange?.(readyProfileCount + sessionRequests.length);
+  }, [onAttentionCountChange, profileRequests, sessionRequests]);
 
   useEffect(() => {
     const search = new URLSearchParams(window.location.search);
@@ -887,6 +905,8 @@ export function Proposals({
       setSort('score');
       setProfileRequests([]);
       setProfileRequestsFailed(false);
+      setSessionRequests([]);
+      setReviewingSessionRequest(null);
       committedDecisions.current.clear();
       pendingStatuses.current.clear();
       decisionSequence.current = 0;
@@ -919,7 +939,7 @@ export function Proposals({
     let revalidatedConfirm: ConfirmForm | null = null;
     let revalidatedSubmission: SubmissionForm | null = null;
     try {
-      const [all, form, submission, updateRequests] = await Promise.all([
+      const [all, form, submission, updateRequests, pendingSessionUpdates] = await Promise.all([
         loadAllProposals(cfpId, {
           speakerDetails: true,
           force,
@@ -963,6 +983,11 @@ export function Proposals({
           : listSpeakerProfileUpdateRequests({ cfpId })
               .then(({ data }) => ({ requests: data.admin, failed: false }))
               .catch(() => ({ requests: [] as ProfileUpdateRequestSummary[], failed: true })),
+        readOnly
+          ? Promise.resolve([] as SessionUpdateRequestSummary[])
+          : listSessionUpdateRequests({ cfpId })
+              .then(({ data }) => data.admin)
+              .catch(() => [] as SessionUpdateRequestSummary[]),
       ]);
       if (request !== loadGeneration.current || activeCfp.current !== cfpId) return;
       if (hasFailed) {
@@ -974,6 +999,7 @@ export function Proposals({
       setShape(revalidatedSubmission ?? submission);
       setProfileRequests(updateRequests.requests);
       setProfileRequestsFailed(updateRequests.failed);
+      setSessionRequests(pendingSessionUpdates);
       setLoadedFor(cfpId);
       setLoadFailed(false);
       setError('');
@@ -1142,6 +1168,9 @@ export function Proposals({
           setProfileRequests((current) =>
             current.filter((summary) => summary.proposalId !== row.id),
           );
+          setSessionRequests((current) =>
+            current.filter((summary) => summary.proposalId !== row.id),
+          );
         }
         // The undo banner is another proposal's after this, so it cannot double
         // as the confirmation for the one just reset. Say so in its own words.
@@ -1213,6 +1242,9 @@ export function Proposals({
         );
         if (snapshot.previous !== 'accepted') {
           setProfileRequests((current) =>
+            current.filter((summary) => summary.proposalId !== snapshot.proposalId),
+          );
+          setSessionRequests((current) =>
             current.filter((summary) => summary.proposalId !== snapshot.proposalId),
           );
         }
@@ -1451,6 +1483,12 @@ export function Proposals({
   return (
     <>
       <Dashboard rows={scopedRows} shape={scopedShape} />
+      {!readOnly && (
+        <SessionUpdateQueue
+          requests={sessionRequests}
+          onReview={setReviewingSessionRequest}
+        />
+      )}
       {!readOnly && (
         <ProfileUpdateQueue
           rows={scopedRows}
@@ -1697,6 +1735,9 @@ export function Proposals({
                   const readyProfileRequests = rowProfileRequests.filter(
                     (request) => request.state === 'ready',
                   ).length;
+                  const rowSessionRequest = sessionRequests.find(
+                    (request) => request.proposalId === row.id,
+                  );
                   return (
                     <tr key={row.id} className={saving ? 'decision-table__row--saving' : undefined}>
                       <td data-label={t.admin.colTitle}>
@@ -1712,6 +1753,15 @@ export function Proposals({
                         >
                           {t.admin.detailOpen}
                         </button>
+                        {!readOnly && rowSessionRequest && (
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--small"
+                            onClick={() => setReviewingSessionRequest(rowSessionRequest)}
+                          >
+                            {t.sessionUpdate.pickerBadge}
+                          </button>
+                        )}
                       </td>
                       <td data-label={t.admin.colSpeaker}>
                         <div className="decision-speakers">
@@ -1824,6 +1874,46 @@ export function Proposals({
           viewerUid={viewerUid}
           decision={decision(detailRow)}
           onClose={closeProposalDetail}
+        />
+      )}
+
+      {reviewingSessionRequest && (
+        <SessionUpdateReviewDialog
+          cfpId={cfpId}
+          request={reviewingSessionRequest}
+          submissionForm={scopedShape}
+          onResolved={(resolved, decision, scheduleNeedsAttention) => {
+            setSessionRequests((current) =>
+              current.filter((item) => item.proposalId !== resolved.proposalId),
+            );
+            if (decision === 'approve') {
+              setRows((current) =>
+                current.map((row) =>
+                  row.id === resolved.proposalId
+                    ? {
+                        ...row,
+                        title: resolved.proposed.title,
+                        abstract: resolved.proposed.abstract,
+                        category: resolved.proposed.category,
+                        level: resolved.proposed.level,
+                        deliveryLanguage: resolved.proposed.deliveryLanguage,
+                        languagePreference: resolved.proposed.languagePreference,
+                      }
+                    : row,
+                ),
+              );
+              setNote(
+                scheduleNeedsAttention
+                  ? t.sessionUpdate.approvedScheduleNotice
+                  : t.sessionUpdate.approvedNotice,
+              );
+            } else {
+              setNote(t.sessionUpdate.rejectedNotice);
+            }
+            onEmailQueueChange?.();
+            setReviewingSessionRequest(null);
+          }}
+          onClose={() => setReviewingSessionRequest(null)}
         />
       )}
 

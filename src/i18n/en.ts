@@ -769,6 +769,56 @@ export const en = {
     filterAll: 'All profile states',
   },
 
+  sessionUpdate: {
+    eyebrow: 'Confirmed session',
+    title: 'Request a session update',
+    help:
+      'Your session is confirmed. You can propose updates to your title, abstract, category, level, or delivery language for organiser approval.',
+    openForm: 'Propose session changes',
+    editRequest: 'Update pending request',
+    closeForm: 'Close form',
+    submitRequest: 'Submit for approval',
+    submittingRequest: 'Submitting request…',
+    cancelRequest: 'Cancel request',
+    cancellingRequest: 'Cancelling…',
+    cancelConfirm: 'Cancel this pending session update request?',
+    requestSubmitted:
+      'Session update request submitted. Organisers have been notified and will review your proposed changes.',
+    requestCancelled: 'Session update request cancelled.',
+    unchangedError: 'Change at least one session field before submitting a request.',
+    failedError: 'Could not save the session update request. Try again.',
+    statusPending: 'Pending organiser approval',
+    statusApproved: 'Approved by organisers',
+    statusRejected: 'Declined by organisers',
+    pendingHelp:
+      'Your current confirmed session stays live while organisers review these proposed changes.',
+    approvedHelp: 'These changes have been applied to your session.',
+    rejectedHelp: 'Your existing confirmed session details remain in place.',
+    rejectionNoteLabel: 'Organiser note',
+    currentValue: 'Current session',
+    proposedValue: 'Proposed change',
+    notProvided: 'Not provided',
+    pickerBadge: 'Session update pending',
+    adminQueueEyebrow: 'Confirmed session updates',
+    adminQueueTitle: 'Session update requests',
+    adminQueueHelp:
+      'Confirmed speakers requested these changes to their session details. Approve to update the session and flag the schedule for reshare, or decline to keep the current details.',
+    adminQueueCount: (count: number) => `Pending approval · ${count}`,
+    reviewButton: 'Review changes',
+    reviewTitle: (title: string) => `Session update request for “${title}”`,
+    requestedBy: (speaker: string) => `Requested by ${speaker}`,
+    approve: 'Approve changes',
+    approving: 'Approving…',
+    reject: 'Decline changes',
+    rejecting: 'Declining…',
+    rejectionNoteField: 'Note to speaker (optional)',
+    rejectionNotePlaceholder: 'Explain why this change could not be applied…',
+    approvedNotice: 'Session update approved and applied.',
+    approvedScheduleNotice:
+      'Session update approved. The working schedule has been flagged for review before resharing.',
+    rejectedNotice: 'Session update request declined.',
+  },
+
   acks: {
     /**
      * Only the link text. The wording of each acknowledgement is the call's own

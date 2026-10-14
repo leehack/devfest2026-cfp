@@ -223,6 +223,33 @@ export function proposalCoreSchema(form: SubmissionForm = DEFAULT_SUBMISSION_FOR
 }
 
 /**
+ * The confirmed-session fields a primary speaker may request to update after
+ * confirmation (`title`, `abstract`, `category`, `level`, `deliveryLanguage`,
+ * `languagePreference`). Validated against this CFP's `config/submissionForm`.
+ */
+export function sessionUpdateSchema(form: SubmissionForm = DEFAULT_SUBMISSION_FORM) {
+  return z
+    .object({
+      title: trimmed(LIMITS.title).min(1),
+      abstract: trimmed(LIMITS.abstractMax).min(LIMITS.abstractMin),
+      category: oneOf(form.category, 'notAnOption'),
+      level: oneOf(form.level, 'notAnOption'),
+      deliveryLanguage: oneOf(form.deliveryLanguage, 'notAnOption'),
+      languagePreference: trimmed(LIMITS.languagePreferenceMax).optional(),
+    })
+    .superRefine((val, ctx) => {
+      if (val.deliveryLanguage !== 'either' && val.languagePreference) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['languagePreference'],
+          params: { key: 'languagePreferenceNotApplicable' },
+          message: 'Language preference only applies when you can present in either language.',
+        });
+      }
+    });
+}
+
+/**
  * The acknowledgements, which are also per-CFP now.
  *
  * Every one of them must be `true`: they are consents, and an unticked consent
