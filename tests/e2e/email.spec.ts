@@ -921,6 +921,58 @@ test.describe('email pipeline', () => {
     expect(rows[0].kind).toBe('rejected');
   });
 
+  test('delivery history paginates rows and resets to page 1 when the status filter changes', async ({
+    page,
+  }) => {
+    await stage();
+    await setEmailDeliveryReadyDirect();
+
+    const baseMs = Date.UTC(2026, 5, 1, 12, 0, 0);
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) => {
+        const num = String(index + 1).padStart(2, '0');
+        const isFailed = index === 10;
+        return seedEmailLog(`history-${num}`, {
+          status: isFailed ? 'failed' : 'sent',
+          kind: 'speaker_message',
+          proposalId: 'talk-1',
+          to: `speaker-${num}@example.test`,
+          subject: `Update ${num}`,
+          attempts: 1,
+          attemptedAt: new Date(baseMs - index * 60_000),
+          ...(isFailed ? { error: 'Provider timeout' } : { sentAt: new Date(baseMs - index * 60_000) }),
+        });
+      }),
+    );
+
+    await signInAs(page, admin, at('/admin/email'));
+
+    const historyTable = page.locator('.email-log-table');
+    const historyRows = historyTable.locator('tbody tr');
+    const pagination = page.getByRole('navigation', { name: 'List pages' });
+
+    await expect(historyRows).toHaveCount(10);
+    await expect(historyTable.getByText('speaker-01@example.test')).toBeVisible();
+    await expect(historyTable.getByText('speaker-10@example.test')).toBeVisible();
+    await expect(historyTable.getByText('speaker-11@example.test')).toHaveCount(0);
+    await expect(pagination).toContainText('1–10 of 12');
+    await expect(pagination).toContainText('Page 1 of 2');
+    await expect(pagination.getByRole('button', { name: /Previous/ })).toBeDisabled();
+
+    await pagination.getByRole('button', { name: /Next/ }).click();
+    await expect(historyRows).toHaveCount(2);
+    await expect(historyTable.getByText('speaker-11@example.test')).toBeVisible();
+    await expect(historyTable.getByText('speaker-12@example.test')).toBeVisible();
+    await expect(pagination).toContainText('11–12 of 12');
+    await expect(pagination).toContainText('Page 2 of 2');
+    await expect(pagination.getByRole('button', { name: /Next/ })).toBeDisabled();
+
+    await page.getByRole('combobox', { name: /^Show/ }).selectOption('failed');
+    await expect(historyRows).toHaveCount(1);
+    await expect(historyTable.getByText('speaker-11@example.test')).toBeVisible();
+    await expect(pagination).toHaveCount(0);
+  });
+
   test('the event workspace distinguishes inherited delivery from an activated override', async ({
     page,
   }) => {
