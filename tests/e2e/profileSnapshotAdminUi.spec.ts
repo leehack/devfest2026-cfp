@@ -204,6 +204,9 @@ test('admin requests a session-scoped update and the confirmed speaker completes
   ).toBeVisible();
 
   await signInAs(page, ADMIN, at('/admin/proposals'));
+  await expect(
+    page.locator('.subnav').getByRole('link', { name: 'Proposals' }).locator('.subnav__badge'),
+  ).toHaveText('1');
   const readyQueue = page.getByRole('region', { name: 'Profile update queue' });
   await expect(readyQueue.getByText('Ready to review · 1')).toBeVisible();
   await readyQueue.getByRole('button', {
@@ -254,3 +257,133 @@ test('speaker sees an outstanding request in the picker and its deep link opens 
   ).toHaveAttribute('aria-current', 'true');
   await expect(page.locator('.profile-update-request--pending')).toHaveCount(1);
 });
+
+test('confirmed speaker requests a session update, notifies admins, and organiser declines then approves', async ({
+  page,
+}) => {
+  await reset();
+  const [admin, speaker] = await Promise.all([
+    createAccount(ADMIN),
+    createAccount(SPEAKER),
+  ]);
+  await Promise.all([
+    seedMember(admin.uid, 'admin', CFP_ID, ADMIN.email),
+    seedSpeaker(speaker.uid, {
+      name: SPEAKER.name,
+      email: SPEAKER.email,
+    }),
+    seedProposal('session-update-ui-talk', {
+      speakerUid: speaker.uid,
+      title: 'Original Session Title',
+      status: 'confirmed',
+      speaker: { name: SPEAKER.name },
+    }),
+    seedProposal('session-update-other-talk', {
+      speakerUid: speaker.uid,
+      title: 'Unchanged Confirmed Talk',
+      status: 'confirmed',
+      speaker: { name: SPEAKER.name },
+    }),
+  ]);
+
+  await signInAs(page, SPEAKER, at());
+  await page.getByRole('button', { name: /Original Session Title Confirmed/ }).click();
+
+  const sessionCard = page.locator('.session-update-request');
+  await expect(sessionCard).toBeVisible();
+  await sessionCard.getByRole('button', { name: 'Propose session changes' }).click();
+
+  await sessionCard.getByLabel('Title').fill('First Proposed Session Title');
+  await sessionCard.getByLabel('Category').selectOption('cloud');
+  await sessionCard.getByRole('button', { name: 'Submit for approval' }).click();
+
+  await expect(
+    sessionCard.getByText(
+      'Session update request submitted. Organisers have been notified and will review your proposed changes.',
+    ),
+  ).toBeVisible();
+  await expect(
+    sessionCard.getByText('Pending organiser approval', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: /Original Session Title Confirmed Session update pending/,
+    }),
+  ).toBeVisible();
+
+  await signInAs(page, ADMIN, at('/admin/overview'));
+  await expect(
+    page.locator('.subnav').getByRole('link', { name: 'Proposals' }).locator('.subnav__badge'),
+  ).toHaveText('1');
+
+  await page.locator('.subnav').getByRole('link', { name: 'Email' }).click();
+  await expect(
+    page.getByText(/Session update request for “Original Session Title”/),
+  ).toBeVisible();
+
+  await page.locator('.subnav').getByRole('link', { name: 'Proposals' }).click();
+  const sessionQueue = page.getByRole('region', { name: 'Session update requests' });
+  await expect(sessionQueue.getByText('Pending approval · 1')).toBeVisible();
+
+  await sessionQueue
+    .getByRole('button', { name: 'Review changes' })
+    .click();
+
+  const reviewDialog = page.getByRole('dialog', {
+    name: 'Session update request for “Original Session Title”',
+  });
+  await expect(reviewDialog).toBeVisible();
+  await expect(reviewDialog.getByText('First Proposed Session Title')).toBeVisible();
+  await expect(reviewDialog.getByText('Cloud')).toBeVisible();
+
+  await reviewDialog
+    .getByLabel('Note to speaker (optional)')
+    .fill('Please keep the original framing or shorten the new title.');
+  await reviewDialog.getByRole('button', { name: 'Decline changes' }).click();
+  await expect(reviewDialog).toBeHidden();
+  await expect(
+    page.locator('.subnav').getByRole('link', { name: 'Proposals' }).locator('.subnav__badge'),
+  ).toHaveCount(0);
+
+  await signInAs(page, SPEAKER, at());
+  await page.getByRole('button', { name: /Original Session Title Confirmed/ }).click();
+  await expect(
+    sessionCard.getByText('Declined by organisers', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    sessionCard.getByText('Please keep the original framing or shorten the new title.'),
+  ).toBeVisible();
+
+  await sessionCard.getByRole('button', { name: 'Propose session changes' }).click();
+  await sessionCard.getByLabel('Title').fill('Approved Session Title');
+  await sessionCard.getByLabel('Category').selectOption('cloud');
+  await sessionCard.getByRole('button', { name: 'Submit for approval' }).click();
+  await expect(
+    sessionCard.getByText('Pending organiser approval', { exact: true }),
+  ).toBeVisible();
+
+  await signInAs(page, ADMIN, at('/admin/proposals'));
+  await expect(
+    page.locator('.subnav').getByRole('link', { name: 'Proposals' }).locator('.subnav__badge'),
+  ).toHaveText('1');
+  await page
+    .getByRole('region', { name: 'Session update requests' })
+    .getByRole('button', { name: 'Review changes' })
+    .click();
+
+  await page
+    .getByRole('dialog', { name: 'Session update request for “Original Session Title”' })
+    .getByRole('button', { name: 'Approve changes' })
+    .click();
+
+  await expect(
+    page.getByRole('dialog', { name: 'Session update request for “Original Session Title”' }),
+  ).toBeHidden();
+  await expect(
+    page.getByRole('row').filter({ hasText: 'Approved Session Title' }),
+  ).toBeVisible();
+  await expect(
+    page.locator('.subnav').getByRole('link', { name: 'Proposals' }).locator('.subnav__badge'),
+  ).toHaveCount(0);
+});
+

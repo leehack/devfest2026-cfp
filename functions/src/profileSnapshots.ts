@@ -32,6 +32,7 @@ import type {
 } from '../../shared/types';
 import { speakerConfirmedHeadshotPath, speakerProfilePhotoFrom } from './headshots';
 import { queueEmail } from './email';
+import { notifyEventAdminsOfSpeakerUpdate } from './sessionUpdateRequests';
 import { speakerConfirmationRef, usesPerSpeakerLifecycle } from './speakerLifecycle';
 
 const CALLABLE = { region: 'northamerica-northeast1', maxInstances: 10 } as const;
@@ -885,8 +886,14 @@ export const completeProposalSpeakerProfileUpdate = onCall(CALLABLE, async (requ
     if (current.status === 'cancelled') {
       throw new HttpsError('failed-precondition', 'This profile update request was cancelled.');
     }
-    if (current.status === 'resolved') {
-      return { changed: false, request: current, remainingScopes: [] as SpeakerProfileUpdateScope[] };
+    if ( current.status === 'resolved') {
+      return {
+        changed: false,
+        request: current,
+        remainingScopes: [] as SpeakerProfileUpdateScope[],
+        proposalTitle: '',
+        speakerName: '',
+      };
     }
 
     const snapshots = proposal.get('speakerSnapshot');
@@ -976,8 +983,34 @@ export const completeProposalSpeakerProfileUpdate = onCall(CALLABLE, async (requ
         { merge: true },
       );
     }
-    return { changed, request: next, remainingScopes };
+    return {
+      changed,
+      request: next,
+      remainingScopes,
+      proposalTitle: safeString(proposal.get('title')).trim(),
+      speakerName: parsedProfile.data.name,
+    };
   });
+  if (result.changed && result.remainingScopes.length === 0) {
+    try {
+      await notifyEventAdminsOfSpeakerUpdate(db, cfpId, {
+        proposalId,
+        proposalTitle: result.proposalTitle,
+        speakerName: result.speakerName,
+        updateType: 'profile',
+        dedupeKey: `profile_${speakerUid}_${requestId}`,
+        excludeUids: [speakerUid],
+      });
+    } catch (notifyError) {
+      logger.warn('failed to queue admin notification for completed profile update request', {
+        cfpId,
+        proposalId,
+        speakerUid,
+        requestId,
+        error: String(notifyError),
+      });
+    }
+  }
   logger.info('proposal speaker profile update completed', {
     cfpId,
     proposalId,
@@ -986,7 +1019,12 @@ export const completeProposalSpeakerProfileUpdate = onCall(CALLABLE, async (requ
     changed: result.changed,
     remainingScopes: result.remainingScopes,
   });
-  return { ok: true, ...result };
+  return {
+    ok: true,
+    changed: result.changed,
+    request: result.request,
+    remainingScopes: result.remainingScopes,
+  };
 });
 
 /**

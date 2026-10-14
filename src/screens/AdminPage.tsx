@@ -5,6 +5,8 @@ import { Link } from '../components/Link';
 import { useI18n } from '../i18n/context';
 import { ADMIN_TABS, goTo, href, type AdminTab } from '../lib/router';
 import { loadEmailSummary, publishEmailSummary, type EmailSummary } from '../lib/roles';
+import { listSpeakerProfileUpdateRequests } from '../lib/profileUpdateRequests';
+import { listSessionUpdateRequests } from '../lib/sessionUpdateRequests';
 import type { CfpRole } from '@shared/cfp';
 
 const Committee = lazy(() =>
@@ -67,6 +69,10 @@ export function AdminPage({
   const [dirty, setDirty] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [pendingEmailState, setPendingEmailState] = useState<PendingEmailState | null>(null);
+  const [proposalAttentionState, setProposalAttentionState] = useState<{
+    cfpId: string;
+    count: number;
+  } | null>(null);
   const dirtyRef = useRef(dirty);
   const restoringHistory = useRef(false);
   const queueRequest = useRef(0);
@@ -82,6 +88,15 @@ export function AdminPage({
   }`;
   const pendingEmailCheckFailed =
     pendingEmailState?.cfpId === cfpId && pendingEmailState.failed;
+  const proposalAttentionCount =
+    proposalAttentionState?.cfpId === cfpId ? proposalAttentionState.count : 0;
+
+  const handleProposalAttentionCountChange = useCallback(
+    (count: number) => {
+      setProposalAttentionState({ cfpId, count });
+    },
+    [cfpId],
+  );
 
   const publishPendingEmailCount = useCallback(
     (state: EmailSummary) => {
@@ -128,6 +143,27 @@ export function AdminPage({
       queueRequest.current += 1;
     };
   }, [refreshPendingEmails, tab]);
+
+  useEffect(() => {
+    if (archived || tab === 'proposals' || proposalAttentionState?.cfpId === cfpId) return;
+    let active = true;
+    void Promise.all([
+      listSpeakerProfileUpdateRequests({ cfpId })
+        .then(({ data }) => data.admin)
+        .catch(() => []),
+      listSessionUpdateRequests({ cfpId })
+        .then(({ data }) => data.admin)
+        .catch(() => []),
+    ]).then(([profileAdmin, sessionAdmin]) => {
+      if (!active) return;
+      const readyProfiles = profileAdmin.filter((item) => item.state === 'ready').length;
+      const pendingSessions = sessionAdmin.filter((item) => item.status === 'pending').length;
+      setProposalAttentionState({ cfpId, count: readyProfiles + pendingSessions });
+    });
+    return () => {
+      active = false;
+    };
+  }, [archived, cfpId, proposalAttentionState?.cfpId, tab]);
 
   useEffect(() => {
     const pagePath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -287,6 +323,11 @@ export function AdminPage({
               const content = (
                 <>
                   <span>{t.admin.tabs[name]}</span>
+                  {name === 'proposals' && proposalAttentionCount > 0 ? (
+                    <span className="subnav__badge" aria-hidden="true">
+                      {proposalAttentionCount}
+                    </span>
+                  ) : null}
                   {name === 'email' && emailAttentionCount ? (
                     <span className={emailBadgeClass} aria-hidden="true">
                       {emailAttentionCount}
@@ -340,6 +381,11 @@ export function AdminPage({
             }
           >
             <span>{t.admin.tabs[name]}</span>
+            {name === 'proposals' && proposalAttentionCount > 0 ? (
+              <span className="subnav__badge" aria-hidden="true">
+                {proposalAttentionCount}
+              </span>
+            ) : null}
             {name === 'email' && emailAttentionCount ? (
               <span className={emailBadgeClass} aria-hidden="true">
                 {emailAttentionCount}
@@ -427,6 +473,7 @@ export function AdminPage({
             pendingEmailCount={pendingEmailCount}
             pendingEmailCheckFailed={pendingEmailCheckFailed}
             onEmailQueueChange={forceRefreshPendingEmails}
+            onAttentionCountChange={handleProposalAttentionCountChange}
           />
         )}
         {tab === 'schedule' && (
